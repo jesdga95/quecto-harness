@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -392,4 +393,42 @@ func TestSchemasMatchTheDescriptions(t *testing.T) {
 func mustJSON(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+func TestReadAttachment(t *testing.T) {
+	dir := t.TempDir()
+	text := filepath.Join(dir, "notes.md")
+	if err := os.WriteFile(text, []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadAttachment(text)
+	if err != nil {
+		t.Fatalf("read a text file: %v", err)
+	}
+	if got != "one\ntwo\n" {
+		t.Errorf("content = %q", got)
+	}
+
+	binary := filepath.Join(dir, "blob.bin")
+	if err := os.WriteFile(binary, []byte{0x00, 0x01, 0x02, 0x03}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadAttachment(binary); err == nil {
+		t.Error("a binary file was attached")
+	}
+
+	big := filepath.Join(dir, "big.txt")
+	if err := os.WriteFile(big, bytes.Repeat([]byte("x"), MaxAttachment+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadAttachment(big); err == nil {
+		t.Error("a file over the cap was attached")
+	}
+
+	if _, err := ReadAttachment("notes.md"); err == nil {
+		t.Error("a relative path was attached")
+	}
+	if _, err := ReadAttachment(dir); err == nil {
+		t.Error("a folder was attached")
+	}
 }

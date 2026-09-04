@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -160,7 +161,7 @@ func (s *Session) contextMessages(osName string) []llama.Message {
 		}
 		switch e.Kind {
 		case "user":
-			msgs = append(msgs, llama.Message{Role: "user", Content: e.Content})
+			msgs = append(msgs, llama.Message{Role: "user", Content: userContent(e)})
 		case "compaction":
 			msgs = append(msgs, llama.Message{Role: "user", Content: prompts.Compaction(e.Content)})
 		case "assistant":
@@ -173,6 +174,20 @@ func (s *Session) contextMessages(osName string) []llama.Message {
 		}
 	}
 	return msgs
+}
+
+// userContent is the message as typed, with each attached file under it.
+func userContent(e store.Entry) string {
+	if len(e.Attachments) == 0 {
+		return e.Content
+	}
+	var b strings.Builder
+	b.WriteString(e.Content)
+	for _, a := range e.Attachments {
+		b.WriteString("\n\n")
+		b.WriteString(prompts.Attachment(a.Path, a.Content))
+	}
+	return b.String()
 }
 
 // repairToolResults returns one tool message per call, synthesising the ones

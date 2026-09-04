@@ -1,0 +1,5 @@
+Attached file {{.Path}}:
+
+````
+{{.Content}}
+````

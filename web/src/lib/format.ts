@@ -16,6 +16,17 @@ export function level(ratio: number): "ok" | "warn" | "crit" {
   return "ok";
 }
 
+/** The file name at the end of a path. */
+export function fileName(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
+/** What a file weighs, for an attachment chip. */
+export function bytes(n: number): string {
+  return n < 1024 ? `${n} b` : `${Math.round(n / 1024)} kb`;
+}
+
 export function shortPath(path: string): string {
   return path.replace(/^\/Users\/[^/]+/, "~");
 }

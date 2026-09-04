@@ -18,10 +18,14 @@ import (
 	"quecto-harness/internal/tools"
 )
 
+// maxAttachments bounds what one message can carry, since every attachment is
+// inlined into the prompt.
+const maxAttachments = 5
+
 var (
 	ErrBusy      = errors.New("The session is busy: stop the current turn first")
 	ErrNotFound  = errors.New("No session with that id")
-	ErrEmptyText = errors.New("The message is empty: type something to send")
+	ErrEmptyText = errors.New("The message is empty: type something or attach a file")
 	ErrNoProject = errors.New("That folder is not in the project list: add it first")
 	ErrNoModel   = errors.New("No model is selected: pick one from the model list")
 )
@@ -152,11 +156,17 @@ func (e *Engine) State(id string) State {
 
 // Send appends the user entry and starts the turn goroutine. It returns as
 // soon as the goroutine is running; everything else arrives on the stream.
-func (e *Engine) Send(id, text string) error {
-	if strings.TrimSpace(text) == "" {
+// Attached files are read here, so a file that cannot be read refuses the
+// message rather than reaching the model half sent.
+func (e *Engine) Send(id, text string, files []string) error {
+	if strings.TrimSpace(text) == "" && len(files) == 0 {
 		return ErrEmptyText
 	}
 	s, err := e.Get(id)
+	if err != nil {
+		return err
+	}
+	attachments, err := readAttachments(files)
 	if err != nil {
 		return err
 	}
@@ -168,7 +178,8 @@ func (e *Engine) Send(id, text string) error {
 	s.state = StatePreflight
 	ctx, cancel := context.WithCancel(e.ctx)
 	s.cancel = cancel
-	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text, InContext: true, Visible: true})
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text,
+		Attachments: attachments, InContext: true, Visible: true})
 	if s.Title == "" {
 		s.Title = store.Title(text)
 	}
@@ -184,6 +195,26 @@ func (e *Engine) Send(id, text string) error {
 		e.run(ctx, s)
 	}()
 	return nil
+}
+
+// readAttachments reads every attached file at once, so the message is either
+// sent with all of them or not sent at all.
+func readAttachments(paths []string) ([]store.Attachment, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	if len(paths) > maxAttachments {
+		return nil, fmt.Errorf("Attach %d files: at most %d fit in one message", len(paths), maxAttachments)
+	}
+	out := make([]store.Attachment, 0, len(paths))
+	for _, p := range paths {
+		content, err := tools.ReadAttachment(p)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, store.Attachment{Path: p, Bytes: len(content), Content: content})
+	}
+	return out, nil
 }
 
 // Stop cancels the turn. It never appends: the loop reaches stopped and

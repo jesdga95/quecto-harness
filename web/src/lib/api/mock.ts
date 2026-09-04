@@ -201,6 +201,15 @@ export class MockApi implements HarnessApi {
     return answer?.trim() ? answer.trim() : null;
   }
 
+  async pickFile(): Promise<string | null> {
+    await this.tick();
+    const answer = window.prompt(
+      "The real harness opens the host file dialog here.",
+      "/Users/jay/Projects/Personal/quecto-harness/AGENTS.md",
+    );
+    return answer?.trim() ? answer.trim() : null;
+  }
+
   async listSessions(project: string): Promise<Session[]> {
     await this.tick();
     return this.sessions.filter((s) => s.project === project).map((s) => ({ ...s }));
@@ -332,10 +341,14 @@ export class MockApi implements HarnessApi {
     };
   }
 
-  async sendMessage(session: string, text: string): Promise<void> {
+  async sendMessage(session: string, text: string, files: string[] = []): Promise<void> {
     const t = this.transcripts.get(session);
     if (!t) return;
-    pushUser(t.items, text);
+    pushUser(
+      t.items,
+      text,
+      files.map((path) => ({ path, bytes: 2400 })),
+    );
     if (t.session.title === "New session") t.session.title = title(text);
     void this.runTurn(session, t);
   }

@@ -9,12 +9,13 @@ import (
 	"text/template"
 )
 
-//go:embed system.md tool_read_file.md tool_write_file.md tool_run_shell.md compact.md compaction.md title.md
+//go:embed system.md tool_read_file.md tool_write_file.md tool_run_shell.md compact.md compaction.md title.md attachment.md
 var files embed.FS
 
 var (
 	systemTmpl     = template.Must(template.New("system").Parse(mustRead("system.md")))
 	compactionTmpl = template.Must(template.New("compaction").Parse(mustRead("compaction.md")))
+	attachmentTmpl = template.Must(template.New("attachment").Parse(mustRead("attachment.md")))
 )
 
 func mustRead(name string) string {
@@ -45,6 +46,15 @@ func Compaction(summary string) string {
 	var b strings.Builder
 	if err := compactionTmpl.Execute(&b, struct{ Summary string }{summary}); err != nil {
 		panic("prompts: render compaction.md: " + err.Error())
+	}
+	return b.String()
+}
+
+// Attachment is one file the user attached, as the model is shown it.
+func Attachment(path, content string) string {
+	var b strings.Builder
+	if err := attachmentTmpl.Execute(&b, struct{ Path, Content string }{path, content}); err != nil {
+		panic("prompts: render attachment.md: " + err.Error())
 	}
 	return b.String()
 }

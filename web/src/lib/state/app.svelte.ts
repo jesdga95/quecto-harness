@@ -196,12 +196,27 @@ export async function deleteSession(id: string): Promise<void> {
   }
 }
 
-export async function send(text: string): Promise<void> {
+/** Asks the host for a file to attach. Null when the dialog is dismissed. */
+export async function pickAttachment(): Promise<string | null> {
+  return (await guard(() => api.pickFile())) ?? null;
+}
+
+export async function send(text: string, files: string[] = []): Promise<void> {
   const message = text.trim();
-  if (!app.sessionId || !message) return;
-  pushUser(app.items, message);
-  const sent = await guard(() => api.sendMessage(app.sessionId, message));
-  if (sent === null) return;
+  if (!app.sessionId || (!message && files.length === 0)) return;
+  pushUser(
+    app.items,
+    message,
+    files.map((path) => ({ path, bytes: 0 })),
+  );
+  // The harness reads the attachments, so a file it refuses refuses the whole
+  // message. The bubble comes back off the transcript when that happens.
+  const id = app.items[app.items.length - 1]?.id;
+  const sent = await guard(() => api.sendMessage(app.sessionId, message, files));
+  if (sent === null) {
+    app.items = app.items.filter((i) => i.id !== id);
+    return;
+  }
   await loadSessions();
 }
 

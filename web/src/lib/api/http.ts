@@ -105,6 +105,7 @@ interface WireEntry {
   exit_code?: number | null;
   truncated?: boolean;
   permission?: WirePermission | null;
+  attachments?: { path?: string; bytes?: number }[] | null;
   visible?: boolean;
   meta?: Record<string, unknown> | null;
 }
@@ -313,7 +314,13 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
   const seq = e.seq ?? items.length;
 
   if (e.kind === "user") {
-    if (e.content) items.push({ kind: "user", id: `u${seq}`, text: e.content });
+    const files = (e.attachments ?? []).map((a) => ({
+      path: a.path ?? "",
+      bytes: a.bytes ?? 0,
+    }));
+    if (e.content || files.length > 0) {
+      items.push({ kind: "user", id: `u${seq}`, text: e.content ?? "", files });
+    }
     return;
   }
 
@@ -642,6 +649,11 @@ class HttpApi implements HarnessApi {
     return wire.path ?? null;
   }
 
+  async pickFile(): Promise<string | null> {
+    const wire = await call<{ path?: string | null }>("/fs/pick", "POST", { kind: "file" });
+    return wire.path ?? null;
+  }
+
   async addProject(path: string): Promise<Project[]> {
     return this.setProjects(await call("/projects", "POST", { path }));
   }
@@ -688,8 +700,11 @@ class HttpApi implements HarnessApi {
     summaries.delete(id);
   }
 
-  async sendMessage(id: string, text: string): Promise<void> {
-    await call(`/sessions/${encodeURIComponent(id)}/message`, "POST", { text });
+  async sendMessage(id: string, text: string, files: string[] = []): Promise<void> {
+    await call(`/sessions/${encodeURIComponent(id)}/message`, "POST", {
+      text,
+      attachments: files,
+    });
   }
 
   async stop(id: string): Promise<void> {

@@ -409,12 +409,13 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Text string `json:"text"`
+		Text        string   `json:"text"`
+		Attachments []string `json:"attachments"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
-	if err := s.engine.Send(sess.ID, body.Text); err != nil {
+	if err := s.engine.Send(sess.ID, body.Text, body.Attachments); err != nil {
 		writeEngineError(w, err)
 		return
 	}

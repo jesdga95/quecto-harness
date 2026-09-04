@@ -158,7 +158,7 @@ func waitIdle(t *testing.T, s *Session) {
 func TestPlainReply(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt")
 	s := h.session(t)
-	if err := h.engine.Send(s.ID, "what is here"); err != nil {
+	if err := h.engine.Send(s.ID, "what is here", nil); err != nil {
 		t.Fatal(err)
 	}
 	waitIdle(t, s)
@@ -198,7 +198,7 @@ func TestEffortReachesTheRequestBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := h.session(t)
-	h.engine.Send(s.ID, "hello")
+	h.engine.Send(s.ID, "hello", nil)
 	waitIdle(t, s)
 
 	body := h.replay.Body(0)
@@ -235,7 +235,7 @@ func TestPreserveReasoningFollowsTheCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := h.sessionWith(t, "Delta3.8-27B Q5")
-	h.engine.Send(s.ID, "first")
+	h.engine.Send(s.ID, "first", nil)
 	waitIdle(t, s)
 
 	if _, ok := h.replay.Body(0)["chat_template_kwargs"]; ok {
@@ -246,7 +246,7 @@ func TestPreserveReasoningFollowsTheCapability(t *testing.T) {
 	// The title request follows the first turn, so the second turn is the
 	// third request rather than the second.
 	waitForRequests(t, h, 2)
-	if err := h.engine.Send(s.ID, "second"); err != nil {
+	if err := h.engine.Send(s.ID, "second", nil); err != nil {
 		t.Fatal(err)
 	}
 	waitIdle(t, s)
@@ -264,7 +264,7 @@ func TestPreserveReasoningFollowsTheCapability(t *testing.T) {
 func TestSingleToolCallWithApproval(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "list the files here")
+	h.engine.Send(s.ID, "list the files here", nil)
 
 	id := waitForCard(t, h, s.ID)
 	if err := h.broker.Resolve(id, perms.Decision{Kind: perms.DecideOnce}); err != nil {
@@ -303,7 +303,7 @@ func TestSingleToolCallWithApproval(t *testing.T) {
 func TestToolCallEventsCarryTheIndex(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "list")
+	h.engine.Send(s.ID, "list", nil)
 	id := waitForCard(t, h, s.ID)
 	h.broker.Resolve(id, perms.Decision{Kind: perms.DecideOnce})
 	waitIdle(t, s)
@@ -325,7 +325,7 @@ func TestTwoToolCallsAreSequential(t *testing.T) {
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeAllowlist })
 	h.cfg.AddAllow(h.project, "echo")
 	s := h.session(t)
-	h.engine.Send(s.ID, "echo twice")
+	h.engine.Send(s.ID, "echo twice", nil)
 	waitIdle(t, s)
 
 	doc, _, _, _ := s.Snapshot()
@@ -346,7 +346,7 @@ func TestTwoToolCallsAreSequential(t *testing.T) {
 func TestDenialReachesTheModel(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "list")
+	h.engine.Send(s.ID, "list", nil)
 	id := waitForCard(t, h, s.ID)
 	h.broker.Resolve(id, perms.Decision{Kind: perms.DecideDeny, Reason: "wrong directory"})
 	waitIdle(t, s)
@@ -367,7 +367,7 @@ func TestDenialReachesTheModel(t *testing.T) {
 func TestAlwaysWritesTheAllowlist(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "list")
+	h.engine.Send(s.ID, "list", nil)
 	id := waitForCard(t, h, s.ID)
 	h.broker.Resolve(id, perms.Decision{Kind: perms.DecideAlways, Prefix: "ls"})
 	waitIdle(t, s)
@@ -385,7 +385,7 @@ func TestFullModeRunsEverythingWithoutPrompting(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
 	s := h.session(t)
-	h.engine.Send(s.ID, "list")
+	h.engine.Send(s.ID, "list", nil)
 	waitIdle(t, s)
 
 	if len(h.broker.Pending(s.ID)) != 0 {
@@ -406,7 +406,7 @@ func TestStopDuringACommand(t *testing.T) {
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeAllowlist })
 	h.cfg.AddAllow(h.project, "sleep")
 	s := h.session(t)
-	h.engine.Send(s.ID, "sleep")
+	h.engine.Send(s.ID, "sleep", nil)
 
 	waitForState(t, s, StateExecuting)
 	if _, err := h.engine.Stop(s.ID); err != nil {
@@ -427,7 +427,7 @@ func TestStopDuringACommand(t *testing.T) {
 func TestStopWhileWaitingForADecision(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "list")
+	h.engine.Send(s.ID, "list", nil)
 	card := waitForCard(t, h, s.ID)
 	h.engine.Stop(s.ID)
 	waitIdle(t, s)
@@ -469,9 +469,9 @@ func TestStopOnIdleIsANoOp(t *testing.T) {
 func TestSendWhileBusyIsRefused(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "list")
+	h.engine.Send(s.ID, "list", nil)
 	waitForCard(t, h, s.ID)
-	if err := h.engine.Send(s.ID, "again"); err != ErrBusy {
+	if err := h.engine.Send(s.ID, "again", nil); err != ErrBusy {
 		t.Errorf("Send while busy = %v, want ErrBusy", err)
 	}
 	h.engine.Stop(s.ID)
@@ -481,7 +481,7 @@ func TestSendWhileBusyIsRefused(t *testing.T) {
 func TestUpstreamErrorEndsTheTurnInFailed(t *testing.T) {
 	h := newHarness(t, "stream_error.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "go")
+	h.engine.Send(s.ID, "go", nil)
 	waitIdle(t, s)
 
 	doc, _, _, _ := s.Snapshot()
@@ -501,7 +501,7 @@ func TestUpstreamErrorEndsTheTurnInFailed(t *testing.T) {
 func TestMalformedFramesReportWithoutFailing(t *testing.T) {
 	h := newHarness(t, "stream_malformed.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "go")
+	h.engine.Send(s.ID, "go", nil)
 	waitIdle(t, s)
 
 	doc, _, _, _ := s.Snapshot()
@@ -584,7 +584,7 @@ func TestAssumedContextArmsCompaction(t *testing.T) {
 	s.mu.Lock()
 	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: strings.Repeat("x", 40000), InContext: true, Visible: true})
 	s.mu.Unlock()
-	h.engine.Send(s.ID, "carry on")
+	h.engine.Send(s.ID, "carry on", nil)
 	waitIdle(t, s)
 
 	if len(h.rec.ofType("compacted")) != 1 {
@@ -649,7 +649,7 @@ func TestCompactionRewritesInContextOnly(t *testing.T) {
 func TestCompactRefusedWhileBusy(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "list")
+	h.engine.Send(s.ID, "list", nil)
 	waitForCard(t, h, s.ID)
 	if err := h.engine.Compact(s.ID); err != ErrBusy {
 		t.Errorf("Compact while busy = %v", err)
@@ -692,7 +692,7 @@ func TestRebindResetsAccounting(t *testing.T) {
 func TestRebindRefusedWhileBusy(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "list")
+	h.engine.Send(s.ID, "list", nil)
 	waitForCard(t, h, s.ID)
 	if err := h.engine.Rebind(s.ID, "Delta3.8-27B Q5", 1024, "args"); err != ErrBusy {
 		t.Errorf("Rebind while busy = %v", err)
@@ -704,7 +704,7 @@ func TestRebindRefusedWhileBusy(t *testing.T) {
 func TestPropsProbeCarriesAutoloadFalse(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "hello")
+	h.engine.Send(s.ID, "hello", nil)
 	waitIdle(t, s)
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -753,7 +753,7 @@ func TestUnansweredToolCallIsRepaired(t *testing.T) {
 func TestDeleteRequiresIdle(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "list")
+	h.engine.Send(s.ID, "list", nil)
 	waitForCard(t, h, s.ID)
 	if err := h.engine.Delete(s.ID); err != ErrBusy {
 		t.Errorf("Delete while busy = %v", err)
@@ -778,7 +778,7 @@ func TestToolCallLimit(t *testing.T) {
 	})
 	h.cfg.AddAllow(h.project, "echo")
 	s := h.session(t)
-	h.engine.Send(s.ID, "loop forever")
+	h.engine.Send(s.ID, "loop forever", nil)
 	waitIdle(t, s)
 
 	// Three turns, and the title request that follows a first turn.
@@ -802,13 +802,56 @@ func TestToolCallLimit(t *testing.T) {
 	}
 }
 
+// TestAttachmentReachesThePrompt asserts that an attached file is read once,
+// kept with the message, and inlined under it when the prompt is built.
+func TestAttachmentReachesThePrompt(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	path := filepath.Join(t.TempDir(), "notes.md")
+	if err := os.WriteFile(path, []byte("the plan is to ship"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.engine.Send(s.ID, "read this", []string{path}); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	first := doc.Entries[0]
+	if len(first.Attachments) != 1 || first.Attachments[0].Path != path {
+		t.Fatalf("entry attachments = %+v", first.Attachments)
+	}
+	if first.Content != "read this" {
+		t.Errorf("the file was folded into the message text: %q", first.Content)
+	}
+
+	msgs, _ := h.replay.Body(0)["messages"].([]any)
+	user, _ := msgs[len(msgs)-1].(map[string]any)
+	content, _ := user["content"].(string)
+	if !strings.Contains(content, "the plan is to ship") || !strings.Contains(content, path) {
+		t.Errorf("the prompt did not carry the file: %q", content)
+	}
+
+	// A file that cannot be read refuses the message rather than sending half.
+	if err := h.engine.Send(s.ID, "and this", []string{filepath.Join(t.TempDir(), "gone.md")}); err == nil {
+		t.Error("a missing attachment was accepted")
+	}
+	doc, _, _, _ = s.Snapshot()
+	for _, e := range doc.Entries {
+		if e.Kind == "user" && e.Content == "and this" {
+			t.Error("the refused message was written to the session")
+		}
+	}
+}
+
 // TestTitleAfterFirstTurn asserts that the model names the session once, that
 // the request continues the session's own messages, and that a title the user
 // typed is left alone.
 func TestTitleAfterFirstTurn(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt", "stream_title.txt", "stream_plain.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "what is in this project")
+	h.engine.Send(s.ID, "what is in this project", nil)
 	waitIdle(t, s)
 	waitForRequests(t, h, 2)
 
@@ -842,7 +885,7 @@ func TestTitleAfterFirstTurn(t *testing.T) {
 	if err := h.engine.Rename(s.ID, "Mine"); err != nil {
 		t.Fatal(err)
 	}
-	h.engine.Send(s.ID, "and now")
+	h.engine.Send(s.ID, "and now", nil)
 	waitIdle(t, s)
 	doc, _, _, _ = s.Snapshot()
 	if doc.Title != "Mine" || !doc.Named {
@@ -858,7 +901,7 @@ func TestTitleAfterFirstTurn(t *testing.T) {
 func TestEndToEndTurn(t *testing.T) {
 	h := newHarness(t, "stream_read.txt", "stream_tool.txt", "stream_write.txt", "stream_summary.txt", "stream_plain.txt")
 	s := h.session(t)
-	h.engine.Send(s.ID, "read, run, write")
+	h.engine.Send(s.ID, "read, run, write", nil)
 
 	// read_file is allowed by policy, run_shell is denied, write_file is
 	// approved once, then the threshold forces a compaction.

@@ -1,4 +1,4 @@
-import type { HarnessEvent, PermissionDecision, TranscriptItem } from "./api/types";
+import type { Attached, HarnessEvent, PermissionDecision, TranscriptItem } from "./api/types";
 
 let seq = 0;
 
@@ -160,6 +160,6 @@ export function outcomeLabel(decision: PermissionDecision): string {
   return decision.reason ? `Denied: ${decision.reason}` : "Denied";
 }
 
-export function pushUser(items: TranscriptItem[], text: string): void {
-  items.push({ kind: "user", id: nextId("u"), text });
+export function pushUser(items: TranscriptItem[], text: string, files: Attached[] = []): void {
+  items.push({ kind: "user", id: nextId("u"), text, files });
 }

@@ -39,12 +39,21 @@ type Entry struct {
 	ExitCode   *int             `json:"exit_code,omitempty"`
 	Truncated  bool             `json:"truncated,omitempty"`
 
-	Permission *PermissionRecord `json:"permission,omitempty"`
+	Permission  *PermissionRecord `json:"permission,omitempty"`
+	Attachments []Attachment      `json:"attachments,omitempty"`
 
 	InContext bool           `json:"in_context"`
 	Visible   bool           `json:"visible"`
 	At        time.Time      `json:"at"`
 	Meta      map[string]any `json:"meta,omitempty"`
+}
+
+// Attachment is a text file the user attached to a message. Its content is
+// inlined into the message the model is sent.
+type Attachment struct {
+	Path    string `json:"path"`
+	Bytes   int    `json:"bytes"`
+	Content string `json:"content"`
 }
 
 // PermissionRecord is the decision as it was made, kept so a reloaded page

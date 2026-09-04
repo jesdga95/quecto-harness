@@ -126,7 +126,7 @@ export type HarnessEvent =
   | { type: "connection"; connected: boolean; message?: string };
 
 export type TranscriptItem =
-  | { kind: "user"; id: string; text: string }
+  | { kind: "user"; id: string; text: string; files: Attached[] }
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
   | { kind: "reasoning"; id: string; text: string; tokens: number; open: boolean }
   | {
@@ -151,6 +151,12 @@ export type TranscriptItem =
   | { kind: "status"; id: string; text: string }
   | { kind: "error"; id: string; message: string };
 
+/** One file attached to a message, as the transcript shows it. */
+export interface Attached {
+  path: string;
+  bytes: number;
+}
+
 export interface Usage {
   prompt_tokens: number;
   completion_tokens: number;
@@ -172,6 +178,8 @@ export interface HarnessApi {
   listModels(refresh?: boolean): Promise<Model[]>;
   /** Opens the host's folder dialog. Resolves to null when it is dismissed. */
   pickDirectory(): Promise<string | null>;
+  /** Opens the host's file dialog. Resolves to null when it is dismissed. */
+  pickFile(): Promise<string | null>;
   addProject(path: string): Promise<Project[]>;
   removeProject(path: string): Promise<Project[]>;
   listSessions(project: string): Promise<Session[]>;
@@ -181,7 +189,8 @@ export interface HarnessApi {
   getSession(id: string): Promise<Transcript>;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string): Promise<void>;
-  sendMessage(id: string, text: string): Promise<void>;
+  /** Files are read by the harness and inlined into the message. */
+  sendMessage(id: string, text: string, files?: string[]): Promise<void>;
   stop(id: string): Promise<void>;
   compact(id: string): Promise<void>;
   decide(permissionId: string, decision: PermissionDecision): Promise<void>;
