@@ -1,0 +1,3337 @@
+# quecto harness: implementation spec
+
+Status: reviewed, ready to implement. Every decision in the approved design plan is taken as
+settled. This document expands those decisions into package boundaries, type definitions,
+wire shapes, state machines and tests. The gaps and contradictions raised at review are
+answered in section 14, and those answers are already folded into the sections above.
+
+Captured fixtures used throughout: `docs/fixtures/props-router.json`,
+`docs/fixtures/v1-models.json`, `docs/fixtures/props-model.json`. All three were read from
+the live router at `http://192.168.2.205:8080` (build `b10812-8b4b3558f`). The model-scoped
+capture used `?autoload=false`.
+
+---
+
+## 1. Overview and process model
+
+### 1.1 One binary
+
+`quecto-harness` is a single Go binary with no runtime assets on disk. The Svelte build
+output is compiled in with `//go:embed all:dist` inside `internal/web`. The binary is built
+with `CGO_ENABLED=0`, so it is one file that can be copied between machines of the same
+GOOS and GOARCH.
+
+Argument shape:
+
+```
+quecto-harness [flags]                     serve
+quecto-harness open                        open the browser at the saved URL
+quecto-harness service install [flags]     write and load the OS unit
+quecto-harness service uninstall           unload and remove the OS unit
+quecto-harness service status              report unit presence, run state, URL
+quecto-harness version                     print version, commit, Go version
+```
+
+Flags accepted by the serve form and by `service install` (which records them in the unit):
+
+| flag | type | default | meaning |
+|------|------|---------|---------|
+| `--listen` | string | from config, else `127.0.0.1:7331` | host:port to bind |
+| `--no-open` | bool | false | do not open a browser after binding |
+| `--home` | string | `$QUECTO_HARNESS_HOME`, else `~/.quecto-harness` | state directory |
+
+`--listen` on the command line overrides `config.json` for this process only and is not
+written back. Subcommand dispatch happens before `flag.Parse` on the serve flag set, by
+inspecting `os.Args[1]` against the fixed set `open`, `service`, `version`. Anything
+starting with `-` falls through to the serve form.
+
+### 1.2 Startup sequence
+
+`cmd/quecto-harness/main.go` runs the following in order. Any step that returns an error
+prints `quecto-harness: <what failed>: <what to do>` to stderr and exits 1.
+
+1. Dispatch the subcommand. `service` and `open` return before any of the rest.
+2. `config.DiscoverPaths()` resolves the home directory and derived paths. It does not
+   touch the filesystem.
+3. `paths.EnsureDirs()` creates `~/.quecto-harness`, `sessions/` and `log/` with mode
+   0700. Existing directories are left alone; their mode is not changed.
+4. `config.Open(paths)` reads `config.json` and `allowlist.json`. A missing file is not an
+   error: defaults are resolved in memory and written back at once, so a first run leaves
+   both files on disk. A file that exists but does not parse is an error and stops startup,
+   with the parse position in the message.
+5. `store.Open(paths.Sessions)` scans the sessions directory for `*.json` and builds an
+   index of `(id, project, model, created, updated, title, messages)` without reading each
+   file in full. See section 9.4.
+6. Load or mint the token. `~/.quecto-harness/token` is read when it exists and its contents
+   are non-empty after trimming; otherwise 32 bytes from `crypto/rand` are encoded with
+   `base64.RawURLEncoding` and written there with the atomic replace, mode 0600. The token
+   is therefore stable across restarts, which is what keeps an open browser tab working
+   when a service supervisor restarts the process. Deleting the file rotates the token on
+   the next start, which is the only way to revoke it.
+7. Construct `llama.New(cfg.Server.URL, cfg.Server.Token)`.
+8. `net.Listen("tcp", listen)`. Binding happens before anything is printed, so a port
+   conflict fails with `listen 127.0.0.1:7331: address already in use: another process is
+   using the port, pass --listen to choose another` and no URL is emitted.
+9. Build the `agent.Engine`, the `perms.Broker`, the `server.Server`, and start the SSE hub
+   goroutine.
+10. Kick off `llama.Detect` in a goroutine with a 5 second timeout. Startup does not wait on
+    it. Until it returns, `GET /api/state` reports `"mode": "unknown"` and the model picker
+    shows a spinner. A failure is cached as an error string and re-attempted on the next
+    `/api/state` that finds the cache older than 15 seconds.
+11. Write the URL file: `~/.quecto-harness/url`, mode 0600, content
+    `http://127.0.0.1:7331/?token=<token>\n`. Written with the atomic replace of section
+    3.4 so a concurrent `quecto-harness open` never sees a partial line.
+12. Print the same URL to stdout.
+13. Unless `--no-open`, spawn the browser opener (section 1.4).
+14. `http.Serve(ln, srv)` in a goroutine; block on `signal.NotifyContext(ctx,
+    os.Interrupt, syscall.SIGTERM)`.
+
+If the listen address is not loopback, step 8 additionally prints one warning line to
+stderr: `listening on <addr>: the session token is the only access control, bind to
+127.0.0.1 unless you meant this`. The server still starts.
+
+### 1.3 Shutdown
+
+On the first SIGINT or SIGTERM:
+
+1. Cancel the root context. Every in-flight `llama.Chat` request, every running shell
+   command, and every pending permission wait observes it.
+2. `perms.Broker.CancelAll()` releases blocked tool calls with `context.Canceled`, which the
+   agent loop turns into a terminal `stopped` state for each active turn.
+3. `agent.Engine.Wait(3 * time.Second)` waits for turn goroutines to reach a terminal state
+   and persist. Turns that have not finished by the deadline are abandoned; their session
+   file keeps whatever was last flushed.
+4. `srv.Shutdown(ctx)` with a 5 second deadline. Open SSE connections are closed by
+   cancelling their per-connection context first, since `Shutdown` waits on active handlers
+   and an SSE handler is active for as long as the client is attached.
+5. `os.Remove(paths.URL)`. A failure is logged, not fatal.
+6. Exit 0. A second signal exits 130 immediately without any of the above.
+
+Running shell commands are killed by process group as described in section 6.5. A command
+that ignores SIGTERM is SIGKILLed 2 seconds later, which happens inside step 3.
+
+### 1.4 Opening the browser
+
+```go
+// internal/server or cmd; single small helper.
+func OpenBrowser(url string) error
+```
+
+macOS runs `open <url>`, Linux runs `xdg-open <url>`. The process is started with
+`exec.Command(...).Start()` and never waited on; stdout and stderr go to `os.DevNull`. A
+missing `xdg-open` returns an error which is printed as a single line
+(`open browser: xdg-open not found: visit <url> yourself`) and does not stop the server.
+
+`quecto-harness open` reads `~/.quecto-harness/url`, trims whitespace, and calls the same
+helper. A missing file prints `no saved URL at ~/.quecto-harness/url: start quecto-harness
+first, or check service status` and exits 1.
+
+### 1.5 The token file and the URL file
+
+`~/.quecto-harness/token` holds the token alone, one line, mode 0600. It is created on first
+start and reused afterwards. Nothing rewrites it; removing it is how the token is rotated.
+
+`~/.quecto-harness/url` holds the full URL with the token, one line, mode 0600. It is
+rewritten on every start because the listen address can change between starts, and it exists
+because a service-managed process has no terminal to print to. `service status` prints its
+contents.
+
+The URL file is removed on clean shutdown. A stale one left by a crash still carries a valid
+token, since the token now outlives the process, so `quecto-harness open` against a stopped
+server fails at the connection rather than at the login.
+
+---
+
+## 2. Package map
+
+```
+cmd/quecto-harness
+  |
+  +-> internal/config      paths, config.json, allowlist.json, atomic write
+  +-> internal/store       session files
+  +-> internal/llama       llama.cpp client and wire types
+  +-> internal/perms       decision broker
+  +-> internal/tools       read_file, write_file, run_shell
+  +-> internal/prompts     embedded markdown, render funcs
+  +-> internal/agent       turn loop
+  +-> internal/server      routes, SSE hub, auth
+  +-> internal/service     launchd and systemd units
+  +-> internal/web         go:embed dist, fallback page
+```
+
+Import direction, no cycles:
+
+```
+llama     -> (stdlib only)
+prompts   -> (stdlib only)
+web       -> (stdlib only)
+config    -> llama (Effort type)
+tools     -> config (WriteAtomic), llama (Tool type for schemas)
+store     -> config (WriteAtomic), llama (Message, ToolCall, Usage)
+perms     -> config (allowlist read and append)
+agent     -> config, llama, tools, perms, prompts, store
+service   -> config (paths only)
+server    -> config, store, agent, perms, llama, web
+cmd       -> everything
+```
+
+Why each boundary exists:
+
+- **config** is the only package that reads or writes `~/.quecto-harness/config.json` and
+  `allowlist.json`. Anything else takes a resolved value or a `*config.Store`. This keeps
+  the "every field optional on read" rule in one file and makes defaults testable without a
+  filesystem. It imports `llama` for one type alias and nothing else, which cannot create a
+  cycle because `llama` imports no internal package.
+- **llama** knows nothing about sessions, tools or permissions. It converts HTTP and SSE
+  into Go values and back. It owns the `Effort` type, because effort only means something
+  as a set of request fields and that translation lives here. It is the package with the
+  highest fixture-to-code ratio, and it must stay swappable for a second OpenAI-compatible
+  backend later.
+- **tools** has no knowledge of who approved a call. It takes a resolved project root and
+  arguments and returns bytes. Its only policy is the path guard, which is a correctness
+  property of the tool rather than a permission.
+- **perms** decides. It never executes. Splitting decision from execution is what lets the
+  loop block on a channel while the HTTP handler resolves it from another goroutine.
+- **agent** is the only package that knows the order of operations in a turn. It is also the
+  only package that mutates a session.
+- **store** persists and lists. It does not know what a turn is.
+- **server** translates HTTP to calls on `agent`, `store`, `config`, `perms` and `llama`. It
+  owns the SSE hub because fan-out to browsers is a transport concern.
+- **prompts** is separate so that every string sent to a model is in one directory of
+  markdown, and a missing file fails the build.
+- **web** is separate from `server` so that a checkout without Node still compiles: the
+  embed directive and the fallback page live together and `server` only asks for an
+  `http.Handler`.
+- **service** is separate so that the unit text is a pure function of a few paths and can be
+  asserted in a test on a machine that has neither launchd nor systemd.
+
+---
+
+## 3. internal/config
+
+### 3.1 Paths
+
+```go
+package config
+
+// Paths are the locations under the state directory. Nothing is written
+// outside it, and nothing is written into a project folder.
+type Paths struct {
+	Home      string // ~/.quecto-harness
+	Config    string // <Home>/config.json
+	Allowlist string // <Home>/allowlist.json
+	Sessions  string // <Home>/sessions
+	Log       string // <Home>/log
+	Token     string // <Home>/token
+	URL       string // <Home>/url
+}
+
+func DiscoverPaths() (Paths, error)   // honours $QUECTO_HARNESS_HOME
+func DiscoverPathsIn(home string) Paths
+func (p Paths) EnsureDirs() error     // 0700 on Home, Sessions, Log
+```
+
+`DiscoverPaths` uses `os.UserHomeDir`. On a machine with no home directory it returns an
+error naming `$QUECTO_HARNESS_HOME` as the fix.
+
+### 3.2 The wire shape and the resolved shape
+
+Two types. `File` is what is on disk, every field a pointer or a slice so that absent and
+zero are distinguishable. `Config` is what the rest of the program sees, every field a
+value that has already been defaulted and validated.
+
+```go
+// File mirrors config.json. A nil field is absent and takes the default.
+type File struct {
+	Listen           *string  `json:"listen,omitempty"`
+	Server           *Server  `json:"server,omitempty"`
+	Model            *string  `json:"model,omitempty"`
+	Effort           *string  `json:"effort,omitempty"`
+	Auto             *bool    `json:"auto,omitempty"`
+	CompactAt        *float64 `json:"compact_at,omitempty"`
+	Shell            *string  `json:"shell,omitempty"`
+	CommandTimeoutS  *int     `json:"command_timeout_s,omitempty"`
+	OutputLimitBytes *int     `json:"output_limit_bytes,omitempty"`
+	Projects         []string `json:"projects,omitempty"`
+}
+
+type Server struct {
+	URL   *string `json:"url,omitempty"`
+	Token *string `json:"token,omitempty"`
+}
+
+// Config is the resolved configuration. Every field is usable as it stands.
+type Config struct {
+	Listen           string
+	ServerURL        string
+	ServerToken      string
+	Model            string
+	Effort           Effort
+	Auto             bool
+	CompactAt        float64
+	Shell            string
+	CommandTimeout   time.Duration
+	OutputLimitBytes int
+	Projects         []string
+}
+
+// Effort is defined in internal/llama, which is what turns it into request
+// fields. The alias and the four re-exported constants keep callers of this
+// package to one import.
+type Effort = llama.Effort
+
+const (
+	EffortAuto   = llama.EffortAuto
+	EffortOff    = llama.EffortOff
+	EffortLow    = llama.EffortLow
+	EffortMedium = llama.EffortMedium
+	EffortHigh   = llama.EffortHigh
+)
+```
+
+### 3.3 Defaults and validation
+
+```go
+func Defaults() Config {
+	return Config{
+		Listen:           "127.0.0.1:7331",
+		ServerURL:        "http://127.0.0.1:8080",
+		ServerToken:      "",
+		Model:            "",
+		Effort:           EffortMedium,
+		Auto:             false,
+		CompactAt:        0.8,
+		Shell:            defaultShell(), // $SHELL if absolute and executable, else /bin/sh
+		CommandTimeout:   120 * time.Second,
+		OutputLimitBytes: 16384,
+		Projects:         nil,
+	}
+}
+
+// Resolve folds the file over the defaults. Out-of-range values fall back to
+// the default and are reported, so a hand-edited file does not fail startup.
+func (f File) Resolve(d Config) (Config, []string)
+```
+
+Clamping rules applied by `Resolve`, each producing one note string:
+
+| field | accepted | on violation |
+|-------|----------|--------------|
+| `listen` | parses with `net.SplitHostPort`, port 1 to 65535 | default |
+| `server.url` | parses with `url.Parse`, scheme http or https, non-empty host | default |
+| `effort` | one of auto, off, low, medium, high | `medium` |
+| `compact_at` | 0.05 to 0.95 | 0.8 |
+| `shell` | absolute path | `/bin/sh` |
+| `command_timeout_s` | 1 to 3600 | 120 |
+| `output_limit_bytes` | 1024 to 4194304 | 16384 |
+| `projects` | each entry absolute and `filepath.Clean`ed; duplicates dropped | offending entries dropped |
+
+Notes are printed once at startup as `config.json: <note>` and are also returned by
+`GET /api/state` as `config_notes`, so a bad edit is visible in the UI.
+
+`Config.File()` is the inverse: every field written, no omissions, so a saved file is a
+complete document and a later reader never has to guess which defaults were in force.
+
+### 3.4 Atomic write
+
+```go
+// WriteAtomic replaces path with data. The temp file is created in the same
+// directory so the rename cannot cross a filesystem boundary.
+func WriteAtomic(path string, data []byte, perm os.FileMode) error
+```
+
+Procedure: `os.CreateTemp(filepath.Dir(path), ".tmp-"+filepath.Base(path)+"-*")`, `Chmod`
+to `perm`, `Write`, `Sync`, `Close`, `os.Rename`. On any failure before the rename the temp
+file is removed. The parent directory is not fsynced; a crash between rename and directory
+flush loses the write but never leaves a half-written file, which is the property that
+matters for a config file.
+
+`config.json` and `allowlist.json` are written 0600. Session files are written 0600. The
+token file and the URL file are written 0600. `WriteAtomic` is exported and used by `store`
+and by `tools.WriteFile`.
+
+### 3.5 The store
+
+```go
+// Store holds the resolved configuration and the allowlist, and is the only
+// writer of the two files. All methods are safe for concurrent use.
+type Store struct {
+	mu    sync.RWMutex
+	paths Paths
+	cfg   Config
+	allow map[string][]string
+	notes []string
+}
+
+func Open(p Paths) (*Store, error)
+
+func (s *Store) Paths() Paths
+func (s *Store) Config() Config
+func (s *Store) Notes() []string
+
+// Update applies fn to a copy, validates, persists, and returns the result.
+// The lock is held across the write so two concurrent PUTs cannot interleave.
+func (s *Store) Update(fn func(*Config)) (Config, error)
+
+func (s *Store) Allowlist(project string) []string
+func (s *Store) AllowMatch(project, command string) (prefix string, ok bool)
+func (s *Store) AddAllow(project, prefix string) error
+func (s *Store) RemoveAllow(project, prefix string) error
+
+func (s *Store) AddProject(path string) (Config, error)
+func (s *Store) RemoveProject(path string) (Config, error)
+```
+
+`AddProject` resolves the path with `filepath.Abs` then `filepath.EvalSymlinks`, requires it
+to be an existing directory, requires it to be readable, and rejects a duplicate. It stores
+the symlink-resolved absolute path, which is also what the path guard compares against and
+what keys the allowlist.
+
+### 3.6 allowlist.json
+
+```json
+{
+  "/Users/jay/Projects/Personal/quecto-harness": ["git status", "go test", "ls"],
+  "/Users/jay/src/other": ["make"]
+}
+```
+
+Keys are symlink-resolved absolute project roots. Values are prefixes, deduplicated,
+sorted longest-first on load so that `AllowMatch` reports the most specific match. An entry
+that is the empty string is dropped on load.
+
+### 3.7 Migration stance
+
+There is no version field and no migration code. Unknown keys are ignored on read. A key
+that disappears in a future version simply stops being read; a key that appears takes its
+default until the file is next written, at which point it is materialised. Because
+`Config.File()` writes every field, the file self-heals into the current shape after any
+`PUT /api/config`. If a future change needs a genuinely incompatible reinterpretation of an
+existing key, the key gets a new name and the old one is ignored.
+
+---
+
+## 4. internal/llama
+
+### 4.1 Client
+
+```go
+// Client talks to one llama.cpp server, in router mode or single-model mode.
+type Client struct {
+	BaseURL string       // no trailing slash
+	Token   string       // optional bearer
+	HTTP    *http.Client // defaults to a client with no global timeout
+}
+
+func New(baseURL, token string) *Client
+```
+
+The HTTP client has no `Timeout`, because a chat stream can legitimately run for minutes.
+Deadlines come from the caller's context. Transport settings: `MaxIdleConnsPerHost: 4`,
+`IdleConnTimeout: 90s`, `ResponseHeaderTimeout: 60s`, `DisableCompression: true` for the
+streaming path (gzip on an SSE body defeats incremental delivery on some proxies).
+`ExpectContinueTimeout: 1s`.
+
+Every request carries `Accept: application/json` (or `text/event-stream` for chat) and, when
+`Token` is non-empty, `Authorization: Bearer <token>`.
+
+### 4.2 Detect
+
+```go
+type Mode string
+
+const (
+	ModeUnknown Mode = "unknown"
+	ModeRouter  Mode = "router"
+	ModeSingle  Mode = "single"
+)
+
+// Info is what one GET /props tells us about the server as a whole.
+type Info struct {
+	Mode     Mode
+	Build    string // build_info, e.g. "b10812-8b4b3558f"
+	Autoload bool   // router only; models_autoload
+	Model    string // single mode only; model_alias
+	NCtx     int    // single mode only; 0 when the server did not say
+}
+
+func (c *Client) Detect(ctx context.Context) (Info, error)
+```
+
+`GET /props` with no query parameters. Router capture:
+
+```json
+{"role":"router","max_instances":1,"models_autoload":true,"model_alias":"llama-server",
+ "model_path":"none","default_generation_settings":{"params":null,"n_ctx":0},
+ "ui_settings":{},"build_info":"b10812-8b4b3558f","cors_proxy_enabled":false}
+```
+
+Rule: `role == "router"` selects `ModeRouter`. Anything else, including an absent `role`,
+selects `ModeSingle`. `model_alias` is present in both shapes (the router reports
+`"llama-server"`), so it is not a discriminator and is only read in single mode.
+`default_generation_settings.n_ctx` is `0` on a router and is only read in single mode.
+
+### 4.3 Models
+
+```go
+type ModelStatus string
+
+const (
+	StatusUnloaded    ModelStatus = "unloaded"
+	StatusLoading     ModelStatus = "loading"
+	StatusLoaded      ModelStatus = "loaded"
+	StatusSleeping    ModelStatus = "sleeping"
+	StatusDownloading ModelStatus = "downloading"
+)
+
+// Model is one entry of GET /v1/models, reduced to what the picker needs.
+type Model struct {
+	ID         string
+	Status     ModelStatus
+	Failed     bool
+	ExitCode   int
+	Modalities []string // architecture.input_modalities
+	CtxHint    int      // per-slot context, best available guess
+	CtxSource  string   // "meta", "args" or "" when unknown
+}
+
+func (c *Client) Models(ctx context.Context) ([]Model, error)
+```
+
+`GET /v1/models`. No query parameters, so no model is loaded by this call.
+
+`CtxHint` resolution, in order:
+
+1. `meta.n_ctx` when present and greater than zero. Only a loaded instance carries `meta`.
+   In the capture, `Gemma4-12B` is `loaded` and reports `meta.n_ctx: 131072`, which equals
+   the per-slot value from `/props?model=`. Source `"meta"`.
+2. Otherwise parse `status.args`: find `--ctx-size` (also accept `-c`) and `--parallel`
+   (also accept `-np`), each as the argv element followed by its value. Hint is
+   `ctxSize / max(parallel, 1)`, integer division. In the capture,
+   `--ctx-size 262144 --parallel 2` gives `131072`. Source `"args"`.
+3. Otherwise 0. Source `""`. The picker row shows `ctx unknown`. A session bound to such a
+   model does not carry the zero forward; it assumes 32768, as described in 8.5.
+
+`status.value` maps directly. `status.failed` and `status.exit_code` are read when present
+and surfaced so the picker can show `failed (exit 1)`. `status.progress` for `downloading`
+is not read; the status word alone is shown.
+
+A model whose status is not one of the five known words is passed through verbatim in
+`Status` and rendered as a grey dot with the raw word as its label.
+
+### 4.4 Props
+
+```go
+// Caps is chat_template_caps. Known is false when the server did not send the
+// object, which is how a not-yet-loaded model looks.
+type Caps struct {
+	Known             bool
+	ToolCalls         bool
+	ParallelToolCalls bool
+	ReasoningEffort   bool
+	SystemRole        bool
+	PreserveReasoning bool
+}
+
+// Props is GET /props for one model.
+type Props struct {
+	Model      string // model_alias
+	NCtx       int    // default_generation_settings.n_ctx, per slot
+	TotalSlots int
+	Build      string
+	Sleeping   bool
+	Caps       Caps
+}
+
+func (c *Client) Props(ctx context.Context, model string) (Props, error)
+```
+
+Request in router mode: `GET /props?model=<url-escaped id>&autoload=false`. In single mode
+the model parameter is omitted entirely. The `autoload=false` parameter is added by a single
+helper that every model-scoped GET goes through:
+
+```go
+// modelURL builds a model-scoped GET. autoload=false is not optional: a
+// model-scoped GET without it loads the model on a router.
+func (c *Client) modelURL(path, model string, extra url.Values) string
+```
+
+The capture for `Gemma4-12B` gives `default_generation_settings.n_ctx: 131072`,
+`total_slots: 2`, `model_alias: "Gemma4-12B"`, `is_sleeping: false`, and:
+
+```json
+"chat_template_caps": {
+  "supports_object_arguments": true,
+  "supports_parallel_tool_calls": true,
+  "supports_preserve_reasoning": false,
+  "supports_reasoning_effort": false,
+  "supports_string_content": true,
+  "supports_system_role": true,
+  "supports_tool_calls": true,
+  "supports_tools": true,
+  "supports_typed_content": false
+}
+```
+
+`chat_template_caps` is decoded as `map[string]bool` and folded into `Caps`, so a new
+capability key does not break decoding. `Caps.Known` is set when the map is non-nil.
+
+A 4xx on `Props` means the model is not loaded (the router refuses a model-scoped read for
+an unloaded instance when autoload is off). The caller keeps the `CtxHint` and leaves
+`Caps.Known` false. This is not surfaced as an error to the user.
+
+### 4.5 Chat: the request
+
+```go
+type Message struct {
+	Role       string     `json:"role"` // system, user, assistant, tool
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Name       string     `json:"name,omitempty"`
+}
+
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"` // always "function"
+	Function FunctionCall `json:"function"`
+}
+
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"` // raw JSON text, not a decoded object
+}
+
+type Tool struct {
+	Type     string       `json:"type"` // "function"
+	Function FunctionSpec `json:"function"`
+}
+
+type FunctionSpec struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"` // JSON Schema
+}
+
+// Effort is the UI thinking level. It becomes request fields in applyEffort
+// and has no other meaning.
+type Effort string
+
+const (
+	// Auto sends no thinking field at all. That is not the same as off: the
+	// template decides, which is what llama.cpp does with --reasoning auto.
+	EffortAuto   Effort = "auto"
+	EffortOff    Effort = "off"
+	EffortLow    Effort = "low"
+	EffortMedium Effort = "medium"
+	EffortHigh   Effort = "high"
+)
+
+// ChatRequest is the harness-level request. Wire fields are derived from it by
+// buildBody, so the effort mapping lives in one place.
+type ChatRequest struct {
+	Model    string
+	Messages []Message
+	Tools    []Tool
+	Effort   Effort
+	Caps     Caps
+}
+```
+
+`buildBody(ChatRequest) ([]byte, error)` emits, in this field order:
+
+```json
+{
+  "model": "Gemma4-12B",
+  "messages": [
+    {"role": "system", "content": "You are a coding agent working in /Users/jay/src/x on darwin.\n..."},
+    {"role": "user", "content": "list the files here"},
+    {"role": "assistant", "content": "", "tool_calls": [
+      {"id": "call_0", "type": "function",
+       "function": {"name": "run_shell", "arguments": "{\"command\":\"ls\"}"}}
+    ]},
+    {"role": "tool", "tool_call_id": "call_0", "name": "run_shell",
+     "content": "README.md\nmain.go\n\nexit code: 0"}
+  ],
+  "tools": [
+    {"type": "function", "function": {
+      "name": "read_file",
+      "description": "Read a text file in the project. Returns numbered lines. Use offset and limit for large files.",
+      "parameters": {"type": "object", "properties": {
+        "path":   {"type": "string",  "description": "Path relative to the project root."},
+        "offset": {"type": "integer", "description": "First line to return, 1-based."},
+        "limit":  {"type": "integer", "description": "Number of lines to return. Default 400."}
+      }, "required": ["path"]}
+    }},
+    {"type": "function", "function": {"name": "write_file", "...": "..."}},
+    {"type": "function", "function": {"name": "run_shell",  "...": "..."}}
+  ],
+  "tool_choice": "auto",
+  "stream": true,
+  "stream_options": {"include_usage": true},
+  "reasoning_format": "deepseek",
+  "reasoning_budget": 8192
+}
+```
+
+The example is a medium-effort turn against `Gemma4-12B`, whose template reports
+`supports_reasoning_effort: false`. That is why it carries `reasoning_budget: 8192` and no
+`reasoning_effort`. Against a template that reports the capability, the same turn carries
+`"reasoning_effort": "medium"` and no budget.
+
+Rules for the thinking fields, derived from the settled effort table:
+
+```go
+func applyEffort(body map[string]any, e Effort, caps Caps) {
+	switch {
+	case e == EffortAuto:
+		// Nothing is set. Omitting the field and setting it to a level the
+		// template did not ask for are different requests.
+	case e == EffortOff:
+		body["reasoning_budget"] = 0
+		body["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
+	case caps.Known && caps.ReasoningEffort:
+		body["reasoning_effort"] = string(e) // "low", "medium", "high"
+	default:
+		body["reasoning_budget"] = budget[e] // 2048, 8192, -1
+	}
+}
+
+var budget = map[Effort]int{EffortLow: 2048, EffortMedium: 8192, EffortHigh: -1}
+```
+
+`reasoning_format: "deepseek"` is sent on every request regardless of effort, so any thought
+text arrives in `reasoning_content` rather than inline in `content`. `tool_choice: "auto"` is
+sent on every request. `tools` is omitted entirely when the tool list is empty, which is the
+case for the compaction request.
+
+For `Gemma4-12B` as captured, `supports_reasoning_effort` is false, so a medium turn sends
+`"reasoning_budget": 8192` and no `reasoning_effort`.
+
+The body is built as a `map[string]any` rather than a struct because the field set is
+conditional and Go struct tags cannot express "omit unless the caps say so" without a
+pointer for every field. Determinism for tests comes from `json.Marshal` on a map, which
+sorts keys.
+
+### 4.6 Chat: the call
+
+```go
+type EventKind int
+
+const (
+	EventContent EventKind = iota
+	EventReasoning
+	EventToolCall
+	EventFinish
+	EventUsage
+	EventTimings
+)
+
+// Event is one decoded piece of a stream. Only the fields relevant to Kind
+// are set.
+type Event struct {
+	Kind EventKind
+
+	Text string // EventContent, EventReasoning
+
+	Index     int    // EventToolCall
+	ID        string // EventToolCall, cumulative
+	Name      string // EventToolCall, cumulative
+	Arguments string // EventToolCall, the fragment from this chunk
+
+	FinishReason string   // EventFinish
+	Usage        *Usage   // EventUsage
+	Timings      *Timings // EventTimings
+}
+
+type Usage struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	CachedTokens     int // prompt_tokens_details.cached_tokens
+}
+
+type Timings struct {
+	PromptN            int
+	PromptPerSecond    float64
+	PredictedN         int
+	PredictedPerSecond float64
+	CacheN             int
+}
+
+// Result is the assembled turn. It is also derivable from the events, and is
+// returned so callers that do not stream to a UI need not accumulate.
+type Result struct {
+	Content      string
+	Reasoning    string
+	ToolCalls    []ToolCall
+	FinishReason string
+	Usage        *Usage
+	Timings      *Timings
+	Chunks       int // frames that decoded
+	Dropped      int // frames that did not
+}
+
+// Chat streams one completion. on is called synchronously from the read loop,
+// in stream order; returning an error from it aborts the request.
+func (c *Client) Chat(ctx context.Context, req ChatRequest, on func(Event) error) (Result, error)
+```
+
+`POST /v1/chat/completions`, `Content-Type: application/json`,
+`Accept: text/event-stream`, `Cache-Control: no-store`.
+
+Non-2xx: the body is read up to 8 KiB and turned into an `*Error` (section 4.10) without
+being streamed. A 2xx whose `Content-Type` is not `text/event-stream` is decoded as a whole
+completion and converted into the same event sequence, so a server that quietly ignores
+`stream: true` still works.
+
+### 4.7 SSE parser state machine
+
+Input is the response body. Reading is line-oriented over a `bufio.Reader` with
+`ReadSlice('\n')` and a hand-rolled grow, capped at `maxFrameBytes = 1 << 20`. A frame
+larger than the cap is discarded and counted as dropped, and the parser resynchronises at
+the next blank line.
+
+States:
+
+| state | meaning |
+|-------|---------|
+| `sIdle` | between events; only a field line or a blank line is expected |
+| `sEvent` | at least one `data:` line seen for the current event |
+| `sSkip` | current event exceeded the frame cap; discard until a blank line |
+| `sDone` | `data: [DONE]` seen, or the body ended |
+
+Transitions, applied per line with the trailing `\r\n` or `\n` stripped:
+
+| state | line | action | next |
+|-------|------|--------|------|
+| `sIdle` | empty | nothing | `sIdle` |
+| `sIdle` | starts with `:` | ignore (comment or keepalive) | `sIdle` |
+| `sIdle` | `data: X` | start buffer with `X` | `sEvent` |
+| `sIdle` | `event: X`, `id: X`, `retry: X` | record and ignore | `sIdle` |
+| `sIdle` | anything else | count as dropped, ignore | `sIdle` |
+| `sEvent` | `data: X` | append `"\n" + X` to buffer | `sEvent` |
+| `sEvent` | other field line | ignore | `sEvent` |
+| `sEvent` | empty | dispatch buffer, reset | `sIdle` or `sDone` |
+| `sEvent` | buffer exceeds cap | drop buffer, `Dropped++` | `sSkip` |
+| `sSkip` | empty | reset | `sIdle` |
+| `sSkip` | anything | ignore | `sSkip` |
+| `sDone` | anything | ignore | `sDone` |
+
+Dispatch of a buffered payload:
+
+1. Trim space. If the payload is `[DONE]`, move to `sDone` and stop reading.
+2. If the payload does not start with `{`, `Dropped++` and return.
+3. `json.Unmarshal` into the chunk type. On error, `Dropped++` and return. A malformed
+   chunk never ends the stream and never propagates an error.
+4. `Chunks++`, then emit events in this order for the chunk: reasoning delta, content delta,
+   each tool-call fragment in the order the server listed them, finish reason, usage,
+   timings.
+
+At EOF without `[DONE]`, three cases:
+
+- At least one chunk decoded and a finish reason was seen: the stream ends normally.
+- At least one chunk decoded but no finish reason arrived: the server closed mid-generation.
+  This is `KindUpstream` with the message `the model server closed the stream early: send
+  the message again`. `Result` still carries whatever content, reasoning and tool calls had
+  accumulated, so the UI shows the partial reply, and the turn ends in `failed`.
+- No chunk decoded at all: `KindMalformed`, carrying the count of dropped frames.
+
+`ctx.Done()` closes the body and returns `KindCanceled`.
+
+### 4.8 Every field optional
+
+The chunk type uses pointers for every scalar that has a meaningful zero, and pointers for
+every nested object, so that "absent" and "zero" stay distinct. Slices are left as slices;
+an absent array and an empty array mean the same thing here.
+
+```go
+type chunk struct {
+	ID      *string  `json:"id"`
+	Object  *string  `json:"object"`
+	Model   *string  `json:"model"`
+	Choices []choice `json:"choices"`
+	Usage   *usage   `json:"usage"`
+	Timings *timings `json:"timings"`
+	Error   *apiErr  `json:"error"`
+}
+
+type choice struct {
+	Index        *int    `json:"index"`
+	Delta        *delta  `json:"delta"`
+	Message      *delta  `json:"message"` // non-streaming shape
+	FinishReason *string `json:"finish_reason"`
+}
+
+type delta struct {
+	Role             *string        `json:"role"`
+	Content          *string        `json:"content"`
+	ReasoningContent *string        `json:"reasoning_content"`
+	Reasoning        *string        `json:"reasoning"` // alias some builds use
+	ToolCalls        []deltaToolCall `json:"tool_calls"`
+}
+
+type deltaToolCall struct {
+	Index    *int    `json:"index"`
+	ID       *string `json:"id"`
+	Type     *string `json:"type"`
+	Function *struct {
+		Name      *string `json:"name"`
+		Arguments *string `json:"arguments"`
+	} `json:"function"`
+}
+
+type usage struct {
+	PromptTokens         *int `json:"prompt_tokens"`
+	CompletionTokens     *int `json:"completion_tokens"`
+	TotalTokens          *int `json:"total_tokens"`
+	PromptTokensDetails  *struct {
+		CachedTokens *int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+}
+
+type timings struct {
+	CacheN             *int     `json:"cache_n"`
+	PromptN            *int     `json:"prompt_n"`
+	PromptPerSecond    *float64 `json:"prompt_per_second"`
+	PredictedN         *int     `json:"predicted_n"`
+	PredictedPerSecond *float64 `json:"predicted_per_second"`
+}
+
+type apiErr struct {
+	Code    *int    `json:"code"`
+	Message *string `json:"message"`
+	Type    *string `json:"type"`
+}
+```
+
+Two helpers keep the call sites short: `deref[T any](p *T) T` and `derefOr[T any](p *T, d T) T`.
+
+`Content` and `ReasoningContent` are both read; when a build sends `reasoning` instead of
+`reasoning_content`, the alias is used only if `reasoning_content` is absent. Only
+`choices[0]` is read; a chunk with more than one choice logs nothing and uses the first,
+because `n` is never sent.
+
+A chunk carrying `error` is turned into an `*Error` with `KindUpstream` and terminates the
+stream, since a mid-stream error object means the server has stopped generating.
+
+### 4.9 Tool call fragment accumulation
+
+State held for the duration of one `Chat` call:
+
+```go
+type partial struct {
+	index int
+	id    strings.Builder
+	name  strings.Builder
+	args  strings.Builder
+	seen  int // order of first appearance
+}
+
+acc := map[int]*partial{}
+order := []int{}
+```
+
+For each `deltaToolCall` in a chunk:
+
+1. `idx := derefOr(d.Index, len(order))`. An absent index means the server is streaming a
+   single call without indices; the first such fragment allocates index 0 and every later
+   indexless fragment appends to the last index seen.
+2. If `acc[idx]` is nil, create it and append `idx` to `order`.
+3. Append `deref(d.ID)`, `deref(d.Function.Name)` and `deref(d.Function.Arguments)` to their
+   builders. All three are cumulative because some builds resend the id on every fragment
+   and others send it once; appending an empty string is a no-op, and a repeated identical
+   id is guarded by "only append when the builder is empty or the new text is not a prefix
+   already present" for `id` and `name`. `arguments` is always appended raw.
+4. Emit `Event{Kind: EventToolCall, Index: idx, ID: <accumulated id>, Name: <accumulated
+   name>, Arguments: <this fragment only>}`.
+
+At the end of the stream, `order` is walked and each `partial` becomes a `ToolCall` with
+`Type: "function"`. An entry whose accumulated name is empty is dropped and counted in
+`Dropped`. An entry whose id is empty gets `fmt.Sprintf("call_%d", idx)`, because the tool
+result message needs a `tool_call_id` and some builds omit it.
+
+`Arguments` is not parsed by `llama`. Validation against the schema happens in `agent` when
+the call is dispatched, so a malformed argument object becomes a tool error message the
+model can react to rather than a client error.
+
+### 4.10 Usage and timings
+
+`stream_options: {"include_usage": true}` makes the server send a final chunk with
+`choices: []` and a `usage` object. Recorded shape from the llama.cpp server:
+
+```json
+{"choices":[],"created":1757141666,"id":"chatcmpl-...","model":"Gemma4-12B",
+ "usage":{"completion_tokens":48,"prompt_tokens":44,"total_tokens":92,
+          "prompt_tokens_details":{"cached_tokens":0}},
+ "timings":{"cache_n":236,"prompt_n":1,"prompt_ms":30.958,"prompt_per_second":32.30,
+            "predicted_n":35,"predicted_ms":661.064,"predicted_per_second":52.94}}
+```
+
+`usage` and `timings` may also ride on a chunk that carries choices. Both are handled the
+same way: the last non-nil value wins, `Result.Usage` and `Result.Timings` hold it, and an
+`EventUsage` and `EventTimings` are emitted when they arrive. `TotalTokens` falls back to
+`PromptTokens + CompletionTokens` when absent.
+
+`Timings` is surfaced but not persisted. The UI shows `52 tok/s` next to a finished
+assistant message and `32 tok/s prompt` in a tooltip. `cache_n` is shown in the same tooltip
+as `236 cached`.
+
+### 4.11 Error taxonomy
+
+```go
+type ErrKind string
+
+const (
+	KindUnreachable  ErrKind = "unreachable"   // dial, DNS, TLS, connection reset
+	KindAuth         ErrKind = "auth"          // 401, 403
+	KindNotFound     ErrKind = "not_found"     // 404, unknown model id
+	KindBadRequest   ErrKind = "bad_request"   // other 4xx
+	KindModelLoading ErrKind = "model_loading" // 503 with "loading" in the body
+	KindUpstream     ErrKind = "upstream"      // 5xx, or an error object mid-stream
+	KindMalformed    ErrKind = "malformed"     // nothing decodable arrived
+	KindCanceled     ErrKind = "canceled"      // caller's context
+)
+
+// Error is every failure this package returns.
+type Error struct {
+	Kind    ErrKind
+	Status  int    // 0 when no response was received
+	Message string // server message when it sent one, else our own
+	Body    string // first 8 KiB of the response body, for the log
+	Op      string // "detect", "models", "props", "chat"
+	err     error
+}
+
+func (e *Error) Error() string { ... } // "chat: model Gemma4-12B is loading, retry in a moment"
+func (e *Error) Unwrap() error { return e.err }
+
+func Kind(err error) ErrKind // errors.As, returns "" for a non-llama error
+```
+
+Classification:
+
+| condition | kind |
+|-----------|------|
+| `errors.Is(err, context.Canceled)` or `context.DeadlineExceeded` | `KindCanceled` |
+| `*net.OpError`, `*url.Error` wrapping a dial or reset | `KindUnreachable` |
+| 401, 403 | `KindAuth` |
+| 404, or 400 whose message contains `model` and `not found` | `KindNotFound` |
+| 503 whose body message contains `loading` | `KindModelLoading` |
+| other 4xx | `KindBadRequest` |
+| 5xx | `KindUpstream` |
+| stream ended with `Chunks > 0` and no finish reason | `KindUpstream` |
+| stream ended with `Chunks == 0` | `KindMalformed` |
+
+Message text follows the "errors are for the reader" rule:
+
+- `KindUnreachable`: `reach <base URL>: the model server is not answering, check it is running and that server.url is right`
+- `KindAuth`: `authenticate with <base URL>: the server rejected the token, set server.token in settings`
+- `KindNotFound`: `model "<id>" is not on <base URL>: pick another from the model list`
+- `KindModelLoading`: `model "<id>" is loading: send the message again in a moment`
+- `KindBadRequest`: `<server message>` verbatim, prefixed with `the model server refused the request: `
+- `KindUpstream`, from a status code or an error object: `the model server failed: <server
+  message>`
+- `KindUpstream`, from an early close: `the model server closed the stream early: send the
+  message again`
+- `KindMalformed`: `the model server sent nothing usable: <n> frames could not be read`
+
+A malformed chunk inside an otherwise good stream is not an error at all. It increments
+`Result.Dropped`, and the agent emits a single `error` SSE event with kind `malformed` at
+the end of the turn when `Dropped > 0`, so the user knows some output was lost without the
+turn failing.
+
+---
+
+## 5. internal/prompts
+
+### 5.1 Layout
+
+```
+internal/prompts/
+  prompts.go
+  prompts_test.go
+  system.md
+  tool_read_file.md
+  tool_write_file.md
+  tool_run_shell.md
+  compact.md
+```
+
+```go
+package prompts
+
+//go:embed system.md tool_read_file.md tool_write_file.md tool_run_shell.md compact.md
+var files embed.FS
+```
+
+Each file is named individually rather than by glob, so deleting one fails the build. A
+package-level `var systemTmpl = template.Must(template.New("system").Parse(mustRead("system.md")))`
+turns a template syntax error into a panic at init, which the package test catches.
+
+### 5.2 Render functions
+
+```go
+// SystemVars are the values system.md takes.
+type SystemVars struct {
+	Project string // absolute project root
+	OS      string // runtime.GOOS
+}
+
+func System(v SystemVars) string
+
+func ToolReadFile() string
+func ToolWriteFile() string
+func ToolRunShell() string
+func Compact() string
+```
+
+The four tool and compact functions return the file contents with trailing whitespace
+trimmed. Only `system.md` is a template.
+
+### 5.3 system.md
+
+```
+You are a coding agent working in {{.Project}} on {{.OS}}.
+Tools: read_file, write_file, run_shell. Use them. Do not guess file contents.
+Read a file before you change it. write_file replaces the whole file.
+Run one command per call. Each run_shell starts a new shell in the project root.
+Keep replies short. Say what you did and what failed.
+When the task is done, stop and summarize in two sentences.
+```
+
+### 5.4 tool_read_file.md
+
+```
+Read a text file in the project. Returns numbered lines. Use offset and limit for large files.
+```
+
+Argument descriptions, which live in the Go schema and not in the markdown:
+
+- `path`: `Path relative to the project root.`
+- `offset`: `First line to return, 1-based.`
+- `limit`: `Number of lines to return. Default 400.`
+
+### 5.5 tool_write_file.md
+
+```
+Write content to a file, creating or replacing it. Parent folders are created.
+```
+
+- `path`: `Path relative to the project root.`
+- `content`: `The full file contents.`
+
+### 5.6 tool_run_shell.md
+
+```
+Run a shell command in the project root. Returns output and exit code. Each call is a new shell; nothing persists between calls.
+```
+
+- `command`: `The command line to run.`
+- `timeout_s`: `Seconds before the command is killed. Default 120.`
+
+### 5.7 compact.md
+
+```
+Summarize this conversation for yourself to continue the work.
+Keep: the task, decisions, files changed with paths, current state, open problems, next step.
+Drop chatter and tool output already acted on.
+Plain text, under 400 words.
+```
+
+---
+
+## 6. internal/tools
+
+### 6.1 Runner
+
+```go
+// Runner executes the three tools against one project root. All paths are
+// resolved against Root and may not leave it.
+type Runner struct {
+	Root        string // symlink-resolved absolute directory
+	Shell       string
+	Timeout     time.Duration // default per call
+	MaxTimeout  time.Duration // ceiling a call may ask for
+	OutputLimit int           // bytes retained from run_shell
+	ReadLimit   int           // bytes retained from read_file, 64 << 10
+	ReadLines   int           // default line count, 400
+}
+
+func NewRunner(root string, cfg config.Config) (*Runner, error)
+
+// Result is what the model is told. Output is already truncated and, for
+// run_shell, already carries the exit code line.
+type Result struct {
+	Output    string
+	ExitCode  *int  // run_shell only
+	Truncated bool
+	Bytes     int   // bytes before truncation
+}
+
+func (r *Runner) ReadFile(ctx context.Context, args json.RawMessage) (Result, error)
+func (r *Runner) WriteFile(ctx context.Context, args json.RawMessage) (Result, error)
+func (r *Runner) RunShell(ctx context.Context, args json.RawMessage) (Result, error)
+
+// Schemas returns the three tool definitions in the order the model sees them.
+func Schemas() []llama.Tool
+```
+
+`NewRunner` fails if `root` is not an existing directory after `filepath.EvalSymlinks`.
+
+Argument types:
+
+```go
+type ReadFileArgs struct {
+	Path   string `json:"path"`
+	Offset *int   `json:"offset"`
+	Limit  *int   `json:"limit"`
+}
+
+type WriteFileArgs struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+type RunShellArgs struct {
+	Command  string `json:"command"`
+	TimeoutS *int   `json:"timeout_s"`
+}
+```
+
+Decoding uses `json.Decoder` with `DisallowUnknownFields` turned off, since a small model
+routinely invents a field and the call should still run. A missing required field returns a
+one-line error that becomes the tool result: `read_file needs a path`.
+
+### 6.2 JSON schemas
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "read_file",
+    "description": "<contents of tool_read_file.md>",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path":   {"type": "string",  "description": "Path relative to the project root."},
+        "offset": {"type": "integer", "description": "First line to return, 1-based.", "minimum": 1},
+        "limit":  {"type": "integer", "description": "Number of lines to return. Default 400.", "minimum": 1}
+      },
+      "required": ["path"],
+      "additionalProperties": false
+    }
+  }
+}
+```
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "write_file",
+    "description": "<contents of tool_write_file.md>",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path":    {"type": "string", "description": "Path relative to the project root."},
+        "content": {"type": "string", "description": "The full file contents."}
+      },
+      "required": ["path", "content"],
+      "additionalProperties": false
+    }
+  }
+}
+```
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "run_shell",
+    "description": "<contents of tool_run_shell.md>",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command":   {"type": "string",  "description": "The command line to run."},
+        "timeout_s": {"type": "integer", "description": "Seconds before the command is killed. Default 120.", "minimum": 1}
+      },
+      "required": ["command"],
+      "additionalProperties": false
+    }
+  }
+}
+```
+
+The schemas are built once at init into `json.RawMessage` values, so they are marshalled
+without re-encoding on every turn.
+
+### 6.3 Path guard
+
+```go
+// resolve turns a tool path argument into an absolute path inside Root, or
+// returns the message the model is shown.
+func (r *Runner) resolve(p string) (string, error)
+```
+
+Algorithm:
+
+1. Reject an empty path: `path is empty`.
+2. Reject a path containing a NUL byte: `path contains a null byte`.
+3. If `filepath.IsAbs(p)`, keep it. Otherwise `p = filepath.Join(r.Root, p)`.
+4. `p = filepath.Clean(p)`.
+5. Split `p` into the longest existing prefix and a non-existent tail, by walking up with
+   `os.Lstat` until a component exists. In practice this is at most a handful of `Lstat`
+   calls because a write target's parent usually exists.
+6. `real, err := filepath.EvalSymlinks(existingPrefix)`. An error other than
+   `fs.ErrNotExist` is returned as `resolve <path>: <err>`.
+7. Reject if any component of the non-existent tail is `..`. After step 4 this can only
+   happen when the path started outside the root, which step 8 also catches, but the check
+   is cheap and gives a clearer message.
+8. `resolved := filepath.Join(real, tail)`. `rel, err := filepath.Rel(r.Root, resolved)`.
+   Reject when `err != nil`, when `rel == ".."`, or when
+   `strings.HasPrefix(rel, ".."+string(filepath.Separator))`.
+9. Return `resolved`.
+
+Refusal message, identical for every cause so a probing model learns nothing from the
+difference: `path is outside the project: <original argument>`.
+
+Symlink notes:
+
+- `Runner.Root` is itself symlink-resolved once at construction. On macOS this matters:
+  `/tmp` is a symlink to `/private/tmp`, and a project under `/tmp` would otherwise fail
+  every comparison.
+- A symlink inside the project that points outside it is refused, because step 6 resolves it
+  and step 8 then sees a path outside the root.
+- A symlink inside the project that points inside it is allowed and is followed.
+- `write_file` to a path whose final component is an existing symlink writes through the
+  symlink to its target, and the target is subject to the same check because the final
+  component is part of the existing prefix in step 5.
+- The check is done once per call, immediately before the operation. There is no protection
+  against a symlink being swapped in between the check and the open. That race is accepted:
+  the tools run as the user, on the user's own machine, on a directory the user chose.
+
+### 6.4 read_file
+
+1. Resolve the path.
+2. `os.Stat`. A directory returns `<path> is a directory`. A file larger than 64 MiB returns
+   `<path> is <n> MB, too large to read`.
+3. Open and read the first 8192 bytes for binary detection (section 6.7). On detection,
+   return `<path> looks like a binary file, not read`.
+4. Seek back to 0. Scan lines with `bufio.Scanner`, buffer cap 1 MiB. A line longer than the
+   cap is truncated at the cap with ` ...` appended and scanning continues.
+5. `offset` defaults to 1, `limit` defaults to `ReadLines` (400). Lines before `offset` are
+   counted and discarded.
+6. Emit lines as `%6d\t%s\n` with the original 1-based line number. Stop after `limit` lines
+   or after the accumulated output reaches `ReadLimit` (64 KiB), whichever comes first.
+7. When the file has more lines after the emitted range, append a final line
+   `... <n> more lines, use offset <m>`. When the read stopped on the byte limit rather than
+   the line limit, the appended line is `... stopped at 64 KB, use offset <m>`.
+8. An empty file returns `<path> is empty`.
+
+### 6.5 write_file
+
+1. Resolve the path.
+2. `os.MkdirAll(filepath.Dir(resolved), 0755)`.
+3. `config.WriteAtomic(resolved, []byte(content), 0644)`. When the file already exists, its
+   current mode is read first and preserved instead of 0644.
+4. Result output: `wrote <rel> (<n> bytes, <m> lines)` where `rel` is the path relative to
+   the project root. When the file existed, the word is `replaced` rather than `wrote`.
+
+There is no diff and no backup. The tool description says the file is replaced whole.
+
+### 6.6 run_shell
+
+```go
+cmd := exec.CommandContext(ctx, r.Shell, "-c", args.Command)
+cmd.Dir = r.Root
+cmd.Env = os.Environ()
+cmd.Stdin = nil
+cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+```
+
+`SysProcAttr` lives in `run_shell_unix.go` behind `//go:build darwin || linux`, which is the
+whole supported set. There is no other build tag in the package.
+
+Timeout: `t := args.TimeoutS` clamped to `[1, MaxTimeout]`, defaulting to `Runner.Timeout`.
+`MaxTimeout` is `4 * Runner.Timeout` with a floor of 600 seconds, so a model asking for
+`timeout_s: 100000` gets a bounded wait rather than a hang.
+
+Kill semantics, identical on macOS and Linux:
+
+1. `cmd.Cancel` is set to a function that sends `syscall.Kill(-cmd.Process.Pid,
+   syscall.SIGTERM)`. The negative pid targets the process group created by `Setpgid`, so a
+   shell that forked children takes the whole tree down rather than orphaning it.
+2. `cmd.WaitDelay = 2 * time.Second`. If the group has not exited by then, `os/exec` closes
+   the pipes and `Wait` returns; a second explicit `syscall.Kill(-pid, syscall.SIGKILL)` is
+   issued from the same cancel path to make the kill unconditional.
+3. Timeout and stop are the same mechanism: the call runs under a context derived from both
+   the turn context and a `context.WithTimeout` for the requested seconds. Whichever fires
+   first cancels.
+4. `syscall.Kill` returning `ESRCH` is ignored; the group has already gone.
+
+Output: stdout and stderr are both written into one `*limitBuffer` (section 6.7), so
+interleaving is preserved in arrival order. The buffer is guarded by a mutex because
+`os/exec` writes from two goroutines when the same writer is used for both streams.
+
+Exit code: `cmd.ProcessState.ExitCode()`. A signalled process reports -1; the result line
+then reads `exit code: killed by signal <name>`. A timeout appends
+`\n\ncommand timed out after <n>s and was killed` before the exit line. Cancellation by the
+Stop button appends `\n\nstopped` and returns a `Result` with `ExitCode` nil, which the agent
+turns into a tool message so the transcript is complete.
+
+Final output shape given to the model:
+
+```
+README.md
+main.go
+
+exit code: 0
+```
+
+### 6.7 Truncation and binary detection
+
+```go
+// Truncate keeps the head and the tail of s within limit bytes, cutting on
+// line boundaries where one is close enough.
+func Truncate(s string, limit int) (out string, truncated bool)
+```
+
+Algorithm:
+
+1. If `len(s) <= limit`, return unchanged.
+2. `head := limit * 2 / 3`, `tail := limit - head`.
+3. Move the head cut forward to the next `\n` within 512 bytes; if there is none, cut where
+   it is and back off to the previous UTF-8 rune boundary.
+4. Move the tail cut backward to the previous `\n` within 512 bytes; if there is none, cut
+   where it is and advance to the next rune boundary.
+5. Join with `"\n... " + strconv.Itoa(omitted) + " bytes omitted ...\n"`.
+
+The returned string may exceed `limit` by the length of the marker. That is deliberate: the
+limit governs retained output, not the total string, so the marker cannot be silently cut.
+
+```go
+// looksBinary reports whether the sniff is not text. A NUL byte settles it;
+// otherwise invalid UTF-8 over 1 percent of the sniff does.
+func looksBinary(sniff []byte) bool
+```
+
+1. `bytes.IndexByte(sniff, 0) >= 0` returns true.
+2. Trim up to 3 trailing bytes that form an incomplete rune at the sniff boundary.
+3. Decode runes; count `utf8.RuneError` with width 1. True when the count exceeds
+   `len(sniff)/100` or when the count is at least 1 and `len(sniff) < 100`.
+
+UTF-16 files are reported as binary. That is accepted.
+
+---
+
+## 7. internal/perms
+
+### 7.1 Types
+
+```go
+package perms
+
+// Action is what policy says about a call before any human is asked.
+type Action string
+
+const (
+	ActionAllow  Action = "allow"
+	ActionPrompt Action = "prompt"
+)
+
+type DecisionKind string
+
+const (
+	DecideOnce   DecisionKind = "once"
+	DecideAlways DecisionKind = "always"
+	DecideDeny   DecisionKind = "deny"
+)
+
+// Request is one pending question about one tool call.
+type Request struct {
+	ID        string    `json:"id"`      // "perm_" + 12 random base32 chars
+	SessionID string    `json:"session"`
+	Project   string    `json:"project"`
+	Tool      string    `json:"tool"`    // read_file, write_file, run_shell
+	Command   string    `json:"command,omitempty"`
+	Path      string    `json:"path,omitempty"`
+	Prefix    string    `json:"prefix"`  // proposed "allow always" prefix
+	Args      string    `json:"args"`    // raw arguments JSON, for display
+	Created   time.Time `json:"created"`
+}
+
+// Decision is the answer.
+type Decision struct {
+	Kind   DecisionKind `json:"decision"`
+	Prefix string       `json:"prefix,omitempty"` // used when Kind is always
+	Reason string       `json:"reason,omitempty"` // used when Kind is deny
+}
+```
+
+### 7.2 Broker
+
+```go
+// Broker turns a policy question into a pending request and blocks until the
+// UI answers or the session is cancelled.
+type Broker struct {
+	cfg  *config.Store
+	mu   sync.Mutex
+	wait map[string]chan Decision // by request id
+	byS  map[string][]string      // request ids by session id
+	emit func(sessionID string, r Request)
+}
+
+func New(cfg *config.Store, emit func(string, Request)) *Broker
+
+// Evaluate applies the static policy. It never blocks and never asks.
+func (b *Broker) Evaluate(project, tool, command string, auto bool) Action
+
+// Ask registers a pending request, calls emit, and blocks. It returns
+// context.Canceled when the turn is stopped and ErrSessionCanceled when the
+// session's pending decisions were dropped.
+func (b *Broker) Ask(ctx context.Context, r Request) (Decision, error)
+
+// Resolve answers a pending request. It reports ErrNoSuchRequest when the id
+// is unknown, which is what a double click on the card produces.
+func (b *Broker) Resolve(id string, d Decision) error
+
+// Pending lists unanswered requests for a session, for replay after a browser
+// reconnect.
+func (b *Broker) Pending(sessionID string) []Request
+
+func (b *Broker) CancelSession(sessionID string)
+func (b *Broker) CancelAll()
+```
+
+`Ask` registers a channel buffered to one under the lock, then selects on `ctx.Done()` and
+that channel. `Resolve` sends on the same channel and deletes the map entry, both under the
+lock. The buffer is what lets `Resolve` return without waiting for `Ask` to be scheduled, so
+a resolve that races with a cancel either wins or reports `ErrNoSuchRequest`, and can never
+block the HTTP handler.
+
+`DecideAlways` calls `cfg.AddAllow(project, prefix)` before returning, so the allowlist is on
+disk before the command runs. A write failure downgrades the decision to `DecideOnce` and
+attaches a note that reaches the UI as an `error` event: `save allowlist: <err>: the command
+ran, but the rule was not kept`.
+
+### 7.3 Policy
+
+```go
+func (b *Broker) Evaluate(project, tool, command string, auto bool) Action {
+	switch tool {
+	case "read_file":
+		return ActionAllow
+	case "write_file":
+		if auto {
+			return ActionAllow
+		}
+		return ActionPrompt
+	case "run_shell":
+		if !auto {
+			return ActionPrompt
+		}
+		if hasOperator(command) {
+			return ActionPrompt
+		}
+		if _, ok := b.cfg.AllowMatch(project, command); ok {
+			return ActionAllow
+		}
+		return ActionPrompt
+	}
+	return ActionPrompt
+}
+```
+
+`read_file` is always allowed because the path guard already confines it to the project root
+and reading is the operation the model must do constantly for the loop to be worth running.
+
+### 7.4 Operator rejection list
+
+```go
+var operators = []string{";", "&", "|", ">", "<", "`", "$(", "\n", "\r"}
+
+func hasOperator(cmd string) bool {
+	for _, op := range operators {
+		if strings.Contains(cmd, op) {
+			return true
+		}
+	}
+	return false
+}
+```
+
+Bare `&` covers `&&` and backgrounding, which would otherwise escape the process group wait
+and the timeout. Bare `|` covers `||` and pipelines. `\r` is a line separator to some
+shells. `${` is not on the list, so `echo ${HOME}` runs under an allowlist match; parameter
+expansion cannot start a second command on its own.
+
+It is a substring scan, not a parse: `echo "a > b"` contains `>` and therefore prompts even
+though the redirect is quoted. Over-prompting is the intended direction of error.
+
+### 7.5 Allowlist prefix matching
+
+```go
+func (s *Store) AllowMatch(project, command string) (string, bool)
+```
+
+1. Normalise the command: `strings.TrimSpace`, then collapse every run of spaces and tabs to
+   a single space. The stored prefix is normalised the same way when it is added.
+2. For each prefix for the project, longest first: match when `command == prefix`, or when
+   `strings.HasPrefix(command, prefix)` and the byte at `len(prefix)` is a space. The
+   trailing-space requirement is what stops `git status` from allowing `git statusfoo`, and
+   what stops `rm` from allowing `rmdir`.
+3. Return the matched prefix and true, or `"", false`.
+
+Matching is per project. A prefix allowed in one project has no effect in another.
+
+### 7.6 Default prefix offered by the card
+
+```go
+// DefaultPrefix is the first two whitespace-separated fields of the command.
+func DefaultPrefix(cmd string) string
+```
+
+`go test ./...` gives `go test`. `ls` gives `ls`. The field is editable in the card, and what
+is stored is what the user submits after the same normalisation as section 7.5. A submitted
+prefix that is empty, or that is not a prefix of the command being decided, is rejected with
+400 and the message `prefix "<p>" does not match the command: edit it or choose allow once`.
+
+### 7.7 Auto mode
+
+`auto` is a single global boolean from `config.json`, toggled from the top bar. It is read at
+the moment `Evaluate` is called, so flipping it mid-turn affects the next tool call. It is
+not per project and not per session.
+
+### 7.8 What a denial returns to the model
+
+The tool message content is exactly:
+
+```
+denied by user: <reason>
+```
+
+When the reason is empty, the content is `denied by user`. The message keeps the
+`tool_call_id` of the refused call, so the assistant message and its result stay paired and
+the history remains valid. The loop continues to the next iteration; a denial is not a
+turn-ending event. The UI shows the permission card in its denied state with the reason
+underneath, and no tool output card.
+
+A tool call that arrived while the session was being stopped gets
+`stopped by user` instead, and the turn then ends.
+
+---
+
+## 8. internal/agent
+
+### 8.1 Types
+
+```go
+package agent
+
+// Session is one conversation with one model in one project. It is the
+// in-memory authority; store holds the same data on disk.
+type Session struct {
+	mu sync.Mutex
+
+	ID      string
+	Project string
+	Model   string
+	Created time.Time
+	Updated time.Time
+	Title   string
+
+	Entries []store.Entry // full transcript, including out-of-context entries
+
+	// Accounting.
+	NCtx        int         // resolved context size, 0 when unknown
+	NCtxSource  string      // "props", "meta", "args", ""
+	LastUsage   *llama.Usage
+	Compactions int
+
+	state   State
+	cancel  context.CancelFunc
+	turnSeq int
+}
+
+// Turn is one Send or one Compact, from the user message to a terminal state.
+type Turn struct {
+	Session   *Session
+	Seq       int
+	Started   time.Time
+	Iteration int
+	State     State
+	Err       error
+}
+
+// Engine owns every live session and dispatches turns.
+type Engine struct {
+	cfg    *config.Store
+	store  *store.Sessions
+	client *llama.Client
+	perms  *perms.Broker
+	hub    Publisher // implemented by server's SSE hub
+
+	mu   sync.Mutex
+	live map[string]*Session
+}
+
+type Publisher interface {
+	Publish(sessionID string, ev Event)
+}
+
+func NewEngine(cfg *config.Store, st *store.Sessions, cl *llama.Client,
+	pb *perms.Broker, hub Publisher) *Engine
+
+func (e *Engine) Create(project, model string) (*Session, error)
+func (e *Engine) Get(id string) (*Session, error)
+func (e *Engine) Send(id, text string) error     // returns once the turn is started
+func (e *Engine) Stop(id string) error
+func (e *Engine) Compact(id string) error
+func (e *Engine) Rebind(id, model string) error  // change the session's model
+func (e *Engine) Delete(id string) error
+func (e *Engine) State(id string) State
+```
+
+`Send` validates that the session is `StateIdle`, appends the user entry, persists, sets
+`StatePreflight`, starts a goroutine, and returns. A `Send` against a session that is not
+idle returns `ErrBusy`, which the server maps to 409.
+
+`Get` resolves in this order, holding the engine lock:
+
+1. `e.live[id]`, returned as it is.
+2. `e.store.Load(id)`. On success the session is put into `e.live` and returned, so the next
+   `Get` is a map hit and there is only ever one `*Session` per id in the process.
+3. `ErrNotFound`, which the server maps to 404.
+
+Nothing is evicted from `e.live`. A session stays resident for the life of the process once
+it has been opened, which is what makes the per-session mutex meaningful and what lets the
+SSE hub publish into a session no request is currently touching. The memory cost is the
+transcript, and a process holding every session a person opened in one sitting is not a
+size worth managing.
+
+`Rebind` requires `StateIdle` and returns `ErrBusy` otherwise. It is described in 8.5.
+
+`Delete` requires `StateIdle`, removes the file through `store.Delete`, removes the live
+entry, and drops the hub channel for the id.
+
+### 8.2 States
+
+```go
+type State string
+
+const (
+	StateIdle      State = "idle"
+	StatePreflight State = "preflight"
+	StateCompacting State = "compacting"
+	StateStreaming State = "streaming"
+	StateDeciding  State = "deciding"
+	StateExecuting State = "executing"
+	StateFinal     State = "final"
+	StateStopped   State = "stopped"
+	StateFailed    State = "failed"
+	StateLimit     State = "limit"
+)
+```
+
+| state | entered when | work done | leaves to |
+|-------|--------------|-----------|-----------|
+| `idle` | session created; any terminal state completes | none | `preflight` on Send, `compacting` on Compact |
+| `preflight` | top of each loop iteration | check iteration count, compute fill, compare with `compact_at * n_ctx`, build the request | `limit` when iteration is 50; `compacting` when over threshold; `streaming` otherwise |
+| `compacting` | threshold hit, or Compact pressed | run the compaction request, rewrite the in-context set | `preflight` when it came from the loop; `idle` when it came from the Compact button; `failed` on error |
+| `streaming` | request sent | read the SSE stream, publish `delta`, `reasoning`, `tool_call`, `usage` | `final` when no tool calls; `deciding` when there are; `stopped` on cancel; `failed` on error |
+| `deciding` | assistant asked for tools | for each call in order: `Evaluate`, then `Ask` when it says prompt | `executing` for the call just decided; `stopped` on cancel |
+| `executing` | a call was allowed or denied | run the tool or synthesise the denial, append the tool entry | `deciding` for the next call; `preflight` when the calls are exhausted |
+| `final` | assistant replied with no tool calls | append the assistant entry, persist, publish `done` | `idle` |
+| `stopped` | Stop pressed, or shutdown | kill the command, cancel pending decisions, append a stopped marker, persist | `idle` |
+| `failed` | any non-cancel error | append an error entry, persist, publish `error` and `done` | `idle` |
+| `limit` | 50 iterations without a plain reply | append `turn limit reached`, persist, publish `error` and `done` | `idle` |
+
+Every state change publishes `{"type":"status","state":"<state>"}` on the session's SSE
+stream. The UI drives its spinner and its Stop button off that one event.
+
+### 8.3 The loop
+
+```
+Send(text):
+  append Entry{Kind: user, Content: text, InContext: true, Visible: true}
+  persist
+  go run(turn)
+
+run(turn):
+  ctx, cancel = context.WithCancel(engine root ctx); session.cancel = cancel
+  for iteration = 0; iteration < 50; iteration++ {
+      state = preflight
+      fill = computeFill()
+      if session.NCtx > 0 && float64(fill) >= cfg.CompactAt*float64(session.NCtx) {
+          state = compacting
+          if err := compact(ctx); err != nil { fail(err); return }
+      }
+      state = streaming
+      req = llama.ChatRequest{
+          Model:    session.Model,
+          Messages: session.contextMessages(),
+          Tools:    tools.Schemas(),
+          Effort:   cfg.Effort,
+          Caps:     session.caps,
+      }
+      res, err = client.Chat(ctx, req, publishEvent)
+      if err != nil { classify: canceled -> stop(); else fail(err); return }
+      if res.Usage != nil { session.LastUsage = res.Usage; publish usage }
+      if len(res.ToolCalls) == 0 {
+          append Entry{Kind: assistant, Content: res.Content, Reasoning: res.Reasoning,
+                       InContext: true, Visible: true}
+          state = final; persist; publish done; return
+      }
+      append Entry{Kind: assistant, Content: res.Content, Reasoning: res.Reasoning,
+                   ToolCalls: res.ToolCalls, InContext: true, Visible: true}
+      persist
+      for _, call := range res.ToolCalls {
+          state = deciding
+          decision = decide(ctx, call)      // may block on the UI
+          state = executing
+          out = execute(ctx, call, decision)
+          append Entry{Kind: tool, ToolCallID: call.ID, ToolName: call.Function.Name,
+                       Content: out.Output, ExitCode: out.ExitCode,
+                       Truncated: out.Truncated, InContext: true, Visible: true}
+          persist
+          if stopped { state = stopped; return }
+      }
+  }
+  state = limit
+  append Entry{Kind: error, Content: "turn limit reached after 50 model calls"}
+  persist; publish done
+```
+
+The assistant entry is appended before the tools run, so a crash between the model reply and
+the tool result leaves a history whose last message is an assistant with unanswered
+`tool_calls`. On the next `Send`, `contextMessages` detects that and synthesises a tool
+message `not run: the session was interrupted` for each unanswered call, which keeps the
+request valid.
+
+### 8.4 Cancellation
+
+`Stop` does three things under the session lock: calls `session.cancel()`, calls
+`perms.CancelSession(id)`, and publishes `status: stopped`. The running `llama.Chat` sees a
+closed body and returns `KindCanceled`. A running shell command sees its context cancelled
+and its process group killed. A blocked `Ask` returns `context.Canceled`.
+
+The goroutine that owns the turn is the only writer of `session.Entries`. `Stop` never
+appends; it lets the loop reach `StateStopped` and append the marker itself, so entry order
+is always the order one goroutine wrote them.
+
+Stop on an idle session is a no-op returning 200.
+
+### 8.5 Token fill accounting
+
+```go
+// computeFill estimates tokens currently in context. The last usage report is
+// authoritative for everything up to the response it came from; entries added
+// since then are estimated at four characters per token.
+func (s *Session) computeFill() int {
+	if s.LastUsage == nil {
+		return s.estimateAll()
+	}
+	base := s.LastUsage.PromptTokens + s.LastUsage.CompletionTokens
+	return base + s.estimateSince(s.lastUsageEntry)/4
+}
+```
+
+`estimateAll` sums `len(Content) + len(marshalled ToolCalls)` over in-context entries and
+divides by 4. `lastUsageEntry` is the index of the assistant entry the usage arrived with.
+
+This matters because a tool result of 16 KiB adds roughly 4000 tokens that no usage report
+has counted yet, and the threshold check at the top of the next iteration has to see them.
+
+`NCtx` resolution, best available first:
+
+1. `Props(model).NCtx`. Source `"props"`.
+2. `Model.CtxHint` with source `"meta"`.
+3. `Model.CtxHint` with source `"args"`.
+4. 32768 with source `"assumed"`. Automatic compaction stays armed against the assumed
+   value, and the meter reads `<fill> / ~32k` so the number is visibly a guess.
+
+`Props` is called at two points, both with `autoload=false`, both from a goroutine that does
+not block the caller:
+
+- At session creation, and again on a model rebind, when the cached model list already
+  reports that model `loaded`. The model is loaded, so the call cannot load anything, and
+  caps are known from turn one.
+- Immediately after the first successful response for a session that still has
+  `NCtxSource != "props"`. This is the path for a model that was unloaded when the session
+  was created; by the time a response has arrived it is certainly loaded.
+
+Either call fills `session.NCtx`, `session.NCtxSource` and `session.caps`. Caps decide
+whether the effort mapping uses the effort column or the budget column, so a model that was
+already loaded gets the right column on its first request.
+
+**Rebind.** `Rebind(id, model)` is only accepted on an idle session. Under the session lock
+it sets `session.Model`, resets `NCtx` and `NCtxSource` from the new model's hint, sets
+`session.caps = llama.Caps{}` so caps are unknown again, sets `session.LastUsage = nil` so
+the next fill is re-estimated from the entries rather than carried over from a different
+model's tokenizer, and appends
+
+```go
+store.Entry{Kind: "status", Content: "model changed to " + model,
+            InContext: false, Visible: true}
+```
+
+The entry is visible so the transcript shows where the model changed, and out of context so
+the model is never told about it. The session is then persisted and the `Props` probe above
+runs.
+
+### 8.6 Effort mapping
+
+| UI level | caps known and `supports_reasoning_effort` | otherwise |
+|----------|--------------------------------------------|-----------|
+| auto | nothing sent | nothing sent |
+| off | `reasoning_budget: 0`, `chat_template_kwargs: {"enable_thinking": false}` | same |
+| low | `reasoning_effort: "low"` | `reasoning_budget: 2048` |
+| medium | `reasoning_effort: "medium"` | `reasoning_budget: 8192` |
+| high | `reasoning_effort: "high"` | `reasoning_budget: -1` |
+
+`reasoning_format: "deepseek"` on every request in every row. The budget constants are Go
+constants in `internal/llama`, not configuration.
+
+For the first turn of a session against a model that has never been loaded, caps are
+unknown, so the budget column is used. For `Gemma4-12B` as captured, caps become known after
+turn one and still select the budget column, because that template reports
+`supports_reasoning_effort: false`.
+
+### 8.7 Compaction
+
+Triggers:
+
+- Automatic: `computeFill() >= compact_at * NCtx` evaluated in `preflight`, so it can fire
+  between two tool calls of the same user turn as well as before the first model call.
+- Manual: `POST /api/sessions/{id}/compact` on an idle session.
+
+Procedure:
+
+1. Publish `status: compacting`.
+2. Build the request: `messages = contextMessages() + [{role: "user", content:
+   prompts.Compact()}]`, `tools` omitted, `Effort: off`, `stream: true` (the stream is read
+   but no `delta` events are published; the UI shows a status row instead).
+3. Send with the session's normal model. A failure moves the turn to `failed` and leaves the
+   history untouched, so a failed compaction never loses context.
+4. On success, take `res.Content` as the summary. An empty summary is treated as a failure
+   with the message `the model returned an empty summary: try again or start a new session`.
+5. Under the session lock: set `InContext = false` on every existing entry, then append
+
+   ```go
+   store.Entry{
+       Kind:      "compaction",
+       Role:      "user",
+       Content:   "Summary of earlier work:\n" + summary + "\n\nContinue.",
+       InContext: true,
+       Visible:   true,
+       Meta:      map[string]any{"before": fillBefore, "after": fillAfter, "n": session.Compactions + 1},
+   }
+   ```
+
+   The system entry is regenerated rather than kept: `contextMessages` always emits the
+   system prompt first from `prompts.System`, so it is never part of the entry list.
+6. `session.Compactions++`, `session.LastUsage = nil` so the next fill is estimated rather
+   than carried over from before the compaction, and `lastUsageEntry = len(Entries) - 1`.
+7. Persist.
+8. Publish `{"type":"compacted","before":<int>,"after":<int>,"summary":"..."}`.
+
+What the UI keeps versus what the model sees:
+
+- The UI keeps every entry, in order, forever. The `compaction` entry renders as a divider
+  labelled `compacted, 96k to 3k tokens` with the summary collapsed underneath it.
+- The model sees `contextMessages()`, which is the system prompt followed by every entry
+  with `InContext == true`. After a compaction that is one user message.
+- `GET /api/sessions/{id}` returns every entry with its `in_context` flag, so a reloaded
+  page reconstructs the same view.
+
+`contextMessages` also enforces two invariants before returning:
+
+- Every assistant entry with `ToolCalls` is followed by one tool message per call. Missing
+  ones are synthesised as described in 8.3.
+- No tool message appears without its assistant. A compaction can only drop whole prefixes,
+  so this holds by construction, but the check is cheap and a violation is a bug worth
+  catching in a test rather than at the model.
+
+`Reasoning` is never included in `contextMessages`. It is stored, shown, and dropped from
+the request.
+
+### 8.8 Persistence points
+
+The session file is written at each of these, and nowhere else:
+
+1. After `Create`.
+2. After the user entry is appended in `Send`.
+3. After the assistant entry is appended, whether or not it carries tool calls.
+4. After each tool entry.
+5. After a compaction rewrites the in-context flags.
+6. On reaching `final`, `stopped`, `failed` or `limit`.
+
+Streaming deltas are not persisted. A crash mid-stream loses the partial assistant message,
+which is the correct outcome because a partial message with no finish reason is not
+something to resume from.
+
+Writes go through `store.Sessions.Save`, which serialises per session and uses the atomic
+replace. A save failure publishes an `error` event and does not stop the turn.
+
+### 8.9 Concurrent turns
+
+Turns are not serialised. Two sessions can stream at once, and the engine does nothing to
+prevent it.
+
+The captured server reports `total_slots: 2` for the loaded model and `--parallel 1` for
+four of the six presets. When every slot is busy, llama.cpp queues the request rather than
+refusing it: the POST is accepted, headers come back, and no chunk arrives until a slot
+frees. The visible effect is a session sitting in `status: streaming` with no `delta`
+events, for as long as the other turn takes.
+
+That is the documented behaviour, not a defect to work around. The UI shows the streaming
+spinner and the Stop button, and Stop cancels the queued request the same way it cancels a
+running one. Nothing is built for this.
+
+---
+
+## 9. internal/store
+
+### 9.1 Entry
+
+```go
+package store
+
+// Entry is one row of a session. Kind drives rendering; InContext drives what
+// is sent to the model.
+type Entry struct {
+	Seq       int    `json:"seq"`
+	Kind      string `json:"kind"` // user, assistant, tool, compaction, error, status
+	Role      string `json:"role"` // OpenAI role, empty for non-message kinds
+
+	Content   string `json:"content,omitempty"`
+	Reasoning string `json:"reasoning,omitempty"`
+
+	ToolCalls  []llama.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolName   string           `json:"tool_name,omitempty"`
+	ExitCode   *int             `json:"exit_code,omitempty"`
+	Truncated  bool             `json:"truncated,omitempty"`
+
+	Permission *PermissionRecord `json:"permission,omitempty"`
+
+	InContext bool           `json:"in_context"`
+	Visible   bool           `json:"visible"`
+	At        time.Time      `json:"at"`
+	Meta      map[string]any `json:"meta,omitempty"`
+}
+
+// PermissionRecord is the decision as it was made, kept so a reloaded page
+// shows the card in its answered state.
+type PermissionRecord struct {
+	ID       string `json:"id"`
+	Tool     string `json:"tool"`
+	Command  string `json:"command,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Decision string `json:"decision"` // once, always, deny, auto, stopped
+	Prefix   string `json:"prefix,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+```
+
+`InContext` and `Visible` are written without `omitempty` so their false value is explicit in
+the file and a reader never has to know the default.
+
+### 9.2 File format
+
+`~/.quecto-harness/sessions/<id>.json`, mode 0600, id is `sess_` plus 16 base32 characters
+from `crypto/rand`.
+
+```json
+{
+  "id": "sess_k4m9x2q7ta5vb1nc",
+  "project": "/Users/jay/Projects/Personal/quecto-harness",
+  "model": "Gemma4-12B",
+  "title": "list the files here",
+  "created": "2026-09-04T12:26:11.412Z",
+  "updated": "2026-09-04T12:28:02.907Z",
+  "n_ctx": 131072,
+  "n_ctx_source": "props",
+  "compactions": 1,
+  "last_usage": {
+    "prompt_tokens": 4193,
+    "completion_tokens": 118,
+    "total_tokens": 4311,
+    "cached_tokens": 3968
+  },
+  "entries": [
+    {
+      "seq": 1, "kind": "user", "role": "user",
+      "content": "list the files here",
+      "in_context": false, "visible": true,
+      "at": "2026-09-04T12:26:11.412Z"
+    },
+    {
+      "seq": 2, "kind": "assistant", "role": "assistant",
+      "content": "",
+      "reasoning": "The user wants a directory listing. run_shell with ls.",
+      "tool_calls": [
+        {"id": "call_0", "type": "function",
+         "function": {"name": "run_shell", "arguments": "{\"command\":\"ls\"}"}}
+      ],
+      "in_context": false, "visible": true,
+      "at": "2026-09-04T12:26:13.980Z"
+    },
+    {
+      "seq": 3, "kind": "tool", "role": "tool",
+      "tool_call_id": "call_0", "tool_name": "run_shell",
+      "content": "AGENTS.md\nMakefile\ncmd\ndocs\ninternal\nweb\n\nexit code: 0",
+      "exit_code": 0,
+      "permission": {
+        "id": "perm_7fq2ka9mzx01", "tool": "run_shell", "command": "ls",
+        "decision": "always", "prefix": "ls"
+      },
+      "in_context": false, "visible": true,
+      "at": "2026-09-04T12:26:19.204Z"
+    },
+    {
+      "seq": 4, "kind": "compaction", "role": "user",
+      "content": "Summary of earlier work:\nListed the repository root. Six entries, Go plus a web directory.\n\nContinue.",
+      "in_context": true, "visible": true,
+      "at": "2026-09-04T12:27:44.001Z",
+      "meta": {"before": 104857, "after": 3120, "n": 1}
+    },
+    {
+      "seq": 5, "kind": "assistant", "role": "assistant",
+      "content": "The repository has cmd, internal, web and docs. Nothing is built yet.",
+      "in_context": true, "visible": true,
+      "at": "2026-09-04T12:28:02.907Z"
+    }
+  ]
+}
+```
+
+The system prompt is not in the file. It is regenerated from `prompts.System` on every
+request, so a change to the prompt takes effect on an existing session.
+
+### 9.3 API
+
+```go
+// Sessions is the on-disk session set. One file per session, one mutex per
+// session id, so two sessions never serialise against each other.
+type Sessions struct {
+	dir string
+
+	mu    sync.RWMutex
+	index map[string]Summary
+	locks map[string]*sync.Mutex
+}
+
+// Summary is what the sidebar needs, cheap enough to keep for every session.
+type Summary struct {
+	ID       string    `json:"id"`
+	Project  string    `json:"project"`
+	Model    string    `json:"model"`
+	Title    string    `json:"title"`
+	Created  time.Time `json:"created"`
+	Updated  time.Time `json:"updated"`
+	Messages int       `json:"messages"`
+	Bytes    int64     `json:"bytes"`
+}
+
+func Open(dir string) (*Sessions, error)
+
+func (s *Sessions) List(project string) []Summary // sorted by Updated, newest first
+func (s *Sessions) Load(id string) (*Session, error)
+func (s *Sessions) Save(sess *Session) error
+func (s *Sessions) Delete(id string) error
+```
+
+`Open` reads every file in the directory once to build the index. A file that does not parse
+is logged (`sessions/<name>: <err>: the file is skipped`) and skipped rather than fatal. A
+file whose name does not match `sess_[a-z2-7]{16}\.json` is ignored.
+
+`Title` is the first 60 runes of the first user entry, with newlines collapsed to spaces.
+
+### 9.4 Listing cost
+
+The index is built once at startup and updated on every `Save`, so `List` never touches the
+filesystem. With a few hundred sessions the startup scan reads a few megabytes; that is
+accepted. If the directory grows past a size where the startup scan is noticeable, the fix
+is a single `index.json` written alongside, not a database. That is out of scope now.
+
+### 9.5 Size
+
+The dominant term is `write_file` content and `run_shell` output, both stored verbatim in
+the entry. `run_shell` output is already capped at `output_limit_bytes` plus a marker.
+`write_file` content is not capped: a 2 MB file written by the model produces a 2 MB entry,
+and the file is rewritten in full on the next save.
+
+Mitigation, in this version: the tool result stored for `write_file` is the summary line
+(`replaced main.go (2103 bytes, 87 lines)`), not the content. The content only exists inside
+the assistant entry's `tool_calls[].function.arguments`, where it is needed for the history
+to be valid. A session that writes many large files will produce a large file and a slow
+save. The threshold at which that becomes a problem is roughly 20 MB, and the mitigation
+then is a new session.
+
+`Save` marshals with `json.MarshalIndent(v, "", "  ")`. The readability is worth the size for
+a file a person is expected to be able to open.
+
+---
+
+## 10. internal/server
+
+### 10.1 Construction and middleware
+
+```go
+package server
+
+type Server struct {
+	cfg    *config.Store
+	store  *store.Sessions
+	engine *agent.Engine
+	perms  *perms.Broker
+	client *llama.Client
+	hub    *Hub
+	token  string
+	ui     http.Handler
+
+	mu        sync.Mutex
+	modelsAt  time.Time
+	modelsVal []llama.Model
+	infoAt    time.Time
+	infoVal   llama.Info
+	infoErr   error
+}
+
+func New(...) *Server
+func (s *Server) Handler() http.Handler
+```
+
+`Handler` returns `http.NewServeMux` with Go 1.22 method-and-pattern routes, wrapped in one
+chain: `recoverPanic -> logRequest -> checkOrigin -> auth -> mux`. `logRequest` writes one
+line per request to stderr at `method path status duration`; SSE requests log on close with
+the event count.
+
+`recoverPanic` returns 500 with `{"error":"internal error"}` and logs the stack. A panic in
+one handler never takes the process down, because a browser bug should not stop a running
+turn.
+
+### 10.2 Auth flow
+
+1. The binary prints and opens `http://127.0.0.1:7331/?token=<token>`.
+2. `GET /` with a `token` query parameter compares it to the process token with
+   `subtle.ConstantTimeCompare`. On a match it sets
+
+   ```
+   Set-Cookie: qh=<token>; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000
+   ```
+
+   and replies 303 to `/`, so the token leaves the address bar and is not kept in history.
+   `Secure` is not set, because the server is plain HTTP on loopback and a `Secure` cookie
+   would never be stored.
+3. `GET /` with no token and a valid cookie serves the UI.
+4. `GET /` with neither serves a 200 page with one line: `open the URL printed by
+   quecto-harness, or run quecto-harness open`. Not a 401, because a person typing the
+   address by hand should get an instruction rather than a browser auth dialog.
+5. Every `/api/*` request requires either the cookie or `Authorization: Bearer <token>`.
+   Failure is 401 with `{"error":"not authorized: open the URL printed by quecto-harness"}`.
+
+The token is read from `~/.quecto-harness/token` and survives a restart, so a tab left open
+across a restart, including one caused by a service supervisor, keeps working. The cookie
+has a 30 day `Max-Age`, so a tab reopened the next day also works.
+
+A 401 therefore means the token file was deleted and a new one minted, or the cookie
+expired. The UI treats it as a full-page state: it stops the event source and shows
+`not authorized, run quecto-harness open`.
+
+### 10.3 Origin and CORS
+
+No `Access-Control-Allow-Origin` header is ever sent, so a cross-origin fetch from a page on
+another site cannot read a response. `OPTIONS` on `/api/*` returns 405.
+
+In addition, `checkOrigin` rejects with 403 any request that has an `Origin` header whose
+value is not `http://<listen host>:<port>`, `http://localhost:<port>` or
+`http://127.0.0.1:<port>`. This closes the gap where a cross-site form or an
+`EventSource` from another origin would still reach the handler even though it could not
+read the reply. `Sec-Fetch-Site: cross-site` is also rejected when present. Requests with no
+`Origin` (curl, the browser's own top-level navigation) pass, and are still gated by the
+token.
+
+### 10.4 Routes
+
+All request and response bodies are `application/json` unless stated. Errors are
+`{"error":"<sentence>"}` with the status codes noted.
+
+#### GET /api/state
+
+```json
+{
+  "mode": "router",
+  "build": "b10812-8b4b3558f",
+  "server_url": "http://192.168.2.205:8080",
+  "autoload": true,
+  "detect_error": "",
+  "config": {
+    "model": "Gemma4-12B",
+    "effort": "medium",
+    "auto": false,
+    "compact_at": 0.8,
+    "shell": "/bin/sh",
+    "command_timeout_s": 120,
+    "output_limit_bytes": 16384,
+    "listen": "127.0.0.1:7331"
+  },
+  "config_notes": [],
+  "projects": ["/Users/jay/Projects/Personal/quecto-harness"],
+  "models": [
+    {"id": "Gemma4-12B", "status": "loaded", "ctx_hint": 131072, "ctx_source": "meta",
+     "modalities": ["text", "image", "audio"], "failed": false},
+    {"id": "Muse Glimmer 30B Q5", "status": "unloaded", "ctx_hint": 131072,
+     "ctx_source": "args", "modalities": ["text", "image"], "failed": false},
+    {"id": "Qwen3.6-35B-A3B Q5", "status": "unloaded", "ctx_hint": 262144,
+     "ctx_source": "args", "modalities": ["text", "image"], "failed": false}
+  ],
+  "models_error": "",
+  "os": "darwin",
+  "version": "0.1.0"
+}
+```
+
+`server.token` is never returned; the UI shows a boolean `server_token_set` instead. The
+model list is cached for 15 seconds. `detect_error` and `models_error` carry the message from
+the taxonomy when the last attempt failed, and the rest of the payload is still served, so a
+dead model server does not blank the UI.
+
+#### GET /api/models?refresh=1
+
+Same `models` array as above, forcing a fresh `GET /v1/models` when `refresh=1`. 502 with the
+taxonomy message when the call fails.
+
+#### GET /api/models/props?id=<model id>
+
+```json
+{
+  "model": "Gemma4-12B",
+  "n_ctx": 131072,
+  "total_slots": 2,
+  "sleeping": false,
+  "caps": {
+    "known": true,
+    "tool_calls": true,
+    "parallel_tool_calls": true,
+    "reasoning_effort": false,
+    "system_role": true,
+    "preserve_reasoning": false
+  }
+}
+```
+
+The model id is a query parameter rather than a path segment because ids contain spaces
+(`Muse Glimmer 30B Q5`) and, in a Hugging Face deployment, slashes and colons
+(`ggml-org/gemma-3-4b-it-GGUF:Q4_K_M`). A slash would split a `{id}` path segment.
+
+The upstream call always carries `autoload=false`. A 4xx from upstream is translated to 409
+with `{"error":"model \"<id>\" is not loaded: it loads on the first message"}`, which is a
+normal state and not an error row in the UI.
+
+#### GET /api/fs/dirs?path=
+
+```json
+{
+  "path": "/Users/jay/Projects",
+  "parent": "/Users/jay",
+  "crumbs": [
+    {"name": "/", "path": "/"},
+    {"name": "Users", "path": "/Users"},
+    {"name": "jay", "path": "/Users/jay"},
+    {"name": "Projects", "path": "/Users/jay/Projects"}
+  ],
+  "dirs": [
+    {"name": "Personal", "path": "/Users/jay/Projects/Personal"},
+    {"name": "work", "path": "/Users/jay/Projects/work"}
+  ]
+}
+```
+
+Rules:
+
+- Missing or empty `path` means the user's home directory.
+- A relative path is rejected with 400 `path must be absolute`.
+- The path is `filepath.Clean`ed and then `EvalSymlinks`ed. A path that does not resolve
+  returns 404 `no such directory: <path>`.
+- Only directories are listed. Entries starting with `.` are excluded. Symlinks that point
+  at directories are listed and are shown with their link name; selecting one stores the
+  resolved target.
+- Entries are sorted case-insensitively.
+- A directory that cannot be read returns 403 `cannot read <path>: check permissions`.
+- There is no root restriction. The browser is how a project is chosen, so it has to be able
+  to reach anywhere the user can.
+- The listing is capped at 2000 entries with a `truncated: true` flag.
+
+#### POST /api/projects
+
+Request `{"path": "/Users/jay/src/thing"}`. Response is the updated `projects` array. 400
+when the path is not an existing readable directory, 409 when it is already present.
+
+#### DELETE /api/projects
+
+Request `{"path": "/Users/jay/src/thing"}`. Response is the updated array. Deleting by path
+rather than by index removes the race where the list changed between the render and the
+click. The allowlist entries for that path are left on disk, so re-adding the project
+restores its rules. They are reachable and removable through the two allowlist routes below,
+which is where a rule kept for a project that no longer exists gets cleaned up.
+
+#### GET /api/allowlist?project=
+
+```json
+{"project": "/Users/jay/src/x", "prefixes": ["git status", "go test", "ls"]}
+```
+
+Prefixes are returned longest first, the same order `AllowMatch` walks. An unknown project
+returns an empty array rather than 404, since a project with no rules and a project that was
+removed look the same on disk.
+
+#### DELETE /api/allowlist
+
+Request `{"project": "/Users/jay/src/x", "prefix": "go test"}`. Response is the updated
+`{"prefixes": [...]}`. Removing a prefix that is not present is 200 with the unchanged list,
+so a double click is harmless. This is the only caller of `config.Store.RemoveAllow`.
+
+#### GET /api/sessions?project=
+
+```json
+{"sessions": [
+  {"id":"sess_k4m9x2q7ta5vb1nc","project":"/Users/jay/src/x","model":"Gemma4-12B",
+   "title":"list the files here","created":"2026-09-04T12:26:11.412Z",
+   "updated":"2026-09-04T12:28:02.907Z","messages":5,"bytes":4183}
+]}
+```
+
+Omitting `project` lists every session.
+
+#### POST /api/sessions
+
+Request `{"project": "/Users/jay/src/x", "model": "Gemma4-12B"}`. `model` may be empty, in
+which case the configured model is used. 400 when the project is not in the projects list.
+Response is the created `Summary` plus `"state": "idle"`.
+
+#### GET /api/sessions/{id}
+
+```json
+{
+  "id": "sess_k4m9x2q7ta5vb1nc",
+  "project": "/Users/jay/src/x",
+  "model": "Gemma4-12B",
+  "state": "idle",
+  "n_ctx": 131072,
+  "n_ctx_source": "props",
+  "fill": 4311,
+  "compactions": 1,
+  "pending": [],
+  "entries": [ ... as in section 9.2 ... ],
+  "last_seq": 41
+}
+```
+
+`pending` carries any unanswered `perms.Request` for this session, so a page reload restores
+the blocked composer. `last_seq` is the SSE sequence number at the moment the snapshot was
+taken; the client opens its event source with `Last-Event-ID: <last_seq>` so nothing is
+missed between the fetch and the subscribe.
+
+#### POST /api/sessions/{id}/message
+
+Request `{"text": "list the files here"}`. 202 with `{"state":"preflight"}` on acceptance.
+409 `{"error":"the session is busy: stop the current turn first"}` when not idle. 400 on
+empty text. The response returns as soon as the turn goroutine is started; everything else
+arrives on the event stream.
+
+#### POST /api/sessions/{id}/stop
+
+Empty body. 200 `{"state":"stopped"}` or `{"state":"idle"}` when nothing was running.
+
+#### POST /api/sessions/{id}/compact
+
+Empty body. 202 `{"state":"compacting"}`. 409 when the session is not idle.
+
+#### PUT /api/sessions/{id}
+
+Request `{"model": "Qwen3.8-27B Q5"}`. Rebinds the session to another model, as described in
+8.5. Response:
+
+```json
+{"id": "sess_k4m9x2q7ta5vb1nc", "model": "Qwen3.8-27B Q5",
+ "n_ctx": 262144, "n_ctx_source": "args", "fill": 4311}
+```
+
+409 `{"error":"the session is busy: stop the current turn first"}` when the session is not
+idle. 400 when the model id is not in the current model list. The `status` entry the rebind
+appends also arrives on the event stream, so an open transcript shows the change without a
+refetch.
+
+#### DELETE /api/sessions/{id}
+
+Empty body. 204 on success: the file is removed, the live session is dropped from the
+engine, and the hub channel for the id is discarded so any attached event source ends. 409
+when the session is not idle. 404 when the id is unknown. There is no undo and no trash;
+the file is gone.
+
+#### POST /api/permissions/{id}
+
+```json
+{"decision": "always", "prefix": "go test"}
+```
+
+```json
+{"decision": "deny", "reason": "wrong directory"}
+```
+
+200 `{"ok": true}`. 404 `{"error":"that decision is no longer pending: the turn moved on"}`
+when the id is unknown, which is what a second click produces. 400 when the prefix does not
+match the command being decided.
+
+#### PUT /api/config
+
+Request carries only the fields being changed:
+
+```json
+{"model": "Qwen3.8-27B Q5", "effort": "high", "auto": true,
+ "server": {"url": "http://192.168.2.205:8080", "token": ""}}
+```
+
+Response is the same shape as `state.config`. Changing `model` sets the default for sessions
+created afterwards; it does not rebind an existing session, which is what
+`PUT /api/sessions/{id}` is for. Changing `server.url` invalidates the detect and models
+caches and triggers a fresh `Detect`. Changing `listen` is accepted and persisted
+but takes effect on the next start; the response includes
+`"note": "listen changes take effect on restart"`. `compact_at`, `shell`,
+`command_timeout_s` and `output_limit_bytes` are also settable here.
+
+#### GET /api/events?session=<id>
+
+`Content-Type: text/event-stream`, `Cache-Control: no-store`,
+`X-Accel-Buffering: no`, `Connection: keep-alive`. Each event is written as
+
+```
+id: 128
+event: delta
+data: {"type":"delta","seq":128,"text":"Hello"}
+
+```
+
+`event:` and the `type` field carry the same word, so a client can use either
+`addEventListener` or a single `onmessage` with a switch. A comment line `:ping` is written
+every 20 seconds to keep intermediaries and idle-timeout logic from closing the connection.
+
+Event payloads:
+
+```json
+{"type":"status","seq":120,"state":"streaming"}
+{"type":"delta","seq":121,"text":"Reading"}
+{"type":"reasoning","seq":122,"text":"The user wants"}
+{"type":"tool_call","seq":123,"index":0,"id":"call_0","name":"run_shell","arguments":"{\"comm"}
+{"type":"permission","seq":124,"id":"perm_7fq2ka9mzx01","tool":"run_shell","command":"ls","prefix":"ls","args":"{\"command\":\"ls\"}"}
+{"type":"tool_output","seq":125,"index":0,"id":"call_0","name":"run_shell","output":"AGENTS.md\n...","exit_code":0,"truncated":false}
+{"type":"usage","seq":126,"prompt_tokens":4193,"completion_tokens":118,"cached_tokens":3968,"fill":4311,"n_ctx":131072}
+{"type":"compacted","seq":127,"before":104857,"after":3120,"summary":"Listed the repository root."}
+{"type":"error","seq":128,"kind":"model_loading","message":"model \"Gemma4-12B\" is loading: send the message again in a moment"}
+{"type":"done","seq":129,"finish_reason":"stop","iterations":2}
+{"type":"resync","seq":130}
+```
+
+`tool_call` carries the argument fragment from one chunk, so the UI can show arguments
+arriving. The complete call is also implied by the `tool_output` event that follows.
+
+`index` is the join key, not `id`. The accumulated id is empty on the first fragments of a
+call and some builds never send one at all, in which case the server substitutes
+`call_<index>` only when the stream ends. A client that matched on `id` would open a second
+card the moment the id appeared. `tool_output` carries both `index` and `id` so the same
+match works and the id is available for display.
+
+### 10.5 The SSE hub
+
+```go
+// Hub fans one session's events out to every attached browser and keeps a
+// short replay buffer so a reconnect does not lose the middle of a turn.
+type Hub struct {
+	mu       sync.Mutex
+	sessions map[string]*channel
+}
+
+type channel struct {
+	seq    int64
+	ring   []Event // capacity 512, oldest overwritten
+	base   int64   // seq of ring[0]
+	subs   map[int64]*subscriber
+	nextID int64
+}
+
+type subscriber struct {
+	ch     chan Event // buffered, capacity 256
+	dropped bool
+}
+
+func (h *Hub) Publish(sessionID string, ev Event)
+func (h *Hub) Subscribe(sessionID string, from int64) (<-chan Event, func(), []Event)
+```
+
+`Publish` assigns `seq`, appends to the ring, and does a non-blocking send to each
+subscriber. A subscriber whose buffer is full is marked `dropped` and gets one `resync`
+event; it is not disconnected, because a slow tab should recover rather than reload. The
+next event it reads is `resync`, and the client responds by refetching
+`GET /api/sessions/{id}` and reopening the stream with the returned `last_seq`.
+
+`Subscribe(sessionID, from)` returns the replay slice for `(from, seq]` when `from >= base`,
+or a single `resync` event when the requested sequence has already been overwritten. The
+replay is written to the socket before the live channel is read, and the two cannot
+interleave because `Subscribe` holds the lock while it snapshots.
+
+Reconnect uses the standard `Last-Event-ID` request header, which `EventSource` sends
+automatically after a dropped connection. An explicit `?from=<seq>` query parameter is also
+accepted and takes precedence, which is what the client uses for the first connection after
+a snapshot fetch.
+
+Ring size 512 at roughly one event per token fragment covers a few seconds of streaming.
+That is enough for a network blip and not enough for a laptop that slept for an hour, which
+is exactly the case `resync` exists for.
+
+The hub is per session. A browser watching two sessions opens two event sources. A session
+with no subscribers still has its events published into the ring, which is what makes a
+reconnect after `done` show the tail of the turn.
+
+### 10.6 The UI handler and embed fallback
+
+```go
+package web
+
+//go:embed all:dist
+var dist embed.FS
+
+// Handler serves the built UI, or a page explaining that it is not built.
+func Handler() http.Handler
+func Built() bool
+```
+
+`Built` reports whether `dist/index.html` exists in the embedded filesystem. The repository
+keeps `internal/web/dist/.gitkeep` so `all:dist` always has a directory to embed and a
+checkout without Node compiles.
+
+When built: `http.FileServerFS(sub)` with a rewrite that serves `dist/index.html` for any
+path that has no extension and does not start with `/api/`, so a client-side route survives
+a reload. Assets under `/assets/` get `Cache-Control: public, max-age=31536000, immutable`
+because Vite fingerprints them; `index.html` gets `Cache-Control: no-store`.
+
+When not built: every UI path returns 200 with a self-contained page, no external assets:
+
+```
+quecto harness is running.
+
+The web UI is not built. Run:
+
+    make web
+
+then restart, or use the JSON API at /api/state.
+```
+
+---
+
+## 11. internal/service
+
+### 11.1 Interface
+
+```go
+package service
+
+type Spec struct {
+	Binary string // resolved absolute path of the running executable
+	Home   string // ~/.quecto-harness
+	LogDir string // <Home>/log
+	Path   string // PATH to give the unit
+	Listen string // only written when it differs from the default
+}
+
+type Status struct {
+	Installed bool
+	Running   bool
+	Unit      string // absolute path of the unit file
+	Detail    string // raw first line from launchctl or systemctl
+	URL       string // contents of <Home>/url, empty when absent
+}
+
+func Install(s Spec) error
+func Uninstall(home string) error
+func Report(home string) (Status, error)
+
+// UnitText renders the unit without touching the filesystem, so its exact
+// text can be asserted on any OS.
+func UnitText(s Spec) (path string, body string, err error)
+```
+
+`UnitText` switches on `runtime.GOOS` and is the only place either format is written.
+Two build-tag-free helpers, `plistText` and `systemdText`, are both compiled on both
+platforms and both are exercised by the test suite, which is what allows the systemd path to
+be verified on a Mac.
+
+`Spec.Binary` comes from `os.Executable` followed by `filepath.EvalSymlinks`, so a binary
+invoked through a `PATH` symlink records its real location.
+
+`Spec.Path` is `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` with the directory of the
+binary prepended when it is not already present. A service-managed process inherits almost
+no environment, and `run_shell` needs a usable `PATH`.
+
+### 11.2 launchd
+
+Path: `~/Library/LaunchAgents/io.quecto.harness.plist`, mode 0644.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>io.quecto.harness</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/jay/go/bin/quecto-harness</string>
+		<string>--no-open</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/jay/.quecto-harness</string>
+	<key>StandardOutPath</key>
+	<string>/Users/jay/.quecto-harness/log/harness.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/jay/.quecto-harness/log/harness.err</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>/Users/jay</string>
+		<key>PATH</key>
+		<string>/Users/jay/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+</dict>
+</plist>
+```
+
+`--listen <addr>` is appended to `ProgramArguments` when `Spec.Listen` is non-empty.
+Every string is escaped for XML with `xml.EscapeText`, so a home directory containing an
+ampersand does not produce an invalid plist.
+
+### 11.3 systemd
+
+Path: `~/.config/systemd/user/quecto-harness.service`, mode 0644.
+
+```ini
+[Unit]
+Description=quecto harness
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/jay/go/bin/quecto-harness --no-open
+WorkingDirectory=/home/jay/.quecto-harness
+Environment=PATH=/home/jay/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/home/jay/.quecto-harness/log/harness.log
+StandardError=append:/home/jay/.quecto-harness/log/harness.err
+
+[Install]
+WantedBy=default.target
+```
+
+A path containing a space is quoted with `systemd-escape` rules by wrapping the whole
+`ExecStart` value in double quotes and escaping embedded quotes and backslashes.
+
+### 11.4 Install algorithm
+
+1. `os.Executable`, then `EvalSymlinks`. A binary under a temporary directory (a path with
+   `/var/folders/` or `/tmp/` prefix) is refused: `the binary is at <path>: install it
+   somewhere permanent first, for example /usr/local/bin`.
+2. `paths.EnsureDirs()`, then `os.MkdirAll` on the unit's parent directory.
+3. `UnitText(spec)`, then `config.WriteAtomic(path, []byte(body), 0644)`.
+4. macOS:
+   - `launchctl bootout gui/$UID/io.quecto.harness` and ignore its exit status, so a
+     reinstall over a loaded agent works.
+   - `launchctl enable gui/$UID/io.quecto.harness`. Enable acts on the service identifier
+     and outlives a bootout, so it comes first; running it after bootstrap on a service that
+     a previous `bootout` left disabled means bootstrap has already refused.
+   - `launchctl bootstrap gui/$UID <plist path>`. A non-zero exit returns the combined
+     output as the error: `load the launch agent: <output>`.
+   - `launchctl kickstart gui/$UID/io.quecto.harness` to start it now.
+5. Linux:
+   - `systemctl --user daemon-reload`.
+   - `systemctl --user enable --now quecto-harness`.
+   - Print `if you want this running without a login session: loginctl enable-linger $USER`.
+     This is a printed note, never executed, because it needs privileges the harness does
+     not assume.
+6. Poll `<Home>/url` for up to 5 seconds. When it appears, print
+   `installed and running, open <url>`. When it does not, print
+   `installed, but no URL appeared: check <LogDir>/harness.err`.
+
+`$UID` is `os.Getuid()`, formatted, not read from the environment.
+
+### 11.5 Uninstall algorithm
+
+1. macOS: `launchctl bootout gui/$UID/io.quecto.harness`, ignoring an exit status that means
+   "not loaded". Then remove the plist.
+2. Linux: `systemctl --user disable --now quecto-harness`, ignoring "not loaded". Then remove
+   the unit and `systemctl --user daemon-reload`.
+3. Remove `<Home>/url`. Leave `token`, `config.json`, `allowlist.json`, `sessions/` and
+   `log/` alone, and say so: `removed the unit. config, token and sessions are still in
+   ~/.quecto-harness`.
+
+### 11.6 Status algorithm
+
+1. `os.Stat` on the unit path sets `Installed`.
+2. macOS: `launchctl print gui/$UID/io.quecto.harness`. Exit 0 sets `Running` when the output
+   contains a `pid = ` line; the `state = ` line becomes `Detail`.
+3. Linux: `systemctl --user is-active quecto-harness`. Output `active` sets `Running`; the
+   trimmed output becomes `Detail`.
+4. Read `<Home>/url` into `URL`.
+
+Printed form:
+
+```
+unit      /Users/jay/Library/LaunchAgents/io.quecto.harness.plist
+state     running (pid 4711)
+url       http://127.0.0.1:7331/?token=Vq3n8...
+token     /Users/jay/.quecto-harness/token (delete to rotate)
+logs      /Users/jay/.quecto-harness/log/harness.log
+```
+
+The URL is printed in full, token included, because the point of the command is to hand it
+to a browser. The token line is there so that rotating it does not require reading this
+document.
+
+Exit code 0 when running, 3 when installed and not running, 4 when not installed, so the
+command is usable from a shell script.
+
+### 11.7 Logs
+
+`~/.quecto-harness/log/harness.log` and `harness.err`. Neither is rotated by the harness.
+The server writes one line per request and one line per turn to stderr, so growth is bounded
+by use rather than by time; a note in the README says to truncate them if they matter. Both
+are created by the init system, not by the binary.
+
+---
+
+## 12. Frontend
+
+### 12.1 Files
+
+```
+web/
+  index.html
+  package.json
+  vite.config.ts        build.outDir = "../internal/web/dist", emptyOutDir
+  tsconfig.json         strict, noUncheckedIndexedAccess
+  src/
+    main.ts
+    App.svelte
+    app.css             @theme inline with the proxy palette, Poppins 400/500
+    lib/api.ts          the Api interface and the fetch implementation
+    lib/mock.ts         the mock implementation
+    lib/events.ts       the ServerEvent union and the stream client
+    stores/app.svelte.ts
+    stores/session.svelte.ts
+    components/Sidebar.svelte
+    components/TopBar.svelte
+    components/Transcript.svelte
+    components/Composer.svelte
+    components/FolderPicker.svelte
+    components/PermissionCard.svelte
+    components/ToolCard.svelte
+    components/ModelPicker.svelte
+    components/ContextMeter.svelte
+    components/SettingsPanel.svelte
+```
+
+### 12.2 Event types
+
+`src/lib/events.ts` mirrors section 10.4 exactly. The discriminant is `type`.
+
+```ts
+export type TurnState =
+  | "idle" | "preflight" | "compacting" | "streaming"
+  | "deciding" | "executing" | "final" | "stopped" | "failed" | "limit";
+
+export type ServerEvent =
+  | { type: "status";      seq: number; state: TurnState }
+  | { type: "delta";       seq: number; text: string }
+  | { type: "reasoning";   seq: number; text: string }
+  | { type: "tool_call";   seq: number; index: number; id: string; name: string;
+                           arguments: string }
+  | { type: "tool_output"; seq: number; index: number; id: string; name: string;
+                           output: string; exit_code: number | null; truncated: boolean }
+  | { type: "permission";  seq: number; id: string; tool: string; command?: string;
+                           path?: string; prefix: string; args: string }
+  | { type: "usage";       seq: number; prompt_tokens: number; completion_tokens: number;
+                           cached_tokens: number; fill: number; n_ctx: number }
+  | { type: "compacted";   seq: number; before: number; after: number; summary: string }
+  | { type: "error";       seq: number; kind: string; message: string }
+  | { type: "done";        seq: number; finish_reason: string; iterations: number }
+  | { type: "resync";      seq: number };
+```
+
+### 12.3 Store shapes
+
+```ts
+// stores/app.svelte.ts
+export type ModelRow = {
+  id: string;
+  status: "unloaded" | "loading" | "loaded" | "sleeping" | "downloading" | string;
+  ctx_hint: number;
+  ctx_source: CtxSource;
+  modalities: string[];
+  failed: boolean;
+};
+
+export type CtxSource = "props" | "meta" | "args" | "assumed" | "";
+
+export type AppConfig = {
+  model: string;
+  effort: "off" | "low" | "medium" | "high";
+  auto: boolean;
+  compact_at: number;
+  shell: string;
+  command_timeout_s: number;
+  output_limit_bytes: number;
+  listen: string;
+};
+
+export class AppStore {
+  mode = $state<"router" | "single" | "unknown">("unknown");
+  build = $state("");
+  serverUrl = $state("");
+  detectError = $state("");
+  config = $state<AppConfig | null>(null);
+  configNotes = $state<string[]>([]);
+  projects = $state<string[]>([]);
+  models = $state<ModelRow[]>([]);
+  modelsError = $state("");
+  selectedProject = $state<string | null>(null);
+  sessions = $state<SessionSummary[]>([]);
+  authExpired = $state(false);
+}
+```
+
+```ts
+// stores/session.svelte.ts
+export type EntryKind = "user" | "assistant" | "tool" | "compaction" | "error" | "status";
+
+export type Entry = {
+  seq: number;
+  kind: EntryKind;
+  content: string;
+  reasoning: string;
+  reasoningOpen: boolean;         // UI only
+  toolCalls: { index: number; id: string; name: string; arguments: string }[];
+  toolCallId: string;
+  toolName: string;
+  exitCode: number | null;
+  truncated: boolean;
+  permission: PermissionRecord | null;
+  inContext: boolean;
+  at: string;
+  streaming: boolean;             // UI only, true while deltas are arriving
+};
+
+export type Pending = {
+  id: string; tool: string; command?: string; path?: string;
+  prefix: string; args: string;
+};
+
+export class SessionStore {
+  id = $state("");
+  project = $state("");
+  model = $state("");
+  state = $state<TurnState>("idle");
+  entries = $state<Entry[]>([]);
+  pending = $state<Pending | null>(null);
+  fill = $state(0);
+  nCtx = $state(0);
+  nCtxSource = $state<CtxSource>("");
+  cached = $state(0);
+  compactions = $state(0);
+  lastSeq = $state(0);
+  connected = $state(false);
+
+  get ratio() { return this.nCtx > 0 ? this.fill / this.nCtx : 0; }
+  get ctxApprox() { return this.nCtxSource === "assumed"; }
+  get busy()  { return this.state !== "idle"; }
+  get blocked() { return this.pending !== null; }
+}
+```
+
+Only one `SessionStore` is live at a time. Switching sessions closes the event source,
+fetches the snapshot, and rebuilds the store.
+
+### 12.4 The api interface
+
+```ts
+export interface Api {
+  state(): Promise<StateResponse>;
+  models(refresh?: boolean): Promise<ModelRow[]>;
+  modelProps(id: string): Promise<PropsResponse>;
+  dirs(path?: string): Promise<DirsResponse>;
+  addProject(path: string): Promise<string[]>;
+  removeProject(path: string): Promise<string[]>;
+  allowlist(project: string): Promise<string[]>;
+  removeAllow(project: string, prefix: string): Promise<string[]>;
+  listSessions(project?: string): Promise<SessionSummary[]>;
+  createSession(project: string, model: string): Promise<SessionSummary>;
+  getSession(id: string): Promise<SessionSnapshot>;
+  rebindSession(id: string, model: string): Promise<RebindResponse>;
+  deleteSession(id: string): Promise<void>;
+  send(id: string, text: string): Promise<void>;
+  stop(id: string): Promise<void>;
+  compact(id: string): Promise<void>;
+  decide(id: string, d: Decision): Promise<void>;
+  putConfig(patch: Partial<AppConfig> & { server?: { url?: string; token?: string } }): Promise<AppConfig>;
+  events(sessionId: string, from: number, on: (e: ServerEvent) => void): Stream;
+}
+
+export interface Stream { close(): void; }
+```
+
+`lib/api.ts` exports `httpApi: Api`. `lib/mock.ts` exports `mockApi: Api`, which serves a
+scripted session including a tool call, a permission prompt and a compaction, driven by a
+timer. `main.ts` picks between them with `import.meta.env.VITE_MOCK === "1"`, so the whole UI
+can be built and clicked through before the Go server exists. The swap is a single
+assignment; no component imports `fetch` directly.
+
+Every fetch sends `credentials: "same-origin"` and treats 401 by setting
+`app.authExpired = true` and closing the stream.
+
+### 12.5 Reconnection
+
+`events()` wraps `EventSource`:
+
+1. Open `/api/events?session=<id>&from=<lastSeq>`.
+2. `onopen` sets `connected = true` and resets the backoff.
+3. `onmessage` parses the payload, updates `lastSeq` from `seq`, and dispatches.
+4. `onerror` sets `connected = false`. `EventSource` retries on its own with the interval
+   from the last `retry:` field; the harness does not send one, so the browser default (3
+   seconds) applies. The reconnect carries `Last-Event-ID` automatically, which the server
+   uses when `from` is absent. Since `from` is in the URL from the first open, it is
+   refreshed by closing and reopening with the new `lastSeq` after five consecutive errors.
+5. A `resync` event closes the stream, refetches `GET /api/sessions/{id}`, replaces the
+   entries, and reopens with the snapshot's `last_seq`.
+
+A disconnect shows a one-line bar above the composer: `reconnecting`. It does not block
+typing, but Send is disabled while `connected` is false.
+
+### 12.6 Transcript rendering
+
+| event | effect |
+|-------|--------|
+| `status` | sets `session.state`; drives the spinner in the top bar and the Stop button |
+| `delta` | appends to the last entry when it is a streaming assistant, otherwise creates one with `streaming: true` |
+| `reasoning` | appends to `reasoning` of the same entry; the block renders collapsed with a caret and a token count computed as `Math.ceil(reasoning.length / 4)` |
+| `tool_call` | matches `toolCalls[]` on `index`, creating the entry on first sight, appends the argument fragment, and updates `id` and `name` from the event; renders the arguments as they arrive in a mono block |
+| `permission` | sets `session.pending` and appends a `PermissionCard` inline at the end of the transcript |
+| `tool_output` | finds the tool card on `index`, fills its output, exit code badge and truncation notice |
+| `usage` | updates `fill`, `nCtx`, `cached`; the context meter recolours at 60 and 80 percent |
+| `compacted` | appends a divider entry; everything above it is dimmed and marked `out of context`, matching the server's `in_context` flags |
+| `error` | appends a red row with the message; does not clear the transcript |
+| `done` | sets `streaming: false` on the last assistant entry, `state` returns to `idle` |
+| `resync` | triggers the snapshot refetch of 12.5 |
+
+Assistant content is rendered as plain text with fenced code blocks detected by a small
+regex and put in a mono block. There is no markdown library.
+
+Tool cards: header `run_shell`, the arguments as JSON, the output in a mono block with a
+`max-height` and a scroll, an exit code badge (`0` green, non-zero amber, `killed` grey), and
+a footer line `output truncated, 96 KB omitted` when `truncated` is true.
+
+### 12.7 The permission card and the composer
+
+`PermissionCard` renders inside the transcript at the point the request arrived. It shows the
+tool name, the command or path in mono, and three actions:
+
+- **Allow once** posts `{"decision":"once"}`.
+- **Allow always** shows an editable text input pre-filled with the server's `prefix`, and
+  posts `{"decision":"always","prefix":"<value>"}`. A 400 from the server puts the message
+  under the input and keeps the card open.
+- **Deny** reveals an optional single-line reason and posts
+  `{"decision":"deny","reason":"<value>"}`.
+
+While `session.pending !== null`:
+
+- The composer textarea is `disabled` and shows the placeholder
+  `waiting for your decision above`.
+- Enter does nothing.
+- The Send button is disabled.
+- The Stop button stays enabled, because stopping is the way out of a decision the user does
+  not want to make.
+
+Once the POST returns 200, the card renders its answered state (`allowed once`,
+`allowed always: go test`, `denied: wrong directory`) and `pending` is cleared locally
+without waiting for a server event, so the composer unblocks immediately.
+
+### 12.8 Model picker and context meter
+
+The picker lists every model from `/api/state`. Each row: a status dot (grey `unloaded`,
+amber `loading` with a pulse, green `loaded`, grey `sleeping`, amber `downloading`), the id,
+and the context to the right, shown as `131k` from `ctx_hint`. A row whose status is not
+`loaded` is dimmed and carries the note `loads on first message`.
+
+Selecting a model does two things. It calls `PUT /api/config` so the choice is the default
+for new sessions, and, when a session is selected and idle, it calls
+`PUT /api/sessions/{id}` to rebind that session. A 409 from the rebind leaves the picker on
+the old model and shows `stop the current turn first` under it. Nothing model-scoped is
+fetched from the model server by either call; the props probe that follows a rebind happens
+on the server side and only for a model already reported loaded.
+
+The meter reads `42k / 131k` with a filled bar, green below 60 percent, amber to 80, red
+above. When `n_ctx_source` is `assumed` it reads `42k / ~32k`, with the tilde as the only
+signal that the denominator is a guess, and the bar behaves the same way. `n_ctx` is never
+zero, so there is no unknown state to render.
+
+### 12.9 Settings and session removal
+
+`SettingsPanel` edits `effort`, `auto`, `compact_at`, `shell`, `command_timeout_s`,
+`output_limit_bytes` and `server.url` through `PUT /api/config`, and shows `config_notes`
+above the form when the server clamped anything.
+
+It also shows the allowlist for the currently selected project, fetched with
+`GET /api/allowlist?project=`, one row per prefix in mono with a remove control that calls
+`DELETE /api/allowlist`. This is the only way to withdraw an "allow always", and the only
+way to clear rules left behind by a project that was removed from the list.
+
+Each session row in the sidebar carries a remove control that calls
+`DELETE /api/sessions/{id}` behind a confirmation, since there is no undo. A 409 shows
+`stop the current turn first` on the row.
+
+---
+
+## 13. Testing
+
+### 13.1 Per package
+
+| package | tests |
+|---------|-------|
+| `config` | defaults resolution; every clamp in the table of 3.3 with its note; absent file creates defaults; unknown keys ignored; `Config.File()` round trip; `WriteAtomic` leaves no temp file on a write error and never truncates on failure; allowlist prefix match table including `git status` versus `git statusfoo` and `rm` versus `rmdir`; concurrent `Update` under `-race` |
+| `llama` | `Detect` against the router fixture and against a synthesised single-model body; `Models` `CtxHint` from `meta` and from `args` for every entry in the fixture; `Props` decoding including `chat_template_caps`; `modelURL` always carries `autoload=false`; `buildBody` golden JSON for each of the four effort levels crossed with caps known and unknown; the SSE state machine table; tool-call accumulation, including a stream whose fragments never carry an id; malformed chunk skipping; EOF with a finish reason, EOF without one (`KindUpstream`, partial content preserved) and EOF with nothing decoded (`KindMalformed`); error taxonomy for each status |
+| `prompts` | every embedded file is non-empty; `System` renders with both fields substituted and leaves no `{{`; the tool descriptions match the schema descriptions by name |
+| `tools` | path guard table (section 13.3); `read_file` numbering, offset, limit, byte cap, empty file, directory, binary; `write_file` creates parents, preserves mode, atomic replace leaves the old content on a failed write; `run_shell` exit code, merged streams, timeout kill, process group kill of a forked child, truncation head and tail, `Truncate` boundary cases |
+| `perms` | `Evaluate` matrix over tool times auto times allowlist times operators, with a case per entry of the operator list and a case proving `${` does not prompt; `Ask` and `Resolve` happy path; `Resolve` on an unknown id; cancel while blocked; double resolve; `always` writes the allowlist before returning; denial content string |
+| `agent` | the state machine transitions; the loop against the replay server for a plain reply, a single tool call, two tool calls, a denial, a stop mid-command, 50 iterations; `Get` on a live id, on an id only on disk, and on an unknown id; `computeFill` before and after a usage report; the `assumed` fallback arms auto compaction; effort mapping into the recorded request body; `Rebind` resets `NCtx`, caps and `LastUsage`, appends the visible out-of-context status entry, and returns `ErrBusy` when not idle; the props probe fires at creation for a loaded model and after the first response for an unloaded one, always with `autoload=false`; compaction rewrites `in_context` and leaves `visible` alone; the unanswered-tool-call repair |
+| `store` | round trip of a session with every entry kind; index built at `Open`; a corrupt file is skipped and named; `List` ordering; concurrent `Save` of two sessions under `-race` |
+| `server` | auth: token to cookie, bearer, 401 without either, constant-time compare, a token file present at start is reused rather than replaced, a missing one is created 0600; origin rejection; every route's happy path and its documented error status, including `PUT /api/sessions/{id}` (200 idle, 409 busy, 400 unknown model), `DELETE /api/sessions/{id}` (204, 409 busy, 404 unknown, hub channel dropped), `GET /api/allowlist` (empty array for an unknown project) and `DELETE /api/allowlist` (200 with the unchanged list for a prefix that is absent); `tool_call` and `tool_output` payloads carry `index`; the folder browser rules including hidden exclusion and a non-absolute path; SSE replay from `Last-Event-ID`, from `?from=`, and the `resync` path when the ring has rolled; a slow subscriber gets `resync` and is not disconnected; embed fallback page when `Built()` is false |
+| `service` | `UnitText` golden output for both platforms, asserted on whichever platform the test runs on; XML escaping of a home directory containing `&`; a binary under `/tmp` is refused; the install command sequence recorded by a stub `launchctl` placed first on `PATH`, asserted in order so that `enable` precedes `bootstrap`; `Report` parses a recorded `launchctl print` and a recorded `systemctl is-active` output |
+
+### 13.2 Fixtures
+
+`internal/llama/testdata/` receives copies of the three captures:
+
+- `props-router.json` from `GET /props`. Drives the `ModeRouter` test and the assertion that
+  `default_generation_settings.n_ctx == 0` does not become a context size.
+- `v1-models.json` from `GET /v1/models`. Drives `Models`, all six entries, including the
+  `meta.n_ctx` path for the loaded `Gemma4-12B` and the `--ctx-size 262144 --parallel 2`
+  arithmetic that also gives 131072, and the ids containing spaces.
+- `props-model.json` from `GET /props?model=Gemma4-12B&autoload=false`. Drives `Props`,
+  `total_slots: 2`, `n_ctx: 131072`, and the caps decode where
+  `supports_reasoning_effort` is false and `supports_tool_calls` is true. That last pair is
+  the case the effort mapping test uses for the budget column.
+
+`internal/agent/testdata/` receives recorded SSE streams as plain text files, one frame per
+blank-line-separated block, replayed verbatim:
+
+- `stream_plain.txt`: content deltas, finish `stop`, usage, `[DONE]`.
+- `stream_tool.txt`: reasoning deltas, one tool call streamed across four fragments with the
+  arguments split mid-string, finish `tool_calls`, usage, `[DONE]`.
+- `stream_two_tools.txt`: two calls with interleaved fragments at indices 0 and 1.
+- `stream_malformed.txt`: a valid chunk, a chunk with a truncated JSON object, a chunk that
+  is not JSON at all, then valid chunks and `[DONE]`.
+- `stream_error.txt`: two content chunks then a chunk carrying an `error` object.
+
+A source comment in each file records the build the shape came from. The bodies are edited
+copies of live responses, not invented from the README.
+
+### 13.3 Path guard table
+
+Root is a temp directory with `sub/`, `link_in -> sub`, `link_out -> /etc`, `file.txt`.
+
+| argument | outcome |
+|----------|---------|
+| `file.txt` | allowed |
+| `sub/new.txt` | allowed, parent exists |
+| `sub/deep/new.txt` | allowed, parent created by write_file |
+| `./file.txt` | allowed |
+| `../outside.txt` | refused |
+| `sub/../../outside.txt` | refused |
+| `/etc/passwd` | refused |
+| `link_in/x.txt` | allowed, resolves inside |
+| `link_out/passwd` | refused |
+| `sub/link_out/passwd` | refused |
+| `` (empty) | refused, `path is empty` |
+| `a\x00b` | refused |
+| root itself, `.` | refused by read_file as a directory, refused by write_file as a directory |
+
+The same table runs with the root under `/tmp` on macOS, which only passes because the root
+is symlink-resolved at construction.
+
+### 13.4 The replay server
+
+```go
+// replay serves a recorded SSE body and records the request that asked for it.
+type replay struct {
+	Frames   []string      // one entry per SSE frame, without the blank line
+	Delay    time.Duration // between frames
+	Status   int           // non-200 short-circuits before any frame
+	Requests []recorded    // path, headers, body
+}
+
+func newReplay(t *testing.T, fixture string) *replay
+func (r *replay) Server() *httptest.Server
+func (r *replay) LastBody() map[string]any
+```
+
+Design:
+
+- `Server()` returns an `httptest.Server` whose handler reads and records the body, then
+  writes `Content-Type: text/event-stream` and each frame followed by `\n\n`, flushing after
+  every write with `http.Flusher`. Without the flush the whole body arrives at once and the
+  incremental path is not exercised.
+- `Delay` defaults to zero. One test sets it to 5 ms and cancels the context after the second
+  frame, which is how cancellation mid-stream is covered.
+- The handler also answers `GET /props`, `GET /props?model=`, and `GET /v1/models` from the
+  captured fixtures, so an `agent` test can run a whole turn including the post-first-response
+  `Props` call against one server.
+- `LastBody` decodes the recorded request body into a map, which is how the effort mapping,
+  the tool schemas, the absence of `reasoning_content` in replayed history, and the presence
+  of `stream_options.include_usage` are asserted.
+- A `?model=` request without `autoload=false` returns 500 with a message naming the rule, so
+  a regression on that fails loudly in every test that touches it rather than silently
+  loading a model in production.
+
+An `agent` end-to-end test wires a real `perms.Broker`, a real `tools.Runner` over a temp
+directory, a real `store.Sessions` over a temp directory, and the replay server, and drives
+one turn that reads a file, is denied a command, writes a file, and is then forced to
+compact by setting `compact_at` to 0.01. Assertions: the file exists on disk with the right
+content, the denial reached the model as `denied by user: <reason>`, the second request body
+is smaller than the first, the session file has `compactions: 1`, and every entry before the
+divider has `in_context: false` and `visible: true`.
+
+### 13.5 Live smoke checklist
+
+Run against `http://192.168.2.205:8080`. Steps 1 to 3 are read-only and load nothing.
+
+1. `curl -s http://192.168.2.205:8080/v1/models | jq -r '.data[] | "\(.id) \(.status.value)"'`
+   and keep the output. This is the before picture.
+2. Start `quecto-harness`. `GET /api/state` reports `"mode":"router"`, the build string, and
+   six models with the same statuses as step 1.
+3. Repeat step 1. Nothing changed. This is the assertion that the harness performs no
+   model-scoped GET without `autoload=false`.
+4. Ask the user before this step, because it loads a model. Add a project with the `+`
+   button, select `Gemma4-12B`, send `list the files here`. Approve the `ls` once. Output
+   appears with `exit code: 0`.
+5. Send another listing command, approve `always`, and check that `~/.quecto-harness/allowlist.json`
+   gained the prefix under the project key.
+6. Turn auto on and send a command that prefix-matches. No card appears. Send one containing
+   `|`. A card appears.
+7. Send a write task. The file appears on disk with the right content and the transcript
+   shows `wrote <name>`.
+8. Set `compact_at` to 0.01 through the settings, send a message, and confirm a compaction
+   divider, a `compacted` event with a smaller `after`, and a smaller `prompt_tokens` on the
+   next turn's usage event.
+9. Set effort to off and confirm that no `reasoning` event arrives and the request body
+   carried `reasoning_budget: 0`.
+10. Ask the model to run `sleep 60`, approve it, press Stop. The process is gone
+    (`pgrep -f 'sleep 60'` finds nothing), the transcript shows the stop marker, the state
+    returns to idle.
+11. Kill the server with SIGINT while a turn is streaming. It exits within 5 seconds and the
+    session file on disk ends at the last persisted entry. Start it again without touching
+    the browser: the same tab keeps working, and `~/.quecto-harness/url` carries the same
+    token as before. Delete `~/.quecto-harness/token`, restart, and the tab now gets a 401
+    and the `not authorized` page.
+12. Rebind the model on an idle session through the picker. The transcript gains
+    `model changed to <id>`, the meter denominator changes, and the next turn's usage event
+    reports against the new model. Try the same during a turn and confirm the picker refuses
+    with `stop the current turn first`.
+13. Remove an "allow always" rule from the settings panel, then send the same command again
+    with auto on. The permission card comes back.
+14. Delete a session from the sidebar. The file is gone from
+    `~/.quecto-harness/sessions/` and the transcript pane is empty.
+15. `quecto-harness service install`, then
+    `launchctl print gui/$UID/io.quecto.harness | head -5` shows a pid.
+    `quecto-harness open` opens the UI. `quecto-harness service status` exits 0 and prints the
+    URL and the token path. `quecto-harness service uninstall` removes the plist and the
+    process.
+16. `gofmt -l . && go vet ./... && go test -race ./...` clean.
+
+---
+
+## 14. Decisions
+
+The fourteen questions raised at review, and their answers. Each is settled and is already
+reflected in the sections above.
+
+1. **Token lifetime.** The token is persisted in `~/.quecto-harness/token`, mode 0600,
+   created on first start and reused across restarts, so a tab survives a supervisor
+   restart. Deleting the file rotates it on the next start, and that is the only revocation
+   mechanism. Sections 1.2, 1.5, 3.1, 10.2, 11.5, 11.6.
+
+2. **The "off" effort row.** Off sends both `reasoning_budget: 0` and
+   `chat_template_kwargs: {"enable_thinking": false}`, regardless of what the caps report.
+   A template that does not know the keyword ignores it, and the budget covers the case
+   where it does. Sections 4.5, 8.6.
+
+3. **Parallel tool calls.** A batch of calls in one assistant message is executed
+   sequentially, one permission card at a time, in the order the model listed them.
+   `parallel_tool_calls` is not sent in either direction. Sections 4.5, 8.3.
+
+4. **`max_tokens`.** Not sent. The iteration limit and the compaction threshold are the
+   bounds on a runaway turn. Section 4.5.
+
+5. **Manual compaction.** Compact stays idle-only. A user watching a turn that needs
+   compacting presses Stop first. This keeps the rewrite away from a history whose tool
+   results have not been appended yet. Sections 8.7, 10.4.
+
+6. **The operator rejection list.** It is `;`, `&`, `|`, `>`, `<`, backtick, `$(`, `\n`,
+   `\r`. Bare `&` subsumes `&&` and catches backgrounding, which would otherwise escape the
+   process group wait. Bare `|` subsumes `||`. `${` is not on the list, since parameter
+   expansion cannot start a second command. Section 7.4.
+
+7. **Concurrent turns.** Not serialised. llama.cpp queues a request when every slot is busy,
+   so a second session sits in `status: streaming` with no deltas until a slot frees. This
+   is documented behaviour and nothing is built for it. Section 8.9.
+
+8. **Model picker versus session model.** The picker rebinds the currently selected session
+   when it is idle, through `PUT /api/sessions/{id}`, and also sets `config.model` as the
+   default for new sessions. A rebind changes `session.Model`, resets `NCtx` and caps to the
+   new model's hint and unknown, clears `LastUsage` so fill is re-estimated, and appends a
+   visible out-of-context `status` entry reading `model changed to <id>`. 409 when the
+   session is busy. Sections 8.1, 8.5, 10.4, 12.8.
+
+9. **Unknown context size.** The last resort is 32768 with source `"assumed"`. Automatic
+   compaction stays armed against it, and the meter renders `42k / ~32k` so the guess is
+   visible. `n_ctx` is therefore never zero. Sections 8.5, 12.3, 12.8.
+
+10. **Large tool arguments in the session file.** Accepted as it is. There is no cap on
+    stored `tool_calls[].function.arguments`, because a truncated argument makes the stored
+    history unusable for a resend. A session that writes several large files produces a
+    large file. Section 9.5.
+
+11. **Single-model detection.** Confirmed: `role == "router"` selects router mode and the
+    absence of `role` selects single mode. `model_alias` is not a discriminator, since the
+    router returns it too. Section 4.2.
+
+12. **Allowlist entries for a removed project.** They stay on disk, so re-adding the project
+    restores its rules. Two routes make them reachable: `GET /api/allowlist?project=` and
+    `DELETE /api/allowlist`. The settings panel lists the current project's rules with a
+    remove control, which is the only caller of `config.Store.RemoveAllow`. Sections 10.4,
+    12.4, 12.9.
+
+13. **Deleting a session.** `DELETE /api/sessions/{id}` returns 204 on success, 409 when the
+    session is busy, and 404 when the id is unknown. It removes the file, the live engine
+    entry and the hub channel. The sidebar exposes it behind a confirmation, since there is
+    no undo. Sections 8.1, 10.4, 12.9.
+
+14. **Reasoning dropped from the history.** Noted, no action. Reasoning is stored and shown
+    but never replayed to the model, so a template reporting
+    `supports_preserve_reasoning: true` will not receive the trace it is built for. Section
+    8.7.
