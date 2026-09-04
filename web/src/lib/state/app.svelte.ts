@@ -368,6 +368,13 @@ function onEvent(event: HarnessEvent): void {
     return;
   }
 
+  // The title lands in the sidebar and the header, neither of which reads the
+  // transcript, so it is refetched with the session list.
+  if (event.type === "title") {
+    void loadSessions();
+    return;
+  }
+
   applyEvent(app.items, event);
 
   if (event.type === "usage") {

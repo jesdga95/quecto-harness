@@ -430,6 +430,7 @@ export class MockApi implements HarnessApi {
       };
       this.emit(session, { type: "usage", ...t.usage });
       this.finish(session, t);
+      if (index === 0) this.nameSession(session, t);
     } catch (err) {
       if (!(err instanceof Cancelled)) {
         this.send(session, t, { type: "error", message: String(err) });
@@ -440,6 +441,16 @@ export class MockApi implements HarnessApi {
     } finally {
       if (this.running === turn) this.running = null;
     }
+  }
+
+  // The harness asks the model for a title after the first turn, and the
+  // sidebar picks it up off the stream.
+  private nameSession(session: string, t: Transcript): void {
+    const named = "Fan out the SSE hub";
+    t.session.title = named;
+    const summary = this.sessions.find((s) => s.id === session);
+    if (summary) summary.title = named;
+    this.emit(session, { type: "title", title: named });
   }
 
   private finish(session: string, t: Transcript): void {

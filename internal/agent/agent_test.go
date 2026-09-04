@@ -129,6 +129,20 @@ func waitForCaps(t *testing.T, s *Session) {
 	t.Fatal("the capabilities never arrived")
 }
 
+// waitForRequests blocks until the replay server has been asked n times, which
+// is how a test waits for the title request that follows a first turn.
+func waitForRequests(t *testing.T, h *harness, n int) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.replay.Count() >= n {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("the replay server was asked %d times, want %d", h.replay.Count(), n)
+}
+
 func waitIdle(t *testing.T, s *Session) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -216,7 +230,7 @@ func TestEffortReachesTheRequestBody(t *testing.T) {
 // The kwarg is not known to apply until the model is loaded and read, so the
 // first request to a cold model carries none.
 func TestPreserveReasoningFollowsTheCapability(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt", "stream_plain.txt")
 	if _, err := h.cfg.Update(func(c *config.Config) { c.PreserveReasoning = false }); err != nil {
 		t.Fatal(err)
 	}
@@ -229,12 +243,15 @@ func TestPreserveReasoningFollowsTheCapability(t *testing.T) {
 	}
 
 	waitForCaps(t, s)
+	// The title request follows the first turn, so the second turn is the
+	// third request rather than the second.
+	waitForRequests(t, h, 2)
 	if err := h.engine.Send(s.ID, "second"); err != nil {
 		t.Fatal(err)
 	}
 	waitIdle(t, s)
 
-	second := h.replay.Body(1)
+	second := h.replay.Body(2)
 	kw, _ := second["chat_template_kwargs"].(map[string]any)
 	if kw == nil || kw["preserve_reasoning"] != false {
 		t.Errorf("chat_template_kwargs = %v, want preserve_reasoning false", second["chat_template_kwargs"])
@@ -764,8 +781,10 @@ func TestToolCallLimit(t *testing.T) {
 	h.engine.Send(s.ID, "loop forever")
 	waitIdle(t, s)
 
-	if h.replay.Count() != 3 {
-		t.Errorf("model calls = %d, want 3", h.replay.Count())
+	// Three turns, and the title request that follows a first turn.
+	waitForRequests(t, h, 4)
+	if h.replay.Count() != 4 {
+		t.Errorf("model calls = %d, want 4", h.replay.Count())
 	}
 	doc, _, _, _ := s.Snapshot()
 	noted := false
@@ -780,6 +799,57 @@ func TestToolCallLimit(t *testing.T) {
 	last := doc.Entries[len(doc.Entries)-1]
 	if last.Kind != "assistant" || len(last.ToolCalls) != 0 {
 		t.Errorf("last entry = %+v, want an assistant answer with no calls", last)
+	}
+}
+
+// TestTitleAfterFirstTurn asserts that the model names the session once, that
+// the request continues the session's own messages, and that a title the user
+// typed is left alone.
+func TestTitleAfterFirstTurn(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_title.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "what is in this project")
+	waitIdle(t, s)
+	waitForRequests(t, h, 2)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		doc, _, _, _ := s.Snapshot()
+		if doc.Title == "Read the project layout" {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	doc, _, _, _ := s.Snapshot()
+	if doc.Title != "Read the project layout" {
+		t.Errorf("title = %q, want the one the model wrote", doc.Title)
+	}
+	if doc.Named {
+		t.Error("a title the harness asked for was recorded as one the user typed")
+	}
+
+	body := h.replay.Body(1)
+	msgs, _ := body["messages"].([]any)
+	if len(msgs) < 3 {
+		t.Fatalf("the title request carried %d messages, want the conversation", len(msgs))
+	}
+	last, _ := msgs[len(msgs)-1].(map[string]any)
+	if last["role"] != "user" || !strings.Contains(last["content"].(string), "Six words at most") {
+		t.Errorf("last message = %v", last)
+	}
+
+	// A typed title outlives a second turn, which asks for no title at all.
+	if err := h.engine.Rename(s.ID, "Mine"); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.Send(s.ID, "and now")
+	waitIdle(t, s)
+	doc, _, _, _ = s.Snapshot()
+	if doc.Title != "Mine" || !doc.Named {
+		t.Errorf("title = %q named = %v", doc.Title, doc.Named)
+	}
+	if h.replay.Count() != 3 {
+		t.Errorf("model calls = %d, want 3", h.replay.Count())
 	}
 }
 

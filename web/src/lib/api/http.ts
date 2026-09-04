@@ -150,6 +150,7 @@ interface WireEvent {
   before?: number;
   after?: number;
   summary?: string;
+  title?: string;
   message?: string;
 }
 
@@ -497,6 +498,7 @@ const EVENT_NAMES = [
   "permission_done",
   "usage",
   "status_entry",
+  "title",
   "compacted",
   "done",
   "resync",
@@ -583,6 +585,9 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
 
     case "status_entry":
       return [{ type: "status_entry", text: ev.content ?? "" }];
+
+    case "title":
+      return ev.title ? [{ type: "title", title: ev.title }] : [];
 
     case "compacted":
       return [

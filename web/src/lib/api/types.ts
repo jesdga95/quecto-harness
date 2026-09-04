@@ -116,6 +116,8 @@ export type HarnessEvent =
   | { type: "status"; status: TurnStatus }
   /** A line the harness writes into the transcript, such as a model change. */
   | { type: "status_entry"; text: string }
+  /** The model named the session after its first turn. */
+  | { type: "title"; title: string }
   | { type: "compacted"; before: number; after: number; summary: string }
   | { type: "error"; message: string }
   | { type: "done" }

@@ -11,6 +11,7 @@ func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 		"tool_write_file.md": ToolWriteFile,
 		"tool_run_shell.md":  ToolRunShell,
 		"compact.md":         Compact,
+		"title.md":           Title,
 	} {
 		if strings.TrimSpace(get()) == "" {
 			t.Errorf("%s is empty", name)

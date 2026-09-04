@@ -262,8 +262,8 @@ func (e *Engine) Rebind(id, model string, hint int, hintSource string) error {
 	return nil
 }
 
-// Rename sets the session title. An empty title restores the one derived from
-// the first user message.
+// Rename sets the session title. An empty title hands it back to the harness,
+// which titles it from the first message.
 func (e *Engine) Rename(id, title string) error {
 	s, err := e.Get(id)
 	if err != nil {
@@ -271,6 +271,10 @@ func (e *Engine) Rename(id, title string) error {
 	}
 	s.mu.Lock()
 	s.Title = title
+	s.Named = strings.TrimSpace(title) != ""
+	if !s.Named {
+		s.Title = store.Title(s.firstUserMessage())
+	}
 	s.mu.Unlock()
 	e.save(s)
 	return nil
@@ -305,6 +309,59 @@ func (e *Engine) Wait(d time.Duration) {
 	case <-done:
 	case <-time.After(d):
 	}
+}
+
+// titleSession asks the model to name the conversation after its first turn.
+// The request continues the session's own messages, so the model server has
+// the prompt cached and the next turn does not reprocess it.
+func (e *Engine) titleSession(s *Session) {
+	s.mu.Lock()
+	if !s.firstTurn() {
+		s.mu.Unlock()
+		return
+	}
+	msgs := append(s.contextMessages(e.os), llama.Message{Role: "user", Content: prompts.Title()})
+	model, caps := s.Model, s.caps
+	s.mu.Unlock()
+
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		ctx, cancel := context.WithTimeout(e.ctx, 60*time.Second)
+		defer cancel()
+		res, err := e.llama().Chat(ctx, llama.ChatRequest{
+			Model: model, Messages: msgs, Effort: llama.EffortOff,
+			PreserveReasoning: e.cfg.Config().PreserveReasoning, Caps: caps}, nil)
+		if err != nil {
+			return
+		}
+		title := cleanTitle(res.Content)
+		if title == "" {
+			return
+		}
+		s.mu.Lock()
+		// A rename or a second message while the request was in flight wins,
+		// since both say more about the session than the model does.
+		if !s.firstTurn() {
+			s.mu.Unlock()
+			return
+		}
+		s.Title = title
+		s.mu.Unlock()
+		e.save(s)
+		e.publish(s.ID, ev("title", map[string]any{"title": title}))
+	}()
+}
+
+// cleanTitle takes the first line of a reply and strips what a model wraps a
+// title in. An empty result leaves the title cut from the first message.
+func cleanTitle(reply string) string {
+	line := strings.TrimSpace(reply)
+	if i := strings.IndexAny(line, "\r\n"); i >= 0 {
+		line = line[:i]
+	}
+	line = strings.Trim(line, " \t\"'`*#.")
+	return store.Title(line)
 }
 
 // probeProps fills n_ctx and caps from a model-scoped read that carries
@@ -476,6 +533,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			e.probeProps(s, false)
 			e.publishUsage(s)
 			e.finish(s, StateIdle, res.FinishReason, iteration+1)
+			e.titleSession(s)
 			return
 		}
 

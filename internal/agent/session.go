@@ -42,6 +42,7 @@ type Session struct {
 	Created time.Time
 	Updated time.Time
 	Title   string
+	Named   bool
 
 	Entries []store.Entry
 
@@ -69,7 +70,7 @@ func newSession(id, project, model string) *Session {
 func fromDoc(d *store.Session) *Session {
 	return &Session{
 		ID: d.ID, Project: d.Project, Model: d.Model,
-		Created: d.Created, Updated: d.Updated, Title: d.Title,
+		Created: d.Created, Updated: d.Updated, Title: d.Title, Named: d.Named,
 		Entries:     append([]store.Entry(nil), d.Entries...),
 		NCtx:        d.NCtx,
 		NCtxSource:  d.NCtxSource,
@@ -85,7 +86,7 @@ func fromDoc(d *store.Session) *Session {
 // doc renders the on-disk shape. The caller holds the session lock.
 func (s *Session) doc() *store.Session {
 	return &store.Session{
-		ID: s.ID, Project: s.Project, Model: s.Model, Title: s.Title,
+		ID: s.ID, Project: s.Project, Model: s.Model, Title: s.Title, Named: s.Named,
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, LastUsage: s.LastUsage,
@@ -116,6 +117,33 @@ func (s *Session) appendEntry(e store.Entry) store.Entry {
 	s.Entries = append(s.Entries, e)
 	s.Updated = e.At
 	return e
+}
+
+// firstTurn reports that one user message has been sent and no title was
+// typed, which is when a title is worth asking the model for. The caller holds
+// the lock.
+func (s *Session) firstTurn() bool {
+	if s.Named {
+		return false
+	}
+	users := 0
+	for _, e := range s.Entries {
+		if e.Kind == "user" {
+			users++
+		}
+	}
+	return users == 1
+}
+
+// firstUserMessage is the text the fallback title is cut from. The caller
+// holds the lock.
+func (s *Session) firstUserMessage() string {
+	for _, e := range s.Entries {
+		if e.Kind == "user" {
+			return e.Content
+		}
+	}
+	return ""
 }
 
 // contextMessages is the system prompt followed by every in-context entry,

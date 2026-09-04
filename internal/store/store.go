@@ -62,10 +62,12 @@ type PermissionRecord struct {
 // Session is the on-disk document. The system prompt is not in it: it is
 // regenerated on every request, so editing the prompt reaches old sessions.
 type Session struct {
-	ID          string       `json:"id"`
-	Project     string       `json:"project"`
-	Model       string       `json:"model"`
-	Title       string       `json:"title"`
+	ID      string `json:"id"`
+	Project string `json:"project"`
+	Model   string `json:"model"`
+	Title   string `json:"title"`
+	// Named is set when the user typed the title. Nothing overwrites it.
+	Named       bool         `json:"named"`
 	Created     time.Time    `json:"created"`
 	Updated     time.Time    `json:"updated"`
 	NCtx        int          `json:"n_ctx"`
