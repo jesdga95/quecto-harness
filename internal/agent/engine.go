@@ -566,7 +566,8 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, call
 		return perms.Decision{Kind: perms.DecideOnce}, record, false
 	}
 	// The id is minted here rather than inside Ask, so the record kept with the
-	// tool entry carries the same id the card was answered with.
+	// tool entry carries the same id the card was asked with, whether the card
+	// was answered or the turn was stopped under it.
 	req := perms.Request{
 		ID:        perms.NewRequestID(),
 		SessionID: s.ID, Project: s.Project, Tool: tool,
@@ -574,19 +575,32 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, call
 		Prefix: perms.DefaultPrefix(command),
 		Args:   string(call.Function.Arguments),
 	}
+	record.ID = req.ID
 	d, err := e.perms.Ask(ctx, req)
 	if err != nil {
 		record.Decision = "stopped"
+		e.publishDecided(s, record)
 		return perms.Decision{}, record, true
 	}
-	record.ID = req.ID
 	record.Decision = string(d.Kind)
 	record.Prefix = d.Prefix
 	record.Reason = d.Reason
+	e.publishDecided(s, record)
 	if d.Note != "" {
 		e.publish(s.ID, ev("error", map[string]any{"kind": "allowlist", "message": d.Note}))
 	}
 	return d, record, false
+}
+
+// publishDecided closes a card that is open in the browser. The tab that
+// answered it already knows, but a stop answers it for every tab and nothing
+// else tells them, which leaves the composer waiting on a card that is gone.
+func (e *Engine) publishDecided(s *Session, r *store.PermissionRecord) {
+	if r.ID == "" {
+		return
+	}
+	e.publish(s.ID, ev("permission_done", map[string]any{
+		"id": r.ID, "decision": r.Decision, "prefix": r.Prefix, "reason": r.Reason}))
 }
 
 // execute runs the tool or writes the denial, and appends the tool entry that

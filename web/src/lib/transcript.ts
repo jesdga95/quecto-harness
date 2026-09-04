@@ -1,9 +1,14 @@
 import type { HarnessEvent, PermissionDecision, TranscriptItem } from "./api/types";
 
 let seq = 0;
+
+/** An id minted here must never equal one built from a stored entry, since a
+    repeated key aborts the whole keyed list and the transcript stops updating
+    until the page is reloaded. Stored ids are the prefix and the entry sequence
+    number with nothing between them, so the dash is what keeps the two apart. */
 export function nextId(prefix = "i"): string {
   seq += 1;
-  return `${prefix}${seq}`;
+  return `${prefix}-${seq}`;
 }
 
 /** Ids that arrive from the model or the server are not guaranteed unique, and
@@ -108,6 +113,19 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
         prefix: event.prefix,
         outcome: null,
       });
+      break;
+    }
+    case "permission_done": {
+      // A card is answered by one tab and closed in all of them, and a stop
+      // answers every card it finds, so the outcome arrives on the stream
+      // rather than only from the click that caused it.
+      const item = [...items]
+        .reverse()
+        .find(
+          (i) =>
+            i.kind === "permission" && (i.id === event.id || i.id.startsWith(`${event.id}#`)),
+        );
+      if (item && item.kind === "permission") item.outcome = event.outcome;
       break;
     }
     case "compacted": {

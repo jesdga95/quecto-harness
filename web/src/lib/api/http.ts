@@ -136,6 +136,8 @@ interface WireEvent {
   output?: string;
   exit_code?: number | null;
   truncated?: boolean;
+  decision?: string;
+  reason?: string;
   prompt_tokens?: number;
   completion_tokens?: number;
   cached_tokens?: number;
@@ -470,6 +472,7 @@ const EVENT_NAMES = [
   "tool_call",
   "tool_output",
   "permission",
+  "permission_done",
   "usage",
   "compacted",
   "done",
@@ -529,6 +532,15 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           tool: ev.tool ?? "",
           command: ev.command || ev.path || ev.args || "",
           prefix: ev.prefix ?? "",
+        },
+      ];
+
+    case "permission_done":
+      return [
+        {
+          type: "permission_done",
+          id: ev.id ?? "",
+          outcome: outcomeOf({ decision: ev.decision, prefix: ev.prefix, reason: ev.reason }),
         },
       ];
 

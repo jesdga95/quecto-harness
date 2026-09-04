@@ -94,6 +94,8 @@ export type HarnessEvent =
       command: string;
       prefix: string;
     }
+  /** The card was answered, or a stop answered it, and every tab closes it. */
+  | { type: "permission_done"; id: string; outcome: string }
   | {
       type: "usage";
       prompt_tokens: number;

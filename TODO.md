@@ -56,6 +56,9 @@ Ordered by size. Take from the top.
 - Fixed the crash that made compacted sessions render nothing: a decided
   permission was written with an empty id, and a repeated key aborts a keyed
   list in Svelte.
+- Fixed the freeze after a stop: a stopped card is now closed on the stream
+  instead of blocking the composer until a reload, and ids minted for live
+  items can no longer collide with ids built from stored entries.
 
 ## Known, not scheduled
 

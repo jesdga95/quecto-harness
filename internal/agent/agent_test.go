@@ -337,7 +337,7 @@ func TestStopWhileWaitingForADecision(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "list")
-	waitForCard(t, h, s.ID)
+	card := waitForCard(t, h, s.ID)
 	h.engine.Stop(s.ID)
 	waitIdle(t, s)
 
@@ -346,10 +346,23 @@ func TestStopWhileWaitingForADecision(t *testing.T) {
 	for _, e := range doc.Entries {
 		if e.Kind == "tool" && e.Content == "stopped by user" {
 			found = true
+			if e.Permission == nil || e.Permission.ID != card {
+				t.Errorf("the stopped record lost the id the card was asked with: %+v", e.Permission)
+			}
 		}
 	}
 	if !found {
 		t.Errorf("no stopped tool result, entries = %+v", doc.Entries)
+	}
+
+	// Without this the card stays open in the browser and the composer waits
+	// on a decision nothing will ever answer.
+	closed := h.rec.ofType("permission_done")
+	if len(closed) != 1 {
+		t.Fatalf("got %d permission_done events, want 1", len(closed))
+	}
+	if closed[0].Fields["id"] != card || closed[0].Fields["decision"] != "stopped" {
+		t.Errorf("permission_done = %+v, want id %q stopped", closed[0].Fields, card)
 	}
 }
 
