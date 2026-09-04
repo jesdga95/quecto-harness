@@ -138,6 +138,7 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
         id: nextId("c"),
         before: event.before,
         after: event.after,
+        summary: event.summary,
       });
       break;
     }

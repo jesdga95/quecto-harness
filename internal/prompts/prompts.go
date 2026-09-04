@@ -9,10 +9,13 @@ import (
 	"text/template"
 )
 
-//go:embed system.md tool_read_file.md tool_write_file.md tool_run_shell.md compact.md
+//go:embed system.md tool_read_file.md tool_write_file.md tool_run_shell.md compact.md compaction.md
 var files embed.FS
 
-var systemTmpl = template.Must(template.New("system").Parse(mustRead("system.md")))
+var (
+	systemTmpl     = template.Must(template.New("system").Parse(mustRead("system.md")))
+	compactionTmpl = template.Must(template.New("compaction").Parse(mustRead("compaction.md")))
+)
 
 func mustRead(name string) string {
 	b, err := files.ReadFile(name)
@@ -32,6 +35,16 @@ func System(v SystemVars) string {
 	var b strings.Builder
 	if err := systemTmpl.Execute(&b, v); err != nil {
 		panic("prompts: render system.md: " + err.Error())
+	}
+	return b.String()
+}
+
+// Compaction is the message the summary is sent back as, so the entry keeps
+// the summary alone and the framing lives here with the other prompts.
+func Compaction(summary string) string {
+	var b strings.Builder
+	if err := compactionTmpl.Execute(&b, struct{ Summary string }{summary}); err != nil {
+		panic("prompts: render compaction.md: " + err.Error())
 	}
 	return b.String()
 }

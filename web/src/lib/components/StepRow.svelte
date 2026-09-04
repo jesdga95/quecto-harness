@@ -1,6 +1,7 @@
 <script lang="ts">
   import ArrowsIn from "phosphor-svelte/lib/ArrowsIn";
   import Brain from "phosphor-svelte/lib/Brain";
+  import CaretRight from "phosphor-svelte/lib/CaretRight";
   import FileText from "phosphor-svelte/lib/FileText";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
@@ -37,7 +38,8 @@
   });
 
   const isPath = $derived(item.kind === "tool" && path !== "");
-  const expandable = $derived(item.kind !== "compaction");
+  // A compaction with no summary is a divider and nothing more.
+  const expandable = $derived(item.kind !== "compaction" || item.summary !== "");
 </script>
 
 <div>
@@ -66,12 +68,17 @@
     {#if item.kind === "tool" && item.running}
       <span class="spinner"></span>
     {/if}
+    {#if expandable}
+      <span class="caret" class:is-open={open}><CaretRight /></span>
+    {/if}
   </button>
 
   {#if open && expandable}
     <div class="mt-1 mb-2 ml-8 flex flex-col gap-2">
       {#if item.kind === "reasoning"}
         <p class="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{item.text}</p>
+      {:else if item.kind === "compaction"}
+        <p class="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{item.summary}</p>
       {:else if item.kind === "permission"}
         <pre class="mono-block">{item.command}</pre>
       {:else if item.kind === "tool"}

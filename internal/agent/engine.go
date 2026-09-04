@@ -714,8 +714,7 @@ func (e *Engine) compact(ctx context.Context, s *Session) error {
 	}
 	s.Compactions++
 	s.appendEntry(store.Entry{Kind: "compaction", Role: "user",
-		Content:   "Summary of earlier work:\n" + summary + "\n\nContinue.",
-		InContext: true, Visible: true,
+		Content: summary, InContext: true, Visible: true,
 		Meta: map[string]any{"before": before, "n": s.Compactions}})
 	s.LastUsage = nil
 	s.lastUsageEntry = len(s.Entries) - 1

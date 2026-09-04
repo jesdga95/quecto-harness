@@ -597,8 +597,18 @@ func TestCompactionRewritesInContextOnly(t *testing.T) {
 		}
 	}
 	last := doc.Entries[len(doc.Entries)-1]
-	if last.Kind != "compaction" || !last.InContext || !strings.HasPrefix(last.Content, "Summary of earlier work:") {
+	if last.Kind != "compaction" || !last.InContext || last.Content != "Read file.txt, was denied a command, wrote out.txt. Next: report." {
 		t.Errorf("compaction entry = %+v", last)
+	}
+	// The entry keeps the summary alone; the framing is added to the message
+	// built from it, so the transcript can show the summary as it was written.
+	s.mu.Lock()
+	msgs := s.contextMessages("darwin")
+	s.mu.Unlock()
+	sent := msgs[len(msgs)-1]
+	if sent.Role != "user" || !strings.HasPrefix(sent.Content, "Summary of earlier work:") ||
+		!strings.Contains(sent.Content, "wrote out.txt") {
+		t.Errorf("compaction message = %+v", sent)
 	}
 	if last.Meta["before"] == nil || last.Meta["after"] == nil || last.Meta["n"] != 1 {
 		t.Errorf("meta = %+v", last.Meta)

@@ -643,6 +643,20 @@
   .step .sep {
     color: var(--border-2);
   }
+  /* Points down once the row is open, so a row with more to show says so. */
+  .step .caret {
+    display: inline-grid;
+    place-items: center;
+    color: var(--border-2);
+    transition: transform 120ms ease;
+  }
+  .step .caret.is-open {
+    transform: rotate(90deg);
+  }
+  .step .caret svg {
+    width: 13px;
+    height: 13px;
+  }
 
   .tab {
     padding: 14px 2px;

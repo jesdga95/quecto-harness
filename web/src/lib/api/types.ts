@@ -116,7 +116,7 @@ export type HarnessEvent =
   | { type: "status"; status: TurnStatus }
   /** A line the harness writes into the transcript, such as a model change. */
   | { type: "status_entry"; text: string }
-  | { type: "compacted"; before: number; after: number }
+  | { type: "compacted"; before: number; after: number; summary: string }
   | { type: "error"; message: string }
   | { type: "done" }
   /** The stream fell too far behind to replay, so it carries a fresh snapshot. */
@@ -145,7 +145,7 @@ export type TranscriptItem =
       prefix: string;
       outcome: string | null;
     }
-  | { kind: "compaction"; id: string; before: number; after: number }
+  | { kind: "compaction"; id: string; before: number; after: number; summary: string }
   | { kind: "status"; id: string; text: string }
   | { kind: "error"; id: string; message: string };
 

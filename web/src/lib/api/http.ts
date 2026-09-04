@@ -149,6 +149,7 @@ interface WireEvent {
   n_ctx?: number;
   before?: number;
   after?: number;
+  summary?: string;
   message?: string;
 }
 
@@ -376,6 +377,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
       id: `c${seq}`,
       before: count(meta.before),
       after: count(meta.after),
+      summary: e.content ?? "",
     });
     return;
   }
@@ -583,7 +585,14 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       return [{ type: "status_entry", text: ev.content ?? "" }];
 
     case "compacted":
-      return [{ type: "compacted", before: ev.before ?? 0, after: ev.after ?? 0 }];
+      return [
+        {
+          type: "compacted",
+          before: ev.before ?? 0,
+          after: ev.after ?? 0,
+          summary: ev.summary ?? "",
+        },
+      ];
 
     case "error":
       return [{ type: "error", message: ev.message ?? "the turn failed" }];

@@ -37,6 +37,13 @@ interface ScriptedTurn {
   denied: string;
 }
 
+const MOCK_SUMMARY = [
+  "Task: find why two tabs on one session each see half the events.",
+  "Found: subscribe hands both tabs the same channel, so an event goes to",
+  "whichever tab reads first. Files: internal/server/hub.go.",
+  "Next: keep a set of subscribers per session and fan out on publish.",
+].join(" ");
+
 const LONG_OUTPUT = [
   "internal/agent/loop.go:41: undefined: compactIfNeeded",
   "internal/agent/loop.go:88: cannot use req (variable of type *chat.Request) as chat.Request",
@@ -301,7 +308,12 @@ export class MockApi implements HarnessApi {
     const after = Math.min(before, Math.max(600, Math.round(before * 0.062)));
     await this.tick(1100);
     t.usage = { prompt_tokens: after, completion_tokens: 0, n_ctx: t.usage.n_ctx };
-    this.emit(session, { type: "compacted", before, after });
+    this.emit(session, {
+      type: "compacted",
+      before,
+      after,
+      summary: MOCK_SUMMARY,
+    });
     this.emit(session, {
       type: "usage",
       prompt_tokens: after,
@@ -636,7 +648,7 @@ function seededEvents(): HarnessEvent[] {
         "- close the channel when the last tab goes away",
     },
     { type: "done" },
-    { type: "compacted", before: 98000, after: 6000 },
+    { type: "compacted", before: 98000, after: 6000, summary: MOCK_SUMMARY },
     { type: "error", message: "Stream closed by server: context canceled" },
   ];
 }

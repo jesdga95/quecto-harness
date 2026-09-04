@@ -131,8 +131,10 @@ func (s *Session) contextMessages(osName string) []llama.Message {
 			continue
 		}
 		switch e.Kind {
-		case "user", "compaction":
+		case "user":
 			msgs = append(msgs, llama.Message{Role: "user", Content: e.Content})
+		case "compaction":
+			msgs = append(msgs, llama.Message{Role: "user", Content: prompts.Compaction(e.Content)})
 		case "assistant":
 			msgs = append(msgs, llama.Message{Role: "assistant", Content: e.Content,
 				ReasoningContent: e.Reasoning, ToolCalls: e.ToolCalls})
