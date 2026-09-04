@@ -521,6 +521,18 @@ func TestBusySessionReturns409(t *testing.T) {
 	f.waitIdle(t, id)
 }
 
+// An unreadable policy is rejected rather than stored.
+func TestPutConfigRejectsAnUnknownMode(t *testing.T) {
+	f := newFixture(t)
+	res := f.do(t, "PUT", "/api/config", map[string]any{"permissions": "everything"})
+	if res.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", res.Code)
+	}
+	if f.cfg.Config().Mode != config.ModeAsk {
+		t.Errorf("the store changed anyway: %v", f.cfg.Config().Mode)
+	}
+}
+
 func TestPermissionRoute(t *testing.T) {
 	f := newFixture(t)
 	go f.perms.Ask(context.Background(), perms.Request{
@@ -563,10 +575,13 @@ func TestPermissionRoute(t *testing.T) {
 func TestPutConfig(t *testing.T) {
 	f := newFixture(t)
 	body := decode(t, f.do(t, "PUT", "/api/config", map[string]any{
-		"effort": "auto", "auto": true, "compact_at": 0.5, "model": "Alpha-12B",
+		"effort": "auto", "permissions": "full", "compact_at": 0.5, "model": "Alpha-12B",
 	}))
-	if body["effort"] != "auto" || body["auto"] != true || body["compact_at"] != 0.5 {
+	if body["effort"] != "auto" || body["permissions"] != "full" || body["compact_at"] != 0.5 {
 		t.Errorf("config = %v", body)
+	}
+	if f.cfg.Config().Mode != config.ModeFull {
+		t.Errorf("the store was not updated: mode = %v", f.cfg.Config().Mode)
 	}
 	if f.cfg.Config().Effort != config.EffortAuto {
 		t.Errorf("the store was not updated: %v", f.cfg.Config().Effort)

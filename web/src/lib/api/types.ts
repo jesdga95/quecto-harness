@@ -42,12 +42,17 @@ export interface ServerConfig {
   token: string;
 }
 
+/** The permission policy. ask shows a card for everything, allowlist runs
+    writes and allowlisted command prefixes, full runs every tool call with
+    nothing checked. */
+export type PermMode = "ask" | "allowlist" | "full";
+
 export interface Config {
   listen: string;
   server: ServerConfig;
   model: string;
   effort: Effort;
-  auto: boolean;
+  permissions: PermMode;
   compact_at: number;
   shell: string;
   command_timeout_s: number;

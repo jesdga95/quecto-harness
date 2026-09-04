@@ -138,6 +138,7 @@ func TestEmptyProjectsIsStillWritten(t *testing.T) {
 func TestConfigFileRoundTrip(t *testing.T) {
 	in := Defaults()
 	in.Effort = EffortAuto
+	in.Mode = ModeFull
 	in.Model = "Alpha-12B"
 	in.Projects = []string{"/tmp/x"}
 	raw, err := json.Marshal(in.File())
@@ -152,10 +153,10 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	if len(notes) != 0 {
 		t.Fatalf("round trip produced notes: %v", notes)
 	}
-	if out.Effort != in.Effort || out.Model != in.Model || out.CompactAt != in.CompactAt {
+	if out.Effort != in.Effort || out.Mode != in.Mode || out.Model != in.Model || out.CompactAt != in.CompactAt {
 		t.Errorf("got %+v, want %+v", out, in)
 	}
-	for _, key := range []string{"listen", "server", "model", "effort", "auto", "compact_at", "shell", "command_timeout_s", "output_limit_bytes", "projects"} {
+	for _, key := range []string{"listen", "server", "model", "effort", "permissions", "compact_at", "shell", "command_timeout_s", "output_limit_bytes", "projects"} {
 		if !strings.Contains(string(raw), `"`+key+`"`) {
 			t.Errorf("saved file omits %q, a reader would have to guess the default", key)
 		}
@@ -266,6 +267,17 @@ func TestWriteAtomicKeepsOldContentOnFailure(t *testing.T) {
 	}
 }
 
+func TestBadPermissionsFallsBackToAsk(t *testing.T) {
+	bad := "yolo"
+	got, notes := File{Permissions: &bad}.Resolve(Defaults())
+	if got.Mode != ModeAsk {
+		t.Errorf("mode = %q, want ask: an unreadable policy must be the safe one", got.Mode)
+	}
+	if len(notes) != 1 {
+		t.Errorf("notes = %v, want one", notes)
+	}
+}
+
 func TestConcurrentUpdate(t *testing.T) {
 	home := t.TempDir()
 	p := DiscoverPathsIn(home)
@@ -281,7 +293,13 @@ func TestConcurrentUpdate(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			s.Update(func(c *Config) { c.Auto = i%2 == 0 })
+			s.Update(func(c *Config) {
+				if i%2 == 0 {
+					c.Mode = ModeFull
+				} else {
+					c.Mode = ModeAsk
+				}
+			})
 			s.AddAllow("/proj", "cmd")
 			_ = s.Config()
 			_, _ = s.AllowMatch("/proj", "cmd x")

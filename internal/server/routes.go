@@ -28,7 +28,7 @@ type modelJSON struct {
 type configJSON struct {
 	Model            string  `json:"model"`
 	Effort           string  `json:"effort"`
-	Auto             bool    `json:"auto"`
+	Permissions      string  `json:"permissions"`
 	CompactAt        float64 `json:"compact_at"`
 	Shell            string  `json:"shell"`
 	CommandTimeoutS  int     `json:"command_timeout_s"`
@@ -41,7 +41,7 @@ type configJSON struct {
 
 func toConfigJSON(c config.Config) configJSON {
 	return configJSON{
-		Model: c.Model, Effort: string(c.Effort), Auto: c.Auto, CompactAt: c.CompactAt,
+		Model: c.Model, Effort: string(c.Effort), Permissions: string(c.Mode), CompactAt: c.CompactAt,
 		Shell: c.Shell, CommandTimeoutS: int(c.CommandTimeout / time.Second),
 		OutputLimitBytes: c.OutputLimitBytes, Listen: c.Listen,
 		ServerURL: c.ServerURL, ServerTokenSet: c.ServerToken != "",
@@ -486,7 +486,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Model            *string  `json:"model"`
 		Effort           *string  `json:"effort"`
-		Auto             *bool    `json:"auto"`
+		Permissions      *string  `json:"permissions"`
 		CompactAt        *float64 `json:"compact_at"`
 		Shell            *string  `json:"shell"`
 		CommandTimeoutS  *int     `json:"command_timeout_s"`
@@ -504,6 +504,10 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "effort \""+*body.Effort+"\" is not auto, off, low, medium or high")
 		return
 	}
+	if body.Permissions != nil && !config.ValidMode(*body.Permissions) {
+		writeError(w, http.StatusBadRequest, "Permissions \""+*body.Permissions+"\" is not ask, allowlist or full")
+		return
+	}
 	before := s.cfg.Config()
 	cfg, err := s.cfg.Update(func(c *config.Config) {
 		if body.Model != nil {
@@ -512,8 +516,8 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		if body.Effort != nil {
 			c.Effort = config.Effort(*body.Effort)
 		}
-		if body.Auto != nil {
-			c.Auto = *body.Auto
+		if body.Permissions != nil {
+			c.Mode = config.Mode(*body.Permissions)
 		}
 		if body.CompactAt != nil {
 			c.CompactAt = *body.CompactAt

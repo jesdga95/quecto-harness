@@ -138,7 +138,7 @@ export class MockApi implements HarnessApi {
     server: { url: "http://192.168.2.205:8080", token: "" },
     model: "Gemma4-12B",
     effort: "medium",
-    auto: false,
+    permissions: "ask",
     compact_at: 0.8,
     shell: "/bin/sh",
     command_timeout_s: 120,
@@ -484,7 +484,8 @@ export class MockApi implements HarnessApi {
   }
 
   private preapproved(project: string, command: string): boolean {
-    if (!this.config.auto) return false;
+    if (this.config.permissions === "full") return true;
+    if (this.config.permissions !== "allowlist") return false;
     const list = this.allowlist.get(project) ?? [];
     return list.some((p) => command.startsWith(p));
   }

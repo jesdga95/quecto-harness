@@ -81,8 +81,14 @@ func New(cfg *config.Store, emit func(string, Request)) *Broker {
 	}
 }
 
-// Evaluate applies the static policy. It never blocks and never asks.
-func (b *Broker) Evaluate(project, tool, command string, auto bool) Action {
+// Evaluate applies the static policy. It never blocks and never asks. ModeFull
+// is answered before the tool name is read, so nothing about the call changes
+// the answer.
+func (b *Broker) Evaluate(project, tool, command string, mode config.Mode) Action {
+	if mode == config.ModeFull {
+		return ActionAllow
+	}
+	auto := mode == config.ModeAllowlist
 	switch tool {
 	case "read_file":
 		return ActionAllow

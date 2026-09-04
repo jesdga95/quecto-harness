@@ -247,7 +247,7 @@ type File struct {
 	Server           *Server  `json:"server,omitempty"`
 	Model            *string  `json:"model,omitempty"`
 	Effort           *string  `json:"effort,omitempty"`
-	Auto             *bool    `json:"auto,omitempty"`
+	Permissions      *string  `json:"permissions,omitempty"`
 	CompactAt        *float64 `json:"compact_at,omitempty"`
 	Shell            *string  `json:"shell,omitempty"`
 	CommandTimeoutS  *int     `json:"command_timeout_s,omitempty"`
@@ -267,7 +267,7 @@ type Config struct {
 	ServerToken      string
 	Model            string
 	Effort           Effort
-	Auto             bool
+	Mode             Mode
 	CompactAt        float64
 	Shell            string
 	CommandTimeout   time.Duration
@@ -287,6 +287,20 @@ const (
 	EffortMedium = llama.EffortMedium
 	EffortHigh   = llama.EffortHigh
 )
+
+// Mode is the permission policy. One field rather than the pair of booleans
+// it reads as in the interface, because a pair has a fourth state that means
+// nothing and every layer would have to agree on what to do with it.
+type Mode string
+
+const (
+	ModeAsk       Mode = "ask"
+	ModeAllowlist Mode = "allowlist"
+	ModeFull      Mode = "full"
+)
+
+// ValidMode reports whether s is one of the three policies.
+func ValidMode(s string) bool
 ```
 
 ### 3.3 Defaults and validation
@@ -299,7 +313,7 @@ func Defaults() Config {
 		ServerToken:      "",
 		Model:            "",
 		Effort:           EffortMedium,
-		Auto:             false,
+		Mode:             ModeAsk,
 		CompactAt:        0.8,
 		Shell:            defaultShell(), // $SHELL if absolute and executable, else /bin/sh
 		CommandTimeout:   120 * time.Second,
@@ -320,6 +334,7 @@ Clamping rules applied by `Resolve`, each producing one note string:
 | `listen` | parses with `net.SplitHostPort`, port 1 to 65535 | default |
 | `server.url` | parses with `url.Parse`, scheme http or https, non-empty host | default |
 | `effort` | one of auto, off, low, medium, high | `medium` |
+| `permissions` | one of ask, allowlist, full | `ask` |
 | `compact_at` | 0.05 to 0.95 | 0.8 |
 | `shell` | absolute path | `/bin/sh` |
 | `command_timeout_s` | 1 to 3600 | 120 |
@@ -1485,7 +1500,7 @@ type Broker struct {
 func New(cfg *config.Store, emit func(string, Request)) *Broker
 
 // Evaluate applies the static policy. It never blocks and never asks.
-func (b *Broker) Evaluate(project, tool, command string, auto bool) Action
+func (b *Broker) Evaluate(project, tool, command string, mode config.Mode) Action
 
 // Ask registers a pending request, calls emit, and blocks. It returns
 // context.Canceled when the turn is stopped and ErrSessionCanceled when the
@@ -1518,7 +1533,11 @@ ran, but the rule was not kept`.
 ### 7.3 Policy
 
 ```go
-func (b *Broker) Evaluate(project, tool, command string, auto bool) Action {
+func (b *Broker) Evaluate(project, tool, command string, mode config.Mode) Action {
+	if mode == config.ModeFull {
+		return ActionAllow
+	}
+	auto := mode == config.ModeAllowlist
 	switch tool {
 	case "read_file":
 		return ActionAllow
@@ -1597,11 +1616,27 @@ is stored is what the user submits after the same normalisation as section 7.5. 
 prefix that is empty, or that is not a prefix of the command being decided, is rejected with
 400 and the message `prefix "<p>" does not match the command: edit it or choose allow once`.
 
-### 7.7 Auto mode
+### 7.7 Permission modes
 
-`auto` is a single global boolean from `config.json`, toggled from the top bar. It is read at
-the moment `Evaluate` is called, so flipping it mid-turn affects the next tool call. It is
-not per project and not per session.
+One global `permissions` field in `config.json`, picked from the top-bar menu. It is one
+field and not a pair of booleans, so there is no fourth state for a layer to interpret:
+
+| value | what runs without a card |
+|-------|--------------------------|
+| `ask` | reads only |
+| `allowlist` | reads, `write_file`, and `run_shell` on an allowlisted prefix with no shell operator |
+| `full` | everything |
+
+`full` is answered before `Evaluate` looks at the tool name, so the allowlist, the operator
+list and the card all stop applying, and an unknown tool is allowed through to the runner
+that rejects it. Path confinement is unaffected: it lives in `internal/tools`, so `read_file`
+and `write_file` still cannot leave the project root. `run_shell` only starts there, and can
+leave. The interface asks for confirmation before switching to `full`, before any state is
+written or sent.
+
+The mode is read at the moment `Evaluate` is called, so changing it mid-turn affects the next
+tool call. It is not per project and not per session: it persists in `config.json` until it
+is changed, which the warning says.
 
 ### 7.8 What a denial returns to the model
 
@@ -2029,7 +2064,7 @@ type PermissionRecord struct {
 	Tool     string `json:"tool"`
 	Command  string `json:"command,omitempty"`
 	Path     string `json:"path,omitempty"`
-	Decision string `json:"decision"` // once, always, deny, auto, stopped
+	Decision string `json:"decision"` // once, always, deny, auto, full, stopped
 	Prefix   string `json:"prefix,omitempty"`
 	Reason   string `json:"reason,omitempty"`
 }
@@ -2271,7 +2306,7 @@ All request and response bodies are `application/json` unless stated. Errors are
   "config": {
     "model": "Gemma4-12B",
     "effort": "medium",
-    "auto": false,
+    "permissions": "ask",
     "compact_at": 0.8,
     "shell": "/bin/sh",
     "command_timeout_s": 120,
@@ -2491,7 +2526,7 @@ match the command being decided.
 Request carries only the fields being changed:
 
 ```json
-{"model": "Qwen3.8-27B Q5", "effort": "high", "auto": true,
+{"model": "Qwen3.8-27B Q5", "effort": "high", "permissions": "allowlist",
  "server": {"url": "http://192.168.2.205:8080", "token": ""}}
 ```
 
@@ -2893,7 +2928,7 @@ export type CtxSource = "props" | "meta" | "args" | "assumed" | "";
 export type AppConfig = {
   model: string;
   effort: "off" | "low" | "medium" | "high";
-  auto: boolean;
+  permissions: "ask" | "allowlist" | "full";
   compact_at: number;
   shell: string;
   command_timeout_s: number;

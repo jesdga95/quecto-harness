@@ -6,6 +6,7 @@ import type {
   HarnessEvent,
   Model,
   ModelStatus,
+  PermMode,
   PermissionDecision,
   Project,
   Session,
@@ -45,7 +46,7 @@ interface WireModel {
 interface WireConfig {
   model?: string;
   effort?: string;
-  auto?: boolean;
+  permissions?: string;
   compact_at?: number;
   shell?: string;
   command_timeout_s?: number;
@@ -197,6 +198,7 @@ const STATUSES: ModelStatus[] = [
   "downloading",
 ];
 const EFFORTS: Effort[] = ["auto", "off", "low", "medium", "high"];
+const PERM_MODES: PermMode[] = ["ask", "allowlist", "full"];
 
 /** The harness reports where a context number came from; two sources are real. */
 const MEASURED_CTX = new Set(["props", "meta"]);
@@ -239,6 +241,11 @@ function toEffort(value: string | undefined): Effort {
   return EFFORTS.find((e) => e === value) ?? "medium";
 }
 
+// An unreadable policy reads as ask.
+function toPermMode(value: string | undefined): PermMode {
+  return PERM_MODES.find((m) => m === value) ?? "ask";
+}
+
 function toStatus(value: string | undefined): TurnStatus {
   return TURN_STATES[value ?? ""] ?? "idle";
 }
@@ -266,6 +273,9 @@ function parseArgs(raw: string | undefined): Record<string, unknown> | null {
 function count(value: unknown): number {
   return typeof value === "number" ? value : 0;
 }
+
+// Both mean the call was never put to the user, so neither draws a row.
+const SILENT_DECISIONS = new Set(["auto", "full"]);
 
 /** What an answered card says, matching the labels the live flow writes. */
 function outcomeOf(p: WirePermission): string {
@@ -332,7 +342,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
 
   if (e.kind === "tool") {
     const permission = e.permission;
-    if (permission && permission.decision && permission.decision !== "auto") {
+    if (permission && permission.decision && !SILENT_DECISIONS.has(permission.decision)) {
       items.push(toPermission(permission, outcomeOf(permission), `perm${seq}`));
     }
     const card = items.find((i) => i.kind === "tool" && i.id === e.tool_call_id);
@@ -410,7 +420,7 @@ function toConfig(c: WireConfig): Config {
     server: { url: serverUrl, token: "" },
     model: c.model ?? "",
     effort: toEffort(c.effort),
-    auto: c.auto ?? false,
+    permissions: toPermMode(c.permissions),
     compact_at: c.compact_at ?? 0.8,
     shell: c.shell ?? "/bin/sh",
     command_timeout_s: c.command_timeout_s ?? 120,

@@ -251,7 +251,7 @@ func TestToolCallEventsCarryTheIndex(t *testing.T) {
 
 func TestTwoToolCallsAreSequential(t *testing.T) {
 	h := newHarness(t, "stream_two_tools.txt", "stream_plain.txt")
-	h.cfg.Update(func(c *config.Config) { c.Auto = true })
+	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeAllowlist })
 	h.cfg.AddAllow(h.project, "echo")
 	s := h.session(t)
 	h.engine.Send(s.ID, "echo twice")
@@ -310,9 +310,29 @@ func TestAlwaysWritesTheAllowlist(t *testing.T) {
 	}
 }
 
+func TestFullModeRunsEverythingWithoutPrompting(t *testing.T) {
+	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
+	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
+	s := h.session(t)
+	h.engine.Send(s.ID, "list")
+	waitIdle(t, s)
+
+	if len(h.broker.Pending(s.ID)) != 0 {
+		t.Error("full mode still asked for a decision")
+	}
+	doc, _, _, _ := s.Snapshot()
+	tool := doc.Entries[2]
+	if tool.Kind != "tool" || tool.ExitCode == nil || *tool.ExitCode != 0 {
+		t.Fatalf("tool entry = %+v", tool)
+	}
+	if tool.Permission == nil || tool.Permission.Decision != "full" {
+		t.Errorf("permission record = %+v, want a decision of full, not one that reads as an allowlist hit", tool.Permission)
+	}
+}
+
 func TestStopDuringACommand(t *testing.T) {
 	h := newHarness(t, "stream_sleep.txt")
-	h.cfg.Update(func(c *config.Config) { c.Auto = true })
+	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeAllowlist })
 	h.cfg.AddAllow(h.project, "sleep")
 	s := h.session(t)
 	h.engine.Send(s.ID, "sleep")
@@ -673,7 +693,7 @@ func TestTurnLimit(t *testing.T) {
 		fixtures[i] = "stream_two_tools.txt"
 	}
 	h := newHarness(t, fixtures...)
-	h.cfg.Update(func(c *config.Config) { c.Auto = true })
+	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeAllowlist })
 	h.cfg.AddAllow(h.project, "echo")
 	s := h.session(t)
 	h.engine.Send(s.ID, "loop forever")

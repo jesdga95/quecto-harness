@@ -19,7 +19,7 @@ type File struct {
 	Server           *Server  `json:"server,omitempty"`
 	Model            *string  `json:"model,omitempty"`
 	Effort           *string  `json:"effort,omitempty"`
-	Auto             *bool    `json:"auto,omitempty"`
+	Permissions      *string  `json:"permissions,omitempty"`
 	CompactAt        *float64 `json:"compact_at,omitempty"`
 	Shell            *string  `json:"shell,omitempty"`
 	CommandTimeoutS  *int     `json:"command_timeout_s,omitempty"`
@@ -41,7 +41,7 @@ type Config struct {
 	ServerToken      string
 	Model            string
 	Effort           Effort
-	Auto             bool
+	Mode             Mode
 	CompactAt        float64
 	Shell            string
 	CommandTimeout   time.Duration
@@ -61,6 +61,28 @@ const (
 	EffortHigh   = llama.EffortHigh
 )
 
+// Mode is the permission policy. One field rather than a pair of booleans,
+// which would have a fourth state with no meaning.
+type Mode string
+
+const (
+	// ModeAsk shows a card for every write and every command.
+	ModeAsk Mode = "ask"
+	// ModeAllowlist runs writes and allowlisted command prefixes on their own.
+	ModeAllowlist Mode = "allowlist"
+	// ModeFull runs every tool call. Nothing is asked and nothing is checked.
+	ModeFull Mode = "full"
+)
+
+// ValidMode reports whether s is one of the three policies.
+func ValidMode(s string) bool {
+	switch Mode(s) {
+	case ModeAsk, ModeAllowlist, ModeFull:
+		return true
+	}
+	return false
+}
+
 func Defaults() Config {
 	return Config{
 		Listen:           "127.0.0.1:7331",
@@ -68,7 +90,7 @@ func Defaults() Config {
 		ServerToken:      "",
 		Model:            "",
 		Effort:           EffortMedium,
-		Auto:             false,
+		Mode:             ModeAsk,
 		CompactAt:        0.8,
 		Shell:            defaultShell(),
 		CommandTimeout:   120 * time.Second,
@@ -130,8 +152,12 @@ func (f File) Resolve(d Config) (Config, []string) {
 			note("effort " + strconv.Quote(*f.Effort) + " is not auto, off, low, medium or high, using medium")
 		}
 	}
-	if f.Auto != nil {
-		c.Auto = *f.Auto
+	if f.Permissions != nil {
+		if ValidMode(*f.Permissions) {
+			c.Mode = Mode(*f.Permissions)
+		} else {
+			note("permissions " + strconv.Quote(*f.Permissions) + " is not ask, allowlist or full, using ask")
+		}
 	}
 	if f.CompactAt != nil {
 		if *f.CompactAt >= 0.05 && *f.CompactAt <= 0.95 {
@@ -186,7 +212,7 @@ func (f File) Resolve(d Config) (Config, []string) {
 // complete document and a later reader never guesses which defaults applied.
 func (c Config) File() File {
 	listen, model, effort := c.Listen, c.Model, string(c.Effort)
-	shell, auto, compact := c.Shell, c.Auto, c.CompactAt
+	shell, mode, compact := c.Shell, string(c.Mode), c.CompactAt
 	timeout, limit := int(c.CommandTimeout/time.Second), c.OutputLimitBytes
 	surl, stok := c.ServerURL, c.ServerToken
 	projects := c.Projects
@@ -198,7 +224,7 @@ func (c Config) File() File {
 		Server:           &Server{URL: &surl, Token: &stok},
 		Model:            &model,
 		Effort:           &effort,
-		Auto:             &auto,
+		Permissions:      &mode,
 		CompactAt:        &compact,
 		Shell:            &shell,
 		CommandTimeoutS:  &timeout,

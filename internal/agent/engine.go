@@ -561,8 +561,13 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, call
 	command, path := argSummary(call)
 	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
 
-	if e.perms.Evaluate(s.Project, tool, command, cfg.Auto) == perms.ActionAllow {
+	if e.perms.Evaluate(s.Project, tool, command, cfg.Mode) == perms.ActionAllow {
+		// A call skips the card two ways, and the record keeps them apart.
+		// "auto" is a policy that allowed this call, "full" is no policy.
 		record.Decision = "auto"
+		if cfg.Mode == config.ModeFull {
+			record.Decision = "full"
+		}
 		return perms.Decision{Kind: perms.DecideOnce}, record, false
 	}
 	// The id is minted here rather than inside Ask, so the record kept with the

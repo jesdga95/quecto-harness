@@ -5,6 +5,7 @@ import type {
   Effort,
   HarnessEvent,
   Model,
+  PermMode,
   PermissionDecision,
   Project,
   Session,
@@ -13,6 +14,7 @@ import type {
   Usage,
 } from "../api";
 import { applyEvent, outcomeLabel, pushUser } from "../transcript";
+import { confirm } from "./confirm.svelte";
 
 // Every screen reads this one object. It holds what the server would hold plus
 // the little the browser owns, like which panel is open and whether the last
@@ -290,9 +292,27 @@ export function setEffort(effort: Effort): void {
   void guard(() => api.updateConfig({ effort }));
 }
 
-export function setAuto(auto: boolean): void {
-  if (app.config) app.config.auto = auto;
-  void guard(() => api.updateConfig({ auto }));
+export function permMode(): PermMode {
+  return app.config?.permissions ?? "ask";
+}
+
+const FULL_AUTO_WARNING = {
+  title: "Turn on full auto?",
+  body:
+    "Every tool call runs with nothing asked and nothing checked: the allowlist stops " +
+    "applying, and the model can run any shell command as you, anywhere on this machine, " +
+    "including ones that delete files or reach the network. It stays on for every project " +
+    "and every session until you turn it off.",
+  confirmLabel: "Turn on full auto",
+};
+
+/** Switches the permission policy. Nothing is written and nothing is sent
+    until the full auto dialog is answered. */
+export async function setPermMode(mode: PermMode): Promise<void> {
+  if (mode === permMode()) return;
+  if (mode === "full" && !(await confirm(FULL_AUTO_WARNING))) return;
+  if (app.config) app.config.permissions = mode;
+  void guard(() => api.updateConfig({ permissions: mode }));
 }
 
 function onEvent(event: HarnessEvent): void {
