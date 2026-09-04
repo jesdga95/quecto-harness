@@ -240,10 +240,10 @@ export async function connectServer(url: string, token: string): Promise<string>
   app.probing = true;
   try {
     const config = await guard(() => api.updateConfig({ server: { url, token } }));
-    if (!config) return app.error || "the harness did not accept that address";
+    if (!config) return app.error || "The harness did not accept that address";
     app.config = config;
     const state = await guard(() => api.getState());
-    if (!state) return app.error || "the harness did not answer";
+    if (!state) return app.error || "The harness did not answer";
     app.mode = state.mode;
     app.detectError = state.detectError ?? "";
     app.detectKind = state.detectKind ?? "";
@@ -255,16 +255,16 @@ export async function connectServer(url: string, token: string): Promise<string>
     // turn. Anything else the server says is its own business.
     const kinds = [app.detectKind, state.modelsKind ?? ""];
     if (kinds.includes("unreachable") || kinds.includes("canceled")) {
-      return app.detectError || "nothing answered at that address";
+      return app.detectError || "Nothing answered at that address";
     }
     if (kinds.includes("auth")) {
       return token.trim() === ""
-        ? "that server needs an API key"
-        : "that server refused the API key";
+        ? "That server needs an API key"
+        : "That server refused the API key";
     }
     // Any web server answers a GET. Only a model list proves this is llama.cpp.
     if (app.modelsError !== "" || app.models.length === 0) {
-      return "that address answered, but it did not return a model list";
+      return "That address answered, but it did not return a model list";
     }
     return "";
   } finally {
@@ -308,7 +308,7 @@ function onEvent(event: HarnessEvent): void {
       app.error = "";
       dismissSticky();
     } else {
-      const message = event.message ?? "the harness is not reachable, reconnecting";
+      const message = event.message ?? "The harness is not reachable, reconnecting";
       app.error = message;
       toast(message, "warn", true);
     }

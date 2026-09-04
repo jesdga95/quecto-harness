@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"quecto-harness/internal/agent"
 	"quecto-harness/internal/config"
@@ -244,7 +245,19 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeJSON(w, status, map[string]string{"error": Sentence(msg)})
+}
+
+// Sentence capitalises a message on its way to a person. Error strings are
+// written lowercase so they read correctly when wrapped, and this is the one
+// place that turns the outermost one into a sentence.
+func Sentence(msg string) string {
+	if msg == "" {
+		return msg
+	}
+	r := []rune(msg)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {

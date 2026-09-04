@@ -19,6 +19,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"quecto-harness/internal/agent"
 	"quecto-harness/internal/config"
@@ -39,7 +40,7 @@ var (
 func main() {
 	log.SetFlags(log.LstdFlags)
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "quecto-harness: "+err.Error())
+		fmt.Fprintln(os.Stderr, "quecto-harness: "+sentence(err.Error()))
 		os.Exit(1)
 	}
 }
@@ -81,6 +82,17 @@ func parseFlags(name string, argv []string) (flags, error) {
 		return f, err
 	}
 	return f, nil
+}
+
+// Messages reaching a terminal are sentences, the same as the ones reaching
+// the browser.
+func sentence(msg string) string {
+	if msg == "" {
+		return msg
+	}
+	r := []rune(msg)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
 }
 
 const usage = `quecto-harness: a local coding agent that talks to a llama.cpp server.
@@ -145,7 +157,7 @@ func serve(argv []string) error {
 	}
 	defer ln.Close()
 	if !isLoopback(listen) {
-		fmt.Fprintf(os.Stderr, "listening on %s: the session token is the only access control, bind to 127.0.0.1 unless you meant this\n", listen)
+		fmt.Fprintf(os.Stderr, "Listening on %s: the session token is the only access control, bind to 127.0.0.1 unless you meant this\n", listen)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -299,23 +311,23 @@ func serviceCmd(argv []string) error {
 			return err
 		}
 		if runtime.GOOS == "linux" {
-			fmt.Println("if you want this running without a login session: loginctl enable-linger $USER")
+			fmt.Println("If you want this running without a login session: loginctl enable-linger $USER")
 		}
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			if raw, err := os.ReadFile(p.URL); err == nil {
-				fmt.Printf("installed and running, open %s\n", strings.TrimSpace(string(raw)))
+				fmt.Printf("Installed and running, open %s\n", strings.TrimSpace(string(raw)))
 				return nil
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
-		fmt.Printf("installed, but no URL appeared: check %s/harness.err\n", p.Log)
+		fmt.Printf("Installed, but no URL appeared: check %s/harness.err\n", p.Log)
 		return nil
 	case "uninstall":
 		if err := service.Uninstall(p.Home); err != nil {
 			return err
 		}
-		fmt.Printf("removed the unit. config, token and sessions are still in %s\n", p.Home)
+		fmt.Printf("Removed the unit. Config, token and sessions are still in %s\n", p.Home)
 		return nil
 	case "status":
 		st, err := service.Report(p.Home)

@@ -580,7 +580,7 @@ func errText(err error) string {
 	if err == nil {
 		return ""
 	}
-	return err.Error()
+	return Sentence(err.Error())
 }
 
 func orEmpty(v []string) []string {

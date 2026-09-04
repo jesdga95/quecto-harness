@@ -184,7 +184,7 @@ func TestAuthMissingIs401(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "not authorized") {
+	if !strings.Contains(w.Body.String(), "Not authorized") {
 		t.Errorf("body = %s", w.Body.String())
 	}
 }
@@ -681,7 +681,7 @@ func TestPanicIsContained(t *testing.T) {
 	h := recoverPanic(mux)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/boom", nil))
-	if w.Code != 500 || !strings.Contains(w.Body.String(), "internal error") {
+	if w.Code != 500 || !strings.Contains(w.Body.String(), "Internal error") {
 		t.Errorf("status = %d body = %s", w.Code, w.Body.String())
 	}
 }

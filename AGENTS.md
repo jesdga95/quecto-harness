@@ -14,6 +14,19 @@ Keep the register of a manual page.
 No em dashes anywhere, least of all in user-facing copy. Restructure the sentence
 instead.
 
+## Casing
+
+Anything a person reads starts with a capital letter. Buttons, labels, headings,
+placeholders, dialog copy, toasts, terminal output, and the message inside an
+error response. Sentence case, not title case: "Remove and delete", not "Remove
+And Delete". There is no lowercase house style here and never was.
+
+Go error strings stay lowercase, because they are written to be wrapped and
+"open config.json: Check the permissions" reads wrong. They are capitalised at
+the one point they become something a person reads, which is `Sentence` in
+`internal/server`, and `sentence` in `web/src/lib/format.ts` on the way to a
+toast or a form. Add a message to those paths, not a second capitalising helper.
+
 ## Comments
 
 Comments are stateless. They explain what the code does and why it is that way,
