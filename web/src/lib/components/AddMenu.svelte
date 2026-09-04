@@ -28,7 +28,7 @@
   </button>
 
   {#if open}
-    <Popover onclose={() => (open = false)} {up} width={264}>
+    <Popover onclose={() => (open = false)} {up} width={292}>
       <div class="popover-head">Thinking</div>
       <label class="popover-item cursor-pointer">
         <span class="min-w-0 flex-1">
@@ -57,7 +57,7 @@
             After the limit the model answers with no tools
           </span>
         </span>
-        <span class="pill pill-mute num">{limitLabel}</span>
+        <span class="pill pill-mute num w-[46px] shrink-0 justify-center">{limitLabel}</span>
       </button>
     </Popover>
   {/if}
