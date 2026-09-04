@@ -30,9 +30,6 @@ export const app = $state({
   sessionId: "",
   items: [] as TranscriptItem[],
   usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: 131072 } as Usage,
-  // Levels the current session's model accepts, narrowed once its template
-  // has been read.
-  effortLevels: ["low", "medium", "high"] as Effort[],
   status: "idle" as TurnStatus,
   allowlist: [] as string[],
   sidebar: true,
@@ -120,7 +117,6 @@ export async function selectSession(id: string): Promise<void> {
   if (!t) return;
   app.items = t.items;
   app.usage = t.usage;
-  app.effortLevels = t.effortLevels;
   app.status = "idle";
   if (app.config) app.config.model = t.session.model;
   unsubscribe = api.events(id, onEvent);
@@ -286,8 +282,17 @@ export async function saveConfig(patch: Partial<Config>): Promise<void> {
   setTimeout(() => (app.saved = false), 1600);
 }
 
-export function setModel(id: string): void {
+/** A turn talks to the session's model, not to the configuration, so an open
+    session is repointed as well as the default for the next one. */
+export async function setModel(id: string): Promise<void> {
+  const previous = app.config?.model ?? "";
   if (app.config) app.config.model = id;
+  if (app.sessionId) {
+    if ((await guard(() => api.setSessionModel(app.sessionId, id))) === null) {
+      if (app.config) app.config.model = previous;
+      return;
+    }
+  }
   void guard(() => api.updateConfig({ model: id }));
 }
 
@@ -332,7 +337,6 @@ function onEvent(event: HarnessEvent): void {
   if (event.type === "resync") {
     app.items = event.transcript.items;
     app.usage = event.transcript.usage;
-    app.effortLevels = event.transcript.effortLevels;
     return;
   }
 
@@ -364,8 +368,6 @@ function onEvent(event: HarnessEvent): void {
   // A turn that ends in an error still ends, so the composer comes back rather
   // than sitting on a spinner until the next status event.
   if (event.type === "done" || event.type === "error") app.status = "idle";
-
-  if (event.type === "caps") app.effortLevels = event.effortLevels;
 
   if (event.type === "status") {
     app.status = event.status;

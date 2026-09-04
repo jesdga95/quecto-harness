@@ -28,7 +28,6 @@ type propsBody struct {
 	TotalSlots                *int            `json:"total_slots"`
 	IsSleeping                *bool           `json:"is_sleeping"`
 	ChatTemplateCaps          map[string]bool `json:"chat_template_caps"`
-	ChatTemplate              *string         `json:"chat_template"`
 	DefaultGenerationSettings *struct {
 		NCtx *int `json:"n_ctx"`
 	} `json:"default_generation_settings"`

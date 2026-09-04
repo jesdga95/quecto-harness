@@ -44,6 +44,10 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
       }
       break;
     }
+    case "status_entry": {
+      items.push({ kind: "status", id: nextId("s"), text: event.text });
+      break;
+    }
     case "reasoning": {
       if (last && last.kind === "reasoning") {
         last.text += event.text;

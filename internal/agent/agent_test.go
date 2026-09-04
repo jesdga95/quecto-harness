@@ -213,26 +213,18 @@ func TestEffortReachesTheRequestBody(t *testing.T) {
 	}
 }
 
-// The capture for this model reports a template that names its levels and can
-// hold thinking. Neither is known until the model is loaded and read, so the
-// first request carries neither field.
-func TestReasoningFieldsFollowTheModelTemplate(t *testing.T) {
+// The kwarg is not known to apply until the model is loaded and read, so the
+// first request to a cold model carries none.
+func TestPreserveReasoningFollowsTheCapability(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
-	if _, err := h.cfg.Update(func(c *config.Config) {
-		c.Effort = config.EffortXHigh
-		c.PreserveReasoning = false
-	}); err != nil {
+	if _, err := h.cfg.Update(func(c *config.Config) { c.PreserveReasoning = false }); err != nil {
 		t.Fatal(err)
 	}
 	s := h.sessionWith(t, "Delta3.8-27B Q5")
 	h.engine.Send(s.ID, "first")
 	waitIdle(t, s)
 
-	first := h.replay.Body(0)
-	if _, ok := first["reasoning_effort"]; ok {
-		t.Error("a level was named before the template had been read")
-	}
-	if _, ok := first["chat_template_kwargs"]; ok {
+	if _, ok := h.replay.Body(0)["chat_template_kwargs"]; ok {
 		t.Error("a kwarg was sent before the template had been read")
 	}
 
@@ -243,35 +235,12 @@ func TestReasoningFieldsFollowTheModelTemplate(t *testing.T) {
 	waitIdle(t, s)
 
 	second := h.replay.Body(1)
-	if second["reasoning_effort"] != "xhigh" {
-		t.Errorf("reasoning_effort = %v, want xhigh", second["reasoning_effort"])
-	}
-	if _, ok := second["reasoning_budget"]; ok {
-		t.Error("a budget was sent beside a named level")
-	}
 	kw, _ := second["chat_template_kwargs"].(map[string]any)
 	if kw == nil || kw["preserve_reasoning"] != false {
 		t.Errorf("chat_template_kwargs = %v, want preserve_reasoning false", second["chat_template_kwargs"])
 	}
-}
-
-// The same template refuses "high", so that level takes the budget column.
-func TestALevelTheTemplateRefusesTakesTheBudget(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
-	h.cfg.Update(func(c *config.Config) { c.Effort = config.EffortHigh })
-	s := h.sessionWith(t, "Delta3.8-27B Q5")
-	h.engine.Send(s.ID, "first")
-	waitIdle(t, s)
-	waitForCaps(t, s)
-	h.engine.Send(s.ID, "second")
-	waitIdle(t, s)
-
-	body := h.replay.Body(1)
-	if _, ok := body["reasoning_effort"]; ok {
-		t.Error("a level the template raises on was named")
-	}
-	if body["reasoning_budget"] != -1.0 {
-		t.Errorf("reasoning_budget = %v, want -1", body["reasoning_budget"])
+	if second["reasoning_effort"] != "medium" {
+		t.Errorf("reasoning_effort = %v, want medium", second["reasoning_effort"])
 	}
 }
 
@@ -685,7 +654,7 @@ func TestRebindResetsAccounting(t *testing.T) {
 		t.Error("last usage was carried across models")
 	}
 	last := doc.Entries[len(doc.Entries)-1]
-	if last.Kind != "status" || last.Content != "model changed to Delta3.8-27B Q5" {
+	if last.Kind != "status" || last.Content != "Model changed to Delta3.8-27B Q5" {
 		t.Errorf("entry = %+v", last)
 	}
 	if last.InContext || !last.Visible {

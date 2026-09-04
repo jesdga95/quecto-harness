@@ -56,19 +56,16 @@ type Config struct {
 type Effort = llama.Effort
 
 const (
-	EffortAuto    = llama.EffortAuto
-	EffortOff     = llama.EffortOff
-	EffortMinimal = llama.EffortMinimal
-	EffortLow     = llama.EffortLow
-	EffortMedium  = llama.EffortMedium
-	EffortHigh    = llama.EffortHigh
-	EffortXHigh   = llama.EffortXHigh
-	EffortMax     = llama.EffortMax
+	EffortAuto   = llama.EffortAuto
+	EffortOff    = llama.EffortOff
+	EffortLow    = llama.EffortLow
+	EffortMedium = llama.EffortMedium
+	EffortHigh   = llama.EffortHigh
 )
 
 // EffortNames lists what the effort field accepts, for the note a rejected
 // value produces.
-const EffortNames = "auto, off, minimal, low, medium, high, xhigh or max"
+const EffortNames = "auto, off, low, medium or high"
 
 // Mode is the permission policy. One field rather than a pair of booleans,
 // which would have a fourth state with no meaning.

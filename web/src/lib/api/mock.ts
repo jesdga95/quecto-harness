@@ -1,6 +1,5 @@
 import type {
   Config,
-  Effort,
   EventHandler,
   HarnessApi,
   HarnessEvent,
@@ -131,10 +130,6 @@ function baseName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-// The levels a real template names, so the picker is exercised with a set that
-// is not the fallback three.
-const MOCK_LEVELS: Effort[] = ["low", "medium", "xhigh"];
-
 // The whole harness backend, faked in memory. Turns follow a fixed script and
 // every delay is a timer, so the flow can be clicked through end to end.
 export class MockApi implements HarnessApi {
@@ -212,8 +207,15 @@ export class MockApi implements HarnessApi {
       session: { ...t.session },
       items: t.items.map((i) => ({ ...i })),
       usage: { ...t.usage },
-      effortLevels: t.effortLevels.slice(),
     };
+  }
+
+  async setSessionModel(id: string, model: string): Promise<void> {
+    await this.tick();
+    const t = this.transcripts.get(id);
+    if (!t) throw new Error(`session ${id} not found`);
+    t.session.model = model;
+    this.emit(id, { type: "status_entry", text: "Model changed to " + model });
   }
 
   async renameSession(id: string, title: string): Promise<void> {
@@ -256,7 +258,6 @@ export class MockApi implements HarnessApi {
       session,
       items: [],
       usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: this.ctxOf(model) },
-      effortLevels: MOCK_LEVELS.slice(),
     });
     return { ...session };
   }
@@ -322,7 +323,6 @@ export class MockApi implements HarnessApi {
     const t = this.transcripts.get(session);
     if (!t) return;
     pushUser(t.items, text);
-    t.session.model = this.config.model;
     if (t.session.title === "New session") t.session.title = title(text);
     void this.runTurn(session, t);
   }
@@ -550,15 +550,13 @@ export class MockApi implements HarnessApi {
       session: first,
       items,
       usage: { prompt_tokens: 39400, completion_tokens: 2600, n_ctx: 131072 },
-      effortLevels: MOCK_LEVELS.slice(),
     });
     for (const s of [second, third]) {
       this.transcripts.set(s.id, {
         session: s,
         items: [],
         usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: this.ctxOf(s.model) },
-        effortLevels: MOCK_LEVELS.slice(),
-      });
+        });
     }
   }
 }

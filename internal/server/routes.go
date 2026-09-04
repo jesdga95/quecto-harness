@@ -313,7 +313,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	doc, state, fill, caps := sess.Snapshot()
+	doc, state, fill, _ := sess.Snapshot()
 	nctx, source := doc.NCtx, doc.NCtxSource
 	if nctx <= 0 {
 		nctx, source = 32768, "assumed"
@@ -330,8 +330,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		"id": doc.ID, "project": doc.Project, "model": doc.Model,
 		"state": string(state), "n_ctx": nctx, "n_ctx_source": source,
 		"fill": fill, "compactions": doc.Compactions,
-		"effort_levels": llama.EffortLevels(caps),
-		"pending":       pending, "entries": entries,
+		"pending": pending, "entries": entries,
 		"last_seq": s.hub.Seq(doc.ID),
 	})
 }

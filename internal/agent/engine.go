@@ -255,12 +255,12 @@ func (e *Engine) Rebind(id, model string, hint int, hintSource string) error {
 	s.caps = llama.Caps{}
 	s.LastUsage = nil
 	s.lastUsageEntry = -1
-	entry := s.appendEntry(store.Entry{Kind: "status", Content: "model changed to " + model,
+	entry := s.appendEntry(store.Entry{Kind: "status", Content: "Model changed to " + model,
 		InContext: false, Visible: true})
 	s.mu.Unlock()
 
 	e.save(s)
-	e.publish(s.ID, ev("status_entry", map[string]any{"seq": entry.Seq, "content": entry.Content}))
+	e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
 	e.probeProps(s, true)
 	return nil
 }
@@ -359,8 +359,6 @@ func (e *Engine) probeProps(s *Session, onlyIfLoaded bool) {
 			return
 		}
 		e.save(s)
-		e.publish(s.ID, ev("caps", map[string]any{
-			"effort_levels": llama.EffortLevels(props.Caps)}))
 	}()
 }
 

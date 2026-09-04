@@ -90,6 +90,7 @@ interface WirePermission {
   args?: string;
   decision?: string;
   reason?: string;
+  content?: string;
 }
 
 interface WireEntry {
@@ -117,7 +118,6 @@ interface WireSnapshot {
   fill?: number;
   entries?: WireEntry[];
   pending?: WirePermission[];
-  effort_levels?: string[];
   last_seq?: number;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
 }
@@ -141,11 +141,11 @@ interface WireEvent {
   truncated?: boolean;
   decision?: string;
   reason?: string;
+  content?: string;
   prompt_tokens?: number;
   completion_tokens?: number;
   cached_tokens?: number;
   n_ctx?: number;
-  effort_levels?: string[];
   before?: number;
   after?: number;
   message?: string;
@@ -200,9 +200,7 @@ const STATUSES: ModelStatus[] = [
   "sleeping",
   "downloading",
 ];
-const EFFORTS: Effort[] = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"];
-// What a picker offers when the harness has not read the model's template yet.
-const FALLBACK_LEVELS: Effort[] = ["low", "medium", "high"];
+const EFFORTS: Effort[] = ["auto", "off", "low", "medium", "high"];
 const PERM_MODES: PermMode[] = ["ask", "allowlist", "full"];
 
 /** The harness reports where a context number came from; two sources are real. */
@@ -244,13 +242,6 @@ function toModel(m: WireModel): Model {
 
 function toEffort(value: string | undefined): Effort {
   return EFFORTS.find((e) => e === value) ?? "medium";
-}
-
-// A level the harness reports but this build has no name for is dropped, so
-// the picker never offers something it cannot send back.
-function toLevels(values: string[] | undefined): Effort[] {
-  const out = (values ?? []).filter((v): v is Effort => EFFORTS.includes(v as Effort));
-  return out.length > 0 ? out : FALLBACK_LEVELS.slice();
 }
 
 // An unreadable policy reads as ask.
@@ -389,6 +380,11 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
     return;
   }
 
+  if (e.kind === "status") {
+    items.push({ kind: "status", id: `s${seq}`, text: e.content ?? "" });
+    return;
+  }
+
   if (e.kind === "error") {
     items.push({ kind: "error", id: `e${seq}`, message: e.content ?? "" });
   }
@@ -477,7 +473,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
   const highest = entries.reduce((max, e) => Math.max(max, e.seq ?? 0), 0);
   seqs.set(id, snap.last_seq ?? highest);
 
-  return { session, items, usage, effortLevels: toLevels(snap.effort_levels) };
+  return { session, items, usage };
 }
 
 // stream
@@ -497,7 +493,7 @@ const EVENT_NAMES = [
   "permission",
   "permission_done",
   "usage",
-  "caps",
+  "status_entry",
   "compacted",
   "done",
   "resync",
@@ -582,8 +578,8 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       ];
     }
 
-    case "caps":
-      return [{ type: "caps", effortLevels: toLevels(ev.effort_levels) }];
+    case "status_entry":
+      return [{ type: "status_entry", text: ev.content ?? "" }];
 
     case "compacted":
       return [{ type: "compacted", before: ev.before ?? 0, after: ev.after ?? 0 }];
@@ -664,6 +660,12 @@ class HttpApi implements HarnessApi {
     await call<unknown>(`/sessions/${encodeURIComponent(id)}`, "PUT", { title });
     const known = summaries.get(id);
     if (known) summaries.set(id, { ...known, title });
+  }
+
+  async setSessionModel(id: string, model: string): Promise<void> {
+    await call<unknown>(`/sessions/${encodeURIComponent(id)}`, "PUT", { model });
+    const known = summaries.get(id);
+    if (known) summaries.set(id, { ...known, model });
   }
 
   async deleteSession(id: string): Promise<void> {

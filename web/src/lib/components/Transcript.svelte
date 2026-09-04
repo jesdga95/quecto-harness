@@ -1,5 +1,6 @@
 <script lang="ts">
   import ArrowDown from "phosphor-svelte/lib/ArrowDown";
+  import ArrowsLeftRight from "phosphor-svelte/lib/ArrowsLeftRight";
   import Copy from "phosphor-svelte/lib/Copy";
   import Warning from "phosphor-svelte/lib/Warning";
   import PermissionCard from "./PermissionCard.svelte";
@@ -53,6 +54,11 @@
         {:else if item.kind === "assistant"}
           <div class="my-2">
             <Prose text={item.text} streaming={item.streaming} />
+          </div>
+        {:else if item.kind === "status"}
+          <div class="flex items-center gap-2 px-2 py-1 text-[13px] text-muted">
+            <ArrowsLeftRight size={15} class="shrink-0" />
+            <span class="truncate">{item.text}</span>
           </div>
         {:else if item.kind === "error"}
           <div class="flex items-center gap-2 px-2 py-1 text-[13px] text-crit">

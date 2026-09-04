@@ -12,7 +12,7 @@
   const available = $derived(app.models.filter((m) => m.status === "unloaded"));
 
   function pick(id: string) {
-    setModel(id);
+    void setModel(id);
     open = false;
   }
 </script>

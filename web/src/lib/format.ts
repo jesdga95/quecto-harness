@@ -31,9 +31,7 @@ export function since(iso: string): string {
   return `${Math.round(hours / 24)}d`;
 }
 
-/** Level names as the model's template writes them, capitalised. */
 export function effortLabel(effort: string): string {
-  if (effort === "xhigh") return "Extra high";
   return effort[0]!.toUpperCase() + effort.slice(1);
 }
 
@@ -44,13 +42,9 @@ export function effortHint(effort: string): string {
       return "Leave it to the model template";
     case "off":
       return "Ask the model not to think";
-    case "minimal":
-      return "The least the template allows";
     case "low":
       return "Short thinking";
     case "high":
-    case "xhigh":
-    case "max":
       return "As much as the model wants";
     default:
       return "A working amount";

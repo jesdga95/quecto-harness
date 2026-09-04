@@ -7,18 +7,7 @@ export type ModelStatus =
   | "loaded"
   | "sleeping"
   | "downloading";
-/** auto leaves it to the template and off asks for no thinking. The rest are
-    level names a chat template reads; which of them a model takes comes from
-    that model, so a picker offers Transcript.effortLevels rather than all. */
-export type Effort =
-  | "auto"
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "max";
+export type Effort = "auto" | "off" | "low" | "medium" | "high";
 export type TurnStatus =
   | "idle"
   | "thinking"
@@ -123,8 +112,8 @@ export type HarnessEvent =
       cached_pct?: number;
     }
   | { type: "status"; status: TurnStatus }
-  /** The model's template was read, so the levels it takes are now known. */
-  | { type: "caps"; effortLevels: Effort[] }
+  /** A line the harness writes into the transcript, such as a model change. */
+  | { type: "status_entry"; text: string }
   | { type: "compacted"; before: number; after: number }
   | { type: "error"; message: string }
   | { type: "done" }
@@ -155,6 +144,7 @@ export type TranscriptItem =
       outcome: string | null;
     }
   | { kind: "compaction"; id: string; before: number; after: number }
+  | { kind: "status"; id: string; text: string }
   | { kind: "error"; id: string; message: string };
 
 export interface Usage {
@@ -169,8 +159,6 @@ export interface Transcript {
   session: Session;
   items: TranscriptItem[];
   usage: Usage;
-  /** Levels this session's model accepts, between auto and off. */
-  effortLevels: Effort[];
 }
 
 export type EventHandler = (event: HarnessEvent) => void;
@@ -184,6 +172,8 @@ export interface HarnessApi {
   removeProject(path: string): Promise<Project[]>;
   listSessions(project: string): Promise<Session[]>;
   createSession(project: string, model: string): Promise<Session>;
+  /** Points an idle session at another model, keeping its history. */
+  setSessionModel(id: string, model: string): Promise<void>;
   getSession(id: string): Promise<Transcript>;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string): Promise<void>;

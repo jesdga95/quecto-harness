@@ -9,16 +9,9 @@
 
   let { up = false }: { up?: boolean } = $props();
   let open = $state(false);
+  const levels: Effort[] = ["auto", "off", "low", "medium", "high"];
 
   const chosen = $derived(app.config?.effort ?? "medium");
-
-  // Which levels sit between auto and off comes from the model's template. A
-  // stored level this model does not have is still listed, so the chip and the
-  // menu never disagree about what is selected.
-  const levels = $derived.by((): Effort[] => {
-    const list: Effort[] = ["auto", "off", ...app.effortLevels];
-    return list.includes(chosen) ? list : [...list, chosen];
-  });
 
   function pick(level: Effort) {
     setEffort(level);

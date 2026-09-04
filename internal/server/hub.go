@@ -166,10 +166,14 @@ func (c *channel) append(f frame) {
 // encode merges the event fields with its type and sequence number, which is
 // the payload shape the browser reads.
 func encode(kind string, seq int64, fields map[string]any) []byte {
-	out := map[string]any{"type": kind, "seq": seq}
+	out := map[string]any{}
 	for k, v := range fields {
 		out[k] = v
 	}
+	// Written last: the browser reopens the stream from the sequence number it
+	// last saw, so an event carrying a field of its own by that name would
+	// rewind it.
+	out["type"], out["seq"] = kind, seq
 	b, err := json.Marshal(out)
 	if err != nil {
 		b, _ = json.Marshal(map[string]any{"type": "error", "seq": seq,

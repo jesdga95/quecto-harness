@@ -38,45 +38,33 @@ type FunctionSpec struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
-// Effort is the thinking level. Auto and off are the harness's own; the rest
-// are level names a chat template reads. It becomes request fields in
-// applyEffort and has no other meaning.
+// Effort is the thinking level. Auto and off are the harness's own; low,
+// medium and high are the names chat templates agree on. It becomes request
+// fields in applyEffort and has no other meaning.
 type Effort string
 
 const (
 	// Auto sends no thinking field at all. That is not the same as off: the
 	// template decides.
-	EffortAuto    Effort = "auto"
-	EffortOff     Effort = "off"
-	EffortMinimal Effort = "minimal"
-	EffortLow     Effort = "low"
-	EffortMedium  Effort = "medium"
-	EffortHigh    Effort = "high"
-	EffortXHigh   Effort = "xhigh"
-	EffortMax     Effort = "max"
+	EffortAuto   Effort = "auto"
+	EffortOff    Effort = "off"
+	EffortLow    Effort = "low"
+	EffortMedium Effort = "medium"
+	EffortHigh   Effort = "high"
 )
 
-// ValidEffort reports whether s is auto, off, or a level name. Which levels a
-// given model takes is narrower and comes from its template.
+// ValidEffort reports whether s is one of the five levels.
 func ValidEffort(s string) bool {
-	e := Effort(s)
-	if e == EffortAuto || e == EffortOff {
+	switch Effort(s) {
+	case EffortAuto, EffortOff, EffortLow, EffortMedium, EffortHigh:
 		return true
 	}
-	_, ok := levelStrength[e]
-	return ok
+	return false
 }
 
-// budget is the fallback for a template that will not take a named level. The
-// top three are -1, which llama.cpp reads as unbounded.
-var budget = map[Effort]int{
-	EffortMinimal: 1024,
-	EffortLow:     2048,
-	EffortMedium:  8192,
-	EffortHigh:    -1,
-	EffortXHigh:   -1,
-	EffortMax:     -1,
-}
+// budget is the fallback for a template that cannot take a named effort
+// level. High is -1, which llama.cpp reads as unbounded.
+var budget = map[Effort]int{EffortLow: 2048, EffortMedium: 8192, EffortHigh: -1}
 
 // ChatRequest is the harness-level request. Wire fields are derived from it
 // by buildBody, so the effort mapping lives in one place.
@@ -107,15 +95,16 @@ type Timings struct {
 }
 
 // applyEffort writes the thinking fields. Omitting the field and setting it
-// to a level the template did not ask for are different requests, and a level
-// outside the template's set raises there, so it falls back to a budget.
+// to a level the template did not ask for are different requests. A template
+// that knows none of the three names refuses the request rather than guessing,
+// which is the model server's answer to give.
 func applyEffort(body, kwargs map[string]any, e Effort, caps Caps) {
 	switch {
 	case e == EffortAuto:
 	case e == EffortOff:
 		body["reasoning_budget"] = 0
 		kwargs["enable_thinking"] = false
-	case caps.Known && caps.ReasoningEffort && caps.accepts(e):
+	case caps.Known && caps.ReasoningEffort:
 		body["reasoning_effort"] = string(e)
 	default:
 		if b, ok := budget[e]; ok {
