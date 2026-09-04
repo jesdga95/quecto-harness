@@ -745,8 +745,10 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 			res, err = runner.WriteFile(ctx, args)
 		case "run_shell":
 			res, err = runner.RunShell(ctx, args)
+		case "write_todos":
+			res, err = e.writeTodos(s, args)
 		default:
-			err = fmt.Errorf("no tool named %s: use read_file, write_file or run_shell", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read_file, write_file, run_shell or write_todos", call.Function.Name)
 		}
 		if err != nil {
 			content = err.Error()

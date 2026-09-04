@@ -7,11 +7,12 @@ import (
 
 func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 	for name, get := range map[string]func() string{
-		"tool_read_file.md":  ToolReadFile,
-		"tool_write_file.md": ToolWriteFile,
-		"tool_run_shell.md":  ToolRunShell,
-		"compact.md":         Compact,
-		"title.md":           Title,
+		"tool_read_file.md":   ToolReadFile,
+		"tool_write_file.md":  ToolWriteFile,
+		"tool_run_shell.md":   ToolRunShell,
+		"tool_write_todos.md": ToolWriteTodos,
+		"compact.md":          Compact,
+		"title.md":            Title,
 	} {
 		if strings.TrimSpace(get()) == "" {
 			t.Errorf("%s is empty", name)

@@ -327,11 +327,15 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []store.Entry{}
 	}
+	todos := doc.Todos
+	if todos == nil {
+		todos = []store.Todo{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": doc.ID, "project": doc.Project, "model": doc.Model,
 		"state": string(state), "n_ctx": nctx, "n_ctx_source": source,
 		"fill": fill, "compactions": doc.Compactions,
-		"pending": pending, "entries": entries,
+		"pending": pending, "entries": entries, "todos": todos,
 		"last_seq": s.hub.Seq(doc.ID),
 	})
 }

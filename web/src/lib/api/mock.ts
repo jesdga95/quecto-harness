@@ -8,6 +8,7 @@ import type {
   Project,
   Session,
   State,
+  Todo,
   Transcript,
   TranscriptItem,
 } from "./types";
@@ -36,6 +37,12 @@ interface ScriptedTurn {
   reply: string;
   denied: string;
 }
+
+const MOCK_TODOS: Todo[] = [
+  { text: "Read the hub and the routes", status: "done" },
+  { text: "Keep a set of subscribers per session", status: "doing" },
+  { text: "Drop a slow reader instead of blocking", status: "todo" },
+];
 
 const MOCK_SUMMARY = [
   "Task: find why two tabs on one session each see half the events.",
@@ -224,6 +231,7 @@ export class MockApi implements HarnessApi {
       session: { ...t.session },
       items: t.items.map((i) => ({ ...i })),
       usage: { ...t.usage },
+      todos: t.todos.map((todo) => ({ ...todo })),
     };
   }
 
@@ -275,6 +283,7 @@ export class MockApi implements HarnessApi {
       session,
       items: [],
       usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: this.ctxOf(model) },
+      todos: [],
     });
     return { ...session };
   }
@@ -365,6 +374,13 @@ export class MockApi implements HarnessApi {
     try {
       this.load(t.session.model);
       this.emit(session, { type: "status", status: "thinking" });
+      // The plan the real harness keeps with write_todos, one step further on
+      // each turn so the panel has something to show.
+      t.todos = MOCK_TODOS.map((todo, i) => ({
+        text: todo.text,
+        status: i < index ? "done" : i === index ? "doing" : "todo",
+      }));
+      this.emit(session, { type: "todos", todos: t.todos });
       await this.sleep(420, turn);
       this.settle(t.session.model, t);
 
@@ -587,13 +603,15 @@ export class MockApi implements HarnessApi {
       session: first,
       items,
       usage: { prompt_tokens: 39400, completion_tokens: 2600, n_ctx: 131072 },
+      todos: MOCK_TODOS.map((todo) => ({ ...todo })),
     });
     for (const s of [second, third]) {
       this.transcripts.set(s.id, {
         session: s,
         items: [],
         usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: this.ctxOf(s.model) },
-        });
+        todos: [],
+      });
     }
   }
 }

@@ -2,42 +2,33 @@
 
 Ordered by size. Take from the top.
 
-## Next, small
+## Next, large
 
-1. **Expand a compaction.** The summary is already in the entry the divider is
-   built from, so this is a caret and a collapsed block. No server work.
-2. **Syntax highlighting.** One dependency and a renderer override in
-   `markdown.ts`. Pick a small library and a theme that reads in both schemes.
-   The language label is already shown.
-3. **Automatic session titles.** The first user message is already the fallback
-   title. Either keep that and trim it better, or ask the model for a short
-   title after the first turn, which costs a second request.
-
-## Medium
-
-4. **Shell output as a shell.** One compact card per command: the command on a
-   prompt line, output in mono, exit code as a badge, collapsed by default when
-   it is long. Look at how the quectogram android client presents the three
-   tools before starting.
-5. **Text file attachments.** A picker, a size cap, and the file inlined into
-   the message with its path. The read path already exists in `read_file`, so
-   the work is the composer and the request shape.
-6. **Todo lists inside the harness.** A tool the model calls to keep a plan, and
-   a panel that renders it. Needs a fourth tool, a place in the session file,
-   and an event.
-
-## Large
-
-7. **Diff view.** Show what `write_file` changed rather than the summary line.
+1. **Diff view.** Show what `write_file` changed rather than the summary line.
    Needs the old content kept before the write, a diff, and a view for it. The
    quectogram diff view is the reference.
-8. **Git view.** Status and diff for the project, either by shelling out to git
+2. **Git view.** Status and diff for the project, either by shelling out to git
    or by a small set of read-only routes. Decide which before starting.
-9. **Image attachments.** Multimodal request shape, storage, a picker, and a
+3. **Image attachments.** Multimodal request shape, storage, a picker, and a
    view. Three of the six models report vision, so the caps are there.
 
 ## Done
 
+- A tool call budget, set from the plus button and rotating to no limit at all.
+  A spent budget takes the tools out of the next request rather than ending the
+  turn, so it finishes with an answer.
+- A compaction opens and shows the summary it kept. Expandable step rows carry
+  a caret.
+- Syntax highlighting for fenced code, from highlight.js core with the
+  languages registered by hand and a six colour palette of the page's own.
+- The model names the session after its first turn, continuing the session's
+  own messages so the prompt stays cached.
+- Shell steps open as a console: the command behind a prompt, output in mono,
+  and how the run ended under it.
+- Text file attachments, picked in the host dialog and inlined into the message
+  with their path.
+- A plan the model keeps with write_todos, shown as a panel above the composer
+  and as a step in the transcript.
 - Go backend: config, llama client with SSE parsing, three tools, permission
   broker, agent loop, session store, HTTP server, launchd and systemd units.
 - Svelte UI embedded in the binary. One 9.3 MB file, no runtime, no network.

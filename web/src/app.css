@@ -900,6 +900,83 @@
     color: var(--muted);
   }
 
+  /* The plan the model keeps, sitting above the composer. */
+  .plan {
+    border: 1px solid var(--hair);
+    border-radius: 14px;
+    background: var(--surface);
+  }
+  .plan-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 9px 12px;
+    border: 0;
+    border-radius: 14px;
+    background: none;
+    text-align: left;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .plan-head svg {
+    width: 15px;
+    height: 15px;
+    flex: none;
+    color: var(--accent);
+  }
+  .plan-now {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .plan-head .caret {
+    display: inline-grid;
+    place-items: center;
+    transition: transform 120ms ease;
+  }
+  .plan-head .caret svg {
+    width: 13px;
+    height: 13px;
+    color: var(--border-2);
+  }
+  .plan-head .caret.is-open {
+    transform: rotate(90deg);
+  }
+
+  .todo {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-2);
+  }
+  .todo svg {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    margin-top: 2px;
+    color: var(--border-2);
+  }
+  .todo.is-done {
+    color: var(--muted);
+    text-decoration: line-through;
+    text-decoration-color: var(--border-2);
+  }
+  .todo.is-done svg {
+    color: var(--ok);
+  }
+  .todo.is-doing {
+    color: var(--text);
+  }
+  .todo.is-doing svg {
+    color: var(--accent);
+  }
+
   /* One command drawn as the console it ran in. */
   .term {
     border-radius: 12px;

@@ -78,6 +78,12 @@ export interface State {
   models: Model[];
 }
 
+/** One step of the plan the model keeps with write_todos. */
+export interface Todo {
+  text: string;
+  status: "todo" | "doing" | "done";
+}
+
 export type PermissionDecision =
   | { decision: "once" }
   | { decision: "always"; prefix: string }
@@ -119,6 +125,8 @@ export type HarnessEvent =
   /** The model named the session after its first turn. */
   | { type: "title"; title: string }
   | { type: "compacted"; before: number; after: number; summary: string }
+  /** The model rewrote the plan. It replaces the one held. */
+  | { type: "todos"; todos: Todo[] }
   | { type: "error"; message: string }
   | { type: "done" }
   /** The stream fell too far behind to replay, so it carries a fresh snapshot. */
@@ -169,6 +177,7 @@ export interface Transcript {
   session: Session;
   items: TranscriptItem[];
   usage: Usage;
+  todos: Todo[];
 }
 
 export type EventHandler = (event: HarnessEvent) => void;

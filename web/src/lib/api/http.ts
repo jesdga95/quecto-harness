@@ -11,6 +11,7 @@ import type {
   Project,
   Session,
   State,
+  Todo,
   Transcript,
   TranscriptItem,
   TurnStatus,
@@ -119,6 +120,7 @@ interface WireSnapshot {
   n_ctx?: number;
   fill?: number;
   entries?: WireEntry[];
+  todos?: { text?: string; status?: string }[] | null;
   pending?: WirePermission[];
   last_seq?: number;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
@@ -152,6 +154,7 @@ interface WireEvent {
   after?: number;
   summary?: string;
   title?: string;
+  todos?: { text?: string; status?: string }[] | null;
   message?: string;
 }
 
@@ -274,6 +277,16 @@ function parseArgs(raw: string | undefined): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/** A status outside the three the schema names reads as a step not started. */
+function toTodos(wire: { text?: string; status?: string }[] | null | undefined): Todo[] {
+  return (wire ?? [])
+    .filter((t) => (t.text ?? "") !== "")
+    .map((t) => ({
+      text: t.text ?? "",
+      status: t.status === "doing" || t.status === "done" ? t.status : "todo",
+    }));
 }
 
 function count(value: unknown): number {
@@ -484,7 +497,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
   const highest = entries.reduce((max, e) => Math.max(max, e.seq ?? 0), 0);
   seqs.set(id, snap.last_seq ?? highest);
 
-  return { session, items, usage };
+  return { session, items, usage, todos: toTodos(snap.todos) };
 }
 
 // stream
@@ -506,6 +519,7 @@ const EVENT_NAMES = [
   "usage",
   "status_entry",
   "title",
+  "todos",
   "compacted",
   "done",
   "resync",
@@ -595,6 +609,9 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
 
     case "title":
       return ev.title ? [{ type: "title", title: ev.title }] : [];
+
+    case "todos":
+      return [{ type: "todos", todos: toTodos(ev.todos) }];
 
     case "compacted":
       return [

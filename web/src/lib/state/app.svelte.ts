@@ -9,6 +9,7 @@ import type {
   PermissionDecision,
   Project,
   Session,
+  Todo,
   TranscriptItem,
   TurnStatus,
   Usage,
@@ -29,6 +30,7 @@ export const app = $state({
   projectPath: "",
   sessionId: "",
   items: [] as TranscriptItem[],
+  todos: [] as Todo[],
   usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: 131072 } as Usage,
   status: "idle" as TurnStatus,
   allowlist: [] as string[],
@@ -117,6 +119,7 @@ export async function selectSession(id: string): Promise<void> {
   if (!t) return;
   app.items = t.items;
   app.usage = t.usage;
+  app.todos = t.todos;
   app.status = "idle";
   if (app.config) app.config.model = t.session.model;
   unsubscribe = api.events(id, onEvent);
@@ -168,6 +171,7 @@ export async function removeProject(path: string): Promise<void> {
     unsubscribe?.();
     app.sessionId = "";
     app.items = [];
+    app.todos = [];
     const next = projects[0];
     if (next) await selectProject(next.path);
     else app.projectPath = "";
@@ -187,6 +191,7 @@ export async function deleteSession(id: string): Promise<void> {
     unsubscribe?.();
     app.sessionId = "";
     app.items = [];
+    app.todos = [];
   }
   await loadSessions();
   if (wasActive) {
@@ -367,6 +372,12 @@ function onEvent(event: HarnessEvent): void {
   if (event.type === "resync") {
     app.items = event.transcript.items;
     app.usage = event.transcript.usage;
+    app.todos = event.transcript.todos;
+    return;
+  }
+
+  if (event.type === "todos") {
+    app.todos = event.todos;
     return;
   }
 

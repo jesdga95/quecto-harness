@@ -3,11 +3,13 @@
   import Brain from "phosphor-svelte/lib/Brain";
   import CaretRight from "phosphor-svelte/lib/CaretRight";
   import FileText from "phosphor-svelte/lib/FileText";
+  import ListChecks from "phosphor-svelte/lib/ListChecks";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
   import Terminal from "phosphor-svelte/lib/Terminal";
   import TerminalCard from "./TerminalCard.svelte";
-  import type { TranscriptItem } from "../api";
+  import TodoList from "./TodoList.svelte";
+  import type { Todo, TranscriptItem } from "../api";
   import { describeCommand, firstSentence, k } from "../format";
 
   let { item }: { item: TranscriptItem } = $props();
@@ -27,6 +29,7 @@
     if (item.kind !== "tool") return "Step";
     if (item.name === "read_file") return "Read";
     if (item.name === "write_file") return "Write";
+    if (item.name === "write_todos") return "Plan";
     return "Shell";
   });
 
@@ -35,7 +38,26 @@
     if (item.kind === "permission") return item.command;
     if (item.kind === "compaction") return `${k(item.before)} to ${k(item.after)}`;
     if (item.kind !== "tool") return "";
+    if (item.name === "write_todos") {
+      const done = todos.filter((t) => t.status === "done").length;
+      return `${done} of ${todos.length} done`;
+    }
     return path || describeCommand(command);
+  });
+
+  // The plan is in the call's own arguments, which is what the row draws
+  // rather than the result the model was handed back.
+  const todos = $derived.by<Todo[]>(() => {
+    if (item.kind !== "tool" || item.name !== "write_todos") return [];
+    const raw = item.args.todos;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null)
+      .map<Todo>((t) => ({
+        text: typeof t.text === "string" ? t.text : "",
+        status: t.status === "doing" || t.status === "done" ? t.status : "todo",
+      }))
+      .filter((t) => t.text !== "");
   });
 
   const isPath = $derived(item.kind === "tool" && path !== "");
@@ -55,6 +77,8 @@
       <FileText />
     {:else if item.kind === "tool" && item.name === "write_file"}
       <PencilSimple />
+    {:else if item.kind === "tool" && item.name === "write_todos"}
+      <ListChecks />
     {:else}
       <Terminal />
     {/if}
@@ -85,6 +109,8 @@
         <p class="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{item.summary}</p>
       {:else if item.kind === "permission"}
         <pre class="mono-block">{item.command}</pre>
+      {:else if item.kind === "tool" && item.name === "write_todos"}
+        <TodoList {todos} />
       {:else if item.kind === "tool" && item.name === "run_shell"}
         <TerminalCard
           {command}

@@ -214,8 +214,8 @@ func TestEffortReachesTheRequestBody(t *testing.T) {
 		t.Errorf("reasoning_format = %v", body["reasoning_format"])
 	}
 	tools, _ := body["tools"].([]any)
-	if len(tools) != 3 {
-		t.Errorf("tools = %d, want 3", len(tools))
+	if len(tools) != 4 {
+		t.Errorf("tools = %d, want 4", len(tools))
 	}
 	msgs, _ := body["messages"].([]any)
 	if len(msgs) != 2 {
@@ -799,6 +799,42 @@ func TestToolCallLimit(t *testing.T) {
 	last := doc.Entries[len(doc.Entries)-1]
 	if last.Kind != "assistant" || len(last.ToolCalls) != 0 {
 		t.Errorf("last entry = %+v, want an assistant answer with no calls", last)
+	}
+}
+
+// TestWriteTodosKeepsThePlan asserts that the fourth tool asks nothing, keeps
+// the plan on the session, and hands it back to the model.
+func TestWriteTodosKeepsThePlan(t *testing.T) {
+	h := newHarness(t, "stream_todos.txt", "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "plan the work", nil)
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	if len(doc.Todos) != 3 {
+		t.Fatalf("todos = %+v", doc.Todos)
+	}
+	if doc.Todos[0].Status != "done" || doc.Todos[1].Status != "doing" || doc.Todos[2].Status != "todo" {
+		t.Errorf("statuses = %+v", doc.Todos)
+	}
+	if doc.Todos[1].Text != "Add the handler" {
+		t.Errorf("text = %q", doc.Todos[1].Text)
+	}
+
+	var result store.Entry
+	for _, e := range doc.Entries {
+		if e.Kind == "tool" && e.ToolName == "write_todos" {
+			result = e
+		}
+	}
+	if !strings.Contains(result.Content, "1 of 3 done") || !strings.Contains(result.Content, "[>] Add the handler") {
+		t.Errorf("tool result = %q", result.Content)
+	}
+	if result.Permission == nil || result.Permission.Decision != "auto" {
+		t.Errorf("the plan was put to the user: %+v", result.Permission)
+	}
+	if events := h.rec.ofType("todos"); len(events) != 1 {
+		t.Errorf("todos events = %d, want 1", len(events))
 	}
 }
 

@@ -68,6 +68,12 @@ type PermissionRecord struct {
 	Reason   string `json:"reason,omitempty"`
 }
 
+// Todo is one step of the plan the model keeps for the session.
+type Todo struct {
+	Text   string `json:"text"`
+	Status string `json:"status"`
+}
+
 // Session is the on-disk document. The system prompt is not in it: it is
 // regenerated on every request, so editing the prompt reaches old sessions.
 type Session struct {
@@ -83,6 +89,7 @@ type Session struct {
 	NCtxSource  string       `json:"n_ctx_source"`
 	Compactions int          `json:"compactions"`
 	LastUsage   *llama.Usage `json:"last_usage,omitempty"`
+	Todos       []Todo       `json:"todos,omitempty"`
 	Entries     []Entry      `json:"entries"`
 }
 

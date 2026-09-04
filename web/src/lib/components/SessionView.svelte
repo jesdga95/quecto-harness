@@ -1,6 +1,7 @@
 <script lang="ts">
   import Composer from "./Composer.svelte";
   import ContextChip from "./ContextChip.svelte";
+  import PlanPanel from "./PlanPanel.svelte";
   import Transcript from "./Transcript.svelte";
   import { activeSession, app } from "../state/app.svelte";
   import { shortPath } from "../format";
@@ -22,6 +23,7 @@
 
 <div class="shrink-0 px-6 pt-2 pb-5">
   <div class="mx-auto w-full max-w-[820px]">
+    <PlanPanel />
     <Composer placeholder="Message the agent" />
   </div>
 </div>

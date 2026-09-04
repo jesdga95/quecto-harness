@@ -51,6 +51,7 @@ type Session struct {
 	NCtxSource  string
 	LastUsage   *llama.Usage
 	Compactions int
+	Todos       []store.Todo
 
 	caps           llama.Caps
 	lastUsageEntry int
@@ -77,6 +78,7 @@ func fromDoc(d *store.Session) *Session {
 		NCtxSource:  d.NCtxSource,
 		LastUsage:   d.LastUsage,
 		Compactions: d.Compactions,
+		Todos:       append([]store.Todo(nil), d.Todos...),
 		state:       StateIdle,
 		// A reloaded session has no usage anchor, so the next fill is
 		// estimated from the entries rather than trusted from a past turn.
@@ -91,6 +93,7 @@ func (s *Session) doc() *store.Session {
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, LastUsage: s.LastUsage,
+		Todos:   append([]store.Todo(nil), s.Todos...),
 		Entries: append([]store.Entry(nil), s.Entries...),
 	}
 }

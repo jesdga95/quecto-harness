@@ -11,7 +11,7 @@ import (
 // re-encoding them.
 var schemas = buildSchemas()
 
-// Schemas returns the three tool definitions in the order the model sees them.
+// Schemas returns the tool definitions in the order the model sees them.
 func Schemas() []llama.Tool {
 	out := make([]llama.Tool, len(schemas))
 	copy(out, schemas)
@@ -44,6 +44,30 @@ func buildSchemas() []llama.Tool {
 					"content": map[string]any{"type": "string", "description": "The full file contents."},
 				},
 				"required":             []string{"path", "content"},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llama.FunctionSpec{
+			Name:        "write_todos",
+			Description: prompts.ToolWriteTodos(),
+			Parameters: mustSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"todos": map[string]any{
+						"type":        "array",
+						"description": "The whole plan, in order. It replaces the plan that was there.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"text":   map[string]any{"type": "string", "description": "What the step is, in a few words."},
+								"status": map[string]any{"type": "string", "enum": []string{"todo", "doing", "done"}, "description": "Where the step stands."},
+							},
+							"required":             []string{"text", "status"},
+							"additionalProperties": false,
+						},
+					},
+				},
+				"required":             []string{"todos"},
 				"additionalProperties": false,
 			}),
 		}},

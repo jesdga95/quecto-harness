@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md tool_read_file.md tool_write_file.md tool_run_shell.md compact.md compaction.md title.md attachment.md
+//go:embed system.md tool_read_file.md tool_write_file.md tool_run_shell.md tool_write_todos.md compact.md compaction.md title.md attachment.md
 var files embed.FS
 
 var (
@@ -59,8 +59,9 @@ func Attachment(path, content string) string {
 	return b.String()
 }
 
-func ToolReadFile() string  { return mustRead("tool_read_file.md") }
-func ToolWriteFile() string { return mustRead("tool_write_file.md") }
-func ToolRunShell() string  { return mustRead("tool_run_shell.md") }
-func Compact() string       { return mustRead("compact.md") }
-func Title() string         { return mustRead("title.md") }
+func ToolReadFile() string   { return mustRead("tool_read_file.md") }
+func ToolWriteFile() string  { return mustRead("tool_write_file.md") }
+func ToolRunShell() string   { return mustRead("tool_run_shell.md") }
+func ToolWriteTodos() string { return mustRead("tool_write_todos.md") }
+func Compact() string        { return mustRead("compact.md") }
+func Title() string          { return mustRead("title.md") }
