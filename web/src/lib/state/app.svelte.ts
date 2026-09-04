@@ -36,6 +36,7 @@ export const app = $state({
   connected: true,
   // Empty once a model server has answered. Drives the setup screen.
   detectError: "",
+  detectKind: "",
   probing: false,
 });
 
@@ -69,6 +70,7 @@ export async function init(): Promise<void> {
   if (!state) return;
   app.mode = state.mode;
   app.detectError = state.detectError ?? "";
+  app.detectKind = state.detectKind ?? "";
   app.config = state.config;
   app.projects = state.projects;
   app.models = state.models;
@@ -231,7 +233,8 @@ export async function removeAllowed(prefix: string): Promise<void> {
   if (list) app.allowlist = list;
 }
 
-/** Points the harness at a model server and reports what answered. */
+/** Points the harness at a model server. A server that answers at all counts,
+    including one that refuses the key, since that is still a server. */
 export async function connectServer(url: string, token: string): Promise<string> {
   app.probing = true;
   try {
@@ -242,10 +245,12 @@ export async function connectServer(url: string, token: string): Promise<string>
     if (!state) return app.error || "the harness did not answer";
     app.mode = state.mode;
     app.detectError = state.detectError ?? "";
+    app.detectKind = state.detectKind ?? "";
     app.models = state.models;
     app.projects = state.projects;
-    if (app.detectError) return app.detectError;
-    if (app.models.length === 0) return "that server answered but listed no models";
+    if (app.detectKind === "unreachable" || app.detectKind === "canceled") {
+      return app.detectError || "nothing answered at that address";
+    }
     return "";
   } finally {
     app.probing = false;

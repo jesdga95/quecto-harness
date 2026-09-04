@@ -59,6 +59,8 @@ export interface State {
   mode: "router" | "single";
   /** Empty when the model server answered. */
   detectError?: string;
+  /** Error taxonomy: "unreachable" means nothing answered at all. */
+  detectKind?: string;
   config: Config;
   projects: Project[];
   models: Model[];

@@ -60,6 +60,7 @@ interface WireState {
   projects?: string[];
   models?: WireModel[];
   detect_error?: string;
+  detect_kind?: string;
   models_error?: string;
 }
 
@@ -568,6 +569,7 @@ class HttpApi implements HarnessApi {
     return {
       mode: wire.mode === "single" ? "single" : "router",
       detectError: wire.detect_error || wire.models_error || "",
+      detectKind: wire.detect_kind ?? "",
       config: toConfig(wire.config ?? {}),
       projects: toProjects(projectPaths),
       models: (wire.models ?? []).map(toModel),

@@ -1,38 +1,21 @@
 <script lang="ts">
   import Logo from "./Logo.svelte";
-  import StatusDot from "./StatusDot.svelte";
   import { app, connectServer } from "../state/app.svelte";
-  import { k } from "../format";
 
   let { ondone }: { ondone: () => void } = $props();
 
   let url = $state(app.config?.server.url ?? "");
   let token = $state(app.config?.server.token ?? "");
   let problem = $state("");
-  let found = $state(false);
-  let took = $state(0);
 
-  const reachable = $derived(found && problem === "");
-
-  const statusLine = $derived(
-    problem !== ""
-      ? problem
-      : found
-        ? `${app.mode === "router" ? "Router mode" : "Single model mode"}, ${app.models.length} ${
-            app.models.length === 1 ? "model" : "models"
-          }.`
-        : "Not connected yet.",
-  );
-
+  // Probe, and go in when something answered. A server that refuses the key
+  // still answered, so the key is the user's to get right, not a gate here.
   async function connect() {
     if (!url.trim() || app.probing) return;
     problem = "";
-    found = false;
-    const started = performance.now();
     const err = await connectServer(url.trim(), token.trim());
-    took = Math.round(performance.now() - started);
-    if (err) problem = err;
-    else found = true;
+    problem = err;
+    if (err === "") ondone();
   }
 </script>
 
@@ -57,7 +40,7 @@
 
       <div class="mt-9">
         <label class="label mb-2.5 block" for="ob-url">Address</label>
-        <div class="field-lg" class:is-live={reachable}>
+        <div class="field-lg">
           <input
             id="ob-url"
             class="num flex-1 border-0 bg-transparent p-0 text-[15px] outline-none"
@@ -67,14 +50,10 @@
             spellcheck="false"
             autocapitalize="off"
           />
-          <span class="flex items-center gap-2 text-[12px]" class:text-accent={reachable}>
-            <span class="dot" class:dot-loaded={reachable}></span>
-            <span class="num">{found ? `${took}ms` : "—"}</span>
-          </span>
         </div>
-        <p class="mt-2.5 text-[13px]" class:text-crit={problem !== ""} class:text-ink-2={problem === ""}>
-          {statusLine}
-        </p>
+        {#if problem}
+          <p class="mt-2.5 text-[13px] text-crit">{problem}</p>
+        {/if}
       </div>
 
       <div class="mt-7">
@@ -91,26 +70,10 @@
         </div>
       </div>
 
-      {#if found}
-        <div class="mt-8 max-h-[220px] overflow-y-auto pr-1">
-          {#each app.models as model (model.id)}
-            <div class="flex items-center gap-2.5 py-[7px] text-[13.5px]">
-              <StatusDot status={model.status} />
-              <span class="min-w-0 flex-1 truncate">{model.id}</span>
-              <span class="num text-[12px] text-muted">{k(model.ctx)}</span>
-            </div>
-          {/each}
-        </div>
-      {/if}
-
       <div class="mt-9">
-        {#if found}
-          <button class="btn-lg" onclick={ondone}>Start</button>
-        {:else}
-          <button class="btn-lg" onclick={connect} disabled={app.probing || !url.trim()}>
-            {app.probing ? "Checking" : "Connect"}
-          </button>
-        {/if}
+        <button class="btn-lg" onclick={connect} disabled={app.probing || !url.trim()}>
+          {app.probing ? "Checking" : "Connect"}
+        </button>
       </div>
 
       <p class="mt-8 text-[12px] text-muted">

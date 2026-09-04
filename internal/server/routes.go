@@ -141,6 +141,9 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		"server_url":   cfg.ServerURL,
 		"autoload":     info.Autoload,
 		"detect_error": errText(infoErr),
+		// The kind separates a server that refused from one that never
+		// answered, which is the difference setup cares about.
+		"detect_kind":  string(llama.Kind(infoErr)),
 		"config":       toConfigJSON(cfg),
 		"config_notes": notes,
 		"projects":     projects,
