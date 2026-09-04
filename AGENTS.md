@@ -70,6 +70,21 @@ the point is that there is very little here to patch. A dependency has to do som
 the standard library genuinely cannot. The frontend list is Svelte, Vite, Tailwind,
 one font package and one icon package; adding to it is the same conversation.
 
+## Compatibility
+
+There are no released versions and no state files in the wild, so a stored
+shape can change without anything having to read the old one. When a field in
+`config.json`, `allowlist.json` or a session document changes, change it and
+delete the local file. Do not write a reader for the old shape, a migration
+step, a field kept for one more version, or a default whose only job is to
+cover a file an earlier build wrote.
+
+Validation is separate and stays. A hand-edited value outside the accepted set
+still falls back to the default and produces a note, and a field missing from a
+model endpoint response is still treated as missing.
+
+This section goes away at the first release.
+
 ## Tests
 
 Critical core code gets a test. Critical means the protocol, the session log,
