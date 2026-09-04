@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"quecto-harness/internal/agent"
 	"quecto-harness/internal/config"
@@ -102,7 +101,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/config", s.putConfig)
 	mux.HandleFunc("GET /api/events", s.getEvents)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotFound, "no such endpoint: check the path")
+		writeError(w, http.StatusNotFound, "No such endpoint: check the path")
 	})
 	mux.HandleFunc("/", s.serveUI)
 
@@ -114,7 +113,7 @@ func recoverPanic(next http.Handler) http.Handler {
 		defer func() {
 			if v := recover(); v != nil {
 				log.Printf("panic serving %s %s: %v\n%s", r.Method, r.URL.Path, v, debug.Stack())
-				writeError(w, http.StatusInternalServerError, "internal error")
+				writeError(w, http.StatusInternalServerError, "Internal error")
 			}
 		}()
 		next.ServeHTTP(w, r)
@@ -155,11 +154,11 @@ func (s *Server) checkOrigin(next http.Handler) http.Handler {
 			return
 		}
 		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
-			writeError(w, http.StatusForbidden, "cross-site requests are refused: open the URL printed by quecto-harness")
+			writeError(w, http.StatusForbidden, "Cross-site requests are refused: open the URL printed by quecto-harness")
 			return
 		}
 		if origin := r.Header.Get("Origin"); origin != "" && !s.originAllowed(origin) {
-			writeError(w, http.StatusForbidden, "cross-site requests are refused: open the URL printed by quecto-harness")
+			writeError(w, http.StatusForbidden, "Cross-site requests are refused: open the URL printed by quecto-harness")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -189,7 +188,7 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			if !s.authorised(r) {
-				writeError(w, http.StatusUnauthorized, "not authorized: open the URL printed by quecto-harness")
+				writeError(w, http.StatusUnauthorized, "Not authorized: open the URL printed by quecto-harness")
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -245,26 +244,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": Sentence(msg)})
-}
-
-// Sentence capitalises a message on its way to a person. Error strings are
-// written lowercase so they read correctly when wrapped, and this is the one
-// place that turns the outermost one into a sentence.
-func Sentence(msg string) string {
-	if msg == "" {
-		return msg
-	}
-	r := []rune(msg)
-	r[0] = unicode.ToUpper(r[0])
-	return string(r)
+	writeJSON(w, status, map[string]string{"error": msg})
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	defer r.Body.Close()
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, requestBudget))
 	if err := dec.Decode(v); err != nil {
-		writeError(w, http.StatusBadRequest, "the request body is not valid JSON: "+err.Error())
+		writeError(w, http.StatusBadRequest, "The request body is not valid JSON: "+err.Error())
 		return false
 	}
 	return true

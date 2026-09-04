@@ -1,9 +1,3 @@
-/** Every message shown to a person starts with a capital. */
-export function sentence(text: string): string {
-  const t = text.trim();
-  return t === "" ? t : t[0]!.toUpperCase() + t.slice(1);
-}
-
 // Token counts read as thousands everywhere in the interface.
 export function k(n: number): string {
   if (n < 1000) return String(n);

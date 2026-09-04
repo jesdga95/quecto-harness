@@ -19,7 +19,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode"
 
 	"quecto-harness/internal/agent"
 	"quecto-harness/internal/config"
@@ -40,7 +39,7 @@ var (
 func main() {
 	log.SetFlags(log.LstdFlags)
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "quecto-harness: "+sentence(err.Error()))
+		fmt.Fprintln(os.Stderr, "Quecto-harness: "+err.Error())
 		os.Exit(1)
 	}
 }
@@ -84,17 +83,6 @@ func parseFlags(name string, argv []string) (flags, error) {
 	return f, nil
 }
 
-// Messages reaching a terminal are sentences, the same as the ones reaching
-// the browser.
-func sentence(msg string) string {
-	if msg == "" {
-		return msg
-	}
-	r := []rune(msg)
-	r[0] = unicode.ToUpper(r[0])
-	return string(r)
-}
-
 const usage = `quecto-harness: a local coding agent that talks to a llama.cpp server.
 
 Usage:
@@ -135,7 +123,7 @@ func serve(argv []string) error {
 		return err
 	}
 	for _, note := range cfg.Notes() {
-		fmt.Fprintln(os.Stderr, "config.json: "+note)
+		fmt.Fprintln(os.Stderr, "Config.json: "+note)
 	}
 
 	sessions, err := store.Open(p.Sessions)
@@ -287,7 +275,7 @@ func openSaved(argv []string) error {
 
 func serviceCmd(argv []string) error {
 	if len(argv) == 0 {
-		return errors.New("service needs a subcommand: install, uninstall or status")
+		return errors.New("Service needs a subcommand: install, uninstall or status")
 	}
 	sub, rest := argv[0], argv[1:]
 	f, err := parseFlags("quecto-harness service "+sub, rest)

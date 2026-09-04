@@ -148,7 +148,7 @@ func (s *Store) AllowMatch(project, command string) (string, bool) {
 func (s *Store) AddAllow(project, prefix string) error {
 	p := NormaliseCommand(prefix)
 	if p == "" {
-		return errors.New("the rule is empty: type the command prefix to allow")
+		return errors.New("The rule is empty: type the command prefix to allow")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -207,7 +207,7 @@ func normalisePrefixes(in []string) []string {
 // the path guard root and as the allowlist key.
 func ResolveProject(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
-		return "", errors.New("the path is empty: choose a folder")
+		return "", errors.New("The path is empty: choose a folder")
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {

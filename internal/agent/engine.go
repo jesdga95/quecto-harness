@@ -22,11 +22,11 @@ import (
 const maxIterations = 50
 
 var (
-	ErrBusy      = errors.New("the session is busy: stop the current turn first")
-	ErrNotFound  = errors.New("no session with that id")
-	ErrEmptyText = errors.New("the message is empty: type something to send")
-	ErrNoProject = errors.New("that folder is not in the project list: add it first")
-	ErrNoModel   = errors.New("no model is selected: pick one from the model list")
+	ErrBusy      = errors.New("The session is busy: stop the current turn first")
+	ErrNotFound  = errors.New("No session with that id")
+	ErrEmptyText = errors.New("The message is empty: type something to send")
+	ErrNoProject = errors.New("That folder is not in the project list: add it first")
+	ErrNoModel   = errors.New("No model is selected: pick one from the model list")
 )
 
 // Engine owns every live session and dispatches turns.
@@ -659,7 +659,7 @@ func (e *Engine) compact(ctx context.Context, s *Session) error {
 	}
 	summary := strings.TrimSpace(res.Content)
 	if summary == "" {
-		return errors.New("the model returned an empty summary: try again or start a new session")
+		return errors.New("The model returned an empty summary: try again or start a new session")
 	}
 
 	s.mu.Lock()

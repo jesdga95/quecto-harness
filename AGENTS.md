@@ -16,16 +16,18 @@ instead.
 
 ## Casing
 
-Anything a person reads starts with a capital letter. Buttons, labels, headings,
-placeholders, dialog copy, toasts, terminal output, and the message inside an
-error response. Sentence case, not title case: "Remove and delete", not "Remove
-And Delete". There is no lowercase house style here and never was.
+Anything a person reads starts with a capital letter. Buttons, labels,
+headings, placeholders, dialog copy, toasts, terminal output, and the message
+inside an error response. Sentence case, not title case: "Remove and delete",
+not "Remove And Delete". There is no lowercase house style here.
 
-Go error strings stay lowercase, because they are written to be wrapped and
-"open config.json: Check the permissions" reads wrong. They are capitalised at
-the one point they become something a person reads, which is `Sentence` in
-`internal/server`, and `sentence` in `web/src/lib/format.ts` on the way to a
-toast or a form. Add a message to those paths, not a second capitalising helper.
+Write the string that way. Do not add code that capitalises text on its way to
+the screen.
+
+Two exceptions, both because the reader is not a person. Tool results and
+denials in `internal/tools` and `internal/perms` are read by the model. And an
+error string that exists to be wrapped stays lowercase, since "open %s: Check
+the permissions" reads wrong in the middle of a sentence.
 
 ## Comments
 

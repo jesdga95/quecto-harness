@@ -73,7 +73,7 @@ func (s *Server) info(ctx context.Context) (llama.Info, error) {
 	s.mu.Unlock()
 
 	if s.llamaClient().BaseURL == "" {
-		err := errors.New("no model server is set: add its address in setup")
+		err := errors.New("No model server is set: add its address in setup")
 		s.mu.Lock()
 		s.infoVal, s.infoErr, s.infoAt = llama.Info{}, err, time.Now()
 		s.mu.Unlock()
@@ -167,7 +167,7 @@ func (s *Server) getModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getModelProps(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
-		writeError(w, http.StatusBadRequest, "no model id: pass ?id=<model>")
+		writeError(w, http.StatusBadRequest, "No model id: pass ?id=<model>")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -457,12 +457,12 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 	switch kind {
 	case perms.DecideOnce, perms.DecideAlways, perms.DecideDeny:
 	default:
-		writeError(w, http.StatusBadRequest, "decision \""+body.Decision+"\" is not once, always or deny")
+		writeError(w, http.StatusBadRequest, "Decision \""+body.Decision+"\" is not once, always or deny")
 		return
 	}
 	req, known := s.perms.Lookup(id)
 	if !known {
-		writeError(w, http.StatusNotFound, "that decision is no longer pending: the turn moved on")
+		writeError(w, http.StatusNotFound, "That decision is no longer pending: the turn moved on")
 		return
 	}
 	if kind == perms.DecideAlways {
@@ -559,7 +559,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) session(w http.ResponseWriter, r *http.Request) (*agent.Session, bool) {
 	sess, err := s.engine.Get(r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "no session with that id: it may have been deleted")
+		writeError(w, http.StatusNotFound, "No session with that id: it may have been deleted")
 		return nil, false
 	}
 	return sess, true
@@ -580,7 +580,7 @@ func errText(err error) string {
 	if err == nil {
 		return ""
 	}
-	return Sentence(err.Error())
+	return err.Error()
 }
 
 func orEmpty(v []string) []string {

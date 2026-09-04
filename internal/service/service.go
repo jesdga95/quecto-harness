@@ -45,7 +45,7 @@ const DefaultPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 func NewSpec(home, listen string) (Spec, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return Spec{}, errors.New("find the running binary: install quecto-harness somewhere permanent and run it from there")
+		return Spec{}, errors.New("Find the running binary: install quecto-harness somewhere permanent and run it from there")
 	}
 	if real, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = real
@@ -84,7 +84,7 @@ func pathWith(dir string) string {
 func UnitPath(home string) (string, error) {
 	base, err := os.UserHomeDir()
 	if err != nil {
-		return "", errors.New("find your home directory: the unit has nowhere to live")
+		return "", errors.New("Find your home directory: the unit has nowhere to live")
 	}
 	switch runtime.GOOS {
 	case "darwin":

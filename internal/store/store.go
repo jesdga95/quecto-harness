@@ -21,7 +21,7 @@ import (
 	"quecto-harness/internal/llama"
 )
 
-var ErrNotFound = errors.New("no session with that id")
+var ErrNotFound = errors.New("No session with that id")
 
 // Entry is one row of a session. Kind drives rendering; InContext drives what
 // is sent to the model.
@@ -178,7 +178,7 @@ func (s *Sessions) Load(id string) (*Session, error) {
 // serialised; two sessions do not block each other.
 func (s *Sessions) Save(sess *Session) error {
 	if sess.ID == "" {
-		return errors.New("save session: the session has no id")
+		return errors.New("Save session: the session has no id")
 	}
 	data, err := json.MarshalIndent(sess, "", "  ")
 	if err != nil {

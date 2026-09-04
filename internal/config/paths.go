@@ -26,13 +26,13 @@ func DiscoverPaths() (Paths, error) {
 	if h := os.Getenv("QUECTO_HARNESS_HOME"); h != "" {
 		abs, err := filepath.Abs(h)
 		if err != nil {
-			return Paths{}, errors.New("resolve $QUECTO_HARNESS_HOME " + h + ": give it an absolute path")
+			return Paths{}, errors.New("Resolve $QUECTO_HARNESS_HOME " + h + ": give it an absolute path")
 		}
 		return DiscoverPathsIn(abs), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return Paths{}, errors.New("find your home directory: set $QUECTO_HARNESS_HOME to the state directory you want")
+		return Paths{}, errors.New("Find your home directory: set $QUECTO_HARNESS_HOME to the state directory you want")
 	}
 	return DiscoverPathsIn(filepath.Join(home, ".quecto-harness")), nil
 }

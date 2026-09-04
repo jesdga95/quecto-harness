@@ -1,7 +1,6 @@
 <script lang="ts">
   import Logo from "./Logo.svelte";
   import { app, connectServer } from "../state/app.svelte";
-  import { sentence } from "../format";
 
   let { ondone }: { ondone: () => void } = $props();
 
@@ -53,7 +52,7 @@
           />
         </div>
         {#if problem}
-          <p class="mt-2.5 text-[13px] text-crit">{sentence(problem)}</p>
+          <p class="mt-2.5 text-[13px] text-crit">{problem}</p>
         {/if}
       </div>
 

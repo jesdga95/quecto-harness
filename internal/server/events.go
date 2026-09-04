@@ -16,12 +16,12 @@ const pingInterval = 20 * time.Second
 func (s *Server) getEvents(w http.ResponseWriter, r *http.Request) {
 	session := r.URL.Query().Get("session")
 	if session == "" {
-		writeError(w, http.StatusBadRequest, "no session: pass ?session=<id>")
+		writeError(w, http.StatusBadRequest, "No session: pass ?session=<id>")
 		return
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "this connection cannot stream events")
+		writeError(w, http.StatusInternalServerError, "This connection cannot stream events")
 		return
 	}
 
@@ -67,5 +67,5 @@ func (s *Server) getEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeFrame(w http.ResponseWriter, f frame) {
-	fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", f.Seq, f.Type, f.Data)
+	fmt.Fprintf(w, "Id: %d\nevent: %s\ndata: %s\n\n", f.Seq, f.Type, f.Data)
 }

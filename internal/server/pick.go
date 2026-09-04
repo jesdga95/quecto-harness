@@ -12,7 +12,7 @@ import (
 )
 
 // errNoDialog is returned when the host has no folder chooser installed.
-var errNoDialog = errors.New("no folder dialog on this system: install zenity, or type the path")
+var errNoDialog = errors.New("No folder dialog on this system: install zenity, or type the path")
 
 // folderPicker is a variable so the route can be exercised without opening a
 // dialog on the machine running the tests.
@@ -67,7 +67,7 @@ func runDialog(ctx context.Context, name string, args ...string) (string, error)
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			if noGUISession(string(exit.Stderr)) {
-				return "", errors.New("the folder dialog cannot open: this process has no desktop session, type the path instead")
+				return "", errors.New("The folder dialog cannot open: this process has no desktop session, type the path instead")
 			}
 			return "", nil
 		}
@@ -75,9 +75,9 @@ func runDialog(ctx context.Context, name string, args ...string) (string, error)
 			return "", errNoDialog
 		}
 		if ctx.Err() != nil {
-			return "", errors.New("the folder dialog did not answer in time: type the path instead")
+			return "", errors.New("The folder dialog did not answer in time: type the path instead")
 		}
-		return "", errors.New("open the folder dialog: " + err.Error())
+		return "", errors.New("Open the folder dialog: " + err.Error())
 	}
 	// osascript reports a folder with a trailing slash. The path is a key
 	// everywhere else, so it is cleaned before it leaves this package.
