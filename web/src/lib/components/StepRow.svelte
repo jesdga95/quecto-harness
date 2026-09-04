@@ -6,6 +6,7 @@
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
   import Terminal from "phosphor-svelte/lib/Terminal";
+  import TerminalCard from "./TerminalCard.svelte";
   import type { TranscriptItem } from "../api";
   import { describeCommand, firstSentence, k } from "../format";
 
@@ -65,6 +66,9 @@
     {#if item.kind === "permission" && item.outcome}
       <span class="text-[12px] text-muted">{item.outcome}</span>
     {/if}
+    {#if item.kind === "tool" && item.exitCode !== null && item.exitCode !== 0}
+      <span class="text-[12px] text-crit">Exit {item.exitCode}</span>
+    {/if}
     {#if item.kind === "tool" && item.running}
       <span class="spinner"></span>
     {/if}
@@ -81,27 +85,22 @@
         <p class="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{item.summary}</p>
       {:else if item.kind === "permission"}
         <pre class="mono-block">{item.command}</pre>
+      {:else if item.kind === "tool" && item.name === "run_shell"}
+        <TerminalCard
+          {command}
+          output={item.output}
+          exitCode={item.exitCode}
+          truncated={item.truncated}
+        />
       {:else if item.kind === "tool"}
-        {#if command}
-          <pre class="mono-block">{command}</pre>
-        {/if}
         {#if item.output}
           <pre class="mono-block">{item.output}</pre>
         {/if}
-        <div class="flex items-center gap-2">
-          {#if item.exitCode !== null}
-            <span
-              class="code"
-              class:code-ok={item.exitCode === 0}
-              class:code-bad={item.exitCode !== 0}>Exit {item.exitCode}</span
-            >
-          {/if}
-          {#if item.truncated}
-            <span class="text-[11.5px] text-muted">
-              Output truncated to 16 kb, head and tail kept
-            </span>
-          {/if}
-        </div>
+        {#if item.truncated}
+          <span class="text-[11.5px] text-muted">
+            Truncated to 16 kb, head and tail kept
+          </span>
+        {/if}
       {/if}
     </div>
   {/if}

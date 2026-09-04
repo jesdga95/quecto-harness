@@ -89,6 +89,14 @@
   --hl-type: #1d4ed8;
   --hl-fn: #0e7490;
   --hl-com: #6b7a90;
+  /* A console stays dark in both schemes: a repainted white terminal stops
+     looking like one. Three inks for what was asked, what came back, and how
+     it ended. */
+  --term-bg: #15211d;
+  --term-ink: #dfeae4;
+  --term-prompt: #63d6b4;
+  --term-muted: #8ca79c;
+  --term-bad: #f2a099;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -124,6 +132,7 @@
     --hl-type: #93c5fd;
     --hl-fn: #67e8f9;
     --hl-com: #8496ad;
+    --term-bg: #26382f;
   }
 }
 
@@ -889,6 +898,49 @@
     height: 15px;
     flex: none;
     color: var(--muted);
+  }
+
+  /* One command drawn as the console it ran in. */
+  .term {
+    border-radius: 12px;
+    background: var(--term-bg);
+    overflow: hidden;
+  }
+  .term-scroll {
+    padding: 12px 14px;
+    overflow-x: auto;
+  }
+  .term-line {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: pre;
+    color: var(--term-ink);
+  }
+  .term-prompt {
+    color: var(--term-prompt);
+  }
+  .term-bad {
+    color: var(--term-bad);
+  }
+  /* Held out of the scrolling area: it measures the run rather than belonging
+     to the output. */
+  .term-foot {
+    display: block;
+    width: 100%;
+    padding: 0 14px 11px;
+    border: 0;
+    background: none;
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--term-muted);
+  }
+  button.term-foot {
+    cursor: pointer;
+  }
+  button.term-foot:hover {
+    color: var(--term-ink);
   }
 
   .mono-block {
