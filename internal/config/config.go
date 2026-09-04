@@ -25,6 +25,7 @@ type File struct {
 	Shell             *string  `json:"shell,omitempty"`
 	CommandTimeoutS   *int     `json:"command_timeout_s,omitempty"`
 	OutputLimitBytes  *int     `json:"output_limit_bytes,omitempty"`
+	MaxToolCalls      *int     `json:"max_tool_calls,omitempty"`
 	// Projects has no omitempty: a saved file names every field, so a reader
 	// never has to know which default was in force.
 	Projects []string `json:"projects"`
@@ -48,7 +49,10 @@ type Config struct {
 	Shell             string
 	CommandTimeout    time.Duration
 	OutputLimitBytes  int
-	Projects          []string
+	// MaxToolCalls bounds the tool calls one turn may make. Zero is no bound,
+	// which leaves the Stop button as the only thing that ends a runaway turn.
+	MaxToolCalls int
+	Projects     []string
 }
 
 // Effort is defined in internal/llama, which is what turns it into request
@@ -102,6 +106,7 @@ func Defaults() Config {
 		Shell:             defaultShell(),
 		CommandTimeout:    120 * time.Second,
 		OutputLimitBytes:  16384,
+		MaxToolCalls:      50,
 		Projects:          nil,
 	}
 }
@@ -198,6 +203,13 @@ func (f File) Resolve(d Config) (Config, []string) {
 			note("output_limit_bytes " + strconv.Itoa(*f.OutputLimitBytes) + " is outside 1024 to 4194304, using 16384")
 		}
 	}
+	if f.MaxToolCalls != nil {
+		if *f.MaxToolCalls >= 0 && *f.MaxToolCalls <= 1000 {
+			c.MaxToolCalls = *f.MaxToolCalls
+		} else {
+			note("max_tool_calls " + strconv.Itoa(*f.MaxToolCalls) + " is outside 0 to 1000, using 50")
+		}
+	}
 	if f.Projects != nil {
 		seen := map[string]bool{}
 		var keep []string
@@ -225,6 +237,7 @@ func (c Config) File() File {
 	shell, mode, compact := c.Shell, string(c.Mode), c.CompactAt
 	preserve := c.PreserveReasoning
 	timeout, limit := int(c.CommandTimeout/time.Second), c.OutputLimitBytes
+	maxCalls := c.MaxToolCalls
 	surl, stok := c.ServerURL, c.ServerToken
 	projects := c.Projects
 	if projects == nil {
@@ -241,6 +254,7 @@ func (c Config) File() File {
 		Shell:             &shell,
 		CommandTimeoutS:   &timeout,
 		OutputLimitBytes:  &limit,
+		MaxToolCalls:      &maxCalls,
 		Projects:          projects,
 	}
 }

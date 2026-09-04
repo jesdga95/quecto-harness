@@ -141,6 +141,7 @@ export class MockApi implements HarnessApi {
     preserve_reasoning: true,
     permissions: "ask",
     compact_at: 0.8,
+    max_tool_calls: 50,
     shell: "/bin/sh",
     command_timeout_s: 120,
     output_limit_bytes: 16384,

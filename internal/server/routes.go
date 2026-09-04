@@ -34,6 +34,7 @@ type configJSON struct {
 	Shell             string  `json:"shell"`
 	CommandTimeoutS   int     `json:"command_timeout_s"`
 	OutputLimitBytes  int     `json:"output_limit_bytes"`
+	MaxToolCalls      int     `json:"max_tool_calls"`
 	Listen            string  `json:"listen"`
 	ServerURL         string  `json:"server_url"`
 	ServerTokenSet    bool    `json:"server_token_set"`
@@ -45,7 +46,7 @@ func toConfigJSON(c config.Config) configJSON {
 		Model: c.Model, Effort: string(c.Effort), PreserveReasoning: c.PreserveReasoning,
 		Permissions: string(c.Mode), CompactAt: c.CompactAt,
 		Shell: c.Shell, CommandTimeoutS: int(c.CommandTimeout / time.Second),
-		OutputLimitBytes: c.OutputLimitBytes, Listen: c.Listen,
+		OutputLimitBytes: c.OutputLimitBytes, MaxToolCalls: c.MaxToolCalls, Listen: c.Listen,
 		ServerURL: c.ServerURL, ServerTokenSet: c.ServerToken != "",
 	}
 }
@@ -494,6 +495,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		Shell             *string  `json:"shell"`
 		CommandTimeoutS   *int     `json:"command_timeout_s"`
 		OutputLimitBytes  *int     `json:"output_limit_bytes"`
+		MaxToolCalls      *int     `json:"max_tool_calls"`
 		Listen            *string  `json:"listen"`
 		Server            *struct {
 			URL   *string `json:"url"`
@@ -505,6 +507,10 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Effort != nil && !llama.ValidEffort(*body.Effort) {
 		writeError(w, http.StatusBadRequest, "effort \""+*body.Effort+"\" is not "+config.EffortNames)
+		return
+	}
+	if body.MaxToolCalls != nil && (*body.MaxToolCalls < 0 || *body.MaxToolCalls > 1000) {
+		writeError(w, http.StatusBadRequest, "Max tool calls is outside 0 to 1000: 0 is no limit")
 		return
 	}
 	if body.Permissions != nil && !config.ValidMode(*body.Permissions) {
@@ -536,6 +542,9 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.OutputLimitBytes != nil {
 			c.OutputLimitBytes = *body.OutputLimitBytes
+		}
+		if body.MaxToolCalls != nil {
+			c.MaxToolCalls = *body.MaxToolCalls
 		}
 		if body.Listen != nil {
 			c.Listen = *body.Listen

@@ -49,6 +49,7 @@ interface WireConfig {
   preserve_reasoning?: boolean;
   permissions?: string;
   compact_at?: number;
+  max_tool_calls?: number;
   shell?: string;
   command_timeout_s?: number;
   output_limit_bytes?: number;
@@ -218,7 +219,6 @@ const TURN_STATES: Record<string, TurnStatus> = {
   final: "streaming",
   stopped: "idle",
   failed: "idle",
-  limit: "idle",
 };
 
 function baseName(path: string): string {
@@ -431,6 +431,7 @@ function toConfig(c: WireConfig): Config {
     preserve_reasoning: c.preserve_reasoning ?? true,
     permissions: toPermMode(c.permissions),
     compact_at: c.compact_at ?? 0.8,
+    max_tool_calls: c.max_tool_calls ?? 50,
     shell: c.shell ?? "/bin/sh",
     command_timeout_s: c.command_timeout_s ?? 120,
     output_limit_bytes: c.output_limit_bytes ?? 16384,

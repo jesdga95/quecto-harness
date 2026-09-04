@@ -741,25 +741,35 @@ func TestDeleteRequiresIdle(t *testing.T) {
 	}
 }
 
-func TestTurnLimit(t *testing.T) {
-	fixtures := make([]string, maxIterations)
-	for i := range fixtures {
-		fixtures[i] = "stream_two_tools.txt"
-	}
-	h := newHarness(t, fixtures...)
-	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeAllowlist })
+// TestToolCallLimit spends the budget over two rounds of two calls and asserts
+// that the turn ends in an answer rather than in a refusal.
+func TestToolCallLimit(t *testing.T) {
+	h := newHarness(t, "stream_two_tools.txt", "stream_two_tools.txt", "stream_plain.txt")
+	h.cfg.Update(func(c *config.Config) {
+		c.Mode = config.ModeAllowlist
+		c.MaxToolCalls = 4
+	})
 	h.cfg.AddAllow(h.project, "echo")
 	s := h.session(t)
 	h.engine.Send(s.ID, "loop forever")
 	waitIdle(t, s)
 
-	doc, _, _, _ := s.Snapshot()
-	last := doc.Entries[len(doc.Entries)-1]
-	if last.Kind != "error" || !strings.Contains(last.Content, "turn limit reached") {
-		t.Errorf("last entry = %+v", last)
+	if h.replay.Count() != 3 {
+		t.Errorf("model calls = %d, want 3", h.replay.Count())
 	}
-	if h.replay.Count() != maxIterations {
-		t.Errorf("model calls = %d, want %d", h.replay.Count(), maxIterations)
+	doc, _, _, _ := s.Snapshot()
+	noted := false
+	for _, e := range doc.Entries {
+		if e.Kind == "status" && strings.Contains(e.Content, "Tool call limit reached after 4 calls") {
+			noted = true
+		}
+	}
+	if !noted {
+		t.Errorf("no entry says the limit was reached: %+v", doc.Entries)
+	}
+	last := doc.Entries[len(doc.Entries)-1]
+	if last.Kind != "assistant" || len(last.ToolCalls) != 0 {
+		t.Errorf("last entry = %+v, want an assistant answer with no calls", last)
 	}
 }
 

@@ -18,9 +18,6 @@ import (
 	"quecto-harness/internal/tools"
 )
 
-// maxIterations bounds a runaway turn. Reaching it ends the turn in limit.
-const maxIterations = 50
-
 var (
 	ErrBusy      = errors.New("The session is busy: stop the current turn first")
 	ErrNotFound  = errors.New("No session with that id")
@@ -406,7 +403,12 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		return
 	}
 
-	for iteration := 0; iteration < maxIterations; iteration++ {
+	// The tool call budget for this turn. Zero is no budget at all, so the
+	// only thing that ends a runaway turn is the Stop button.
+	budget := cfg.MaxToolCalls
+	calls := 0
+
+	for iteration := 0; ; iteration++ {
 		e.setState(s, StatePreflight)
 
 		s.mu.Lock()
@@ -421,15 +423,25 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			}
 		}
 
+		// A spent budget takes the tools out of the request rather than ending
+		// the turn where it stands, so the last thing the reader sees is an
+		// answer written with what the model already found.
+		spent := budget > 0 && calls >= budget
+		if spent {
+			e.noteLimit(s, calls)
+		}
+
 		e.setState(s, StateStreaming)
 		s.mu.Lock()
 		req := llama.ChatRequest{
 			Model:             s.Model,
 			Messages:          s.contextMessages(e.os),
-			Tools:             tools.Schemas(),
 			Effort:            cfg.Effort,
 			PreserveReasoning: cfg.PreserveReasoning,
 			Caps:              s.caps,
+		}
+		if !spent {
+			req.Tools = tools.Schemas()
 		}
 		s.mu.Unlock()
 
@@ -451,7 +463,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			s.mu.Unlock()
 		}
 
-		if len(res.ToolCalls) == 0 {
+		// Calls that arrive after the budget is spent were not offered and are
+		// not run, so they are dropped rather than left in the history unpaired.
+		if len(res.ToolCalls) == 0 || spent {
 			s.mu.Lock()
 			s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant",
 				Content: res.Content, Reasoning: res.Reasoning, InContext: true, Visible: true})
@@ -476,6 +490,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		e.probeProps(s, false)
 
 		for i, call := range res.ToolCalls {
+			calls++
 			e.setState(s, StateDeciding)
 			decision, record, stopped := e.decide(ctx, s, cfg, call)
 			if stopped {
@@ -496,15 +511,17 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		}
 	}
 
+}
+
+// noteLimit records that the budget ran out, so the transcript says why the
+// model stopped reaching for tools.
+func (e *Engine) noteLimit(s *Session, calls int) {
+	text := fmt.Sprintf("Tool call limit reached after %d calls: the model was asked to finish without tools", calls)
 	s.mu.Lock()
-	s.appendEntry(store.Entry{Kind: "error",
-		Content: "turn limit reached after 50 model calls", InContext: false, Visible: true})
+	entry := s.appendEntry(store.Entry{Kind: "status", Content: text, InContext: false, Visible: true})
 	s.mu.Unlock()
-	e.setState(s, StateLimit)
 	e.save(s)
-	e.publish(s.ID, ev("error", map[string]any{"kind": "limit",
-		"message": "turn limit reached after 50 model calls: send a narrower instruction"}))
-	e.finish(s, StateIdle, "limit", maxIterations)
+	e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
 }
 
 // endWithError separates a cancellation, which is a stop, from a failure.

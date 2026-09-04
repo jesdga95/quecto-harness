@@ -25,7 +25,6 @@ const (
 	StateFinal      State = "final"
 	StateStopped    State = "stopped"
 	StateFailed     State = "failed"
-	StateLimit      State = "limit"
 )
 
 // assumedNCtx is the last resort when nothing reported a context size.

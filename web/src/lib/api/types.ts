@@ -56,6 +56,8 @@ export interface Config {
   preserve_reasoning: boolean;
   permissions: PermMode;
   compact_at: number;
+  /** Tool calls one turn may make. Zero is no limit. */
+  max_tool_calls: number;
   shell: string;
   command_timeout_s: number;
   output_limit_bytes: number;

@@ -1,12 +1,19 @@
 <script lang="ts">
   import Plus from "phosphor-svelte/lib/Plus";
   import Popover from "./Popover.svelte";
-  import { preserveReasoning, setPreserveReasoning } from "../state/app.svelte";
+  import {
+    maxToolCalls,
+    nextToolCallLimit,
+    preserveReasoning,
+    setPreserveReasoning,
+  } from "../state/app.svelte";
 
   let { up = false }: { up?: boolean } = $props();
   let open = $state(false);
 
   const preserve = $derived(preserveReasoning());
+  const limit = $derived(maxToolCalls());
+  const limitLabel = $derived(limit === 0 ? "Unlimited" : String(limit));
 </script>
 
 <div class="relative">
@@ -37,6 +44,17 @@
           onchange={(e) => setPreserveReasoning(e.currentTarget.checked)}
         />
       </label>
+
+      <div class="popover-head">Tools</div>
+      <button class="popover-item" onclick={() => nextToolCallLimit()}>
+        <span class="min-w-0 flex-1">
+          <span class="block">Tool calls per turn</span>
+          <span class="block text-[12px] text-muted">
+            After the limit the model answers with no tools
+          </span>
+        </span>
+        <span class="pill pill-mute num">{limitLabel}</span>
+      </button>
     </Popover>
   {/if}
 </div>

@@ -310,6 +310,21 @@ export function preserveReasoning(): boolean {
   return app.config?.preserve_reasoning ?? true;
 }
 
+/** What the tool call limit rotates through. Zero is no limit. */
+export const TOOL_CALL_STEPS = [10, 25, 50, 100, 200, 0];
+
+export function maxToolCalls(): number {
+  return app.config?.max_tool_calls ?? 50;
+}
+
+/** Advances to the next step. A hand-edited number lands on the next one above it. */
+export function nextToolCallLimit(): void {
+  const current = maxToolCalls();
+  const next = TOOL_CALL_STEPS.find((v) => v > current) ?? 0;
+  if (app.config) app.config.max_tool_calls = next;
+  void guard(() => api.updateConfig({ max_tool_calls: next }));
+}
+
 export function permMode(): PermMode {
   return app.config?.permissions ?? "ask";
 }
