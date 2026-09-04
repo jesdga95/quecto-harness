@@ -149,6 +149,7 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		"projects":     projects,
 		"models":       toModelJSON(models),
 		"models_error": errText(modelsErr),
+		"models_kind":  string(llama.Kind(modelsErr)),
 		"os":           runtime.GOOS,
 		"version":      s.version,
 	})

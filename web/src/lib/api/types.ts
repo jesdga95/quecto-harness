@@ -61,6 +61,9 @@ export interface State {
   detectError?: string;
   /** Error taxonomy: "unreachable" means nothing answered at all. */
   detectKind?: string;
+  /** From GET /v1/models, which is what proves this is a llama.cpp server. */
+  modelsError?: string;
+  modelsKind?: string;
   config: Config;
   projects: Project[];
   models: Model[];

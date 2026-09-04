@@ -37,6 +37,7 @@ export const app = $state({
   // Empty once a model server has answered. Drives the setup screen.
   detectError: "",
   detectKind: "",
+  modelsError: "",
   probing: false,
 });
 
@@ -233,8 +234,8 @@ export async function removeAllowed(prefix: string): Promise<void> {
   if (list) app.allowlist = list;
 }
 
-/** Points the harness at a model server. A server that answers at all counts,
-    including one that refuses the key, since that is still a server. */
+/** Points the harness at a model server. Any answer counts except silence and
+    a refused key, since neither leaves a harness that can run a turn. */
 export async function connectServer(url: string, token: string): Promise<string> {
   app.probing = true;
   try {
@@ -246,10 +247,24 @@ export async function connectServer(url: string, token: string): Promise<string>
     app.mode = state.mode;
     app.detectError = state.detectError ?? "";
     app.detectKind = state.detectKind ?? "";
+    app.modelsError = state.modelsError ?? "";
     app.models = state.models;
     app.projects = state.projects;
-    if (app.detectKind === "unreachable" || app.detectKind === "canceled") {
+
+    // Nothing there, and a refused key, both leave a harness that cannot run a
+    // turn. Anything else the server says is its own business.
+    const kinds = [app.detectKind, state.modelsKind ?? ""];
+    if (kinds.includes("unreachable") || kinds.includes("canceled")) {
       return app.detectError || "nothing answered at that address";
+    }
+    if (kinds.includes("auth")) {
+      return token.trim() === ""
+        ? "that server needs an API key"
+        : "that server refused the API key";
+    }
+    // Any web server answers a GET. Only a model list proves this is llama.cpp.
+    if (app.modelsError !== "" || app.models.length === 0) {
+      return "that address answered, but it did not return a model list";
     }
     return "";
   } finally {
