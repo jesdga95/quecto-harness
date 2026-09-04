@@ -5,6 +5,7 @@
 
 import { Marked, type RendererObject } from "marked";
 import katex from "katex";
+import { highlight } from "./highlight";
 
 // Formulas are lifted out before the markdown runs and put back afterwards.
 // The slots use private use characters, which are stripped from the source
@@ -43,11 +44,12 @@ function safeUrl(raw: string | null | undefined): string | null {
   return url;
 }
 
-// The info string of a fence is shown as a label, so it is held to a short
-// word. Anything else is dropped and the block renders without a label.
-function languageLabel(lang: string | undefined): string {
+// The info string of a fence names the language and is shown as a label, so it
+// is held to a short word. Anything else is dropped and the block renders
+// without a label and without colours.
+function fenceLanguage(lang: string | undefined): string {
   const word = (lang ?? "").trim().split(/\s+/)[0] ?? "";
-  return /^[a-z0-9+#._-]{1,20}$/i.test(word) ? escapeHtml(word) : "";
+  return /^[a-z0-9+#._-]{1,20}$/i.test(word) ? word : "";
 }
 
 function runLength(source: string, at: number, char: string): number {
@@ -243,11 +245,13 @@ function renderMath(formula: Formula | undefined): string {
 
 const renderer: RendererObject = {
   // Fences carry their language as a label and scroll inside their own box,
-  // so a long line moves the code rather than the page.
+  // so a long line moves the code rather than the page. The highlighter
+  // escapes what it emits; an unknown language falls back to escaped text.
   code({ text, lang }) {
-    const label = languageLabel(lang);
-    const head = label ? `<div class="md-code-lang">${label}</div>` : "";
-    return `<div class="md-code">${head}<pre><code>${escapeHtml(text)}</code></pre></div>\n`;
+    const language = fenceLanguage(lang);
+    const head = language ? `<div class="md-code-lang">${escapeHtml(language)}</div>` : "";
+    const body = highlight(text, language.toLowerCase()) ?? escapeHtml(text);
+    return `<div class="md-code">${head}<pre><code>${body}</code></pre></div>\n`;
   },
 
   // Markup written by the model is shown as the text it is, never parsed.

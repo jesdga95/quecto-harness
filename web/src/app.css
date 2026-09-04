@@ -81,6 +81,14 @@
   --crit-bg: #fdeceb;
   --btn: #0f766e;
   --btn-text: #ffffff;
+  /* Six colours for code, kept dull enough that a block of them still reads
+     as one block of text. */
+  --hl-key: #7c3aed;
+  --hl-str: #0a7040;
+  --hl-num: #a35200;
+  --hl-type: #1d4ed8;
+  --hl-fn: #0e7490;
+  --hl-com: #6b7a90;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -110,6 +118,12 @@
     --crit-bg: #3a1f1c;
     --btn: #2dd4bf;
     --btn-text: #0f172a;
+    --hl-key: #c4b5fd;
+    --hl-str: #86e0ac;
+    --hl-num: #f0c674;
+    --hl-type: #93c5fd;
+    --hl-fn: #67e8f9;
+    --hl-com: #8496ad;
   }
 }
 
