@@ -1,0 +1,142 @@
+import type { HarnessEvent, PermissionDecision, TranscriptItem } from "./api/types";
+
+let seq = 0;
+export function nextId(prefix = "i"): string {
+  seq += 1;
+  return `${prefix}${seq}`;
+}
+
+/** Ids that arrive from the model or the server are not guaranteed unique, and
+    a repeated key aborts the whole keyed list, so collisions are renamed. */
+function freshId(items: TranscriptItem[], id: string): string {
+  if (!items.some((i) => i.id === id)) return id;
+  let n = 2;
+  while (items.some((i) => i.id === `${id}#${n}`)) n++;
+  return `${id}#${n}`;
+}
+
+/** Rough count for the thinking block, four characters to a token. */
+function tokens(text: string): number {
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+// Folds one stream event into the transcript. The store and the mock server
+// both use it, so a replayed session looks like a live one.
+export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
+  const last = items[items.length - 1];
+
+  switch (event.type) {
+    case "delta": {
+      if (last && last.kind === "assistant" && last.streaming) {
+        last.text += event.text;
+      } else {
+        items.push({
+          kind: "assistant",
+          id: nextId("a"),
+          text: event.text,
+          streaming: true,
+        });
+      }
+      break;
+    }
+    case "reasoning": {
+      if (last && last.kind === "reasoning") {
+        last.text += event.text;
+        last.tokens = tokens(last.text);
+      } else {
+        items.push({
+          kind: "reasoning",
+          id: nextId("r"),
+          text: event.text,
+          tokens: tokens(event.text),
+          open: false,
+        });
+      }
+      break;
+    }
+    case "tool_call": {
+      items.push({
+        kind: "tool",
+        id: freshId(items, event.id || nextId("tool")),
+        name: event.name,
+        args: event.args,
+        output: "",
+        exitCode: null,
+        truncated: false,
+        running: true,
+      });
+      break;
+    }
+    case "tool_args": {
+      // A renamed collision keeps the original id as its prefix, and the card
+      // being filled is always the most recent one, so the search runs backwards.
+      const item = [...items]
+        .reverse()
+        .find(
+          (i) =>
+            i.kind === "tool" && (i.id === event.id || i.id.startsWith(`${event.id}#`)),
+        );
+      if (item && item.kind === "tool") {
+        item.args = event.args;
+        item.name = event.name;
+      }
+      break;
+    }
+    case "tool_output": {
+      // A renamed collision keeps the original id as its prefix, and the card
+      // being filled is always the most recent one, so the search runs backwards.
+      const item = [...items]
+        .reverse()
+        .find(
+          (i) =>
+            i.kind === "tool" && (i.id === event.id || i.id.startsWith(`${event.id}#`)),
+        );
+      if (item && item.kind === "tool") {
+        item.output = event.output;
+        item.exitCode = event.exit_code;
+        item.truncated = event.truncated;
+        item.running = false;
+      }
+      break;
+    }
+    case "permission": {
+      items.push({
+        kind: "permission",
+        id: freshId(items, event.id || nextId("perm")),
+        tool: event.tool,
+        command: event.command,
+        prefix: event.prefix,
+        outcome: null,
+      });
+      break;
+    }
+    case "compacted": {
+      items.push({
+        kind: "compaction",
+        id: nextId("c"),
+        before: event.before,
+        after: event.after,
+      });
+      break;
+    }
+    case "error": {
+      items.push({ kind: "error", id: nextId("e"), message: event.message });
+      break;
+    }
+    case "done": {
+      if (last && last.kind === "assistant") last.streaming = false;
+      break;
+    }
+  }
+}
+
+/** What a card says once it has been answered. */
+export function outcomeLabel(decision: PermissionDecision): string {
+  if (decision.decision === "once") return "Allowed once";
+  if (decision.decision === "always") return `Always allowed: ${decision.prefix}`;
+  return decision.reason ? `Denied: ${decision.reason}` : "Denied";
+}
+
+export function pushUser(items: TranscriptItem[], text: string): void {
+  items.push({ kind: "user", id: nextId("u"), text });
+}

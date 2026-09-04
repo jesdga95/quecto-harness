@@ -1,0 +1,226 @@
+/* Styles for rendered model output. KaTeX ships its own stylesheet and its
+   fonts, both bundled here rather than fetched, so maths renders on a machine
+   with no route to the internet. Nothing in this file is in a cascade layer,
+   which puts it above the layered rules that Tailwind emits. */
+@import "katex/dist/katex.min.css";
+
+.prose {
+  font-size: 15px;
+  line-height: 1.62;
+  color: var(--text);
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+.prose > *:first-child {
+  margin-top: 0;
+}
+.prose > *:last-child {
+  margin-bottom: 0;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  font-weight: 500;
+  line-height: 1.35;
+  margin: 18px 0 6px;
+}
+.prose h1 {
+  font-size: 19px;
+}
+.prose h2 {
+  font-size: 17px;
+}
+.prose h3 {
+  font-size: 15px;
+}
+.prose h4,
+.prose h5,
+.prose h6 {
+  font-size: 15px;
+  color: var(--text-2);
+}
+
+/* Line breaks are markup now, so the text wraps normally. */
+.prose p {
+  margin: 0 0 10px;
+  white-space: normal;
+}
+
+/* Poppins is bundled at 400 and 500 only, so 500 is what bold has to be. */
+.prose strong,
+.prose b {
+  font-weight: 500;
+}
+.prose em,
+.prose i {
+  font-style: italic;
+}
+.prose del,
+.prose s {
+  text-decoration: line-through;
+  color: var(--text-2);
+}
+
+.prose a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.prose ul,
+.prose ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+.prose ul {
+  list-style: disc;
+}
+.prose ol {
+  list-style: decimal;
+}
+.prose ul ul {
+  list-style: circle;
+}
+.prose ul ul ul {
+  list-style: square;
+}
+.prose li {
+  margin: 0 0 4px;
+  list-style: inherit;
+}
+.prose li > ul,
+.prose li > ol {
+  margin: 4px 0 0;
+}
+.prose li > p {
+  margin: 0 0 4px;
+}
+/* A task list carries its own marker in the checkbox. */
+.prose li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -18px;
+}
+.prose input[type="checkbox"] {
+  margin-right: 6px;
+  accent-color: var(--accent);
+}
+
+.prose blockquote {
+  margin: 0 0 10px;
+  padding: 1px 0 1px 14px;
+  border-left: 2px solid var(--border);
+  color: var(--text-2);
+}
+
+.prose hr {
+  height: 0;
+  border: 0;
+  border-top: 1px solid var(--hair);
+  margin: 18px 0;
+}
+
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--surface-2);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+/* The block scrolls inside its own box, so a long line moves the code and
+   leaves the width of the page alone. */
+.md-code {
+  margin: 0 0 12px;
+  max-width: 100%;
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.md-code-lang {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 7px 13px 0;
+}
+.prose .md-code pre {
+  margin: 0;
+  padding: 11px 13px;
+  overflow-x: auto;
+}
+.prose .md-code code {
+  display: block;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.md-table {
+  margin: 0 0 12px;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.prose table {
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--hair);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.prose th {
+  font-weight: 500;
+  background: var(--surface-2);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* A formula wider than the column scrolls rather than stretching the page. */
+.md-math {
+  margin: 0 0 12px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+.prose .katex {
+  font-size: 1.06em;
+}
+.prose .katex-display {
+  margin: 0;
+}
+.prose .katex-error {
+  color: var(--crit);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* Marks where the next token will land. It sits on text blocks only, since on
+   a code block or a table it would float away from the writing. */
+.prose.is-streaming > p:last-child::after,
+.prose.is-streaming > h1:last-child::after,
+.prose.is-streaming > h2:last-child::after,
+.prose.is-streaming > h3:last-child::after,
+.prose.is-streaming > h4:last-child::after,
+.prose.is-streaming > ul:last-child li:last-child::after,
+.prose.is-streaming > ol:last-child li:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 2px;
+  height: 0.95em;
+  margin-left: 3px;
+  vertical-align: -0.13em;
+  background: var(--accent);
+}

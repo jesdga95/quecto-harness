@@ -1,0 +1,900 @@
+@import "tailwindcss";
+@source "./";
+
+/* Poppins is bundled rather than fetched, so the page renders the same on a
+   machine with no route to the internet. Two weights, and only two: 400 for
+   body text, 500 for the wordmark and every heading. */
+@font-face {
+  font-family: "Poppins";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("@fontsource/poppins/files/poppins-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Poppins";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("@fontsource/poppins/files/poppins-latin-500-normal.woff2") format("woff2");
+}
+
+/* Utilities resolve to the custom properties below, so light and dark are one
+   set of rules with two palettes rather than two sets of utilities. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-2);
+  --color-ink: var(--text);
+  --color-ink-2: var(--text-2);
+  --color-muted: var(--muted);
+  --color-brand: var(--brand);
+  --color-page: var(--page);
+  --color-hair: var(--hair);
+  --color-panel: var(--panel);
+  --color-accent: var(--accent);
+  --color-accent-bg: var(--accent-bg);
+  --color-ok: var(--ok);
+  --color-ok-bg: var(--ok-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-crit: var(--crit);
+  --color-crit-bg: var(--crit-bg);
+
+  --font-sans: "Poppins", ui-sans-serif, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Brand teal, unchanged by the colour scheme, for the places the mark's own
+   colour belongs. Text and controls use --accent instead, the same teal moved
+   until it is legible on the surface behind it. */
+:root {
+  --brand: #0d9488;
+}
+
+:root {
+  --bg: #f8fafc;
+  --page: #ffffff;
+  --panel: #f7f9fb;
+  --hair: rgb(15 23 42 / 0.07);
+  /* The composer's own edge: the brand teal thinned until it reads as a tint
+     on the border rather than as a colour. */
+  --edge: rgb(13 148 136 / 0.3);
+  --edge-focus: rgb(13 148 136 / 0.55);
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --border: #e2e8f0;
+  --border-2: #cbd5e1;
+  --text: #0f172a;
+  --text-2: #475569;
+  --muted: #64748b;
+  --accent: #0f766e;
+  --accent-bg: #dff3f0;
+  --ok: #1a7f45;
+  --ok-bg: #e7f4ec;
+  --warn: #b45309;
+  --warn-bg: #fef3c7;
+  --crit: #b42318;
+  --crit-bg: #fdeceb;
+  --btn: #0f766e;
+  --btn-text: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f172a;
+    --page: #0f172a;
+    --panel: #141d2e;
+    --hair: rgb(226 232 240 / 0.09);
+    --edge: rgb(45 212 191 / 0.28);
+    --edge-focus: rgb(45 212 191 / 0.5);
+    --surface: #1a2436;
+    --surface-2: #263145;
+    --border: #2e3b50;
+    --border-2: #475569;
+    --text: #f1f5f9;
+    --text-2: #cbd5e1;
+    --muted: #94a3b8;
+    --accent: #2dd4bf;
+    --accent-bg: #10403c;
+    --ok: #48b878;
+    --ok-bg: #123122;
+    /* Amber at full strength, since on ink it is exactly the colour the brand
+       reserves for what the operator has to look at. */
+    --warn: #fcd34d;
+    --warn-bg: #3a2a0b;
+    --crit: #e97b70;
+    --crit-bg: #3a1f1c;
+    --btn: #2dd4bf;
+    --btn-text: #0f172a;
+  }
+}
+
+@layer base {
+  html {
+    /* Follows the operating system. Native controls and scrollbars need this
+       told to them separately from the custom properties above. */
+    color-scheme: light dark;
+    background: var(--page);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    margin: 0;
+    height: 100vh;
+    overflow: hidden;
+  }
+  h1,
+  h2,
+  h3 {
+    font-weight: 500;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+  [hidden] {
+    display: none !important;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+}
+
+/* Shared vocabulary. Hierarchy comes from whitespace and muted text, so almost
+   nothing is boxed and only popovers and the composer carry a shadow. */
+@layer components {
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wordmark {
+    font-weight: 500;
+    font-size: 1.05em;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    /* The tracking after the last letter is space nothing follows, so it comes
+       back off the end and the lockup stays optically centred. */
+    margin-right: -0.18em;
+    white-space: nowrap;
+  }
+
+  /* The product name beside the mark, in the brand's own colour rather than
+     a black badge. Tracked to sit with the wordmark. */
+  .chip-harness {
+    padding: 2px 7px 2px 8px;
+    border-radius: 6px;
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    line-height: 1.35;
+  }
+
+  .card {
+    border: 1px solid var(--hair);
+    border-radius: 16px;
+    background: var(--surface);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    border: 1px solid var(--hair);
+    background: var(--surface);
+    color: var(--text-2);
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 90ms ease, border-color 90ms ease;
+  }
+  .chip:hover {
+    background: var(--surface-2);
+    border-color: var(--border-2);
+  }
+  .chip svg {
+    width: 14px;
+    height: 14px;
+  }
+  .chip-plain {
+    border-color: transparent;
+    background: none;
+  }
+
+  /* A picker that reads as one word you can act on: tinted, carrying a caret. */
+  .linkpick {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 7px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-size: 13.5px;
+    font-weight: 500;
+    line-height: 1.45;
+    white-space: nowrap;
+    cursor: pointer;
+    vertical-align: baseline;
+  }
+  .linkpick:hover {
+    border-color: var(--accent);
+  }
+  .linkpick svg {
+    width: 13px;
+    height: 13px;
+  }
+  .linkpick.is-big {
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 12px;
+    font-size: 17px;
+  }
+  .linkpick.is-big svg {
+    width: 18px;
+    height: 18px;
+  }
+  /* Filled at rest, so a chip that is mostly a readout still reads as one. */
+  .chip-solid {
+    border-color: transparent;
+    background: var(--surface-2);
+  }
+  .chip-solid:hover {
+    background: rgb(100 116 139 / 0.18);
+    border-color: transparent;
+  }
+  /* Setup is the one dark surface in the app, so its colours are literals
+     rather than tokens that flip with the scheme. */
+  .onboard {
+    display: grid;
+    grid-template-columns: minmax(420px, 34%) 1fr;
+    min-height: 100vh;
+  }
+  .onboard-panel {
+    display: flex;
+    flex-direction: column;
+    padding: clamp(64px, 9vh, 120px) clamp(44px, 4vw, 72px) clamp(48px, 7vh, 88px);
+    background: #0f2e2a;
+    color: #9fbfb9;
+  }
+  /* The braces are drawn from x=28 with a 4.3 half stroke, so the box starts
+     at 23.7 and the mark needs no pull to sit flush with the text. */
+  .onboard-mark {
+    margin: 0 0 30px -1px;
+    line-height: 0;
+  }
+  .onboard-title {
+    margin: 0;
+    font-size: clamp(30px, 2.4vw, 38px);
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    color: #fff;
+  }
+  .onboard-copy {
+    margin: 22px 0 0;
+    max-width: 30ch;
+    font-size: clamp(15px, 1.05vw, 17px);
+    line-height: 1.6;
+  }
+  .onboard-foot {
+    margin: auto 0 0;
+    padding-top: 56px;
+    font-size: 13px;
+    color: #7fa6a0;
+  }
+  .onboard-form {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 60px clamp(32px, 5vw, 80px);
+  }
+
+  /* A taller field, for the one screen that is only fields. */
+  .field-lg {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 52px;
+    padding: 0 15px;
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    background: var(--page);
+    color: var(--text);
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  .field-lg:focus-within {
+    border-color: var(--accent);
+  }
+  .field-lg.is-live {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgb(13 148 136 / 0.12);
+  }
+  .field-lg input::placeholder {
+    color: var(--muted);
+  }
+
+  .btn-lg {
+    padding: 14px 34px;
+    border: 0;
+    border-radius: 11px;
+    background: var(--btn);
+    color: var(--btn-text);
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 90ms ease;
+  }
+  .btn-lg:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+  .btn-lg:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  @media (max-width: 900px) {
+    .onboard {
+      grid-template-columns: 1fr;
+    }
+    .onboard-panel {
+      display: none;
+    }
+  }
+
+  .toast {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 11px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--hair);
+    background: var(--surface);
+    box-shadow: 0 10px 30px rgb(15 23 42 / 0.14);
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text);
+  }
+  .toast > svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    margin-top: 1px;
+    color: var(--crit);
+  }
+  .toast.is-warn > svg {
+    color: var(--warn);
+  }
+  .toast-x {
+    flex: none;
+    border: 0;
+    background: none;
+    padding: 0;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .toast-x svg {
+    width: 14px;
+    height: 14px;
+  }
+  .toast-x:hover {
+    color: var(--text);
+  }
+
+  .chip-brand {
+    background: var(--btn);
+    border-color: transparent;
+    color: var(--btn-text);
+  }
+  .chip-brand:hover {
+    background: var(--btn);
+    opacity: 0.88;
+  }
+  .chip:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .round {
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    flex: none;
+    border-radius: 999px;
+    border: 1px solid var(--hair);
+    background: var(--surface);
+    color: var(--text-2);
+    cursor: pointer;
+    transition: background 90ms ease, opacity 90ms ease;
+  }
+  .round:hover {
+    background: var(--surface-2);
+  }
+  .round svg {
+    width: 16px;
+    height: 16px;
+  }
+  .round-brand {
+    background: var(--btn);
+    border-color: transparent;
+    color: var(--btn-text);
+  }
+  .round-brand:hover {
+    background: var(--btn);
+    opacity: 0.88;
+  }
+  .round:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .icon-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    transition: background 90ms ease, color 90ms ease;
+  }
+  .icon-btn:hover {
+    background: var(--border);
+    color: var(--text);
+  }
+  .icon-btn svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 13px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid transparent;
+    white-space: nowrap;
+    transition: opacity 90ms ease, background 90ms ease;
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .btn svg {
+    width: 15px;
+    height: 15px;
+  }
+  .btn-primary {
+    background: var(--btn);
+    color: var(--btn-text);
+  }
+  .btn-primary:not(:disabled):hover {
+    opacity: 0.86;
+  }
+  .btn-ghost {
+    background: none;
+    color: var(--text-2);
+    border-color: var(--hair);
+  }
+  .btn-ghost:not(:disabled):hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .btn-danger {
+    background: none;
+    color: var(--crit);
+    border-color: var(--crit);
+  }
+  .btn-sm {
+    padding: 4px 11px;
+    font-size: 12px;
+  }
+
+  /* One rounded panel that floats over the page, so the glow is tinted with
+     the brand rather than plain black. */
+  /* The composer carries every per-turn control, so it is the one surface with
+     a colour of its own. A tinted border does that; a shadow would shout. */
+  .composer {
+    border-radius: 22px;
+    border: 1px solid var(--edge);
+    background: var(--surface);
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+    transition: border-color 130ms ease;
+  }
+  .composer:focus-within {
+    border-color: var(--edge-focus);
+  }
+
+  .popover {
+    border-radius: 14px;
+    border: 1px solid var(--hair);
+    background: var(--surface);
+    box-shadow: 0 14px 36px rgb(15 23 42 / 0.18);
+    padding: 6px;
+  }
+  .popover-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 9px;
+    border-radius: 10px;
+    text-align: left;
+    background: none;
+    border: 0;
+    cursor: pointer;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .popover-item:hover {
+    background: var(--surface-2);
+  }
+  .popover-head {
+    padding: 7px 9px 3px;
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* One line per agent step until it is opened, so a long turn stays readable. */
+  .step {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 5px 8px;
+    border-radius: 10px;
+    background: none;
+    border: 0;
+    text-align: left;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .step:hover {
+    background: var(--surface-2);
+  }
+  .step:disabled {
+    cursor: default;
+  }
+  .step:disabled:hover {
+    background: none;
+  }
+  .step svg {
+    width: 15px;
+    height: 15px;
+    flex: none;
+    color: var(--muted);
+  }
+  .step .name {
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .step .desc {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+  }
+  .step .sep {
+    color: var(--border-2);
+  }
+
+  .tab {
+    padding: 14px 2px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+  }
+  .tab:hover {
+    color: var(--text-2);
+  }
+  .tab.is-active {
+    color: var(--text);
+    border-bottom-color: var(--brand);
+  }
+
+  .input,
+  .select,
+  .textarea {
+    padding: 8px 11px;
+    border: 1px solid var(--hair);
+    border-radius: 10px;
+    background: var(--page);
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    width: 100%;
+  }
+  .textarea {
+    resize: none;
+    line-height: normal;
+    border: 0;
+    background: none;
+    /* Not zero: at zero padding Chrome renders the caret against the edge of
+       the field and no longer places it on the line the text sits on. */
+    padding: 4px 1px;
+    font-size: 14px;
+    overflow-y: auto;
+  }
+  .input:focus,
+  .select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+    border-color: transparent;
+  }
+  .textarea:focus {
+    outline: none;
+  }
+  .input:disabled,
+  .textarea:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .pill-ok {
+    background: var(--ok-bg);
+    color: var(--ok);
+  }
+  .pill-warn {
+    background: var(--warn-bg);
+    color: var(--warn);
+  }
+  .pill-crit {
+    background: var(--crit-bg);
+    color: var(--crit);
+  }
+  .pill-mute {
+    background: var(--surface-2);
+    color: var(--muted);
+  }
+
+  .code {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-weight: 500;
+  }
+  .code-ok {
+    background: var(--ok-bg);
+    color: var(--ok);
+  }
+  .code-bad {
+    background: var(--crit-bg);
+    color: var(--crit);
+  }
+
+  .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    flex: none;
+    background: var(--border-2);
+  }
+  .dot-loaded {
+    background: var(--ok);
+  }
+  .dot-loading {
+    background: var(--warn);
+  }
+
+  /* Sits directly under the composer, so the fill is the only thing that moves. */
+  /* The ring in the header takes its colour from the text colour, so the tone
+     classes only have to move one property. */
+  .chip.is-warn {
+    color: var(--warn);
+  }
+  .chip.is-crit {
+    color: var(--crit);
+  }
+
+  .ctxtrack {
+    height: 3px;
+    border-radius: 999px;
+    background: var(--hair);
+    overflow: hidden;
+  }
+  .ctxtrack span {
+    display: block;
+    height: 100%;
+    background: var(--ok);
+    transition: width 220ms ease;
+  }
+  .ctxtrack.is-warn span {
+    background: var(--warn);
+  }
+  .ctxtrack.is-crit span {
+    background: var(--crit);
+  }
+
+  /* The row and its menu share one line. The menu is always there, so a row
+     never changes shape when the pointer crosses it. */
+  .row-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .row-act {
+    position: absolute;
+    right: 4px;
+    display: flex;
+    align-items: center;
+  }
+  .row-menu {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 7px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    opacity: 0.55;
+  }
+  .row-menu:hover,
+  .row-menu.is-open {
+    background: rgb(100 116 139 / 0.16);
+    color: var(--text);
+    opacity: 1;
+  }
+  .row-menu svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  .side-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 30px 6px 9px;
+    /* Rows carry their own gap, so a hover background never runs into the one
+       above or below it. */
+    margin-bottom: 3px;
+    border-radius: 10px;
+    background: none;
+    border: 0;
+    text-align: left;
+    font-size: 13px;
+    color: var(--text-2);
+    cursor: pointer;
+  }
+  .side-row:hover {
+    background: rgb(100 116 139 / 0.12);
+  }
+  .side-row.is-active {
+    background: rgb(100 116 139 / 0.16);
+    color: var(--text);
+    font-weight: 500;
+  }
+  .side-row svg {
+    width: 15px;
+    height: 15px;
+    flex: none;
+    color: var(--muted);
+  }
+
+  .mono-block {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    padding: 11px 13px;
+    border-radius: 12px;
+    background: var(--surface-2);
+    color: var(--text-2);
+    max-height: 320px;
+    overflow: auto;
+  }
+
+  .spinner {
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    border: 2px solid var(--border-2);
+    border-top-color: var(--accent);
+    animation: spin 700ms linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* The final reply is the only prose on the page, so it sets its own rhythm. */
+  .prose {
+    font-size: 15px;
+    line-height: 1.62;
+    color: var(--text);
+  }
+  .prose h2 {
+    font-size: 17px;
+    font-weight: 500;
+    margin: 18px 0 6px;
+  }
+  .prose h3 {
+    font-size: 15px;
+    font-weight: 500;
+    margin: 14px 0 4px;
+  }
+  .prose p {
+    margin: 0 0 10px;
+    white-space: pre-wrap;
+  }
+  .prose li {
+    margin: 0 0 4px 18px;
+    list-style: disc;
+  }
+  .prose code {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    background: var(--surface-2);
+    border-radius: 5px;
+    padding: 1px 5px;
+  }
+  .prose pre {
+    margin: 0 0 12px;
+  }
+  .prose a,
+  .path {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+}

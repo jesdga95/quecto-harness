@@ -1,0 +1,63 @@
+<script lang="ts">
+  import { untrack } from "svelte";
+  import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
+  import type { TranscriptItem } from "../api";
+  import { decide } from "../state/app.svelte";
+
+  let { item }: { item: Extract<TranscriptItem, { kind: "permission" }> } = $props();
+
+  let prefix = $state(untrack(() => item.prefix));
+  let reason = $state("");
+  let asking = $state(false);
+</script>
+
+<div class="card overflow-hidden">
+  <div class="flex items-center gap-2 px-4 pt-3 text-[13px]">
+    <ShieldCheck size={15} class="text-accent" />
+    <span class="font-medium">{item.tool} wants to run a command</span>
+  </div>
+
+  <pre class="mono-block mx-4 mt-2.5">{item.command}</pre>
+
+  <div class="flex flex-wrap items-center gap-2 px-4 py-3">
+    <button class="chip chip-brand" onclick={() => decide(item, { decision: "once" })}>
+      Allow once
+    </button>
+    <button
+      class="chip"
+      onclick={() => decide(item, { decision: "always", prefix: prefix.trim() })}
+    >
+      Allow always
+    </button>
+    <input class="input !w-[180px] !rounded-full" bind:value={prefix} aria-label="Allowed prefix" />
+    <button
+      class="chip chip-plain ml-auto text-muted"
+      onclick={() =>
+        asking ? decide(item, { decision: "deny", reason: reason.trim() }) : (asking = true)}
+    >
+      Deny
+    </button>
+  </div>
+
+  {#if asking}
+    <div class="flex items-center gap-2 px-4 pb-3">
+      <input
+        class="input !rounded-full"
+        placeholder="Reason, optional"
+        bind:value={reason}
+        onkeydown={(e) =>
+          e.key === "Enter" && decide(item, { decision: "deny", reason: reason.trim() })}
+      />
+      <button
+        class="chip"
+        onclick={() => decide(item, { decision: "deny", reason: reason.trim() })}
+      >
+        Send
+      </button>
+    </div>
+  {/if}
+
+  <p class="px-4 pb-3 text-[11.5px] text-muted">
+    Always adds the prefix to the allowlist for this project
+  </p>
+</div>
