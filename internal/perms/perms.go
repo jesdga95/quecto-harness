@@ -1,0 +1,276 @@
+// Package perms decides whether a tool call may run. It never executes one.
+// Splitting the decision from the execution is what lets the turn loop block
+// on a channel while an HTTP handler answers from another goroutine.
+package perms
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base32"
+	"errors"
+	"strings"
+	"sync"
+	"time"
+
+	"quecto-harness/internal/config"
+)
+
+type Action string
+
+const (
+	ActionAllow  Action = "allow"
+	ActionPrompt Action = "prompt"
+)
+
+type DecisionKind string
+
+const (
+	DecideOnce   DecisionKind = "once"
+	DecideAlways DecisionKind = "always"
+	DecideDeny   DecisionKind = "deny"
+)
+
+var (
+	ErrNoSuchRequest   = errors.New("that decision is no longer pending: the turn moved on")
+	ErrSessionCanceled = errors.New("the session was stopped")
+)
+
+// Request is one pending question about one tool call.
+type Request struct {
+	ID        string    `json:"id"`
+	SessionID string    `json:"session"`
+	Project   string    `json:"project"`
+	Tool      string    `json:"tool"`
+	Command   string    `json:"command,omitempty"`
+	Path      string    `json:"path,omitempty"`
+	Prefix    string    `json:"prefix"`
+	Args      string    `json:"args"`
+	Created   time.Time `json:"created"`
+}
+
+// Decision is the answer. Prefix is used when Kind is always, Reason when it
+// is deny.
+type Decision struct {
+	Kind   DecisionKind `json:"decision"`
+	Prefix string       `json:"prefix,omitempty"`
+	Reason string       `json:"reason,omitempty"`
+	// Note carries a problem that did not change the outcome, such as an
+	// allowlist that could not be saved.
+	Note string `json:"-"`
+}
+
+// Broker turns a policy question into a pending request and blocks until the
+// UI answers or the session is cancelled.
+type Broker struct {
+	cfg  *config.Store
+	emit func(sessionID string, r Request)
+
+	mu      sync.Mutex
+	wait    map[string]chan Decision
+	pending map[string]Request
+	byS     map[string][]string
+}
+
+func New(cfg *config.Store, emit func(string, Request)) *Broker {
+	return &Broker{
+		cfg:     cfg,
+		emit:    emit,
+		wait:    map[string]chan Decision{},
+		pending: map[string]Request{},
+		byS:     map[string][]string{},
+	}
+}
+
+// Evaluate applies the static policy. It never blocks and never asks.
+func (b *Broker) Evaluate(project, tool, command string, auto bool) Action {
+	switch tool {
+	case "read_file":
+		return ActionAllow
+	case "write_file":
+		if auto {
+			return ActionAllow
+		}
+		return ActionPrompt
+	case "run_shell":
+		if !auto {
+			return ActionPrompt
+		}
+		if hasOperator(command) {
+			return ActionPrompt
+		}
+		if _, ok := b.cfg.AllowMatch(project, command); ok {
+			return ActionAllow
+		}
+		return ActionPrompt
+	}
+	return ActionPrompt
+}
+
+// Ask registers a pending request, publishes it and blocks. The channel is
+// buffered so Resolve never waits for the asking goroutine to be scheduled.
+func (b *Broker) Ask(ctx context.Context, r Request) (Decision, error) {
+	if r.ID == "" {
+		r.ID = NewRequestID()
+	}
+	if r.Created.IsZero() {
+		r.Created = time.Now()
+	}
+	ch := make(chan Decision, 1)
+	b.mu.Lock()
+	b.wait[r.ID] = ch
+	b.pending[r.ID] = r
+	b.byS[r.SessionID] = append(b.byS[r.SessionID], r.ID)
+	b.mu.Unlock()
+
+	if b.emit != nil {
+		b.emit(r.SessionID, r)
+	}
+
+	select {
+	case <-ctx.Done():
+		b.forget(r.ID, r.SessionID)
+		return Decision{}, ctx.Err()
+	case d, ok := <-ch:
+		if !ok {
+			return Decision{}, ErrSessionCanceled
+		}
+		return d, nil
+	}
+}
+
+// Resolve answers a pending request. An unknown id is what a second click on
+// the card produces.
+func (b *Broker) Resolve(id string, d Decision) error {
+	b.mu.Lock()
+	ch, ok := b.wait[id]
+	req := b.pending[id]
+	if ok {
+		delete(b.wait, id)
+		delete(b.pending, id)
+		b.dropIDLocked(req.SessionID, id)
+	}
+	b.mu.Unlock()
+	if !ok {
+		return ErrNoSuchRequest
+	}
+	if d.Kind == DecideAlways {
+		if err := b.cfg.AddAllow(req.Project, d.Prefix); err != nil {
+			d.Kind = DecideOnce
+			d.Note = "save allowlist: " + err.Error() + ": the command ran, but the rule was not kept"
+		}
+	}
+	ch <- d
+	return nil
+}
+
+// Lookup returns a pending request, which is how a handler checks that a
+// submitted prefix matches the command being decided.
+func (b *Broker) Lookup(id string) (Request, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r, ok := b.pending[id]
+	return r, ok
+}
+
+// Pending lists unanswered requests for a session, for replay after a browser
+// reconnect.
+func (b *Broker) Pending(sessionID string) []Request {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []Request
+	for _, id := range b.byS[sessionID] {
+		if r, ok := b.pending[id]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func (b *Broker) CancelSession(sessionID string) {
+	b.mu.Lock()
+	ids := b.byS[sessionID]
+	delete(b.byS, sessionID)
+	var chans []chan Decision
+	for _, id := range ids {
+		if ch, ok := b.wait[id]; ok {
+			chans = append(chans, ch)
+			delete(b.wait, id)
+			delete(b.pending, id)
+		}
+	}
+	b.mu.Unlock()
+	for _, ch := range chans {
+		close(ch)
+	}
+}
+
+func (b *Broker) CancelAll() {
+	b.mu.Lock()
+	var chans []chan Decision
+	for id, ch := range b.wait {
+		chans = append(chans, ch)
+		delete(b.wait, id)
+		delete(b.pending, id)
+	}
+	b.byS = map[string][]string{}
+	b.mu.Unlock()
+	for _, ch := range chans {
+		close(ch)
+	}
+}
+
+func (b *Broker) forget(id, sessionID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.wait, id)
+	delete(b.pending, id)
+	b.dropIDLocked(sessionID, id)
+}
+
+func (b *Broker) dropIDLocked(sessionID, id string) {
+	ids := b.byS[sessionID]
+	for i, v := range ids {
+		if v == id {
+			b.byS[sessionID] = append(ids[:i:i], ids[i+1:]...)
+			return
+		}
+	}
+}
+
+// operators are the shell metacharacters that let one approved command start
+// another, or escape the process group the timeout relies on.
+var operators = []string{";", "&", "|", ">", "<", "`", "$(", "\n", "\r"}
+
+func hasOperator(cmd string) bool {
+	for _, op := range operators {
+		if strings.Contains(cmd, op) {
+			return true
+		}
+	}
+	return false
+}
+
+// DefaultPrefix is the first two whitespace-separated fields of the command.
+func DefaultPrefix(cmd string) string {
+	fields := strings.Fields(cmd)
+	if len(fields) > 2 {
+		fields = fields[:2]
+	}
+	return strings.Join(fields, " ")
+}
+
+// DenialContent is what the model is told about a refused call.
+func DenialContent(reason string) string {
+	if strings.TrimSpace(reason) == "" {
+		return "denied by user"
+	}
+	return "denied by user: " + reason
+}
+
+var idEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
+
+func NewRequestID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return "perm_" + idEncoding.EncodeToString(b)[:12]
+}

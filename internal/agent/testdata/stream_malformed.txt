@@ -1,0 +1,10 @@
+: shape from llama.cpp b10812-8b4b3558f
+data: {"choices":[{"index":0,"delta":{"content":"first "}}],"created":1757141666,"id":"chatcmpl-7","model":"Alpha-12B"}
+
+data: {"choices":[{"index":0,"delta":{"content":
+
+data: this frame is not json
+
+data: {"choices":[{"index":0,"delta":{"content":"and last"},"finish_reason":"stop"}],"created":1757141666,"id":"chatcmpl-7","model":"Alpha-12B"}
+
+data: [DONE]

@@ -1,0 +1,6 @@
+: shape from llama.cpp b10812-8b4b3558f
+data: {"choices":[{"index":0,"delta":{"content":"starting"}}],"created":1757141666,"id":"chatcmpl-8","model":"Alpha-12B"}
+
+data: {"choices":[{"index":0,"delta":{"content":" work"}}],"created":1757141666,"id":"chatcmpl-8","model":"Alpha-12B"}
+
+data: {"error":{"code":500,"message":"context shift is disabled","type":"server_error"}}

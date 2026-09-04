@@ -1,0 +1,12 @@
+: shape from llama.cpp b10812-8b4b3558f
+data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"run_shell","arguments":"{\"comm"}}]}}],"created":1757141666,"id":"chatcmpl-5","model":"Alpha-12B","object":"chat.completion.chunk"}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_1","type":"function","function":{"name":"run_shell","arguments":"{\"comm"}}]}}],"created":1757141666,"id":"chatcmpl-5","model":"Alpha-12B","object":"chat.completion.chunk"}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"and\":\"echo one\"}"}}]}}],"created":1757141666,"id":"chatcmpl-5","model":"Alpha-12B","object":"chat.completion.chunk"}
+
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"and\":\"echo two\"}"}}]}}],"created":1757141666,"id":"chatcmpl-5","model":"Alpha-12B","object":"chat.completion.chunk"}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"created":1757141666,"id":"chatcmpl-5","model":"Alpha-12B","object":"chat.completion.chunk"}
+
+data: [DONE]
