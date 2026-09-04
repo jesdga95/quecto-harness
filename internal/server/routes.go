@@ -26,22 +26,24 @@ type modelJSON struct {
 }
 
 type configJSON struct {
-	Model            string  `json:"model"`
-	Effort           string  `json:"effort"`
-	Permissions      string  `json:"permissions"`
-	CompactAt        float64 `json:"compact_at"`
-	Shell            string  `json:"shell"`
-	CommandTimeoutS  int     `json:"command_timeout_s"`
-	OutputLimitBytes int     `json:"output_limit_bytes"`
-	Listen           string  `json:"listen"`
-	ServerURL        string  `json:"server_url"`
-	ServerTokenSet   bool    `json:"server_token_set"`
-	Note             string  `json:"note,omitempty"`
+	Model             string  `json:"model"`
+	Effort            string  `json:"effort"`
+	PreserveReasoning bool    `json:"preserve_reasoning"`
+	Permissions       string  `json:"permissions"`
+	CompactAt         float64 `json:"compact_at"`
+	Shell             string  `json:"shell"`
+	CommandTimeoutS   int     `json:"command_timeout_s"`
+	OutputLimitBytes  int     `json:"output_limit_bytes"`
+	Listen            string  `json:"listen"`
+	ServerURL         string  `json:"server_url"`
+	ServerTokenSet    bool    `json:"server_token_set"`
+	Note              string  `json:"note,omitempty"`
 }
 
 func toConfigJSON(c config.Config) configJSON {
 	return configJSON{
-		Model: c.Model, Effort: string(c.Effort), Permissions: string(c.Mode), CompactAt: c.CompactAt,
+		Model: c.Model, Effort: string(c.Effort), PreserveReasoning: c.PreserveReasoning,
+		Permissions: string(c.Mode), CompactAt: c.CompactAt,
 		Shell: c.Shell, CommandTimeoutS: int(c.CommandTimeout / time.Second),
 		OutputLimitBytes: c.OutputLimitBytes, Listen: c.Listen,
 		ServerURL: c.ServerURL, ServerTokenSet: c.ServerToken != "",
@@ -311,7 +313,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	doc, state, fill, _ := sess.Snapshot()
+	doc, state, fill, caps := sess.Snapshot()
 	nctx, source := doc.NCtx, doc.NCtxSource
 	if nctx <= 0 {
 		nctx, source = 32768, "assumed"
@@ -328,7 +330,8 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		"id": doc.ID, "project": doc.Project, "model": doc.Model,
 		"state": string(state), "n_ctx": nctx, "n_ctx_source": source,
 		"fill": fill, "compactions": doc.Compactions,
-		"pending": pending, "entries": entries,
+		"effort_levels": llama.EffortLevels(caps),
+		"pending":       pending, "entries": entries,
 		"last_seq": s.hub.Seq(doc.ID),
 	})
 }
@@ -484,15 +487,16 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Model            *string  `json:"model"`
-		Effort           *string  `json:"effort"`
-		Permissions      *string  `json:"permissions"`
-		CompactAt        *float64 `json:"compact_at"`
-		Shell            *string  `json:"shell"`
-		CommandTimeoutS  *int     `json:"command_timeout_s"`
-		OutputLimitBytes *int     `json:"output_limit_bytes"`
-		Listen           *string  `json:"listen"`
-		Server           *struct {
+		Model             *string  `json:"model"`
+		Effort            *string  `json:"effort"`
+		PreserveReasoning *bool    `json:"preserve_reasoning"`
+		Permissions       *string  `json:"permissions"`
+		CompactAt         *float64 `json:"compact_at"`
+		Shell             *string  `json:"shell"`
+		CommandTimeoutS   *int     `json:"command_timeout_s"`
+		OutputLimitBytes  *int     `json:"output_limit_bytes"`
+		Listen            *string  `json:"listen"`
+		Server            *struct {
 			URL   *string `json:"url"`
 			Token *string `json:"token"`
 		} `json:"server"`
@@ -501,7 +505,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Effort != nil && !llama.ValidEffort(*body.Effort) {
-		writeError(w, http.StatusBadRequest, "effort \""+*body.Effort+"\" is not auto, off, low, medium or high")
+		writeError(w, http.StatusBadRequest, "effort \""+*body.Effort+"\" is not "+config.EffortNames)
 		return
 	}
 	if body.Permissions != nil && !config.ValidMode(*body.Permissions) {
@@ -515,6 +519,9 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.Effort != nil {
 			c.Effort = config.Effort(*body.Effort)
+		}
+		if body.PreserveReasoning != nil {
+			c.PreserveReasoning = *body.PreserveReasoning
 		}
 		if body.Permissions != nil {
 			c.Mode = config.Mode(*body.Permissions)

@@ -20,9 +20,13 @@ func fixtureServer(t *testing.T) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/props":
-			if r.URL.Query().Get("model") != "" {
+			if model := r.URL.Query().Get("model"); model != "" {
 				if r.URL.Query().Get("autoload") != "false" {
 					http.Error(w, "model-scoped GET without autoload=false", 500)
+					return
+				}
+				if model == "Delta3.8-27B Q5" {
+					writeFixture(t, w, "props-reasoning.json")
 					return
 				}
 				writeFixture(t, w, "props-model.json")
@@ -135,6 +139,176 @@ func TestPropsCaps(t *testing.T) {
 	}
 	if p.Caps.ReasoningEffort || p.Caps.PreserveReasoning {
 		t.Errorf("caps overread: %+v", p.Caps)
+	}
+}
+
+// The captured template validates the level it is given, so the accepted set
+// is readable and narrower than the names llama.cpp documents.
+func TestPropsReadsEffortLevelsFromTheTemplate(t *testing.T) {
+	srv := fixtureServer(t)
+	defer srv.Close()
+	p, err := New(srv.URL, "").Props(context.Background(), "Delta3.8-27B Q5")
+	if err != nil {
+		t.Fatalf("props: %v", err)
+	}
+	if !p.Caps.ReasoningEffort || !p.Caps.PreserveReasoning {
+		t.Fatalf("caps = %+v", p.Caps)
+	}
+	want := []Effort{EffortLow, EffortMedium, EffortXHigh}
+	if fmt.Sprint(p.Caps.EffortLevels) != fmt.Sprint(want) {
+		t.Errorf("effort levels = %v, want %v", p.Caps.EffortLevels, want)
+	}
+	if p.Caps.accepts(EffortHigh) {
+		t.Error("high is accepted, but the template raises on it")
+	}
+	if !p.Caps.accepts(EffortXHigh) {
+		t.Error("xhigh is refused, but the template names it")
+	}
+}
+
+// A template that does not check its input names no set, which is not the
+// same as naming none: the picker falls back to the three budget levels.
+func TestPropsWithoutAnEffortSetFallsBack(t *testing.T) {
+	srv := fixtureServer(t)
+	defer srv.Close()
+	p, err := New(srv.URL, "").Props(context.Background(), "Alpha-12B")
+	if err != nil {
+		t.Fatalf("props: %v", err)
+	}
+	if len(p.Caps.EffortLevels) != 0 {
+		t.Errorf("effort levels = %v, want none named", p.Caps.EffortLevels)
+	}
+	if !p.Caps.accepts(EffortMax) {
+		t.Error("a template that named no set refused a level")
+	}
+	want := []Effort{EffortLow, EffortMedium, EffortHigh}
+	if fmt.Sprint(EffortLevels(p.Caps)) != fmt.Sprint(want) {
+		t.Errorf("levels = %v, want %v", EffortLevels(p.Caps), want)
+	}
+}
+
+func TestTemplateEffortLevels(t *testing.T) {
+	cases := []struct {
+		name     string
+		template string
+		want     string
+	}{
+		{"tuple, strongest first", `{%- if resolved_reasoning_effort not in ('xhigh', 'medium', 'low') %}
+			{{- raise_exception('Unexpected reasoning effort') }}`, "[low medium xhigh]"},
+		{"list with a name the harness will not send",
+			`{%- if reasoning_effort not in ['high', 'low', 'no_think'] %}`, "[low high]"},
+		{"the alias llama.cpp also sets",
+			`{%- if reasoning_strength not in ("minimal", "max") %}`, "[minimal max]"},
+		{"a branch is not a validation set",
+			`{%- if reasoning_effort in ["low", "minimal"] %}`, "[]"},
+		{"no mention at all", `{{- bos_token }}{%- for message in messages %}`, "[]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := templateEffortLevels(tc.template)
+			if fmt.Sprint(got) != tc.want {
+				t.Errorf("levels = %v, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildBodyPreserveReasoning(t *testing.T) {
+	able := Caps{Known: true, PreserveReasoning: true}
+	cases := []struct {
+		name     string
+		req      ChatRequest
+		want     any
+		absent   bool
+		thinking bool
+	}{
+		{"on where the template acts on it",
+			ChatRequest{Effort: EffortAuto, PreserveReasoning: true, Caps: able}, true, false, false},
+		{"off where the template acts on it",
+			ChatRequest{Effort: EffortAuto, PreserveReasoning: false, Caps: able}, false, false, false},
+		{"not sent where the template ignores it",
+			ChatRequest{Effort: EffortAuto, PreserveReasoning: true, Caps: Caps{Known: true}}, nil, true, false},
+		{"not sent before the caps are known",
+			ChatRequest{Effort: EffortAuto, PreserveReasoning: true}, nil, true, false},
+		{"shares the kwargs with off",
+			ChatRequest{Effort: EffortOff, PreserveReasoning: true, Caps: able}, true, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := buildBody(tc.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatal(err)
+			}
+			kw, _ := body["chat_template_kwargs"].(map[string]any)
+			got, present := kw["preserve_reasoning"]
+			if tc.absent {
+				if present {
+					t.Errorf("preserve_reasoning = %v, want absent", got)
+				}
+				return
+			}
+			if got != tc.want {
+				t.Errorf("preserve_reasoning = %v, want %v", got, tc.want)
+			}
+			if tc.thinking && kw["enable_thinking"] != false {
+				t.Errorf("enable_thinking = %v, want false beside it", kw["enable_thinking"])
+			}
+		})
+	}
+}
+
+// A level the template would raise on takes the budget column instead.
+func TestBuildBodyEffortOutsideTheTemplateSet(t *testing.T) {
+	caps := Caps{Known: true, ReasoningEffort: true,
+		EffortLevels: []Effort{EffortLow, EffortMedium, EffortXHigh}}
+	raw, err := buildBody(ChatRequest{Model: "m", Effort: EffortHigh, Caps: caps})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["reasoning_effort"]; ok {
+		t.Error("a level the template raises on was sent as reasoning_effort")
+	}
+	if body["reasoning_budget"] != -1.0 {
+		t.Errorf("reasoning_budget = %v, want -1", body["reasoning_budget"])
+	}
+	raw, _ = buildBody(ChatRequest{Model: "m", Effort: EffortXHigh, Caps: caps})
+	json.Unmarshal(raw, &body)
+	if body["reasoning_effort"] != "xhigh" {
+		t.Errorf("reasoning_effort = %v, want xhigh", body["reasoning_effort"])
+	}
+}
+
+func TestReasoningContentRidesTheAssistantMessage(t *testing.T) {
+	raw, err := buildBody(ChatRequest{Model: "m", Messages: []Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi", ReasoningContent: "they said hello"},
+		{Role: "assistant", Content: "no thinking here"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Messages[1]["reasoning_content"] != "they said hello" {
+		t.Errorf("assistant message = %v", body.Messages[1])
+	}
+	if _, ok := body.Messages[2]["reasoning_content"]; ok {
+		t.Error("an empty reasoning_content was sent")
+	}
+	if _, ok := body.Messages[0]["reasoning_content"]; ok {
+		t.Error("reasoning_content was sent on a user message")
 	}
 }
 

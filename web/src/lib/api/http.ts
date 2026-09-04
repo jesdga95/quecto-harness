@@ -46,6 +46,7 @@ interface WireModel {
 interface WireConfig {
   model?: string;
   effort?: string;
+  preserve_reasoning?: boolean;
   permissions?: string;
   compact_at?: number;
   shell?: string;
@@ -116,6 +117,7 @@ interface WireSnapshot {
   fill?: number;
   entries?: WireEntry[];
   pending?: WirePermission[];
+  effort_levels?: string[];
   last_seq?: number;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
 }
@@ -143,6 +145,7 @@ interface WireEvent {
   completion_tokens?: number;
   cached_tokens?: number;
   n_ctx?: number;
+  effort_levels?: string[];
   before?: number;
   after?: number;
   message?: string;
@@ -197,7 +200,9 @@ const STATUSES: ModelStatus[] = [
   "sleeping",
   "downloading",
 ];
-const EFFORTS: Effort[] = ["auto", "off", "low", "medium", "high"];
+const EFFORTS: Effort[] = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"];
+// What a picker offers when the harness has not read the model's template yet.
+const FALLBACK_LEVELS: Effort[] = ["low", "medium", "high"];
 const PERM_MODES: PermMode[] = ["ask", "allowlist", "full"];
 
 /** The harness reports where a context number came from; two sources are real. */
@@ -239,6 +244,13 @@ function toModel(m: WireModel): Model {
 
 function toEffort(value: string | undefined): Effort {
   return EFFORTS.find((e) => e === value) ?? "medium";
+}
+
+// A level the harness reports but this build has no name for is dropped, so
+// the picker never offers something it cannot send back.
+function toLevels(values: string[] | undefined): Effort[] {
+  const out = (values ?? []).filter((v): v is Effort => EFFORTS.includes(v as Effort));
+  return out.length > 0 ? out : FALLBACK_LEVELS.slice();
 }
 
 // An unreadable policy reads as ask.
@@ -420,6 +432,7 @@ function toConfig(c: WireConfig): Config {
     server: { url: serverUrl, token: "" },
     model: c.model ?? "",
     effort: toEffort(c.effort),
+    preserve_reasoning: c.preserve_reasoning ?? true,
     permissions: toPermMode(c.permissions),
     compact_at: c.compact_at ?? 0.8,
     shell: c.shell ?? "/bin/sh",
@@ -464,7 +477,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
   const highest = entries.reduce((max, e) => Math.max(max, e.seq ?? 0), 0);
   seqs.set(id, snap.last_seq ?? highest);
 
-  return { session, items, usage };
+  return { session, items, usage, effortLevels: toLevels(snap.effort_levels) };
 }
 
 // stream
@@ -484,6 +497,7 @@ const EVENT_NAMES = [
   "permission",
   "permission_done",
   "usage",
+  "caps",
   "compacted",
   "done",
   "resync",
@@ -567,6 +581,9 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
         },
       ];
     }
+
+    case "caps":
+      return [{ type: "caps", effortLevels: toLevels(ev.effort_levels) }];
 
     case "compacted":
       return [{ type: "compacted", before: ev.before ?? 0, after: ev.after ?? 0 }];

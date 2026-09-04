@@ -7,7 +7,18 @@ export type ModelStatus =
   | "loaded"
   | "sleeping"
   | "downloading";
-export type Effort = "auto" | "off" | "low" | "medium" | "high";
+/** auto leaves it to the template and off asks for no thinking. The rest are
+    level names a chat template reads; which of them a model takes comes from
+    that model, so a picker offers Transcript.effortLevels rather than all. */
+export type Effort =
+  | "auto"
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 export type TurnStatus =
   | "idle"
   | "thinking"
@@ -52,6 +63,8 @@ export interface Config {
   server: ServerConfig;
   model: string;
   effort: Effort;
+  /** Keeps thinking from earlier turns in the prompt. */
+  preserve_reasoning: boolean;
   permissions: PermMode;
   compact_at: number;
   shell: string;
@@ -110,6 +123,8 @@ export type HarnessEvent =
       cached_pct?: number;
     }
   | { type: "status"; status: TurnStatus }
+  /** The model's template was read, so the levels it takes are now known. */
+  | { type: "caps"; effortLevels: Effort[] }
   | { type: "compacted"; before: number; after: number }
   | { type: "error"; message: string }
   | { type: "done" }
@@ -154,6 +169,8 @@ export interface Transcript {
   session: Session;
   items: TranscriptItem[];
   usage: Usage;
+  /** Levels this session's model accepts, between auto and off. */
+  effortLevels: Effort[];
 }
 
 export type EventHandler = (event: HarnessEvent) => void;

@@ -11,6 +11,9 @@ type Caps struct {
 	ReasoningEffort   bool `json:"reasoning_effort"`
 	SystemRole        bool `json:"system_role"`
 	PreserveReasoning bool `json:"preserve_reasoning"`
+	// EffortLevels are the levels this model's template accepts. Empty when
+	// the template named no set, which means it takes any name.
+	EffortLevels []Effort `json:"effort_levels"`
 }
 
 // Props is GET /props for one model. NCtx is per slot.
@@ -49,5 +52,8 @@ func (c *Client) Props(ctx context.Context, model string) (Props, error) {
 			PreserveReasoning: body.ChatTemplateCaps["supports_preserve_reasoning"],
 		}
 	}
+	// The accepted levels are written in the template itself, not in the caps,
+	// so they are read whether or not the caps object arrived.
+	p.Caps.EffortLevels = templateEffortLevels(deref(body.ChatTemplate))
 	return p, nil
 }

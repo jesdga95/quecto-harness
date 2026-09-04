@@ -57,12 +57,18 @@ func (r *replay) Server() *httptest.Server {
 		case "/props":
 			// A model-scoped read without autoload=false would load a model
 			// on the router, so it fails here rather than in production.
-			if req.URL.Query().Get("model") != "" {
+			if model := req.URL.Query().Get("model"); model != "" {
 				r.mu.Lock()
 				r.Queries = append(r.Queries, req.URL.RawQuery)
 				r.mu.Unlock()
 				if req.URL.Query().Get("autoload") != "false" {
 					http.Error(w, "model-scoped GET without autoload=false", 500)
+					return
+				}
+				// One capture reports a template that takes named levels and
+				// can hold thinking, the other reports neither.
+				if model == "Delta3.8-27B Q5" {
+					serveFixture(r.t, w, "props-reasoning.json")
 					return
 				}
 				serveFixture(r.t, w, "props-model.json")

@@ -135,7 +135,8 @@ func (s *Session) contextMessages(osName string) []llama.Message {
 		case "user", "compaction":
 			msgs = append(msgs, llama.Message{Role: "user", Content: e.Content})
 		case "assistant":
-			msgs = append(msgs, llama.Message{Role: "assistant", Content: e.Content, ToolCalls: e.ToolCalls})
+			msgs = append(msgs, llama.Message{Role: "assistant", Content: e.Content,
+				ReasoningContent: e.Reasoning, ToolCalls: e.ToolCalls})
 			msgs = append(msgs, repairToolResults(s.Entries, i, e.ToolCalls)...)
 		case "tool":
 			// Tool results are emitted beside their assistant, so a tool
@@ -188,7 +189,7 @@ func (s *Session) estimateChars(from int) int {
 		if i <= from || !e.InContext {
 			continue
 		}
-		total += len(e.Content)
+		total += len(e.Content) + len(e.Reasoning)
 		if len(e.ToolCalls) > 0 {
 			if b, err := json.Marshal(e.ToolCalls); err == nil {
 				total += len(b)

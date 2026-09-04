@@ -15,15 +15,16 @@ import (
 // File mirrors config.json. A nil field is absent and takes the default,
 // which is why every scalar is a pointer.
 type File struct {
-	Listen           *string  `json:"listen,omitempty"`
-	Server           *Server  `json:"server,omitempty"`
-	Model            *string  `json:"model,omitempty"`
-	Effort           *string  `json:"effort,omitempty"`
-	Permissions      *string  `json:"permissions,omitempty"`
-	CompactAt        *float64 `json:"compact_at,omitempty"`
-	Shell            *string  `json:"shell,omitempty"`
-	CommandTimeoutS  *int     `json:"command_timeout_s,omitempty"`
-	OutputLimitBytes *int     `json:"output_limit_bytes,omitempty"`
+	Listen            *string  `json:"listen,omitempty"`
+	Server            *Server  `json:"server,omitempty"`
+	Model             *string  `json:"model,omitempty"`
+	Effort            *string  `json:"effort,omitempty"`
+	PreserveReasoning *bool    `json:"preserve_reasoning,omitempty"`
+	Permissions       *string  `json:"permissions,omitempty"`
+	CompactAt         *float64 `json:"compact_at,omitempty"`
+	Shell             *string  `json:"shell,omitempty"`
+	CommandTimeoutS   *int     `json:"command_timeout_s,omitempty"`
+	OutputLimitBytes  *int     `json:"output_limit_bytes,omitempty"`
 	// Projects has no omitempty: a saved file names every field, so a reader
 	// never has to know which default was in force.
 	Projects []string `json:"projects"`
@@ -36,17 +37,18 @@ type Server struct {
 
 // Config is the resolved configuration. Every field is usable as it stands.
 type Config struct {
-	Listen           string
-	ServerURL        string
-	ServerToken      string
-	Model            string
-	Effort           Effort
-	Mode             Mode
-	CompactAt        float64
-	Shell            string
-	CommandTimeout   time.Duration
-	OutputLimitBytes int
-	Projects         []string
+	Listen            string
+	ServerURL         string
+	ServerToken       string
+	Model             string
+	Effort            Effort
+	PreserveReasoning bool
+	Mode              Mode
+	CompactAt         float64
+	Shell             string
+	CommandTimeout    time.Duration
+	OutputLimitBytes  int
+	Projects          []string
 }
 
 // Effort is defined in internal/llama, which is what turns it into request
@@ -54,12 +56,19 @@ type Config struct {
 type Effort = llama.Effort
 
 const (
-	EffortAuto   = llama.EffortAuto
-	EffortOff    = llama.EffortOff
-	EffortLow    = llama.EffortLow
-	EffortMedium = llama.EffortMedium
-	EffortHigh   = llama.EffortHigh
+	EffortAuto    = llama.EffortAuto
+	EffortOff     = llama.EffortOff
+	EffortMinimal = llama.EffortMinimal
+	EffortLow     = llama.EffortLow
+	EffortMedium  = llama.EffortMedium
+	EffortHigh    = llama.EffortHigh
+	EffortXHigh   = llama.EffortXHigh
+	EffortMax     = llama.EffortMax
 )
+
+// EffortNames lists what the effort field accepts, for the note a rejected
+// value produces.
+const EffortNames = "auto, off, minimal, low, medium, high, xhigh or max"
 
 // Mode is the permission policy. One field rather than a pair of booleans,
 // which would have a fourth state with no meaning.
@@ -85,17 +94,18 @@ func ValidMode(s string) bool {
 
 func Defaults() Config {
 	return Config{
-		Listen:           "127.0.0.1:7331",
-		ServerURL:        "",
-		ServerToken:      "",
-		Model:            "",
-		Effort:           EffortMedium,
-		Mode:             ModeAsk,
-		CompactAt:        0.8,
-		Shell:            defaultShell(),
-		CommandTimeout:   120 * time.Second,
-		OutputLimitBytes: 16384,
-		Projects:         nil,
+		Listen:            "127.0.0.1:7331",
+		ServerURL:         "",
+		ServerToken:       "",
+		Model:             "",
+		Effort:            EffortMedium,
+		PreserveReasoning: true,
+		Mode:              ModeAsk,
+		CompactAt:         0.8,
+		Shell:             defaultShell(),
+		CommandTimeout:    120 * time.Second,
+		OutputLimitBytes:  16384,
+		Projects:          nil,
 	}
 }
 
@@ -149,8 +159,11 @@ func (f File) Resolve(d Config) (Config, []string) {
 		if llama.ValidEffort(*f.Effort) {
 			c.Effort = Effort(*f.Effort)
 		} else {
-			note("effort " + strconv.Quote(*f.Effort) + " is not auto, off, low, medium or high, using medium")
+			note("effort " + strconv.Quote(*f.Effort) + " is not " + EffortNames + ", using medium")
 		}
+	}
+	if f.PreserveReasoning != nil {
+		c.PreserveReasoning = *f.PreserveReasoning
 	}
 	if f.Permissions != nil {
 		if ValidMode(*f.Permissions) {
@@ -213,6 +226,7 @@ func (f File) Resolve(d Config) (Config, []string) {
 func (c Config) File() File {
 	listen, model, effort := c.Listen, c.Model, string(c.Effort)
 	shell, mode, compact := c.Shell, string(c.Mode), c.CompactAt
+	preserve := c.PreserveReasoning
 	timeout, limit := int(c.CommandTimeout/time.Second), c.OutputLimitBytes
 	surl, stok := c.ServerURL, c.ServerToken
 	projects := c.Projects
@@ -220,16 +234,17 @@ func (c Config) File() File {
 		projects = []string{}
 	}
 	return File{
-		Listen:           &listen,
-		Server:           &Server{URL: &surl, Token: &stok},
-		Model:            &model,
-		Effort:           &effort,
-		Permissions:      &mode,
-		CompactAt:        &compact,
-		Shell:            &shell,
-		CommandTimeoutS:  &timeout,
-		OutputLimitBytes: &limit,
-		Projects:         projects,
+		Listen:            &listen,
+		Server:            &Server{URL: &surl, Token: &stok},
+		Model:             &model,
+		Effort:            &effort,
+		PreserveReasoning: &preserve,
+		Permissions:       &mode,
+		CompactAt:         &compact,
+		Shell:             &shell,
+		CommandTimeoutS:   &timeout,
+		OutputLimitBytes:  &limit,
+		Projects:          projects,
 	}
 }
 

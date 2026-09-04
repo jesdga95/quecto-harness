@@ -31,23 +31,29 @@ export function since(iso: string): string {
   return `${Math.round(hours / 24)}d`;
 }
 
+/** Level names as the model's template writes them, capitalised. */
 export function effortLabel(effort: string): string {
+  if (effort === "xhigh") return "Extra high";
   return effort[0]!.toUpperCase() + effort.slice(1);
 }
 
-/** What each level does to the request, in one line. */
+/** How much thinking each level asks for, in one line. */
 export function effortHint(effort: string): string {
   switch (effort) {
     case "auto":
       return "Leave it to the model template";
     case "off":
       return "Ask the model not to think";
+    case "minimal":
+      return "The least the template allows";
     case "low":
-      return "A short budget";
+      return "Short thinking";
     case "high":
-      return "No budget cap";
+    case "xhigh":
+    case "max":
+      return "As much as the model wants";
     default:
-      return "A working budget";
+      return "A working amount";
   }
 }
 

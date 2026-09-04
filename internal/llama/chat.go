@@ -5,11 +5,15 @@ import (
 )
 
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
+	Role    string `json:"role"`
+	Content string `json:"content,omitempty"`
+	// ReasoningContent is the thinking that came with an assistant message.
+	// Sent back so the prompt matches what the model generated; a template
+	// that cannot place it ignores it.
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	Name             string     `json:"name,omitempty"`
 }
 
 type ToolCall struct {
@@ -34,32 +38,45 @@ type FunctionSpec struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
-// Effort is the UI thinking level. It becomes request fields in applyEffort
-// and has no other meaning.
+// Effort is the thinking level. Auto and off are the harness's own; the rest
+// are level names a chat template reads. It becomes request fields in
+// applyEffort and has no other meaning.
 type Effort string
 
 const (
 	// Auto sends no thinking field at all. That is not the same as off: the
 	// template decides.
-	EffortAuto   Effort = "auto"
-	EffortOff    Effort = "off"
-	EffortLow    Effort = "low"
-	EffortMedium Effort = "medium"
-	EffortHigh   Effort = "high"
+	EffortAuto    Effort = "auto"
+	EffortOff     Effort = "off"
+	EffortMinimal Effort = "minimal"
+	EffortLow     Effort = "low"
+	EffortMedium  Effort = "medium"
+	EffortHigh    Effort = "high"
+	EffortXHigh   Effort = "xhigh"
+	EffortMax     Effort = "max"
 )
 
-// ValidEffort reports whether s is one of the five levels.
+// ValidEffort reports whether s is auto, off, or a level name. Which levels a
+// given model takes is narrower and comes from its template.
 func ValidEffort(s string) bool {
-	switch Effort(s) {
-	case EffortAuto, EffortOff, EffortLow, EffortMedium, EffortHigh:
+	e := Effort(s)
+	if e == EffortAuto || e == EffortOff {
 		return true
 	}
-	return false
+	_, ok := levelStrength[e]
+	return ok
 }
 
-// budget is the fallback for a template that cannot take a named effort
-// level. High is -1, which llama.cpp reads as unbounded.
-var budget = map[Effort]int{EffortLow: 2048, EffortMedium: 8192, EffortHigh: -1}
+// budget is the fallback for a template that will not take a named level. The
+// top three are -1, which llama.cpp reads as unbounded.
+var budget = map[Effort]int{
+	EffortMinimal: 1024,
+	EffortLow:     2048,
+	EffortMedium:  8192,
+	EffortHigh:    -1,
+	EffortXHigh:   -1,
+	EffortMax:     -1,
+}
 
 // ChatRequest is the harness-level request. Wire fields are derived from it
 // by buildBody, so the effort mapping lives in one place.
@@ -68,7 +85,10 @@ type ChatRequest struct {
 	Messages []Message
 	Tools    []Tool
 	Effort   Effort
-	Caps     Caps
+	// PreserveReasoning asks the template to keep thinking from earlier turns
+	// in the prompt rather than dropping it.
+	PreserveReasoning bool
+	Caps              Caps
 }
 
 type Usage struct {
@@ -87,19 +107,29 @@ type Timings struct {
 }
 
 // applyEffort writes the thinking fields. Omitting the field and setting it
-// to a level the template did not ask for are different requests.
-func applyEffort(body map[string]any, e Effort, caps Caps) {
+// to a level the template did not ask for are different requests, and a level
+// outside the template's set raises there, so it falls back to a budget.
+func applyEffort(body, kwargs map[string]any, e Effort, caps Caps) {
 	switch {
 	case e == EffortAuto:
 	case e == EffortOff:
 		body["reasoning_budget"] = 0
-		body["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
-	case caps.Known && caps.ReasoningEffort:
+		kwargs["enable_thinking"] = false
+	case caps.Known && caps.ReasoningEffort && caps.accepts(e):
 		body["reasoning_effort"] = string(e)
 	default:
 		if b, ok := budget[e]; ok {
 			body["reasoning_budget"] = b
 		}
+	}
+}
+
+// applyPreserve names the kwarg that keeps earlier thinking in the prompt. It
+// is sent only where the capability says the template acts on it, which is the
+// only case where the value changes anything.
+func applyPreserve(kwargs map[string]any, preserve bool, caps Caps) {
+	if caps.Known && caps.PreserveReasoning {
+		kwargs["preserve_reasoning"] = preserve
 	}
 }
 
@@ -117,6 +147,11 @@ func buildBody(req ChatRequest) ([]byte, error) {
 	if len(req.Tools) > 0 {
 		body["tools"] = req.Tools
 	}
-	applyEffort(body, req.Effort, req.Caps)
+	kwargs := map[string]any{}
+	applyEffort(body, kwargs, req.Effort, req.Caps)
+	applyPreserve(kwargs, req.PreserveReasoning, req.Caps)
+	if len(kwargs) > 0 {
+		body["chat_template_kwargs"] = kwargs
+	}
 	return json.Marshal(body)
 }

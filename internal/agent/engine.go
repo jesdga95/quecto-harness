@@ -320,7 +320,11 @@ func (e *Engine) probeProps(s *Session, onlyIfLoaded bool) {
 	if model == "" || source == "props" {
 		return
 	}
+	// Counted like a turn, so a shutdown waits for the write it ends in
+	// rather than racing it.
+	e.wg.Add(1)
 	go func() {
+		defer e.wg.Done()
 		ctx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
 		defer cancel()
 		if onlyIfLoaded {
@@ -343,14 +347,20 @@ func (e *Engine) probeProps(s *Session, onlyIfLoaded bool) {
 			return
 		}
 		s.mu.Lock()
-		if s.Model == model {
+		stale := s.Model != model
+		if !stale {
 			if props.NCtx > 0 {
 				s.NCtx, s.NCtxSource = props.NCtx, "props"
 			}
 			s.caps = props.Caps
 		}
 		s.mu.Unlock()
+		if stale {
+			return
+		}
 		e.save(s)
+		e.publish(s.ID, ev("caps", map[string]any{
+			"effort_levels": llama.EffortLevels(props.Caps)}))
 	}()
 }
 
@@ -416,11 +426,12 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		e.setState(s, StateStreaming)
 		s.mu.Lock()
 		req := llama.ChatRequest{
-			Model:    s.Model,
-			Messages: s.contextMessages(e.os),
-			Tools:    tools.Schemas(),
-			Effort:   cfg.Effort,
-			Caps:     s.caps,
+			Model:             s.Model,
+			Messages:          s.contextMessages(e.os),
+			Tools:             tools.Schemas(),
+			Effort:            cfg.Effort,
+			PreserveReasoning: cfg.PreserveReasoning,
+			Caps:              s.caps,
 		}
 		s.mu.Unlock()
 
@@ -672,7 +683,8 @@ func (e *Engine) compact(ctx context.Context, s *Session) error {
 	s.mu.Unlock()
 
 	res, err := e.llama().Chat(ctx, llama.ChatRequest{
-		Model: model, Messages: msgs, Effort: llama.EffortOff, Caps: caps}, nil)
+		Model: model, Messages: msgs, Effort: llama.EffortOff,
+		PreserveReasoning: e.cfg.Config().PreserveReasoning, Caps: caps}, nil)
 	if err != nil {
 		return err
 	}

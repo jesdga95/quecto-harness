@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AddMenu from "./AddMenu.svelte";
   import ArrowUp from "phosphor-svelte/lib/ArrowUp";
   import EffortChip from "./EffortChip.svelte";
   import Square from "phosphor-svelte/lib/Square";
@@ -60,6 +61,7 @@
     ></textarea>
 
     <div class="mt-2 flex items-center gap-2">
+      <AddMenu up />
       <PermissionChip />
       <EffortChip up />
 

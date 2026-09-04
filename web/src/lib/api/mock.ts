@@ -1,5 +1,6 @@
 import type {
   Config,
+  Effort,
   EventHandler,
   HarnessApi,
   HarnessEvent,
@@ -130,6 +131,10 @@ function baseName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+// The levels a real template names, so the picker is exercised with a set that
+// is not the fallback three.
+const MOCK_LEVELS: Effort[] = ["low", "medium", "xhigh"];
+
 // The whole harness backend, faked in memory. Turns follow a fixed script and
 // every delay is a timer, so the flow can be clicked through end to end.
 export class MockApi implements HarnessApi {
@@ -138,6 +143,7 @@ export class MockApi implements HarnessApi {
     server: { url: "http://192.168.2.205:8080", token: "" },
     model: "Gemma4-12B",
     effort: "medium",
+    preserve_reasoning: true,
     permissions: "ask",
     compact_at: 0.8,
     shell: "/bin/sh",
@@ -206,6 +212,7 @@ export class MockApi implements HarnessApi {
       session: { ...t.session },
       items: t.items.map((i) => ({ ...i })),
       usage: { ...t.usage },
+      effortLevels: t.effortLevels.slice(),
     };
   }
 
@@ -249,6 +256,7 @@ export class MockApi implements HarnessApi {
       session,
       items: [],
       usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: this.ctxOf(model) },
+      effortLevels: MOCK_LEVELS.slice(),
     });
     return { ...session };
   }
@@ -542,12 +550,14 @@ export class MockApi implements HarnessApi {
       session: first,
       items,
       usage: { prompt_tokens: 39400, completion_tokens: 2600, n_ctx: 131072 },
+      effortLevels: MOCK_LEVELS.slice(),
     });
     for (const s of [second, third]) {
       this.transcripts.set(s.id, {
         session: s,
         items: [],
         usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: this.ctxOf(s.model) },
+        effortLevels: MOCK_LEVELS.slice(),
       });
     }
   }

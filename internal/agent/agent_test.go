@@ -91,20 +91,42 @@ func newHarness(t *testing.T, fixtures ...string) *harness {
 	rec := &recorder{}
 	broker := perms.New(cfg, func(sid string, r perms.Request) { rec.Publish(sid, PermissionEvent(r)) })
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
 	engine := NewEngine(ctx, cfg, st, llama.New(srv.URL, ""), broker, rec)
+	// The temporary home goes away when the test ends, so nothing the engine
+	// started may still be writing sessions into it.
+	t.Cleanup(func() {
+		cancel()
+		engine.Wait(5 * time.Second)
+	})
 
 	return &harness{engine: engine, cfg: cfg, broker: broker, rec: rec,
 		replay: rp, store: st, project: real, cancel: cancel}
 }
 
 func (h *harness) session(t *testing.T) *Session {
+	return h.sessionWith(t, "Alpha-12B")
+}
+
+func (h *harness) sessionWith(t *testing.T, model string) *Session {
 	t.Helper()
-	s, err := h.engine.Create(h.project, "Alpha-12B")
+	s, err := h.engine.Create(h.project, model)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return s
+}
+
+// waitForCaps blocks until the props read that follows a turn has landed.
+func waitForCaps(t *testing.T, s *Session) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, _, _, caps := s.Snapshot(); caps.Known {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("the capabilities never arrived")
 }
 
 func waitIdle(t *testing.T, s *Session) {
@@ -191,6 +213,68 @@ func TestEffortReachesTheRequestBody(t *testing.T) {
 	}
 }
 
+// The capture for this model reports a template that names its levels and can
+// hold thinking. Neither is known until the model is loaded and read, so the
+// first request carries neither field.
+func TestReasoningFieldsFollowTheModelTemplate(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
+	if _, err := h.cfg.Update(func(c *config.Config) {
+		c.Effort = config.EffortXHigh
+		c.PreserveReasoning = false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := h.sessionWith(t, "Delta3.8-27B Q5")
+	h.engine.Send(s.ID, "first")
+	waitIdle(t, s)
+
+	first := h.replay.Body(0)
+	if _, ok := first["reasoning_effort"]; ok {
+		t.Error("a level was named before the template had been read")
+	}
+	if _, ok := first["chat_template_kwargs"]; ok {
+		t.Error("a kwarg was sent before the template had been read")
+	}
+
+	waitForCaps(t, s)
+	if err := h.engine.Send(s.ID, "second"); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	second := h.replay.Body(1)
+	if second["reasoning_effort"] != "xhigh" {
+		t.Errorf("reasoning_effort = %v, want xhigh", second["reasoning_effort"])
+	}
+	if _, ok := second["reasoning_budget"]; ok {
+		t.Error("a budget was sent beside a named level")
+	}
+	kw, _ := second["chat_template_kwargs"].(map[string]any)
+	if kw == nil || kw["preserve_reasoning"] != false {
+		t.Errorf("chat_template_kwargs = %v, want preserve_reasoning false", second["chat_template_kwargs"])
+	}
+}
+
+// The same template refuses "high", so that level takes the budget column.
+func TestALevelTheTemplateRefusesTakesTheBudget(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
+	h.cfg.Update(func(c *config.Config) { c.Effort = config.EffortHigh })
+	s := h.sessionWith(t, "Delta3.8-27B Q5")
+	h.engine.Send(s.ID, "first")
+	waitIdle(t, s)
+	waitForCaps(t, s)
+	h.engine.Send(s.ID, "second")
+	waitIdle(t, s)
+
+	body := h.replay.Body(1)
+	if _, ok := body["reasoning_effort"]; ok {
+		t.Error("a level the template raises on was named")
+	}
+	if body["reasoning_budget"] != -1.0 {
+		t.Errorf("reasoning_budget = %v, want -1", body["reasoning_budget"])
+	}
+}
+
 func TestSingleToolCallWithApproval(t *testing.T) {
 	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
 	s := h.session(t)
@@ -222,10 +306,11 @@ func TestSingleToolCallWithApproval(t *testing.T) {
 	if len(h.rec.ofType("tool_output")) != 1 {
 		t.Error("no tool_output event")
 	}
-	// Reasoning is stored and shown but never replayed to the model.
+	// Reasoning goes back with the assistant message it came from, so the
+	// prompt for the next step matches what the model generated.
 	second := h.replay.Body(1)
-	if strings.Contains(mustJSON(second), "The user wants a directory listing") {
-		t.Error("reasoning was replayed in the history")
+	if !strings.Contains(mustJSON(second), "The user wants a directory listing") {
+		t.Error("reasoning was not replayed in the history")
 	}
 }
 
