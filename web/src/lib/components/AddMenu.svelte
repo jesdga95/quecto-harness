@@ -13,7 +13,7 @@
 
   const preserve = $derived(preserveReasoning());
   const limit = $derived(maxToolCalls());
-  const limitLabel = $derived(limit === 0 ? "Unlimited" : String(limit));
+  const limitLabel = $derived(limit === 0 ? "∞" : String(limit));
 </script>
 
 <div class="relative">
@@ -46,7 +46,11 @@
       </label>
 
       <div class="popover-head">Tools</div>
-      <button class="popover-item" onclick={() => nextToolCallLimit()}>
+      <button
+        class="popover-item"
+        aria-label={limit === 0 ? "Tool calls per turn, no limit" : `Tool calls per turn, ${limit}`}
+        onclick={() => nextToolCallLimit()}
+      >
         <span class="min-w-0 flex-1">
           <span class="block">Tool calls per turn</span>
           <span class="block text-[12px] text-muted">

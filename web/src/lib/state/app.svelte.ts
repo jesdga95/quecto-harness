@@ -311,7 +311,7 @@ export function preserveReasoning(): boolean {
 }
 
 /** What the tool call limit rotates through. Zero is no limit. */
-export const TOOL_CALL_STEPS = [10, 25, 50, 100, 200, 0];
+export const TOOL_CALL_STEPS = [25, 50, 100, 0];
 
 export function maxToolCalls(): number {
   return app.config?.max_tool_calls ?? 50;
