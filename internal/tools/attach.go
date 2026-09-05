@@ -33,6 +33,16 @@ var imageTypes = map[string]bool{
 	"image/webp": true,
 }
 
+// LooksLikeImage reports whether bytes sniff as an image a vision model can
+// read, which is what decides the size an attachment is held to.
+func LooksLikeImage(data []byte) bool {
+	head := data
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	return imageTypes[strings.SplitN(http.DetectContentType(head), ";", 2)[0]]
+}
+
 // ReadAttachment reads a file the user attached to a message. It is not held
 // to a project root: the file was chosen in the host's own dialog, which is
 // the user saying which file it is.

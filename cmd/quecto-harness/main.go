@@ -134,6 +134,10 @@ func serve(argv []string) error {
 	if err != nil {
 		return err
 	}
+	pastes, err := store.OpenUploads(p.Uploads)
+	if err != nil {
+		return err
+	}
 	token, err := loadToken(p.Token)
 	if err != nil {
 		return err
@@ -161,7 +165,7 @@ func serve(argv []string) error {
 		hub.Publish(sessionID, agent.PermissionEvent(r))
 	})
 	engine := agent.NewEngine(ctx, cfg, sessions, blobs, client, broker, hub)
-	srv := server.New(cfg, sessions, blobs, engine, broker, client, hub, token, listen, version)
+	srv := server.New(cfg, sessions, blobs, pastes, engine, broker, client, hub, token, listen, version)
 
 	go srv.Detect(ctx)
 

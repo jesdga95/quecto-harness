@@ -226,6 +226,17 @@ export async function pickAttachments(): Promise<string[]> {
   return (await guard(() => api.pickFiles())) ?? [];
 }
 
+/** Stores a pasted file with the harness, which is what gives it the path a
+    message attaches it by. Empty when the harness refused it. */
+export async function pasteFile(name: string, blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return (await guard(() => api.pasteFile(name, btoa(binary)))) ?? "";
+}
+
 export async function send(text: string, files: string[] = []): Promise<void> {
   const message = text.trim();
   if (!app.sessionId || (!message && files.length === 0)) return;

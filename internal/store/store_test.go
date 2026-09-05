@@ -178,6 +178,45 @@ func TestNewIDAndTitle(t *testing.T) {
 	}
 }
 
+// TestUploadsPruneAndTrim asserts that a pasted file nobody sent is cleared
+// out a day later, that a fresh one is left alone, and that a name too long
+// for a filesystem is cut down with its extension kept.
+func TestUploadsPruneAndTrim(t *testing.T) {
+	uploads, err := OpenUploads(filepath.Join(t.TempDir(), "uploads"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := uploads.Save("Pasted text.txt", []byte("stale"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := uploads.Save("Pasted image.png", []byte("recent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := time.Now().Add(-uploadLife - time.Hour)
+	if err := os.Chtimes(filepath.Dir(old), stale, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	uploads.Prune()
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("a day-old paste is still there: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("a paste just written was pruned: %v", err)
+	}
+
+	long, err := uploads.Save(strings.Repeat("n", 300)+".txt", []byte("long name"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Base(long)
+	if len(name) != maxUploadName || !strings.HasSuffix(name, ".txt") {
+		t.Errorf("trimmed name = %q (%d bytes)", name, len(name))
+	}
+}
+
 func TestFilesRoundTripAndGuardTheID(t *testing.T) {
 	dir := t.TempDir()
 	files, err := OpenFiles(filepath.Join(dir, "files"))

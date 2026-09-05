@@ -298,6 +298,12 @@ export class MockApi implements HarnessApi {
       .filter(Boolean);
   }
 
+  async pasteFile(name: string, data: string): Promise<string> {
+    await this.tick();
+    if (!data) throw new Error("The pasted file is empty");
+    return `/Users/jay/.quecto-harness/uploads/${crypto.randomUUID()}/${name}`;
+  }
+
   async listSessions(project: string): Promise<Session[]> {
     await this.tick();
     return this.sessions.filter((s) => s.project === project).map((s) => ({ ...s }));

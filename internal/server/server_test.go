@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"quecto-harness/internal/llama"
 	"quecto-harness/internal/perms"
 	"quecto-harness/internal/store"
+	"quecto-harness/internal/tools"
 )
 
 const testToken = "test-token"
@@ -111,6 +113,10 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pastes, err := store.OpenUploads(p.Uploads)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	f := &fixture{cfg: cfg, project: real}
 	f.upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +167,7 @@ func newFixture(t *testing.T) *fixture {
 		engine.Wait(5 * time.Second)
 	})
 
-	srv := New(cfg, sessions, blobs, engine, broker, client, hub, testToken, "127.0.0.1:7331", "0.1.0-test")
+	srv := New(cfg, sessions, blobs, pastes, engine, broker, client, hub, testToken, "127.0.0.1:7331", "0.1.0-test")
 	f.srv, f.handler, f.hub, f.engine, f.perms = srv, srv.Handler(), hub, engine, broker
 	f.files = blobs
 	return f
@@ -888,6 +894,54 @@ func TestFolderPick(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "install zenity, or type the path") {
 		t.Errorf("body = %s", w.Body.String())
+	}
+}
+
+// TestPasteStoresTheFile asserts that bytes with no path of their own are
+// written under a name a person can read, and that the path they come back as
+// is one a message can attach.
+func TestPasteStoresTheFile(t *testing.T) {
+	f := newFixture(t)
+
+	data := base64.StdEncoding.EncodeToString([]byte("pasted words\n"))
+	body := decode(t, f.do(t, "POST", "/api/fs/paste",
+		map[string]any{"name": "Pasted text.txt", "data": data}))
+	path, _ := body["path"].(string)
+	if filepath.Base(path) != "Pasted text.txt" {
+		t.Fatalf("path = %v", body["path"])
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || string(raw) != "pasted words\n" {
+		t.Fatalf("stored file = %q %v", raw, err)
+	}
+
+	// A name from a browser is not a path, so it cannot reach out of the
+	// uploads directory.
+	body = decode(t, f.do(t, "POST", "/api/fs/paste",
+		map[string]any{"name": "../../escape.txt", "data": data}))
+	if got, _ := body["path"].(string); filepath.Base(got) != "escape.txt" ||
+		filepath.Dir(filepath.Dir(got)) != filepath.Dir(filepath.Dir(path)) {
+		t.Errorf("escaped the uploads directory: %v", body["path"])
+	}
+
+	// Text is inlined into the prompt, so it is refused here rather than when
+	// the message that carries it is sent.
+	big := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("a"), tools.MaxAttachment+1))
+	w := f.do(t, "POST", "/api/fs/paste", map[string]any{"name": "Huge.txt", "data": big})
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized text = %d, want 413", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "the limit is 256 kb") {
+		t.Errorf("body = %s", w.Body.String())
+	}
+
+	w = f.do(t, "POST", "/api/fs/paste", map[string]any{"name": "Empty.txt", "data": ""})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("empty paste = %d, want 400", w.Code)
+	}
+	w = f.do(t, "POST", "/api/fs/paste", map[string]any{"name": "Bad.png", "data": "not base64!"})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("undecodable paste = %d, want 400", w.Code)
 	}
 }
 

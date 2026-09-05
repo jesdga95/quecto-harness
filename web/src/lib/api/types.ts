@@ -273,6 +273,9 @@ export interface HarnessApi {
   /** Opens the host's file dialog, which takes several files at once. Empty
       when it is dismissed. */
   pickFiles(): Promise<string[]>;
+  /** Stores bytes the browser has no path for, a pasted image or block of
+      text, and answers with the path a message attaches it by. */
+  pasteFile(name: string, data: string): Promise<string>;
   addProject(path: string): Promise<Project[]>;
   removeProject(path: string): Promise<Project[]>;
   listSessions(project: string): Promise<Session[]>;

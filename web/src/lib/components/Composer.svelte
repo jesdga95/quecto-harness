@@ -6,7 +6,14 @@
   import ModelChip from "./ModelChip.svelte";
   import PermissionChip from "./PermissionChip.svelte";
   import X from "phosphor-svelte/lib/X";
-  import { app, pendingPermission, pickAttachments, send, stop } from "../state/app.svelte";
+  import {
+    app,
+    pasteFile,
+    pendingPermission,
+    pickAttachments,
+    send,
+    stop,
+  } from "../state/app.svelte";
   import { fileKind, fileName } from "../format";
 
   let { placeholder }: { placeholder: string } = $props();
@@ -21,6 +28,20 @@
 
   // Grows with the message and stops at six lines, after which it scrolls.
   const maxLines = 6;
+
+  // Pasted text longer than this is attached as a file rather than left in
+  // the field, where it would be too long to read or edit.
+  const maxPastedText = 2048;
+
+  // The name a pasted image is stored under, by what the clipboard says it
+  // is, rather than by a name that may not match the bytes. Anything else is
+  // refused when the message is sent.
+  const imageNames: Record<string, string> = {
+    "image/png": "Pasted image.png",
+    "image/jpeg": "Pasted image.jpg",
+    "image/gif": "Pasted image.gif",
+    "image/webp": "Pasted image.webp",
+  };
 
   function grow() {
     const el = field;
@@ -48,6 +69,37 @@
       if (!next.includes(path) && next.length < maxFiles) next.push(path);
     }
     files = next;
+  }
+
+  // A paste the field cannot hold: an image, which has no path of its own,
+  // and text long enough to be a document. Both are stored by the harness and
+  // attached by the path it gives back.
+  async function onpaste(event: ClipboardEvent) {
+    const data = event.clipboardData;
+    if (!data || disabled) return;
+
+    const images = [...data.items].filter(
+      (item) => item.kind === "file" && imageNames[item.type] !== undefined,
+    );
+    if (images.length > 0) {
+      event.preventDefault();
+      for (const item of images) {
+        const file = item.getAsFile();
+        if (file) await addPasted(imageNames[item.type], file);
+      }
+      return;
+    }
+
+    const pasted = data.getData("text/plain");
+    if (pasted.length <= maxPastedText) return;
+    event.preventDefault();
+    await addPasted("Pasted text.txt", new Blob([pasted], { type: "text/plain" }));
+  }
+
+  async function addPasted(name: string, blob: Blob) {
+    if (files.length >= maxFiles) return;
+    const path = await pasteFile(name, blob);
+    if (path && !files.includes(path)) files = [...files, path];
   }
 
   function submit() {
@@ -95,6 +147,7 @@
       placeholder={blocked ? "Answer the permission card first" : placeholder}
       bind:value={text}
       {onkeydown}
+      {onpaste}
       {disabled}
     ></textarea>
 
