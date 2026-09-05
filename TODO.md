@@ -13,6 +13,9 @@ Ordered by size. Take from the top.
 
 ## Done
 
+- `replace_in_file`, which swaps one exact run of text for another. The match
+  must be unique, and a call that matches nothing or several writes nothing and
+  says which. `write_file` stays for new files and whole rewrites.
 - The change panel: every file the session wrote, listed beside the transcript
   and opened from a chip in the header. Each row compares the copy kept before
   the session's first write to the file on disk now, so an edit made outside
@@ -60,5 +63,7 @@ Ordered by size. Take from the top.
 - Sessions accumulate on disk with no size limit.
 - `write_file` content lives in the assistant entry's tool call arguments, so a
   session that writes large files produces a large session file.
+  `replace_in_file` sends only the run of text it changes, so this now depends
+  on which tool the model reaches for.
 - Baseline copies accumulate under `~/.quecto-harness/sessions` with no size
   limit, one per file a session wrote, capped at 2 MB each.

@@ -186,3 +186,26 @@ func pathsOf(files []FileChange) []string {
 	}
 	return out
 }
+
+// An edit records a baseline the same way a whole-file write does, so a
+// session that only edits still has a change list.
+func TestReplaceInFileRecordsABaseline(t *testing.T) {
+	h := newHarness(t, "stream_replace.txt", "stream_plain.txt", "stream_plain.txt")
+	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
+	s := h.session(t)
+
+	h.engine.Send(s.ID, "change two to TWO", nil)
+	waitIdle(t, s)
+
+	if got, err := os.ReadFile(filepath.Join(h.project, "file.txt")); err != nil || string(got) != "one\nTWO\n" {
+		t.Fatalf("file.txt = %q %v", got, err)
+	}
+	files, err := h.engine.Changes(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := changeFor(t, files, "file.txt")
+	if f.Status != StatusChanged || f.Added != 1 || f.Removed != 1 {
+		t.Errorf("change = %+v, want one line changed", f)
+	}
+}

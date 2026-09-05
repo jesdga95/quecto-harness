@@ -369,10 +369,10 @@ func TestLooksBinary(t *testing.T) {
 
 func TestSchemasMatchTheDescriptions(t *testing.T) {
 	s := Schemas()
-	if len(s) != 4 {
-		t.Fatalf("got %d schemas", len(s))
+	names := []string{"read_file", "write_file", "replace_in_file", "write_todos", "run_shell"}
+	if len(s) != len(names) {
+		t.Fatalf("got %d schemas, want %d", len(s), len(names))
 	}
-	names := []string{"read_file", "write_file", "write_todos", "run_shell"}
 	for i, want := range names {
 		if s[i].Function.Name != want {
 			t.Errorf("schema %d = %q, want %q", i, s[i].Function.Name, want)
@@ -430,5 +430,104 @@ func TestReadAttachment(t *testing.T) {
 	}
 	if _, err := ReadAttachment(dir); err == nil {
 		t.Error("a folder was attached")
+	}
+}
+
+func TestReplaceInFileChangesOneRun(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	target := filepath.Join(base, "hub.go")
+	os.WriteFile(target, []byte("one\ntwo\nthree\n"), 0o640)
+
+	var kept Snapshot
+	r.Baseline = func(s Snapshot) { kept = s }
+
+	res, err := r.ReplaceInFile(context.Background(),
+		json.RawMessage(`{"path":"hub.go","old_string":"two","new_string":"TWO"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Output != "edited hub.go at line 2 (-1 +1)" {
+		t.Errorf("output = %q", res.Output)
+	}
+	got, _ := os.ReadFile(target)
+	if string(got) != "one\nTWO\nthree\n" {
+		t.Errorf("file = %q", got)
+	}
+	info, _ := os.Stat(target)
+	if info.Mode().Perm() != 0o640 {
+		t.Errorf("mode = %v, want 0640 preserved", info.Mode().Perm())
+	}
+	if kept.Path != "hub.go" || string(kept.Content) != "one\ntwo\nthree\n" {
+		t.Errorf("the baseline is %+v, want the file as it was before the edit", kept)
+	}
+}
+
+// A match that is not unique is the case the tool exists to refuse: replacing
+// the first of several is a silent wrong edit.
+func TestReplaceInFileRefusesAmbiguityAndMisses(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	original := "x = 1\ny = 2\nx = 1\n"
+	target := filepath.Join(base, "twice.txt")
+	os.WriteFile(target, []byte(original), 0o644)
+
+	_, err := r.ReplaceInFile(context.Background(),
+		json.RawMessage(`{"path":"twice.txt","old_string":"x = 1","new_string":"x = 9"}`))
+	if err == nil || !strings.Contains(err.Error(), "appears 2 times") {
+		t.Errorf("ambiguous match = %v", err)
+	}
+	_, err = r.ReplaceInFile(context.Background(),
+		json.RawMessage(`{"path":"twice.txt","old_string":"z = 3","new_string":"z = 4"}`))
+	if err == nil || !strings.Contains(err.Error(), "not in twice.txt") {
+		t.Errorf("missing match = %v", err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != original {
+		t.Errorf("a refused edit still wrote: %q", got)
+	}
+}
+
+func TestReplaceInFileRefusesWhatItCannotEdit(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	os.WriteFile(filepath.Join(base, "blob.bin"), []byte("a\x00b\x00c"), 0o644)
+	os.WriteFile(filepath.Join(base, "ok.txt"), []byte("keep\n"), 0o644)
+
+	cases := []struct {
+		name, args, want string
+	}{
+		{"missing file", `{"path":"gone.txt","old_string":"a","new_string":"b"}`, "no such file"},
+		{"binary", `{"path":"blob.bin","old_string":"a","new_string":"b"}`, "binary file"},
+		{"outside the project", `{"path":"../escape.txt","old_string":"a","new_string":"b"}`, "outside"},
+		{"no old_string", `{"path":"ok.txt","new_string":"b"}`, "needs old_string"},
+		{"nothing to change", `{"path":"ok.txt","old_string":"keep","new_string":"keep"}`, "already what you asked for"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := r.ReplaceInFile(context.Background(), json.RawMessage(c.args))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("err = %v, want it to mention %q", err, c.want)
+			}
+		})
+	}
+}
+
+// Deleting a run of text is an edit with an empty new_string.
+func TestReplaceInFileDeletes(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	target := filepath.Join(base, "list.txt")
+	os.WriteFile(target, []byte("keep\ndrop\nkeep too\n"), 0o644)
+
+	res, err := r.ReplaceInFile(context.Background(),
+		json.RawMessage(`{"path":"list.txt","old_string":"drop\n","new_string":""}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "(-1 +0)") {
+		t.Errorf("output = %q, want one line out and none in", res.Output)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "keep\nkeep too\n" {
+		t.Errorf("file = %q", got)
 	}
 }

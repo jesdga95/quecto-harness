@@ -29,6 +29,7 @@
     if (item.kind !== "tool") return "Step";
     if (item.name === "read_file") return "Read";
     if (item.name === "write_file") return "Write";
+    if (item.name === "replace_in_file") return "Edit";
     if (item.name === "write_todos") return "Plan";
     return "Shell";
   });
@@ -75,7 +76,7 @@
       <ArrowsIn />
     {:else if item.kind === "tool" && item.name === "read_file"}
       <FileText />
-    {:else if item.kind === "tool" && item.name === "write_file"}
+    {:else if item.kind === "tool" && (item.name === "write_file" || item.name === "replace_in_file")}
       <PencilSimple />
     {:else if item.kind === "tool" && item.name === "write_todos"}
       <ListChecks />

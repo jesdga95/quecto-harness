@@ -148,8 +148,13 @@ func newFixture(t *testing.T) *fixture {
 	hub := NewHub()
 	broker := perms.New(cfg, func(sid string, r perms.Request) { hub.Publish(sid, agent.PermissionEvent(r)) })
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
 	engine := agent.NewEngine(ctx, cfg, sessions, client, broker, hub)
+	// The temporary home goes away when the test ends, so nothing the engine
+	// started may still be writing sessions into it.
+	t.Cleanup(func() {
+		cancel()
+		engine.Wait(5 * time.Second)
+	})
 
 	srv := New(cfg, sessions, engine, broker, client, hub, testToken, "127.0.0.1:7331", "0.1.0-test")
 	f.srv, f.handler, f.hub, f.engine, f.perms = srv, srv.Handler(), hub, engine, broker

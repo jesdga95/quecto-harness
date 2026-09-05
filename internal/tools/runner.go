@@ -1,5 +1,5 @@
-// Package tools executes read_file, write_file and run_shell against one
-// project root. It knows nothing about who approved a call; its only policy is
+// Package tools executes read_file, write_file, replace_in_file and run_shell
+// against one project root. It knows nothing about who approved a call; its only policy is
 // the path guard, which is a correctness property of the tool.
 package tools
 
@@ -13,7 +13,7 @@ import (
 	"quecto-harness/internal/config"
 )
 
-// Runner executes the three tools against one project root. All paths are
+// Runner executes the file and shell tools against one project root. All paths are
 // resolved against Root and may not leave it.
 type Runner struct {
 	Root        string
@@ -85,6 +85,12 @@ type ReadFileArgs struct {
 type WriteFileArgs struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+}
+
+type ReplaceInFileArgs struct {
+	Path      string `json:"path"`
+	OldString string `json:"old_string"`
+	NewString string `json:"new_string"`
 }
 
 type RunShellArgs struct {

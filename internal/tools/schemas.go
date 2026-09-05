@@ -48,6 +48,20 @@ func buildSchemas() []llama.Tool {
 			}),
 		}},
 		{Type: "function", Function: llama.FunctionSpec{
+			Name:        "replace_in_file",
+			Description: prompts.ToolReplaceInFile(),
+			Parameters: mustSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":       map[string]any{"type": "string", "description": "Path relative to the project root."},
+					"old_string": map[string]any{"type": "string", "description": "The exact text to replace. It must appear once."},
+					"new_string": map[string]any{"type": "string", "description": "What to put in its place. Empty deletes the text."},
+				},
+				"required":             []string{"path", "old_string", "new_string"},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llama.FunctionSpec{
 			Name:        "write_todos",
 			Description: prompts.ToolWriteTodos(),
 			Parameters: mustSchema(map[string]any{

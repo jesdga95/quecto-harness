@@ -214,8 +214,8 @@ func TestEffortReachesTheRequestBody(t *testing.T) {
 		t.Errorf("reasoning_format = %v", body["reasoning_format"])
 	}
 	tools, _ := body["tools"].([]any)
-	if len(tools) != 4 {
-		t.Errorf("tools = %d, want 4", len(tools))
+	if len(tools) != 5 {
+		t.Errorf("tools = %d, want 5", len(tools))
 	}
 	msgs, _ := body["messages"].([]any)
 	if len(msgs) != 2 {

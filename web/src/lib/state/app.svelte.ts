@@ -428,11 +428,13 @@ function onEvent(event: HarnessEvent): void {
 
   applyEvent(app.items, event);
 
-  // A write is the only thing that changes the file list, and the event
-  // carries an id rather than a name, so the card it filled is what names it.
+  // Only the file tools change the list, and the event carries an id rather
+  // than a name, so the card it filled is what names it.
   if (event.type === "tool_output") {
     const card = app.items.find((i) => i.id === event.id);
-    if (card?.kind === "tool" && card.name === "write_file") void loadChanges();
+    const wrote =
+      card?.kind === "tool" && (card.name === "write_file" || card.name === "replace_in_file");
+    if (wrote) void loadChanges();
   }
 
   if (event.type === "usage") {

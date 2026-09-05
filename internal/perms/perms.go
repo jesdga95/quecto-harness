@@ -94,7 +94,7 @@ func (b *Broker) Evaluate(project, tool, command string, mode config.Mode) Actio
 		// write_todos changes the session's own plan and touches nothing on
 		// the machine, so there is nothing to decide.
 		return ActionAllow
-	case "write_file":
+	case "write_file", "replace_in_file":
 		if auto {
 			return ActionAllow
 		}

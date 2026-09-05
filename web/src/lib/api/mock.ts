@@ -762,6 +762,23 @@ function seededEvents(): HarnessEvent[] {
         "- fan out on publish and drop a slow reader instead of blocking\n" +
         "- close the channel when the last tab goes away",
     },
+    {
+      type: "tool_call",
+      id: `${call}_edit`,
+      name: "replace_in_file",
+      args: {
+        path: "internal/server/hub.go",
+        old_string: "\tch := h.subs[session]\n\th.mu.RUnlock()\n\tch <- ev",
+        new_string: "\tsubs := append([]chan agent.Event(nil), h.subs[session]...)",
+      },
+    },
+    {
+      type: "tool_output",
+      id: `${call}_edit`,
+      output: "edited internal/server/hub.go at line 43 (-3 +9)",
+      exit_code: null,
+      truncated: false,
+    },
     { type: "done" },
     { type: "compacted", before: 98000, after: 6000, summary: MOCK_SUMMARY },
     { type: "error", message: "Stream closed by server: context canceled" },
