@@ -5,7 +5,7 @@
 
 import { Marked, type RendererObject } from "marked";
 import katex from "katex";
-import { highlight } from "./highlight";
+import { escapeHtml, guess, highlight } from "./highlight";
 
 // Formulas are lifted out before the markdown runs and put back afterwards.
 // The slots use private use characters, which are stripped from the source
@@ -22,15 +22,6 @@ interface Formula {
   raw: string;
   tex: string;
   display: boolean;
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 // Only http, https and mailto survive, plus links relative to this page.
@@ -250,8 +241,10 @@ const renderer: RendererObject = {
   code({ text, lang }) {
     const language = fenceLanguage(lang);
     const head = language ? `<div class="md-code-lang">${escapeHtml(language)}</div>` : "";
-    const body = highlight(text, language.toLowerCase()) ?? escapeHtml(text);
-    return `<div class="md-code">${head}<pre><code>${body}</code></pre></div>\n`;
+    // A model routinely opens a fence with no language, so an unlabelled
+    // block is guessed at rather than left grey.
+    const marked = language ? highlight(text, language.toLowerCase()) : guess(text);
+    return `<div class="md-code">${head}<pre><code>${marked ?? escapeHtml(text)}</code></pre></div>\n`;
   },
 
   // Markup written by the model is shown as the text it is, never parsed.

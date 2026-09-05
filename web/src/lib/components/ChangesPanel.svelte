@@ -65,7 +65,7 @@
 
         {#if open.has(file.path) && drawable(file)}
           <div class="mt-1 mb-2">
-            <DiffBlock hunks={file.hunks} omitted={file.omitted} />
+            <DiffBlock hunks={file.hunks} omitted={file.omitted} path={file.path} />
           </div>
         {/if}
       </div>

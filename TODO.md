@@ -26,8 +26,10 @@ Ordered by size. Take from the top.
   turn, so it finishes with an answer.
 - A compaction opens and shows the summary it kept. Expandable step rows carry
   a caret.
-- Syntax highlighting for fenced code, from highlight.js core with the
-  languages registered by hand and a six colour palette of the page's own.
+- Syntax highlighting, from highlight.js core with the languages registered by
+  hand and a six colour palette of the page's own. It reaches a fence in a
+  reply, a file that was read, and a line of a diff; a fence with no language
+  is guessed at.
 - The model names the session after its first turn, continuing the session's
   own messages so the prompt stays cached.
 - Shell steps open as a console: the command behind a prompt, output in mono,

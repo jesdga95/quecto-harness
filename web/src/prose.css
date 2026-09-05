@@ -164,64 +164,6 @@
   white-space: pre;
 }
 
-/* Token classes written by the highlighter. Anything it does not name keeps
-   the block's own colour, so an unknown language is plain text. */
-.prose .md-code .hljs-keyword,
-.prose .md-code .hljs-selector-tag,
-.prose .md-code .hljs-literal,
-.prose .md-code .hljs-symbol,
-.prose .md-code .hljs-bullet,
-.prose .md-code .hljs-operator {
-  color: var(--hl-key);
-}
-.prose .md-code .hljs-string,
-.prose .md-code .hljs-regexp,
-.prose .md-code .hljs-doctag,
-.prose .md-code .hljs-quote,
-.prose .md-code .hljs-selector-attr,
-.prose .md-code .hljs-selector-pseudo {
-  color: var(--hl-str);
-}
-.prose .md-code .hljs-number,
-.prose .md-code .hljs-meta,
-.prose .md-code .hljs-link {
-  color: var(--hl-num);
-}
-.prose .md-code .hljs-type,
-.prose .md-code .hljs-built_in,
-.prose .md-code .hljs-class .hljs-title,
-.prose .md-code .hljs-selector-class,
-.prose .md-code .hljs-selector-id,
-.prose .md-code .hljs-attribute {
-  color: var(--hl-type);
-}
-.prose .md-code .hljs-title,
-.prose .md-code .hljs-name,
-.prose .md-code .hljs-section,
-.prose .md-code .hljs-tag,
-.prose .md-code .hljs-attr,
-.prose .md-code .hljs-property,
-.prose .md-code .hljs-variable,
-.prose .md-code .hljs-template-variable {
-  color: var(--hl-fn);
-}
-.prose .md-code .hljs-comment {
-  color: var(--hl-com);
-  font-style: italic;
-}
-.prose .md-code .hljs-addition {
-  color: var(--ok);
-}
-.prose .md-code .hljs-deletion {
-  color: var(--crit);
-}
-.prose .md-code .hljs-strong {
-  font-weight: 500;
-}
-.prose .md-code .hljs-emphasis {
-  font-style: italic;
-}
-
 .md-table {
   margin: 0 0 12px;
   max-width: 100%;

@@ -4,8 +4,6 @@
 package service
 
 import (
-	"bytes"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"os"
@@ -145,11 +143,11 @@ func plistText(s Spec) string {
 	return b.String()
 }
 
-func xmlEscape(s string) string {
-	var buf bytes.Buffer
-	xml.EscapeText(&buf, []byte(s))
-	return buf.String()
-}
+var xmlEscaper = strings.NewReplacer(
+	"&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&#34;", "'", "&#39;",
+)
+
+func xmlEscape(s string) string { return xmlEscaper.Replace(s) }
 
 // systemdText renders the user unit. ExecStart is quoted as one value so a
 // path containing a space survives.

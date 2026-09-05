@@ -74,3 +74,115 @@ export function highlight(code: string, lang: string): string | null {
     return null;
   }
 }
+
+/** Escapes text that is about to be put in markup, for the paths that do not
+    go through the highlighter. */
+export function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// What a file name says about its language. A name with no extension is
+// matched whole, since Makefile and Dockerfile are named rather than suffixed.
+const BY_NAME: Record<string, string> = {
+  makefile: "makefile",
+  dockerfile: "dockerfile",
+  gemfile: "ruby",
+  rakefile: "ruby",
+};
+
+const BY_EXTENSION: Record<string, string> = {
+  bash: "bash",
+  c: "c",
+  cc: "cpp",
+  cjs: "javascript",
+  conf: "ini",
+  cpp: "cpp",
+  cs: "csharp",
+  css: "css",
+  diff: "diff",
+  go: "go",
+  h: "c",
+  hpp: "cpp",
+  htm: "xml",
+  html: "xml",
+  ini: "ini",
+  java: "java",
+  js: "javascript",
+  json: "json",
+  jsx: "javascript",
+  kt: "kotlin",
+  lua: "lua",
+  markdown: "markdown",
+  md: "markdown",
+  mjs: "javascript",
+  mk: "makefile",
+  patch: "diff",
+  php: "php",
+  py: "python",
+  rb: "ruby",
+  rs: "rust",
+  scss: "css",
+  sh: "bash",
+  sql: "sql",
+  svelte: "xml",
+  svg: "xml",
+  swift: "swift",
+  toml: "ini",
+  ts: "typescript",
+  tsx: "typescript",
+  vue: "xml",
+  xml: "xml",
+  yaml: "yaml",
+  yml: "yaml",
+  zsh: "bash",
+};
+
+/** The language a path implies, or an empty string when nothing is known. */
+export function languageOfPath(path: string): string {
+  const name = (path.split("/").pop() ?? "").toLowerCase();
+  const dot = name.lastIndexOf(".");
+  if (dot > 0) return BY_EXTENSION[name.slice(dot + 1)] ?? "";
+  return BY_NAME[name] ?? "";
+}
+
+// The languages a fence with no label is guessed from. A short snippet scores
+// low against every one of them, so a guess is taken only when it is clear.
+const GUESSES = [
+  "bash",
+  "c",
+  "cpp",
+  "css",
+  "go",
+  "java",
+  "javascript",
+  "json",
+  "markdown",
+  "python",
+  "rust",
+  "sql",
+  "typescript",
+  "xml",
+  "yaml",
+];
+
+/** Marked-up code for a fence that named no language, or null when nothing
+    scored well enough to be worth colouring. */
+export function guess(code: string): string | null {
+  try {
+    const best = hljs.highlightAuto(code, GUESSES);
+    return best.relevance >= 6 ? best.value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Marked-up code, falling back to escaped text, for the views that render
+    code outside markdown. */
+export function codeHtml(text: string, language: string): string {
+  return highlight(text, language) ?? escapeHtml(text);
+}

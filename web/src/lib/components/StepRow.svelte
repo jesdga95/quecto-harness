@@ -7,6 +7,7 @@
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
   import Terminal from "phosphor-svelte/lib/Terminal";
+  import FileBlock from "./FileBlock.svelte";
   import TerminalCard from "./TerminalCard.svelte";
   import TodoList from "./TodoList.svelte";
   import type { Todo, TranscriptItem } from "../api";
@@ -119,6 +120,8 @@
           exitCode={item.exitCode}
           truncated={item.truncated}
         />
+      {:else if item.kind === "tool" && item.name === "read_file" && item.output}
+        <FileBlock {path} output={item.output} />
       {:else if item.kind === "tool"}
         {#if item.output}
           <pre class="mono-block">{item.output}</pre>

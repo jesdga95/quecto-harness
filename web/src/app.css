@@ -1257,6 +1257,110 @@
     color: var(--crit);
   }
 
+  /* Token classes written by the highlighter, wherever code is drawn: a fence
+     in a reply, a file that was read, a line of a diff. The colour lands on
+     the span itself, so the block's own colour is what everything else keeps. */
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-literal,
+  .hljs-symbol,
+  .hljs-bullet,
+  .hljs-operator {
+    color: var(--hl-key);
+  }
+  .hljs-string,
+  .hljs-regexp,
+  .hljs-doctag,
+  .hljs-quote,
+  .hljs-selector-attr,
+  .hljs-selector-pseudo {
+    color: var(--hl-str);
+  }
+  .hljs-number,
+  .hljs-meta,
+  .hljs-link {
+    color: var(--hl-num);
+  }
+  .hljs-type,
+  .hljs-built_in,
+  .hljs-class .hljs-title,
+  .hljs-selector-class,
+  .hljs-selector-id,
+  .hljs-attribute {
+    color: var(--hl-type);
+  }
+  .hljs-title,
+  .hljs-name,
+  .hljs-section,
+  .hljs-tag,
+  .hljs-attr,
+  .hljs-property,
+  .hljs-variable,
+  .hljs-template-variable {
+    color: var(--hl-fn);
+  }
+  .hljs-comment {
+    color: var(--hl-com);
+    font-style: italic;
+  }
+  .hljs-addition {
+    color: var(--ok);
+  }
+  .hljs-deletion {
+    color: var(--crit);
+  }
+  .hljs-strong {
+    font-weight: 500;
+  }
+  .hljs-emphasis {
+    font-style: italic;
+  }
+
+  /* A file as read: numbers in a gutter that does not scroll, the code beside
+     them in its own colours. */
+  .filecode {
+    border-radius: 12px;
+    border: 1px solid var(--hair);
+    background: var(--surface-2);
+    max-height: 340px;
+    overflow: auto;
+  }
+  .filecode-rows {
+    display: flex;
+    align-items: flex-start;
+    min-width: 0;
+  }
+  .filecode-gutter {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    padding: 10px 10px 10px 12px;
+    border-right: 1px solid var(--hair);
+    font-size: 11.5px;
+    line-height: 1.6;
+    text-align: right;
+    color: var(--muted);
+    user-select: none;
+  }
+  .filecode-body {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 10px 13px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.6;
+    white-space: pre;
+    color: var(--text-2);
+  }
+  .filecode-foot {
+    padding: 6px 13px 9px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+
   .mono-block {
     font-family: var(--font-mono);
     font-size: 12px;
