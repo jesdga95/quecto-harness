@@ -49,7 +49,7 @@ func NewSpec(home, listen string) (Spec, error) {
 		exe = real
 	}
 	if isTemporary(exe) {
-		return Spec{}, fmt.Errorf("the binary is at %s: install it somewhere permanent first, for example /usr/local/bin", exe)
+		return Spec{}, fmt.Errorf("The binary is at %s: install it somewhere permanent first, for example /usr/local/bin", exe)
 	}
 	return Spec{
 		Binary: exe,
@@ -90,7 +90,7 @@ func UnitPath(home string) (string, error) {
 	case "linux":
 		return filepath.Join(base, ".config", "systemd", "user", "quecto-harness.service"), nil
 	}
-	return "", fmt.Errorf("no service support on %s: run quecto-harness yourself", runtime.GOOS)
+	return "", fmt.Errorf("No service support on %s: run quecto-harness yourself", runtime.GOOS)
 }
 
 // UnitText renders the unit without touching the filesystem.
@@ -105,7 +105,7 @@ func UnitText(s Spec) (string, string, error) {
 	case "linux":
 		return path, systemdText(s), nil
 	}
-	return "", "", fmt.Errorf("no service support on %s: run quecto-harness yourself", runtime.GOOS)
+	return "", "", fmt.Errorf("No service support on %s: run quecto-harness yourself", runtime.GOOS)
 }
 
 func args(s Spec) []string {
@@ -190,7 +190,7 @@ func Install(s Spec) error {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create %s: check the permissions on its parent", filepath.Dir(path))
+		return fmt.Errorf("Create %s: check the permissions on its parent", filepath.Dir(path))
 	}
 	if err := config.WriteAtomic(path, []byte(body), 0o644); err != nil {
 		return err
@@ -204,15 +204,15 @@ func Install(s Spec) error {
 		run("launchctl", "bootout", target)
 		run("launchctl", "enable", target)
 		if out, err := runOut("launchctl", "bootstrap", "gui/"+uid, path); err != nil {
-			return fmt.Errorf("load the launch agent: %s", strings.TrimSpace(out))
+			return fmt.Errorf("Load the launch agent: %s", strings.TrimSpace(out))
 		}
 		run("launchctl", "kickstart", target)
 	case "linux":
 		if out, err := runOut("systemctl", "--user", "daemon-reload"); err != nil {
-			return fmt.Errorf("reload the user units: %s", strings.TrimSpace(out))
+			return fmt.Errorf("Reload the user units: %s", strings.TrimSpace(out))
 		}
 		if out, err := runOut("systemctl", "--user", "enable", "--now", "quecto-harness"); err != nil {
-			return fmt.Errorf("enable the unit: %s", strings.TrimSpace(out))
+			return fmt.Errorf("Enable the unit: %s", strings.TrimSpace(out))
 		}
 	}
 	return nil
@@ -233,7 +233,7 @@ func Uninstall(home string) error {
 		run("systemctl", "--user", "disable", "--now", "quecto-harness")
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove %s: check the permissions on the folder", path)
+		return fmt.Errorf("Remove %s: check the permissions on the folder", path)
 	}
 	if runtime.GOOS == "linux" {
 		run("systemctl", "--user", "daemon-reload")

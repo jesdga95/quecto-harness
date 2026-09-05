@@ -133,12 +133,12 @@ var (
 // skipped, because one bad file must not stop the program.
 func Open(dir string) (*Sessions, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("create %s: check the permissions on its parent", dir)
+		return nil, fmt.Errorf("Create %s: check the permissions on its parent", dir)
 	}
 	s := &Sessions{dir: dir, index: map[string]Summary{}, locks: map[string]*sync.Mutex{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: check the permissions on the folder", dir)
+		return nil, fmt.Errorf("Read %s: check the permissions on the folder", dir)
 	}
 	for _, e := range entries {
 		if e.IsDir() || !namePattern.MatchString(e.Name()) {
@@ -195,11 +195,11 @@ func (s *Sessions) Load(id string) (*Session, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("read session %s: %w", id, err)
+		return nil, fmt.Errorf("Read session %s: %w", id, err)
 	}
 	var sess Session
 	if err := json.Unmarshal(raw, &sess); err != nil {
-		return nil, fmt.Errorf("read session %s: %w: the file is not valid JSON", id, err)
+		return nil, fmt.Errorf("Read session %s: %w: the file is not valid JSON", id, err)
 	}
 	return &sess, nil
 }
@@ -212,7 +212,7 @@ func (s *Sessions) Save(sess *Session) error {
 	}
 	data, err := json.MarshalIndent(sess, "", "  ")
 	if err != nil {
-		return fmt.Errorf("save session %s: %w", sess.ID, err)
+		return fmt.Errorf("Save session %s: %w", sess.ID, err)
 	}
 	data = append(data, '\n')
 	lock := s.lockFor(sess.ID)
@@ -239,7 +239,7 @@ func (s *Sessions) Delete(id string) error {
 		log.Printf("sessions/%s.files: %v: the folder is left behind", id, rmErr)
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("delete session %s: %w", id, err)
+		return fmt.Errorf("Delete session %s: %w", id, err)
 	}
 	s.mu.Lock()
 	delete(s.index, id)

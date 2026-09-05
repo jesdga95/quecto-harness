@@ -639,7 +639,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		}
 		if res.Dropped > 0 {
 			e.publish(s.ID, ev("error", map[string]any{"kind": "malformed",
-				"message": fmt.Sprintf("the model server sent %d frames that could not be read: some output was lost", res.Dropped)}))
+				"message": fmt.Sprintf("The model server sent %d frames that could not be read: some output was lost", res.Dropped)}))
 		}
 		if res.Usage != nil {
 			s.mu.Lock()
@@ -720,7 +720,7 @@ func (e *Engine) endWithError(s *Session, err error, iteration int) {
 
 func (e *Engine) markStopped(s *Session) {
 	s.mu.Lock()
-	s.appendEntry(store.Entry{Kind: "status", Content: "stopped", InContext: false, Visible: true})
+	s.appendEntry(store.Entry{Kind: "status", Content: "Stopped", InContext: false, Visible: true})
 	s.mu.Unlock()
 	e.setState(s, StateStopped)
 	e.save(s)

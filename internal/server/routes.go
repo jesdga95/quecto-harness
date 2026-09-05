@@ -181,7 +181,7 @@ func (s *Server) getModelProps(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var le *llama.Error
 		if errors.As(err, &le) && le.Status >= 400 && le.Status < 500 {
-			writeError(w, http.StatusConflict, "model \""+id+"\" is not loaded: it loads on the first message")
+			writeError(w, http.StatusConflict, "Model \""+id+"\" is not loaded: it loads on the first message")
 			return
 		}
 		writeError(w, http.StatusBadGateway, err.Error())
@@ -236,7 +236,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 	out := map[string]any{"projects": orEmpty(cfg.Projects), "sessions_deleted": removed}
 	if busy > 0 {
-		out["note"] = "a session is still running and was kept"
+		out["note"] = "A session is still running and was kept"
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -401,7 +401,7 @@ func (s *Server) rebindSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if picked == nil {
-		writeError(w, http.StatusBadRequest, "model \""+body.Model+"\" is not on the model server: pick another from the model list")
+		writeError(w, http.StatusBadRequest, "Model \""+body.Model+"\" is not on the model server: pick another from the model list")
 		return
 	}
 	if err := s.engine.Rebind(sess.ID, picked.ID, picked.CtxHint, picked.CtxSource); err != nil {
@@ -527,7 +527,7 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 		command := config.NormaliseCommand(req.Command)
 		if prefix == "" || !strings.HasPrefix(command, prefix) {
 			writeError(w, http.StatusBadRequest,
-				"prefix \""+body.Prefix+"\" does not match the command: edit it or choose allow once")
+				"Prefix \""+body.Prefix+"\" does not match the command: edit it or choose allow once")
 			return
 		}
 		body.Prefix = prefix
@@ -560,7 +560,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Effort != nil && !llama.ValidEffort(*body.Effort) {
-		writeError(w, http.StatusBadRequest, "effort \""+*body.Effort+"\" is not "+config.EffortNames)
+		writeError(w, http.StatusBadRequest, "Effort \""+*body.Effort+"\" is not "+config.EffortNames)
 		return
 	}
 	if body.MaxToolCalls != nil && (*body.MaxToolCalls < 0 || *body.MaxToolCalls > 1000) {
@@ -624,7 +624,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	out := toConfigJSON(cfg)
 	if body.Listen != nil && cfg.Listen != before.Listen {
-		out.Note = "listen changes take effect on restart"
+		out.Note = "Listen changes take effect on restart"
 	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -47,11 +47,11 @@ func (s *Sessions) filesDir(id string) string {
 // never reach outside the folder.
 func (s *Sessions) WriteBlob(id, name string, data []byte) error {
 	if !namePattern.MatchString(id+".json") || !blobPattern.MatchString(name) {
-		return errors.New("store a baseline: the session or the name is not one of ours")
+		return errors.New("Store a baseline: the session or the name is not one of ours")
 	}
 	dir := s.filesDir(id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create %s: check the permissions on the sessions folder", dir)
+		return fmt.Errorf("Create %s: check the permissions on the sessions folder", dir)
 	}
 	return config.WriteAtomic(filepath.Join(dir, name), data, 0o600)
 }
@@ -66,7 +66,7 @@ func (s *Sessions) Blob(id, name string) ([]byte, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
 		}
-		return nil, fmt.Errorf("read a baseline of session %s: %w", id, err)
+		return nil, fmt.Errorf("Read a baseline of session %s: %w", id, err)
 	}
 	return data, nil
 }

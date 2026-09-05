@@ -722,7 +722,7 @@ func TestPutConfig(t *testing.T) {
 		t.Errorf("bad effort = %d", w.Code)
 	}
 	body = decode(t, f.do(t, "PUT", "/api/config", map[string]any{"listen": "127.0.0.1:9999"}))
-	if body["note"] != "listen changes take effect on restart" {
+	if body["note"] != "Listen changes take effect on restart" {
 		t.Errorf("note = %v", body["note"])
 	}
 }

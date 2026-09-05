@@ -91,7 +91,7 @@ func (c *Client) getJSON(ctx context.Context, op, model, u string, v any) error 
 	}
 	if err := json.Unmarshal(body, v); err != nil {
 		return &Error{Kind: KindMalformed, Op: op, err: err,
-			Message: "the model server sent a reply that could not be read: check that " + c.BaseURL + " is a llama.cpp server"}
+			Message: "The model server sent a reply that could not be read: check that " + c.BaseURL + " is a llama.cpp server"}
 	}
 	return nil
 }

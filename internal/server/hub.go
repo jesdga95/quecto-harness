@@ -177,7 +177,7 @@ func encode(kind string, seq int64, fields map[string]any) []byte {
 	b, err := json.Marshal(out)
 	if err != nil {
 		b, _ = json.Marshal(map[string]any{"type": "error", "seq": seq,
-			"kind": "internal", "message": "an event could not be encoded"})
+			"kind": "internal", "message": "An event could not be encoded"})
 	}
 	return b
 }

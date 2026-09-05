@@ -56,7 +56,7 @@ func DiscoverPathsIn(home string) Paths {
 func (p Paths) EnsureDirs() error {
 	for _, d := range []string{p.Home, p.Sessions, p.Files, p.Log} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
-			return errors.New("create " + d + ": check the permissions on its parent")
+			return errors.New("Create " + d + ": check the permissions on its parent")
 		}
 	}
 	return nil

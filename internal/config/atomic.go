@@ -50,7 +50,7 @@ type writeError struct {
 }
 
 func (e *writeError) Error() string {
-	return "write " + e.path + ": " + e.err.Error() + ": check the permissions on the state directory"
+	return "Write " + e.path + ": " + e.err.Error() + ": check the permissions on the state directory"
 }
 
 func (e *writeError) Unwrap() error { return e.err }

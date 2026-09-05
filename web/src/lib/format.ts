@@ -43,15 +43,27 @@ export function shortPath(path: string): string {
 export function since(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
   const min = Math.round(ms / 60000);
-  if (min < 1) return "now";
+  if (min < 1) return "Now";
   if (min < 60) return `${min}min`;
   const hours = Math.round(min / 60);
   if (hours < 24) return `${hours}h`;
   return `${Math.round(hours / 24)}d`;
 }
 
+/** The written name of a thinking level. */
 export function effortLabel(effort: string): string {
-  return effort[0]!.toUpperCase() + effort.slice(1);
+  switch (effort) {
+    case "auto":
+      return "Auto";
+    case "off":
+      return "Off";
+    case "low":
+      return "Low";
+    case "high":
+      return "High";
+    default:
+      return "Medium";
+  }
 }
 
 /** How much thinking each level asks for, in one line. */

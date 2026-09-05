@@ -55,7 +55,7 @@ func run(argv []string) error {
 		case "service":
 			return serviceCmd(argv[1:])
 		default:
-			return fmt.Errorf("no command %q: try serve, open, service or version", argv[0])
+			return fmt.Errorf("No command %q: try serve, open, service or version", argv[0])
 		}
 	}
 	return serve(argv)
@@ -70,9 +70,9 @@ type flags struct {
 func parseFlags(name string, argv []string) (flags, error) {
 	var f flags
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.StringVar(&f.listen, "listen", "", "host:port to bind, overriding config.json for this process")
-	fs.BoolVar(&f.noOpen, "no-open", false, "do not open a browser after binding")
-	fs.StringVar(&f.home, "home", os.Getenv("QUECTO_HARNESS_HOME"), "state directory, default ~/.quecto-harness")
+	fs.StringVar(&f.listen, "listen", "", "Host:port to bind, overriding config.json for this process")
+	fs.BoolVar(&f.noOpen, "no-open", false, "Do not open a browser after binding")
+	fs.StringVar(&f.home, "home", os.Getenv("QUECTO_HARNESS_HOME"), "State directory, default ~/.quecto-harness")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), usage)
 		fs.PrintDefaults()
@@ -83,15 +83,15 @@ func parseFlags(name string, argv []string) (flags, error) {
 	return f, nil
 }
 
-const usage = `quecto-harness: a local coding agent that talks to a llama.cpp server.
+const usage = `quecto-harness: A local coding agent that talks to a llama.cpp server.
 
 Usage:
-  quecto-harness [flags]                  serve
-  quecto-harness open                     open the browser at the saved URL
-  quecto-harness service install [flags]  write and load the OS unit
-  quecto-harness service uninstall        unload and remove the OS unit
-  quecto-harness service status           report unit presence, run state, URL
-  quecto-harness version                  print version, commit, Go version
+  quecto-harness [flags]                  Serve
+  quecto-harness open                     Open the browser at the saved URL
+  quecto-harness service install [flags]  Write and load the OS unit
+  quecto-harness service uninstall        Unload and remove the OS unit
+  quecto-harness service status           Report unit presence, run state, URL
+  quecto-harness version                  Print version, commit, Go version
 
 Flags:
 `
@@ -145,7 +145,7 @@ func serve(argv []string) error {
 	}
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
-		return fmt.Errorf("listen %s: %s: another process may be using the port, pass --listen to choose another", listen, err)
+		return fmt.Errorf("Listen on %s: %s: another process may be using the port, pass --listen to choose another", listen, err)
 	}
 	defer ln.Close()
 	if !isLoopback(listen) {
@@ -195,7 +195,7 @@ func serve(argv []string) error {
 	defer cancel()
 	httpSrv.Shutdown(shutdownCtx)
 	if err := os.Remove(p.URL); err != nil && !errors.Is(err, os.ErrNotExist) {
-		log.Printf("remove %s: %v", p.URL, err)
+		log.Printf("Remove %s: %v", p.URL, err)
 	}
 	return nil
 }
@@ -210,7 +210,7 @@ func loadToken(path string) (string, error) {
 	}
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate a session token: %w", err)
+		return "", fmt.Errorf("Generate a session token: %w", err)
 	}
 	token := base64.RawURLEncoding.EncodeToString(b)
 	if err := config.WriteAtomic(path, []byte(token+"\n"), 0o600); err != nil {
@@ -255,7 +255,7 @@ func OpenBrowser(url string) error {
 		cmd.Stdout, cmd.Stderr = devnull, devnull
 	}
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("open browser: %s not found: visit %s yourself", name, url)
+		return fmt.Errorf("Open a browser: %s not found: visit %s yourself", name, url)
 	}
 	go cmd.Wait()
 	return nil
@@ -272,7 +272,7 @@ func openSaved(argv []string) error {
 	}
 	raw, err := os.ReadFile(p.URL)
 	if err != nil {
-		return fmt.Errorf("no saved URL at %s: start quecto-harness first, or check service status", p.URL)
+		return fmt.Errorf("No saved URL at %s: start quecto-harness first, or check service status", p.URL)
 	}
 	return OpenBrowser(strings.TrimSpace(string(raw)))
 }
@@ -326,21 +326,21 @@ func serviceCmd(argv []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("unit      %s\n", st.Unit)
-		state := "not installed"
+		fmt.Printf("Unit      %s\n", st.Unit)
+		state := "Not installed"
 		switch {
 		case st.Running:
-			state = "running"
+			state = "Running"
 			if st.Detail != "" {
-				state = "running (" + st.Detail + ")"
+				state = "Running (" + st.Detail + ")"
 			}
 		case st.Installed:
-			state = "installed, not running"
+			state = "Installed, not running"
 		}
-		fmt.Printf("state     %s\n", state)
-		fmt.Printf("url       %s\n", st.URL)
-		fmt.Printf("token     %s (delete to rotate)\n", p.Token)
-		fmt.Printf("logs      %s/harness.log\n", p.Log)
+		fmt.Printf("State     %s\n", state)
+		fmt.Printf("URL       %s\n", st.URL)
+		fmt.Printf("Token     %s (delete to rotate)\n", p.Token)
+		fmt.Printf("Logs      %s/harness.log\n", p.Log)
 		switch {
 		case st.Running:
 			os.Exit(0)
@@ -351,5 +351,5 @@ func serviceCmd(argv []string) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("no service subcommand %q: try install, uninstall or status", sub)
+	return fmt.Errorf("No service subcommand %q: try install, uninstall or status", sub)
 }

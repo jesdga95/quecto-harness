@@ -115,7 +115,7 @@ func recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if v := recover(); v != nil {
-				log.Printf("panic serving %s %s: %v\n%s", r.Method, r.URL.Path, v, debug.Stack())
+				log.Printf("Panic serving %s %s: %v\n%s", r.Method, r.URL.Path, v, debug.Stack())
 				writeError(w, http.StatusInternalServerError, "Internal error")
 			}
 		}()
@@ -234,7 +234,7 @@ func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
 	if !s.authorised(r) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Write([]byte("open the URL printed by quecto-harness, or run quecto-harness open\n"))
+		w.Write([]byte("Open the URL printed by quecto-harness, or run quecto-harness open\n"))
 		return
 	}
 	s.ui.ServeHTTP(w, r)

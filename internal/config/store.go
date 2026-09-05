@@ -31,11 +31,11 @@ func Open(p Paths) (*Store, error) {
 	switch {
 	case err == nil:
 		if err := json.Unmarshal(raw, &file); err != nil {
-			return nil, fmt.Errorf("read %s: %w: fix the JSON or delete the file to start from defaults", p.Config, err)
+			return nil, fmt.Errorf("Read %s: %w: fix the JSON or delete the file to start from defaults", p.Config, err)
 		}
 	case errors.Is(err, os.ErrNotExist):
 	default:
-		return nil, fmt.Errorf("read %s: %w", p.Config, err)
+		return nil, fmt.Errorf("Read %s: %w", p.Config, err)
 	}
 	s.cfg, s.notes = file.Resolve(Defaults())
 
@@ -44,14 +44,14 @@ func Open(p Paths) (*Store, error) {
 	case err == nil:
 		var m map[string][]string
 		if err := json.Unmarshal(rawAllow, &m); err != nil {
-			return nil, fmt.Errorf("read %s: %w: fix the JSON or delete the file to start with no rules", p.Allowlist, err)
+			return nil, fmt.Errorf("Read %s: %w: fix the JSON or delete the file to start with no rules", p.Allowlist, err)
 		}
 		for project, prefixes := range m {
 			s.allow[project] = normalisePrefixes(prefixes)
 		}
 	case errors.Is(err, os.ErrNotExist):
 	default:
-		return nil, fmt.Errorf("read %s: %w", p.Allowlist, err)
+		return nil, fmt.Errorf("Read %s: %w", p.Allowlist, err)
 	}
 
 	if err := s.persistConfig(); err != nil {
@@ -211,22 +211,22 @@ func ResolveProject(path string) (string, error) {
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("resolve %s: %w", path, err)
+		return "", fmt.Errorf("Resolve %s: %w", path, err)
 	}
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return "", fmt.Errorf("open %s: no such folder, or it cannot be read", abs)
+		return "", fmt.Errorf("Open %s: no such folder, or it cannot be read", abs)
 	}
 	info, err := os.Stat(real)
 	if err != nil {
-		return "", fmt.Errorf("open %s: no such folder, or it cannot be read", abs)
+		return "", fmt.Errorf("Open %s: no such folder, or it cannot be read", abs)
 	}
 	if !info.IsDir() {
 		return "", fmt.Errorf("%s is a file: choose a folder", abs)
 	}
 	f, err := os.Open(real)
 	if err != nil {
-		return "", fmt.Errorf("read %s: check the permissions on the folder", real)
+		return "", fmt.Errorf("Read %s: check the permissions on the folder", real)
 	}
 	f.Close()
 	return real, nil

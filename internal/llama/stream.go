@@ -70,7 +70,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest, on func(Event) error
 	body, err := buildBody(req)
 	if err != nil {
 		return Result{}, &Error{Kind: KindBadRequest, Op: "chat", err: err,
-			Message: "build the request: " + err.Error()}
+			Message: "Build the request: " + err.Error()}
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
@@ -104,7 +104,7 @@ func (c *Client) readWhole(body io.Reader, on func(Event) error) (Result, error)
 	raw, err := io.ReadAll(io.LimitReader(body, 32<<20))
 	if err != nil {
 		return Result{}, &Error{Kind: KindMalformed, Op: "chat", err: err,
-			Message: "read the reply: " + err.Error()}
+			Message: "Read the reply: " + err.Error()}
 	}
 	var ch chunk
 	if err := json.Unmarshal(raw, &ch); err != nil {
@@ -266,7 +266,7 @@ func (s *streamState) dispatch(payload []byte, on func(Event) error) (bool, erro
 func (s *streamState) apply(ch *chunk, on func(Event) error) error {
 	if ch.Error != nil {
 		s.failure = &Error{Kind: KindUpstream, Op: "chat", Status: deref(ch.Error.Code),
-			Message: "the model server failed: " + fallback(deref(ch.Error.Message), "no reason given")}
+			Message: "The model server failed: " + fallback(deref(ch.Error.Message), "no reason given")}
 		return nil
 	}
 	s.res.Chunks++

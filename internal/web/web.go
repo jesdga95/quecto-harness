@@ -66,7 +66,7 @@ func Handler() http.Handler {
 func serveIndex(w http.ResponseWriter, r *http.Request, sub fs.FS) {
 	body, err := fs.ReadFile(sub, "index.html")
 	if err != nil {
-		http.Error(w, "the web UI is not built: run make web", http.StatusNotFound)
+		http.Error(w, "The web UI is not built: run make web", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

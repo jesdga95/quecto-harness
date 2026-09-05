@@ -420,7 +420,7 @@ func TestStopDuringACommand(t *testing.T) {
 
 	doc, _, _, _ := s.Snapshot()
 	last := doc.Entries[len(doc.Entries)-1]
-	if last.Kind != "status" || last.Content != "stopped" {
+	if last.Kind != "status" || last.Content != "Stopped" {
 		t.Errorf("last entry = %+v, want the stop marker", last)
 	}
 	if last.InContext {

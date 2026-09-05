@@ -175,7 +175,7 @@ async function call<T>(path: string, method = "GET", body?: unknown): Promise<T>
   try {
     res = await fetch(BASE + path, init);
   } catch {
-    throw new ApiError("the harness is not reachable", 0);
+    throw new ApiError("The harness is not reachable", 0);
   }
 
   if (!res.ok) throw new ApiError(await failure(res), res.status);
@@ -184,22 +184,22 @@ async function call<T>(path: string, method = "GET", body?: unknown): Promise<T>
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new ApiError("the harness sent a reply that is not JSON", res.status);
+    throw new ApiError("The harness sent a reply that is not JSON", res.status);
   }
 }
 
 async function failure(res: Response): Promise<string> {
-  if (res.status === 401) return "not authorized, run quecto-harness open";
+  if (res.status === 401) return "Not authorized: run quecto-harness open";
   // A dev proxy in front of a harness that is not listening answers for it,
   // so a gateway status means the same thing as a refused connection.
-  if (res.status >= 502 && res.status <= 504) return "the harness is not reachable";
+  if (res.status >= 502 && res.status <= 504) return "The harness is not reachable";
   try {
     const body = (await res.json()) as { error?: string };
     if (body.error) return body.error;
   } catch {
     // A body that is not JSON leaves only the status line to report.
   }
-  return `${res.status} ${res.statusText || "request failed"}`;
+  return `${res.status} ${res.statusText || "Request failed"}`;
 }
 
 // mapping
@@ -655,7 +655,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       ];
 
     case "error":
-      return [{ type: "error", message: ev.message ?? "the turn failed" }];
+      return [{ type: "error", message: ev.message ?? "The turn failed" }];
 
     case "done":
       return [{ type: "done" }];

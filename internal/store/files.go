@@ -21,7 +21,7 @@ var filePattern = regexp.MustCompile(`^file_[a-z2-7]{16}$`)
 
 func OpenFiles(dir string) (*Files, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("create %s: check the permissions on its parent", dir)
+		return nil, fmt.Errorf("Create %s: check the permissions on its parent", dir)
 	}
 	return &Files{dir: dir}, nil
 }
@@ -30,14 +30,14 @@ func OpenFiles(dir string) (*Files, error) {
 func (f *Files) Put(src string) (string, int, error) {
 	in, err := os.Open(src)
 	if err != nil {
-		return "", 0, fmt.Errorf("read %s: check the permissions on the file", src)
+		return "", 0, fmt.Errorf("Read %s: check the permissions on the file", src)
 	}
 	defer in.Close()
 
 	id := NewFileID()
 	out, err := os.OpenFile(filepath.Join(f.dir, id), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return "", 0, fmt.Errorf("store %s: %w", src, err)
+		return "", 0, fmt.Errorf("Store %s: %w", src, err)
 	}
 	n, err := io.Copy(out, in)
 	if cerr := out.Close(); err == nil {
@@ -45,7 +45,7 @@ func (f *Files) Put(src string) (string, int, error) {
 	}
 	if err != nil {
 		os.Remove(filepath.Join(f.dir, id))
-		return "", 0, fmt.Errorf("store %s: %w", src, err)
+		return "", 0, fmt.Errorf("Store %s: %w", src, err)
 	}
 	return id, int(n), nil
 }

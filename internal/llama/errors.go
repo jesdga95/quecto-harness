@@ -35,12 +35,9 @@ type Error struct {
 	err     error
 }
 
-func (e *Error) Error() string {
-	if e.Op == "" {
-		return e.Message
-	}
-	return e.Op + ": " + e.Message
-}
+// Error is the message as a person reads it. Op names the request that failed
+// and stays out of it, since the string is shown in the transcript.
+func (e *Error) Error() string { return e.Message }
 
 func (e *Error) Unwrap() error { return e.err }
 
@@ -89,31 +86,31 @@ func classify(op, baseURL, model string, status int, body string, err error) *Er
 	switch {
 	case err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)):
 		e.Kind = KindCanceled
-		e.Message = "the request was cancelled"
+		e.Message = "The request was cancelled"
 	case err != nil && isUnreachable(err):
 		e.Kind = KindUnreachable
-		e.Message = "reach " + baseURL + ": the model server is not answering, check it is running and that server.url is right"
+		e.Message = "Reach " + baseURL + ": the model server is not answering, check it is running and that server.url is right"
 	case status == 401 || status == 403:
 		e.Kind = KindAuth
-		e.Message = "authenticate with " + baseURL + ": the server rejected the token, set server.token in settings"
+		e.Message = "Authenticate with " + baseURL + ": the server rejected the token, set server.token in settings"
 	case status == 404 || (status == 400 && strings.Contains(strings.ToLower(msg), "model") && strings.Contains(strings.ToLower(msg), "not found")):
 		e.Kind = KindNotFound
-		e.Message = "model " + strconv.Quote(model) + " is not on " + baseURL + ": pick another from the model list"
+		e.Message = "Model " + strconv.Quote(model) + " is not on " + baseURL + ": pick another from the model list"
 	case status == 503 && strings.Contains(strings.ToLower(msg), "loading"):
 		e.Kind = KindModelLoading
-		e.Message = "model " + strconv.Quote(model) + " is loading: send the message again in a moment"
+		e.Message = "Model " + strconv.Quote(model) + " is loading: send the message again in a moment"
 	case status >= 400 && status < 500:
 		e.Kind = KindBadRequest
-		e.Message = "the model server refused the request: " + fallback(msg, "no reason given")
+		e.Message = "The model server refused the request: " + fallback(msg, "no reason given")
 	case status >= 500:
 		e.Kind = KindUpstream
-		e.Message = "the model server failed: " + fallback(msg, "status "+strconv.Itoa(status))
+		e.Message = "The model server failed: " + fallback(msg, "status "+strconv.Itoa(status))
 	case err != nil:
 		e.Kind = KindUnreachable
-		e.Message = "reach " + baseURL + ": " + err.Error()
+		e.Message = "Reach " + baseURL + ": " + err.Error()
 	default:
 		e.Kind = KindUpstream
-		e.Message = "the model server failed: " + fallback(msg, "status "+strconv.Itoa(status))
+		e.Message = "The model server failed: " + fallback(msg, "status "+strconv.Itoa(status))
 	}
 	return e
 }
@@ -140,10 +137,10 @@ func isUnreachable(err error) bool {
 
 func earlyCloseError(op string) *Error {
 	return &Error{Kind: KindUpstream, Op: op,
-		Message: "the model server closed the stream early: send the message again"}
+		Message: "The model server closed the stream early: send the message again"}
 }
 
 func malformedError(op string, dropped int) *Error {
 	return &Error{Kind: KindMalformed, Op: op,
-		Message: fmt.Sprintf("the model server sent nothing usable: %d frames could not be read", dropped)}
+		Message: fmt.Sprintf("The model server sent nothing usable: %d frames could not be read", dropped)}
 }

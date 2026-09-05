@@ -31,7 +31,7 @@ const (
 )
 
 var (
-	ErrNoSuchRequest   = errors.New("that decision is no longer pending: the turn moved on")
+	ErrNoSuchRequest   = errors.New("That decision is no longer pending: the turn moved on")
 	ErrSessionCanceled = errors.New("the session was stopped")
 )
 
