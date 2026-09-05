@@ -131,20 +131,34 @@ func (b *limitBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// String rebuilds the output exactly while it fits in the head and the tail,
-// and otherwise names how much was dropped in between.
-func (b *limitBuffer) String() string {
+// Render collapses the output to limit bytes and names every byte dropped in
+// between, including the ones the buffer itself never kept. Cutting twice --
+// once here and once in Truncate -- would report only the second cut, which
+// undercounts a flooding command by orders of magnitude.
+func (b *limitBuffer) Render(limit int) (string, bool) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.total <= len(b.head) {
-		return string(b.head)
+	head, tail, total := string(b.head), string(b.tail), b.total
+	b.mu.Unlock()
+
+	// While the head and the tail meet, nothing is lost yet and the ordinary
+	// cut counts correctly.
+	if missing := total - len(head); missing <= len(tail) {
+		return Truncate(head+tail[len(tail)-missing:], limit)
 	}
-	missing := b.total - len(b.head)
-	if missing <= len(b.tail) {
-		return string(b.head) + string(b.tail[len(b.tail)-missing:])
+	if limit <= 0 {
+		limit = len(head) + len(tail)
 	}
-	omitted := b.total - len(b.head) - len(b.tail)
-	return string(b.head) + "\n... " + strconv.Itoa(omitted) + " bytes omitted ...\n" + string(b.tail)
+	front, back := limit*2/3, limit-limit*2/3
+	if front > len(head) {
+		front = len(head)
+	}
+	if back > len(tail) {
+		back = len(tail)
+	}
+	front = forwardToNewline(head, front)
+	backStart := backToNewline(tail, len(tail)-back)
+	omitted := total - front - (len(tail) - backStart)
+	return head[:front] + "\n... " + strconv.Itoa(omitted) + " bytes omitted ...\n" + tail[backStart:], true
 }
 
 func (b *limitBuffer) Total() int {

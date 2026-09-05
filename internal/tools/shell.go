@@ -62,7 +62,7 @@ func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, err
 	timedOut := runCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil
 	stopped := ctx.Err() != nil
 
-	out, truncated := Truncate(buf.String(), r.OutputLimit)
+	out, truncated := buf.Render(r.OutputLimit)
 	var b strings.Builder
 	b.WriteString(out)
 	if b.Len() > 0 && !strings.HasSuffix(out, "\n") {

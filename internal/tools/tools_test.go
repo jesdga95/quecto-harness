@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -555,4 +556,118 @@ func TestReplaceInFileDeletes(t *testing.T) {
 	if got, _ := os.ReadFile(target); string(got) != "keep\nkeep too\n" {
 		t.Errorf("file = %q", got)
 	}
+}
+
+// TestLimitBufferRenderCounts pins the byte count the model is told. Cutting
+// once in the buffer and again in Truncate used to report only the second cut,
+// which named 114631 bytes for a command that had produced 100 MB.
+func TestLimitBufferRenderCounts(t *testing.T) {
+	kept := func(s string) int {
+		i := strings.Index(s, "\n... ")
+		j := strings.Index(s, " bytes omitted ...\n")
+		if i < 0 || j < 0 {
+			t.Fatalf("no marker in %q", s)
+		}
+		n := 0
+		if _, err := fmt.Sscanf(s[i+5:j], "%d", &n); err != nil {
+			t.Fatal(err)
+		}
+		return len(s) - (j + len(" bytes omitted ...\n") - i) + n
+	}
+
+	// Small enough to survive whole: byte-exact, and no marker.
+	b := newLimitBuffer(4096)
+	b.Write([]byte("hello\nworld\n"))
+	if got, tr := b.Render(4096); got != "hello\nworld\n" || tr {
+		t.Errorf("small output = %q %v", got, tr)
+	}
+
+	// Past the limit but inside the buffer's window, and far past it: the
+	// omitted count plus what survived must be the true total either way.
+	for _, lines := range []int{30, 100000} {
+		b := newLimitBuffer(4096)
+		for i := 0; i < lines; i++ {
+			b.Write([]byte(strings.Repeat("y", 999) + "\n"))
+		}
+		out, tr := b.Render(4096)
+		if !tr {
+			t.Fatalf("%d lines: not truncated", lines)
+		}
+		if got := kept(out); got != b.Total() {
+			t.Errorf("%d lines: marker accounts for %d bytes, total is %d", lines, got, b.Total())
+		}
+	}
+}
+
+// TestReadFileLongLine covers a minified file, which is one line longer than
+// any scan buffer. It used to fail the whole read with "bufio.Scanner: token
+// too long", and worse, a long line just past the page silently ended the
+// output as though the file had ended there.
+func TestReadFileLongLine(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	long := strings.Repeat("m", 3<<20)
+
+	// A long line inside the page: the read survives it and says what it cut.
+	body := strings.Repeat("short\n", 10) + long + "\nafter\n"
+	if err := os.WriteFile(filepath.Join(base, "early.txt"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.ReadFile(context.Background(), json.RawMessage(`{"path":"early.txt"}`))
+	if err != nil {
+		t.Fatalf("a long line must not fail the read: %v", err)
+	}
+	if !strings.Contains(res.Output, "more bytes on this line") {
+		t.Errorf("the clip was not named: %q", tail(res.Output, 120))
+	}
+	if len(res.Output) > 4*r.ReadLimit {
+		t.Errorf("output is %d bytes, the clip did not bound it", len(res.Output))
+	}
+
+	// A long line just past the page must still be counted as more to come.
+	var page strings.Builder
+	for i := 1; i <= 400; i++ {
+		fmt.Fprintf(&page, "line %d\n", i)
+	}
+	page.WriteString(long + "\n" + strings.Repeat("tail\n", 50))
+	if err := os.WriteFile(filepath.Join(base, "late.txt"), []byte(page.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err = r.ReadFile(context.Background(), json.RawMessage(`{"path":"late.txt"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Truncated || !strings.Contains(res.Output, "use offset 401") {
+		t.Fatalf("the rest of the file was not announced: %q", tail(res.Output, 120))
+	}
+	res, err = r.ReadFile(context.Background(), json.RawMessage(`{"path":"late.txt","offset":402,"limit":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "   402\ttail") {
+		t.Errorf("reading past the long line = %q", res.Output)
+	}
+}
+
+// TestReadFileLineEndings keeps the reader on bufio.ScanLines behaviour.
+func TestReadFileLineEndings(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	if err := os.WriteFile(filepath.Join(base, "crlf.txt"), []byte("one\r\ntwo\r\nthree"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.ReadFile(context.Background(), json.RawMessage(`{"path":"crlf.txt"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Output != "     1\tone\n     2\ttwo\n     3\tthree\n" {
+		t.Errorf("output = %q", res.Output)
+	}
+}
+
+func tail(s string, n int) string {
+	if len(s) > n {
+		return "..." + s[len(s)-n:]
+	}
+	return s
 }

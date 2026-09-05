@@ -34,7 +34,7 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 		return Result{}, fmt.Errorf("%s is a directory", args.Path)
 	}
 	if info.Size() > maxReadableFile {
-		return Result{}, fmt.Errorf("%s is %d MB, too large to read", args.Path, info.Size()/(1<<20))
+		return Result{}, fmt.Errorf("%s is %d MB, too large to read: use run_shell with sed -n to take a range of lines", args.Path, info.Size()/(1<<20))
 	}
 	if info.Size() == 0 {
 		return Result{Output: fmt.Sprintf("%s is empty", args.Path)}, nil
@@ -67,22 +67,31 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 		limit = *args.Limit
 	}
 
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	rd := bufio.NewReaderSize(f, 64<<10)
+	clip := r.ReadLimit
+	if clip < 4096 {
+		clip = 4096
+	}
+	if clip > maxLineBytes {
+		clip = maxLineBytes
+	}
 
 	var b strings.Builder
 	lineNo, emitted, stoppedOnBytes := 0, 0, false
 	for emitted < limit {
-		if !sc.Scan() {
+		line, over, ok, err := readLine(rd, clip)
+		if err != nil {
+			return Result{}, fmt.Errorf("read %s: %s", args.Path, err)
+		}
+		if !ok {
 			break
 		}
 		lineNo++
 		if lineNo < offset {
 			continue
 		}
-		line := sc.Text()
-		if len(line) >= 1<<20 {
-			line = line[:1<<20] + " ..."
+		if over > 0 {
+			line += fmt.Sprintf(" ... %d more bytes on this line", over)
 		}
 		if b.Len() >= r.ReadLimit {
 			stoppedOnBytes = true
@@ -90,9 +99,6 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 		}
 		fmt.Fprintf(&b, "%6d\t%s\n", lineNo, line)
 		emitted++
-	}
-	if err := sc.Err(); err != nil {
-		return Result{}, fmt.Errorf("read %s: %s", args.Path, err)
 	}
 
 	out := b.String()
@@ -102,11 +108,26 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 		out = b.String()
 		truncated = true
 	} else {
-		remaining := 0
-		for sc.Scan() {
+		remaining, counted := 0, true
+		for {
+			_, _, ok, err := readLine(rd, 0)
+			if err != nil {
+				// Say that the file goes on rather than let a failed count
+				// read as end of file, which would hide the rest of it.
+				counted = false
+				break
+			}
+			if !ok {
+				break
+			}
 			remaining++
 		}
-		if remaining > 0 {
+		switch {
+		case !counted:
+			fmt.Fprintf(&b, "... more lines follow, use offset %d\n", lineNo+1)
+			out = b.String()
+			truncated = true
+		case remaining > 0:
 			fmt.Fprintf(&b, "... %d more lines, use offset %d\n", remaining, lineNo+1)
 			out = b.String()
 			truncated = true
@@ -116,4 +137,54 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 		return Result{Output: fmt.Sprintf("%s has no line %d, the file has %d lines", args.Path, offset, lineNo)}, nil
 	}
 	return Result{Output: out, Truncated: truncated, Bytes: len(out)}, nil
+}
+
+// maxLineBytes is the ceiling on how much of one line is ever kept. The real
+// clip is the read's own byte budget; this only stops a pathological budget
+// from letting one line grow without bound.
+const maxLineBytes = 1 << 20
+
+// readLine returns the next line without its line ending, keeping at most clip
+// bytes of it and counting the rest as over. A minified file is one very long
+// line, and clipping it keeps the rest of the file readable where refusing the
+// line would abandon the whole read. ok is false at end of file.
+func readLine(rd *bufio.Reader, clip int) (line string, over int, ok bool, err error) {
+	var buf []byte
+	seen := false
+	for {
+		chunk, err := rd.ReadSlice('\n')
+		if len(chunk) > 0 {
+			seen = true
+		}
+		switch err {
+		case bufio.ErrBufferFull:
+			buf, over = appendClipped(buf, chunk, over, clip)
+		case nil, io.EOF:
+			if err == io.EOF && !seen {
+				return "", 0, false, nil
+			}
+			if n := len(chunk); n > 0 && chunk[n-1] == '\n' {
+				chunk = chunk[:n-1]
+				if n := len(chunk); n > 0 && chunk[n-1] == '\r' {
+					chunk = chunk[:n-1]
+				}
+			}
+			buf, over = appendClipped(buf, chunk, over, clip)
+			return string(buf), over, true, nil
+		default:
+			return "", 0, false, err
+		}
+	}
+}
+
+// appendClipped copies as much of chunk as the clip allows and counts the rest.
+func appendClipped(buf, chunk []byte, over, clip int) ([]byte, int) {
+	if room := clip - len(buf); room > 0 {
+		if room > len(chunk) {
+			room = len(chunk)
+		}
+		buf = append(buf, chunk[:room]...)
+		chunk = chunk[room:]
+	}
+	return buf, over + len(chunk)
 }
