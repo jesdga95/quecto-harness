@@ -453,16 +453,44 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	// The attachments come back with the ids the harness gave them, so the
 	// page can draw the image it just sent without refetching the session.
+	// The sequence number is what an edit of this message names it by.
+	seq, attachments := sentMessage(sess)
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"state":       string(agent.StatePreflight),
-		"attachments": sentAttachments(sess),
+		"seq":         seq,
+		"attachments": attachments,
 	})
 }
 
-// sentAttachments describes the files on the message that was just appended.
-// The content of a text file is left out: the page has no use for it and it
-// is already in the prompt.
-func sentAttachments(sess *agent.Session) []map[string]any {
+// postResend runs the last message again, with the text rewritten when the
+// body carries one. Naming the message by its sequence number is what stops a
+// second tab editing a message it is no longer looking at.
+func (s *Server) postResend(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Seq  int     `json:"seq"`
+		Text *string `json:"text"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	seq, err := s.engine.Resend(sess.ID, body.Seq, body.Text)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"state": string(agent.StatePreflight), "seq": seq,
+	})
+}
+
+// sentMessage describes the message that was just appended. The content of a
+// text file is left out: the page has no use for it and it is already in the
+// prompt.
+func sentMessage(sess *agent.Session) (int, []map[string]any) {
 	doc, _, _, _ := sess.Snapshot()
 	out := []map[string]any{}
 	for i := len(doc.Entries) - 1; i >= 0; i-- {
@@ -474,9 +502,9 @@ func sentAttachments(sess *agent.Session) []map[string]any {
 				"path": a.Path, "kind": a.Kind, "bytes": a.Bytes, "file": a.File,
 			})
 		}
-		break
+		return doc.Entries[i].Seq, out
 	}
-	return out
+	return 0, out
 }
 
 func (s *Server) postStop(w http.ResponseWriter, r *http.Request) {
@@ -644,7 +672,7 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) (*agent.Session
 
 func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, agent.ErrBusy):
+	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrNotLast):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, agent.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())

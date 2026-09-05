@@ -98,6 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/sessions/{id}", s.rebindSession)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.deleteSession)
 	mux.HandleFunc("POST /api/sessions/{id}/message", s.postMessage)
+	mux.HandleFunc("POST /api/sessions/{id}/resend", s.postResend)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", s.postStop)
 	mux.HandleFunc("POST /api/sessions/{id}/compact", s.postCompact)
 	mux.HandleFunc("POST /api/permissions/{id}", s.postPermission)

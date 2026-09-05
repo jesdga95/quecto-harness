@@ -27,6 +27,7 @@ var (
 	ErrBusy      = errors.New("The session is busy: stop the current turn first")
 	ErrNotFound  = errors.New("No session with that id")
 	ErrEmptyText = errors.New("The message is empty: type something or attach a file")
+	ErrNotLast   = errors.New("That is not the last message: only the last one can be sent again")
 	ErrNoProject = errors.New("That folder is not in the project list: add it first")
 	ErrNoModel   = errors.New("No model is selected: pick one from the model list")
 )
@@ -228,14 +229,87 @@ func (e *Engine) Send(id, text string, files []string) error {
 
 	e.save(s)
 	e.publish(s.ID, ev("status", map[string]any{"state": string(StatePreflight)}))
+	e.startTurn(ctx, s, cancel)
+	return nil
+}
 
+// Resend replaces the last message and runs its turn again, returning the
+// sequence number of the entry that replaced it. text nil sends the message
+// as it stands. The attachments ride along either way: an edit changes the
+// words, not the files.
+func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
+	s, err := e.Get(id)
+	if err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	i := s.lastUserEntry()
+	if i < 0 || s.Entries[i].Seq != seq {
+		s.mu.Unlock()
+		return 0, ErrNotLast
+	}
+	model, attachments := s.Model, s.Entries[i].Attachments
+	s.mu.Unlock()
+
+	// The message was accepted once, but the session may have been pointed at
+	// another model since, and that one may not read pictures.
+	if err := e.checkImages(model, attachments); err != nil {
+		return 0, err
+	}
+
+	s.mu.Lock()
+	if s.state != StateIdle {
+		s.mu.Unlock()
+		return 0, ErrBusy
+	}
+	// The lock was dropped for the check, so the message is found again.
+	i = s.lastUserEntry()
+	if i < 0 || s.Entries[i].Seq != seq {
+		s.mu.Unlock()
+		return 0, ErrNotLast
+	}
+	previous := s.Entries[i]
+	content, edited := previous.Content, previous.Edited
+	if text != nil && *text != previous.Content {
+		content, edited = *text, true
+	}
+	if strings.TrimSpace(content) == "" && len(previous.Attachments) == 0 {
+		s.mu.Unlock()
+		return 0, ErrEmptyText
+	}
+	// Nothing in the file store is left unreferenced by this: the only
+	// message in the discarded range is the one whose files carry over.
+	s.rewindTo(i)
+	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: content,
+		Attachments: previous.Attachments, Edited: edited, InContext: true, Visible: true})
+	// A session takes its name from its opening message, so a rewritten one
+	// renames it unless the name was typed.
+	if s.firstTurn() {
+		s.Title = store.Title(content)
+	}
+	s.state = StatePreflight
+	ctx, cancel := context.WithCancel(e.ctx)
+	s.cancel = cancel
+	s.mu.Unlock()
+
+	e.save(s)
+	// The transcript every browser holds ends in entries that are gone, so
+	// they refetch rather than being patched.
+	e.publish(s.ID, ev("resync", nil))
+	e.publish(s.ID, ev("status", map[string]any{"state": string(StatePreflight)}))
+	e.startTurn(ctx, s, cancel)
+	return entry.Seq, nil
+}
+
+// startTurn runs one turn in the background. The session is already in
+// preflight with its cancel function set.
+func (e *Engine) startTurn(ctx context.Context, s *Session, cancel context.CancelFunc) {
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
 		defer cancel()
 		e.run(ctx, s)
 	}()
-	return nil
 }
 
 // readAttachments reads every attached file at once, so the message is either

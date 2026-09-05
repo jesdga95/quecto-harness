@@ -137,7 +137,9 @@ export type HarnessEvent =
   | { type: "connection"; connected: boolean; message?: string };
 
 export type TranscriptItem =
-  | { kind: "user"; id: string; text: string; files: Attached[] }
+  /** seq names the entry to the harness, which is how a message is sent
+      again. It is 0 until the harness has stored the message. */
+  | { kind: "user"; id: string; seq: number; text: string; files: Attached[]; edited: boolean }
   | { kind: "assistant"; id: string; text: string; streaming: boolean }
   | { kind: "reasoning"; id: string; text: string; tokens: number; open: boolean }
   | {
@@ -161,6 +163,12 @@ export type TranscriptItem =
   | { kind: "compaction"; id: string; before: number; after: number; summary: string }
   | { kind: "status"; id: string; text: string }
   | { kind: "error"; id: string; message: string };
+
+/** A message as the harness stored it. */
+export interface Sent {
+  seq: number;
+  files: Attached[];
+}
 
 /** One file attached to a message, as the transcript shows it. An image is
     fetched back from the harness by its id; text is already in the prompt. */
@@ -259,8 +267,12 @@ export interface HarnessApi {
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string): Promise<void>;
   /** Files are read by the harness and inlined into the message. What comes
-      back is the attachments as it stored them, ids included. */
-  sendMessage(id: string, text: string, files?: string[]): Promise<Attached[]>;
+      back is the attachments as it stored them, ids included, and the
+      sequence number the message was stored under. */
+  sendMessage(id: string, text: string, files?: string[]): Promise<Sent>;
+  /** Runs the last message again, with text in place of the words it was sent
+      with. The reply to it is discarded. */
+  resend(id: string, seq: number, text?: string): Promise<void>;
   stop(id: string): Promise<void>;
   compact(id: string): Promise<void>;
   decide(permissionId: string, decision: PermissionDecision): Promise<void>;

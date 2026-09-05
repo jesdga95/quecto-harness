@@ -13,6 +13,7 @@ import type {
   PermMode,
   PermissionDecision,
   Project,
+  Sent,
   Session,
   State,
   Todo,
@@ -112,6 +113,7 @@ interface WireEntry {
   truncated?: boolean;
   permission?: WirePermission | null;
   attachments?: { path?: string; kind?: string; bytes?: number; file?: string }[] | null;
+  edited?: boolean;
   visible?: boolean;
   meta?: Record<string, unknown> | null;
 }
@@ -355,7 +357,14 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
       file: a.file,
     }));
     if (e.content || files.length > 0) {
-      items.push({ kind: "user", id: `u${seq}`, text: e.content ?? "", files });
+      items.push({
+        kind: "user",
+        id: `u${seq}`,
+        seq,
+        text: e.content ?? "",
+        files,
+        edited: e.edited === true,
+      });
     }
     return;
   }
@@ -771,16 +780,26 @@ class HttpApi implements HarnessApi {
     summaries.delete(id);
   }
 
-  async sendMessage(id: string, text: string, files: string[] = []): Promise<Attached[]> {
+  async sendMessage(id: string, text: string, files: string[] = []): Promise<Sent> {
     const wire = await call<{
+      seq: number;
       attachments?: { path?: string; kind?: string; bytes?: number; file?: string }[];
     }>(`/sessions/${encodeURIComponent(id)}/message`, "POST", { text, attachments: files });
-    return (wire.attachments ?? []).map((a) => ({
-      path: a.path ?? "",
-      kind: a.kind === "image" ? "image" : "text",
-      bytes: a.bytes ?? 0,
-      file: a.file,
-    }));
+    return {
+      seq: wire.seq,
+      files: (wire.attachments ?? []).map((a) => ({
+        path: a.path ?? "",
+        kind: a.kind === "image" ? "image" : "text",
+        bytes: a.bytes ?? 0,
+        file: a.file,
+      })),
+    };
+  }
+
+  // The harness rewrites the history and tells every tab to refetch, so
+  // nothing here touches the transcript.
+  async resend(id: string, seq: number, text?: string): Promise<void> {
+    await call<unknown>(`/sessions/${encodeURIComponent(id)}/resend`, "POST", { seq, text });
   }
 
   async stop(id: string): Promise<void> {

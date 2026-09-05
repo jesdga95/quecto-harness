@@ -11,6 +11,10 @@ Ordered by size. Take from the top.
 
 ## Done
 
+- Editing a message and sending it again. The last message only: the pencil
+  and the circular arrow sit under it, the reply to it is discarded, and the
+  attachments ride along unchanged. What the discarded turn wrote to disk
+  stays written, which is what the dialog says before it runs.
 - Image attachments: picked in the same dialog, kept in a file store beside the
   sessions, sent as the array of parts the endpoint takes, and shown in the
   transcript. A model that does not report image input refuses the message.

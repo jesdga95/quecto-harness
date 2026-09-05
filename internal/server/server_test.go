@@ -893,6 +893,63 @@ func TestEmbedFallbackPage(t *testing.T) {
 	}
 }
 
+// The resend route names the message by sequence number, so a tab holding an
+// older transcript is refused rather than editing a message it is not showing.
+func TestResendRoute(t *testing.T) {
+	f := newFixture(t)
+	f.setFrames(
+		`data: {"choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	)
+	id := f.newSession(t)
+
+	w := f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "hi"})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("message = %d: %s", w.Code, w.Body.String())
+	}
+	seq, ok := decode(t, w)["seq"].(float64)
+	if !ok || seq == 0 {
+		t.Fatalf("the message did not report its sequence number: %s", w.Body.String())
+	}
+	f.waitIdle(t, id)
+
+	if w := f.do(t, "POST", "/api/sessions/"+id+"/resend",
+		map[string]any{"seq": seq + 100, "text": "ho"}); w.Code != http.StatusConflict {
+		t.Errorf("resend of a message that is not the last = %d, want 409", w.Code)
+	}
+
+	// The transcript every tab holds ends in entries the rewrite discards, so
+	// the stream carries the resync that sends them back for a fresh one.
+	mark, _ := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))["last_seq"].(float64)
+
+	w = f.do(t, "POST", "/api/sessions/"+id+"/resend", map[string]any{"seq": seq, "text": "ho"})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("resend = %d: %s", w.Code, w.Body.String())
+	}
+	f.waitIdle(t, id)
+
+	// The title the model wrote for the first turn can land between the mark
+	// and the rewrite, so the resync is looked for rather than counted to.
+	resynced := false
+	for _, fr := range f.readStream(t, fmt.Sprintf("/api/events?session=%s&from=%d", id, int64(mark)), 6) {
+		if fr["type"] == "resync" {
+			resynced = true
+		}
+	}
+	if !resynced {
+		t.Error("the rewrite did not tell the attached tabs to refetch")
+	}
+
+	entries, _ := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))["entries"].([]any)
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want the one turn the rewrite left", len(entries))
+	}
+	first, _ := entries[0].(map[string]any)
+	if first["content"] != "ho" || first["edited"] != true {
+		t.Errorf("first entry = %v, want the rewritten message", first)
+	}
+}
+
 func (f *fixture) newSession(t *testing.T) string {
 	t.Helper()
 	body := decode(t, f.do(t, "POST", "/api/sessions",

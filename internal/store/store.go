@@ -41,6 +41,8 @@ type Entry struct {
 
 	Permission  *PermissionRecord `json:"permission,omitempty"`
 	Attachments []Attachment      `json:"attachments,omitempty"`
+	// Edited is set on a user entry whose text was rewritten and sent again.
+	Edited bool `json:"edited,omitempty"`
 
 	InContext bool           `json:"in_context"`
 	Visible   bool           `json:"visible"`

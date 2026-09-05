@@ -177,6 +177,14 @@ export function outcomeLabel(decision: PermissionDecision): string {
   return decision.reason ? `Denied: ${decision.reason}` : "Denied";
 }
 
-export function pushUser(items: TranscriptItem[], text: string, files: Attached[] = []): void {
-  items.push({ kind: "user", id: nextId("u"), text, files });
+/** seq is 0 until the harness answers for the message, which is what keeps a
+    message the harness has not stored yet out of reach of an edit. */
+export function pushUser(
+  items: TranscriptItem[],
+  text: string,
+  files: Attached[] = [],
+  seq = 0,
+  edited = false,
+): void {
+  items.push({ kind: "user", id: nextId("u"), seq, text, files, edited });
 }

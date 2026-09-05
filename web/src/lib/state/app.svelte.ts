@@ -236,8 +236,63 @@ export async function send(text: string, files: string[] = []): Promise<void> {
     return;
   }
   // The harness stored the files and gave each one an id, which is what the
-  // bubble needs to show a picture rather than the name of one.
-  if (item?.kind === "user" && sent.length > 0) item.files = sent;
+  // bubble needs to show a picture rather than the name of one. Its sequence
+  // number is what an edit of this message names it by.
+  if (item?.kind === "user") {
+    item.seq = sent.seq;
+    if (sent.files.length > 0) item.files = sent.files;
+  }
+  await loadSessions();
+}
+
+/** The last message the user sent, which is the only one an edit can replace. */
+function lastUserItem(): TranscriptItem | undefined {
+  for (let i = app.items.length - 1; i >= 0; i--) {
+    const item = app.items[i];
+    if (item?.kind === "user") return item;
+  }
+  return undefined;
+}
+
+/** A message can be sent again once the harness has stored it and the turn it
+    started has finished. */
+export function canResend(item: TranscriptItem): boolean {
+  if (item.kind !== "user" || item.seq === 0) return false;
+  return app.status === "idle" && lastUserItem() === item;
+}
+
+/** Tool calls in the turn a resend discards. What they wrote to disk is not
+    undone, so a turn that made any is worth confirming. */
+function tailToolCalls(): number {
+  let calls = 0;
+  for (let i = app.items.length - 1; i >= 0; i--) {
+    const item = app.items[i];
+    if (!item || item.kind === "user") break;
+    if (item.kind === "tool") calls += 1;
+  }
+  return calls;
+}
+
+/** Sends the last message again, with text in place of the words it carried.
+    The reply to it is discarded and the model answers the message as it now
+    stands. The harness rewrites the history and every tab refetches, so
+    nothing here edits the transcript. */
+export async function resend(seq: number, text?: string): Promise<void> {
+  if (!app.sessionId) return;
+  const calls = tailToolCalls();
+  if (calls > 0) {
+    const ok = await confirm({
+      title: text === undefined ? "Run the turn again?" : "Send the edited message?",
+      body:
+        `The reply to it is removed and the model answers again. That reply made ` +
+        `${calls} tool ${calls === 1 ? "call" : "calls"}, and what they wrote to ` +
+        `disk stays as it is.`,
+      confirmLabel: text === undefined ? "Run again" : "Send",
+      destructive: true,
+    });
+    if (!ok) return;
+  }
+  if ((await guard(() => api.resend(app.sessionId, seq, text))) === null) return;
   await loadSessions();
 }
 

@@ -168,6 +168,99 @@ func (s *Session) firstUserMessage() string {
 	return ""
 }
 
+// lastUserEntry is the index of the newest message the user sent, or -1.
+// The caller holds the lock.
+func (s *Session) lastUserEntry() int {
+	for i := len(s.Entries) - 1; i >= 0; i-- {
+		if s.Entries[i].Kind == "user" {
+			return i
+		}
+	}
+	return -1
+}
+
+// rewindTo drops the entry at i and everything after it, then repairs what
+// those entries had changed. Sequence numbers are not reused, so an id built
+// from one never names two different entries. The caller holds the lock.
+func (s *Session) rewindTo(i int) {
+	s.Entries = s.Entries[:i:i]
+	s.restoreContext()
+	s.restoreTodos()
+	// The anchor pointed into the entries that are gone, so the next fill is
+	// estimated from what is left rather than measured against a turn the
+	// history no longer contains.
+	s.LastUsage = nil
+	s.LastToolTokens = 0
+	s.lastUsageEntry = -1
+	s.lastSentTools = false
+}
+
+// restoreContext rebuilds the in-context set: everything from the newest
+// surviving compaction onward, with the kinds that are never sent left out.
+// Dropping a compaction therefore gives back what it summarised. The caller
+// holds the lock.
+func (s *Session) restoreContext() {
+	from := 0
+	s.Compactions = 0
+	for i, e := range s.Entries {
+		if e.Kind == "compaction" {
+			from = i
+			s.Compactions++
+		}
+	}
+	for i := range s.Entries {
+		switch s.Entries[i].Kind {
+		case "user", "assistant", "tool", "compaction":
+			s.Entries[i].InContext = i >= from
+		default:
+			s.Entries[i].InContext = false
+		}
+	}
+}
+
+// restoreTodos rewinds the plan to the newest write_todos the surviving
+// entries ran. The call carries the whole plan, so nothing is stored for this
+// beyond the entries themselves. The caller holds the lock.
+func (s *Session) restoreTodos() {
+	for i := len(s.Entries) - 1; i >= 0; i-- {
+		if s.Entries[i].Kind != "tool" || s.Entries[i].ToolName != "write_todos" {
+			continue
+		}
+		args, ok := s.argumentsOf(i, s.Entries[i].ToolCallID)
+		if !ok {
+			continue
+		}
+		// A call the tool refused left the plan alone, so it does not count
+		// as the state to go back to.
+		todos, err := parseTodos(args)
+		if err != nil {
+			continue
+		}
+		s.Todos = todos
+		return
+	}
+	s.Todos = nil
+}
+
+// argumentsOf returns the arguments of the call a tool entry answers. Tool
+// entries follow their assistant with only sibling results between, so the
+// first assistant above the entry is the one that made the call. The caller
+// holds the lock.
+func (s *Session) argumentsOf(at int, id string) (json.RawMessage, bool) {
+	for i := at - 1; i >= 0; i-- {
+		if s.Entries[i].Kind != "assistant" {
+			continue
+		}
+		for _, c := range s.Entries[i].ToolCalls {
+			if c.ID == id {
+				return json.RawMessage(c.Function.Arguments), true
+			}
+		}
+		return nil, false
+	}
+	return nil, false
+}
+
 // imageRefs lists the file ids the in-context messages need, so the bytes are
 // read before the lock is taken rather than under it.
 func (s *Session) imageRefs() []string {

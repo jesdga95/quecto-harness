@@ -9,6 +9,7 @@ import type {
   Model,
   PermissionDecision,
   Project,
+  Sent,
   Session,
   State,
   Todo,
@@ -249,6 +250,7 @@ export class MockApi implements HarnessApi {
     ["/Users/jay/Projects/Personal/quecto-harness", ["git status", "go vet"]],
   ]);
   private turnIndex = new Map<string, number>();
+  private lastSeq = new Map<string, number>();
   private pending:
     | { id: string; session: string; settle: (d: PermissionDecision) => void }
     | null = null;
@@ -435,18 +437,51 @@ export class MockApi implements HarnessApi {
     };
   }
 
-  async sendMessage(session: string, text: string, files: string[] = []): Promise<Attached[]> {
+  async sendMessage(session: string, text: string, files: string[] = []): Promise<Sent> {
     const t = this.transcripts.get(session);
-    if (!t) return [];
+    if (!t) return { seq: 0, files: [] };
     const attached: Attached[] = files.map((path) => ({
       path,
       kind: /\.(png|jpe?g|gif|webp)$/i.test(path) ? "image" : "text",
       bytes: 2400,
     }));
-    pushUser(t.items, text, attached);
+    const seq = this.mintSeq(session);
+    pushUser(t.items, text, attached, seq);
     if (t.session.title === "New session") t.session.title = title(text);
     void this.runTurn(session, t);
-    return attached;
+    return { seq, files: attached };
+  }
+
+  // The harness rewrites the history and tells every tab to refetch, which is
+  // the resync here. The files ride along: an edit changes the words only.
+  async resend(session: string, seq: number, text?: string): Promise<void> {
+    await this.tick();
+    const t = this.transcripts.get(session);
+    if (!t) return;
+    let at = -1;
+    for (let i = t.items.length - 1; i >= 0; i--) {
+      if (t.items[i]?.kind === "user") {
+        at = i;
+        break;
+      }
+    }
+    const message = t.items[at];
+    if (!message || message.kind !== "user" || message.seq !== seq) {
+      throw new Error("That is not the last message: only the last one can be sent again");
+    }
+    t.items.length = at;
+    const words = text ?? message.text;
+    pushUser(t.items, words, message.files, this.mintSeq(session), words !== message.text);
+    this.emit(session, { type: "resync", transcript: await this.getSession(session) });
+    void this.runTurn(session, t);
+  }
+
+  /** Entry numbers are never reused, so an edit cannot land on a number the
+      transcript already showed. */
+  private mintSeq(session: string): number {
+    const next = (this.lastSeq.get(session) ?? 0) + 1;
+    this.lastSeq.set(session, next);
+    return next;
   }
 
   // internals
@@ -684,7 +719,8 @@ export class MockApi implements HarnessApi {
     this.turnIndex.set(first.id, 2);
 
     const items: TranscriptItem[] = [];
-    pushUser(items, "The SSE hub drops events when two tabs are open. Find out why.");
+    pushUser(items, "The SSE hub drops events when two tabs are open. Find out why.",
+      [], this.mintSeq(first.id));
     for (const e of seededEvents()) applyEvent(items, e);
     this.transcripts.set(first.id, {
       session: first,
