@@ -4,16 +4,16 @@
   import type { FileChange } from "../api";
   import { app } from "../state/app.svelte";
 
-  // Which files are expanded, by path, so a refetch after a write does not
-  // close what is open.
-  let open = $state(new Set<string>());
+  // A file is expanded until it is collapsed by hand. Closed paths are held
+  // here so a refetch after a write does not reopen them.
+  let closed = $state(new Set<string>());
 
   const files = $derived(app.changes.files);
 
   function toggle(path: string) {
-    const next = new Set(open);
+    const next = new Set(closed);
     if (!next.delete(path)) next.add(path);
-    open = next;
+    closed = next;
   }
 
   function drawable(f: FileChange): boolean {
@@ -57,13 +57,13 @@
             {#if file.status === "new"}
               <span class="text-[11.5px] text-muted">New</span>
             {/if}
-            <span class="caret" class:is-open={open.has(file.path)}><CaretRight /></span>
+            <span class="caret" class:is-open={!closed.has(file.path)}><CaretRight /></span>
           {:else}
             <span class="text-[11.5px] text-muted">{note(file)}</span>
           {/if}
         </button>
 
-        {#if open.has(file.path) && drawable(file)}
+        {#if !closed.has(file.path) && drawable(file)}
           <div class="mt-1 mb-2">
             <DiffBlock hunks={file.hunks} omitted={file.omitted} path={file.path} />
           </div>
