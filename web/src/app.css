@@ -937,7 +937,7 @@
   .tiles {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px;
   }
   .tiles:not(:last-child) {
     margin-bottom: 6px;
@@ -950,9 +950,12 @@
     justify-content: space-between;
     width: 112px;
     height: 112px;
+    border: 1px solid var(--hair);
     border-radius: 12px;
     overflow: hidden;
-    background: var(--surface);
+    /* A step off whatever holds it, since a tile sits on the composer and in
+       the bubble and has to read as an object on both. */
+    background: var(--surface-2);
     color: var(--text-2);
     text-decoration: none;
   }
