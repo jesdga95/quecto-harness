@@ -1,7 +1,9 @@
 <script lang="ts">
   import CaretRight from "phosphor-svelte/lib/CaretRight";
+  import Copy from "phosphor-svelte/lib/Copy";
   import DiffBlock from "./DiffBlock.svelte";
   import type { FileChange } from "../api";
+  import { unifiedPatch } from "../patch";
   import { app } from "../state/app.svelte";
 
   // A file is expanded until it is collapsed by hand. Closed paths are held
@@ -9,6 +11,7 @@
   let closed = $state(new Set<string>());
 
   const files = $derived(app.changes.files);
+  const patch = $derived(unifiedPatch(files));
 
   function toggle(path: string) {
     const next = new Set(closed);
@@ -29,6 +32,10 @@
     if (f.status === "lost") return "The kept copy is gone";
     return "";
   }
+
+  function copy() {
+    void navigator.clipboard?.writeText(patch);
+  }
 </script>
 
 <aside class="changes">
@@ -38,6 +45,11 @@
       <span class="stat-add">+{app.changes.added}</span>
       <span class="stat-del ml-1.5">&minus;{app.changes.removed}</span>
     </span>
+    {#if patch}
+      <button class="icon-btn changes-copy" aria-label="Copy diff" onclick={copy}>
+        <Copy />
+      </button>
+    {/if}
   </div>
 
   <div class="min-h-0 flex-1 overflow-y-auto px-2.5 pb-5">

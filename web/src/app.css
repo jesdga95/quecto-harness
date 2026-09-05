@@ -1195,11 +1195,18 @@
     border-left: 1px solid var(--hair);
     background: var(--panel);
   }
+  /* The same height as the session header beside it, so the two headings sit
+     on one line. */
   .changes-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 8px;
-    padding: 16px 16px 10px;
+    height: 56px;
+    padding: 0 16px;
+  }
+  /* Pulled right, so the icon rather than its hit area lines up with the edge. */
+  .changes-copy {
+    margin-right: -4px;
   }
   .changes-file {
     display: flex;
