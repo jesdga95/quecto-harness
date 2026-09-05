@@ -48,12 +48,22 @@
   const count = $derived(app.items.length);
   const tail = $derived(app.items.at(-1));
 
+  // How much the last item has to draw. A reply, a thinking block and a command
+  // still running all grow line by line, and an expanded one moves the end of
+  // the page as it does.
+  const tailLength = $derived.by(() => {
+    if (!tail) return 0;
+    if (tail.kind === "assistant" || tail.kind === "reasoning") return tail.text.length;
+    if (tail.kind === "tool") return tail.output.length;
+    return 0;
+  });
+
   // Follows the stream while the reader is at the end, and stops following the
   // moment they scroll up.
   $effect(() => {
     void count;
     void app.steer?.text.length;
-    void (tail && tail.kind === "assistant" ? tail.text.length : 0);
+    void tailLength;
     if (scroller && atBottom) scroller.scrollTop = scroller.scrollHeight;
   });
 
