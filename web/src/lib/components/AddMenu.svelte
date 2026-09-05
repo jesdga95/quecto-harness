@@ -80,7 +80,9 @@
             After the limit the model answers with no tools
           </span>
         </span>
-        <span class="pill pill-mute num w-[46px] shrink-0 justify-center">{limitLabel}</span>
+        <span class="pill pill-mute num w-[34px] shrink-0 justify-center px-1.5 text-[10.5px]"
+          >{limitLabel}</span
+        >
       </button>
     </Popover>
   {/if}

@@ -588,12 +588,14 @@
     flex: none;
     color: var(--muted);
   }
-  /* A checkbox drawn as a track and a knob, for a setting inside a popover. */
+  /* A checkbox drawn as a track and a knob, for a setting inside a popover.
+     The track is as wide as the pill on the row below it, so the two controls
+     have the same width. */
   .switch {
     appearance: none;
     position: relative;
     flex: none;
-    width: 30px;
+    width: 34px;
     height: 18px;
     margin: 0;
     border-radius: 999px;
@@ -619,7 +621,7 @@
   }
   .switch:checked::after {
     background: var(--btn-text);
-    transform: translateX(12px);
+    transform: translateX(16px);
   }
 
   .popover-head {
