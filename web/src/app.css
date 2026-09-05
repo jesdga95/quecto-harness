@@ -919,17 +919,27 @@
     background: var(--accent-bg);
     color: var(--text);
   }
-  .bubble:has(.bubble-files) {
+  .bubble:has(.bubble-shots) {
     /* Pictures set their own edge, so the bubble tightens around them. */
     padding: 8px;
   }
-  .bubble-files {
+  /* Pictures sit side by side and keep their own height; a file that is not a
+     picture is a line of its own, so neither is stretched by the other. */
+  .bubble-shots {
     display: flex;
     flex-wrap: wrap;
+    align-items: flex-start;
     justify-content: flex-end;
     gap: 6px;
   }
-  .bubble-files:not(:last-child) {
+  .bubble-docs {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+  }
+  .bubble-shots:not(:last-child),
+  .bubble-docs:not(:last-child) {
     margin-bottom: 6px;
   }
   .bubble-text {
@@ -937,7 +947,7 @@
     font-size: 14px;
     white-space: pre-wrap;
   }
-  .bubble-files + .bubble-text {
+  .bubble:has(.bubble-shots) .bubble-text {
     padding: 2px 6px 4px;
   }
   /* A file that is not a picture: its name and what it weighs, on a surface

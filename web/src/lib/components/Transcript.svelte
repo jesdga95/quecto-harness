@@ -46,35 +46,40 @@
         {#if item.kind === "user"}
           <div class="mt-4 flex flex-col items-end gap-1">
             <div class="bubble">
-              {#if item.files.length > 0}
-                <div class="bubble-files">
-                  {#each item.files as file (file.path)}
-                    {#if file.kind === "image" && file.file}
-                      <a
-                        class="shot"
-                        href="/api/files/{file.file}"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title={file.path}
-                      >
-                        <img src="/api/files/{file.file}" alt={fileName(file.path)} />
-                      </a>
-                    {:else}
-                      <span class="bubble-file" title={file.path}>
-                        {#if file.kind === "image"}
-                          <ImageIcon />
-                        {:else}
-                          <Paperclip />
-                        {/if}
-                        <span class="truncate">{fileName(file.path)}</span>
-                        {#if file.bytes > 0}
-                          <span class="text-muted">{bytes(file.bytes)}</span>
-                        {/if}
-                      </span>
-                    {/if}
+              {#if item.files.some((f) => f.kind === "image" && f.file)}
+                <div class="bubble-shots">
+                  {#each item.files.filter((f) => f.kind === "image" && f.file) as file (file.path)}
+                    <a
+                      class="shot"
+                      href="/api/files/{file.file}"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={file.path}
+                    >
+                      <img src="/api/files/{file.file}" alt={fileName(file.path)} />
+                    </a>
                   {/each}
                 </div>
               {/if}
+
+              {#if item.files.some((f) => f.kind !== "image" || !f.file)}
+                <div class="bubble-docs">
+                  {#each item.files.filter((f) => f.kind !== "image" || !f.file) as file (file.path)}
+                    <span class="bubble-file" title={file.path}>
+                      {#if file.kind === "image"}
+                        <ImageIcon />
+                      {:else}
+                        <Paperclip />
+                      {/if}
+                      <span class="truncate">{fileName(file.path)}</span>
+                      {#if file.bytes > 0}
+                        <span class="text-muted">{bytes(file.bytes)}</span>
+                      {/if}
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+
               {#if item.text}
                 <p class="bubble-text">{item.text}</p>
               {/if}
