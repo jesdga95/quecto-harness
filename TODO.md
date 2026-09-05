@@ -4,16 +4,19 @@ Ordered by size. Take from the top.
 
 ## Next, large
 
-1. **Diff view.** Show what `write_file` changed rather than the summary line.
-   Needs the old content kept before the write, a diff, and a view for it. The
-   quectogram diff view is the reference.
-2. **Git view.** Status and diff for the project, either by shelling out to git
-   or by a small set of read-only routes. Decide which before starting.
-3. **Image attachments.** Multimodal request shape, storage, a picker, and a
+1. **Git view.** Status and diff for the project, either by shelling out to git
+   or by a small set of read-only routes. Decide which before starting. The
+   change panel is the view to extend; what it lacks is anything a shell
+   command touched.
+2. **Image attachments.** Multimodal request shape, storage, a picker, and a
    view. Three of the six models report vision, so the caps are there.
 
 ## Done
 
+- The change panel: every file the session wrote, listed beside the transcript
+  and opened from a chip in the header. Each row compares the copy kept before
+  the session's first write to the file on disk now, so an edit made outside
+  the harness shows up too. Copies live beside the session and go with it.
 - A tool call budget, set from the plus button and rotating to no limit at all.
   A spent budget takes the tools out of the next request rather than ending the
   turn, so it finishes with an answer.
@@ -57,3 +60,5 @@ Ordered by size. Take from the top.
 - Sessions accumulate on disk with no size limit.
 - `write_file` content lives in the assistant entry's tool call arguments, so a
   session that writes large files produces a large session file.
+- Baseline copies accumulate under `~/.quecto-harness/sessions` with no size
+  limit, one per file a session wrote, capped at 2 MB each.

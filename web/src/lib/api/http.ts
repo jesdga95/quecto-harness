@@ -1,6 +1,8 @@
 import type {
+  Changes,
   Config,
   Effort,
+  FileChange,
   EventHandler,
   HarnessApi,
   HarnessEvent,
@@ -462,6 +464,30 @@ function toConfig(c: WireConfig): Config {
   };
 }
 
+interface WireChanges {
+  files?: FileChange[];
+  added?: number;
+  removed?: number;
+}
+
+// Every field is optional on the wire, so a row missing its hunks still draws
+// as a row rather than throwing the panel away.
+function toChanges(wire: WireChanges): Changes {
+  const files = (wire.files ?? []).map((f) => ({
+    path: f.path ?? "",
+    status: f.status ?? "changed",
+    added: f.added ?? 0,
+    removed: f.removed ?? 0,
+    omitted: f.omitted ?? 0,
+    hunks: (f.hunks ?? []).map((h) => ({
+      old_start: h.old_start ?? 0,
+      new_start: h.new_start ?? 0,
+      lines: h.lines ?? [],
+    })),
+  }));
+  return { files, added: wire.added ?? 0, removed: wire.removed ?? 0 };
+}
+
 function toTranscript(snap: WireSnapshot): Transcript {
   const entries = (snap.entries ?? []).filter((e) => e.visible !== false);
   const items: TranscriptItem[] = [];
@@ -698,6 +724,11 @@ class HttpApi implements HarnessApi {
   async getSession(id: string): Promise<Transcript> {
     const wire = await call<WireSnapshot>(`/sessions/${encodeURIComponent(id)}`);
     return toTranscript({ ...wire, id: wire.id ?? id });
+  }
+
+  async getChanges(id: string): Promise<Changes> {
+    const wire = await call<WireChanges>(`/sessions/${encodeURIComponent(id)}/changes`);
+    return toChanges(wire);
   }
 
   async renameSession(id: string, title: string): Promise<void> {

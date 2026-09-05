@@ -90,7 +90,10 @@ type Session struct {
 	Compactions int          `json:"compactions"`
 	LastUsage   *llama.Usage `json:"last_usage,omitempty"`
 	Todos       []Todo       `json:"todos,omitempty"`
-	Entries     []Entry      `json:"entries"`
+	// Baselines are the files this session has written to, as they stood
+	// before its first write to each. The copies live beside this document.
+	Baselines []Baseline `json:"baselines,omitempty"`
+	Entries   []Entry    `json:"entries"`
 }
 
 // Summary is what the sidebar needs, cheap enough to keep for every session.
@@ -115,7 +118,10 @@ type Sessions struct {
 	locks map[string]*sync.Mutex
 }
 
-var namePattern = regexp.MustCompile(`^sess_[a-z2-7]{16}\.json$`)
+var (
+	namePattern = regexp.MustCompile(`^sess_[a-z2-7]{16}\.json$`)
+	blobPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+)
 
 // Open builds the index once. A file that does not parse is named and
 // skipped, because one bad file must not stop the program.
@@ -220,7 +226,12 @@ func (s *Sessions) Delete(id string) error {
 	lock := s.lockFor(id)
 	lock.Lock()
 	err := os.Remove(s.path(id))
+	// The baseline copies belong to this session alone, so they go with it.
+	rmErr := os.RemoveAll(s.filesDir(id))
 	lock.Unlock()
+	if rmErr != nil {
+		log.Printf("sessions/%s.files: %v: the folder is left behind", id, rmErr)
+	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("delete session %s: %w", id, err)
 	}

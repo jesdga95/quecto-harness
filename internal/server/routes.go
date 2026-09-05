@@ -340,6 +340,28 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// getChanges compares every file the session wrote against the copy kept
+// before its first write and the file on disk now.
+func (s *Server) getChanges(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	files, err := s.engine.Changes(sess.ID)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	added, removed := 0, 0
+	for _, f := range files {
+		added += f.Added
+		removed += f.Removed
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"files": files, "added": added, "removed": removed,
+	})
+}
+
 func (s *Server) rebindSession(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.session(w, r)
 	if !ok {

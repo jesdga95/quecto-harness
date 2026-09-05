@@ -1,6 +1,8 @@
 import type {
+  Changes,
   Config,
   EventHandler,
+  FileChange,
   HarnessApi,
   HarnessEvent,
   Model,
@@ -13,6 +15,66 @@ import type {
   TranscriptItem,
 } from "./types";
 import { applyEvent, nextId, outcomeLabel, pushUser } from "../transcript";
+
+// One of every row the panel has to draw, so the states with no diff are
+// exercised as well as the ones with one.
+function mockChanges(): FileChange[] {
+  return [
+    {
+      path: "internal/server/hub.go",
+      status: "changed",
+      added: 9,
+      removed: 3,
+      omitted: 0,
+      hunks: [
+        {
+          old_start: 41,
+          new_start: 41,
+          lines: [
+            { kind: "context", text: "func (h *Hub) Publish(session string, ev agent.Event) {" },
+            { kind: "context", text: "\th.mu.RLock()" },
+            { kind: "removed", text: "\tch := h.subs[session]" },
+            { kind: "removed", text: "\th.mu.RUnlock()" },
+            { kind: "removed", text: "\tch <- ev" },
+            { kind: "added", text: "\tsubs := append([]chan agent.Event(nil), h.subs[session]...)" },
+            { kind: "added", text: "\th.mu.RUnlock()" },
+            { kind: "added", text: "\tfor _, ch := range subs {" },
+            { kind: "added", text: "\t\tselect {" },
+            { kind: "added", text: "\t\tcase ch <- ev:" },
+            { kind: "added", text: "\t\tdefault:" },
+            { kind: "added", text: "\t\t\th.drop(session, ch)" },
+            { kind: "added", text: "\t\t}" },
+            { kind: "added", text: "\t}" },
+            { kind: "context", text: "}" },
+          ],
+        },
+      ],
+    },
+    {
+      path: "internal/server/fanout_test.go",
+      status: "new",
+      added: 4,
+      removed: 0,
+      omitted: 0,
+      hunks: [
+        {
+          old_start: 1,
+          new_start: 1,
+          lines: [
+            { kind: "added", text: "package server" },
+            { kind: "added", text: "" },
+            { kind: "added", text: "func TestTwoTabsBothGetTheEvent(t *testing.T) {" },
+            { kind: "added", text: "}" },
+          ],
+        },
+      ],
+    },
+    { path: "docs/scratch.md", status: "deleted", added: 0, removed: 0, omitted: 0, hunks: [] },
+    { path: "web/src/app.css", status: "same", added: 0, removed: 0, omitted: 0, hunks: [] },
+    { path: "internal/web/dist/logo.png", status: "binary", added: 0, removed: 0, omitted: 0, hunks: [] },
+    { path: "web/package-lock.json", status: "large", added: 0, removed: 0, omitted: 0, hunks: [] },
+  ];
+}
 
 class Cancelled extends Error {}
 
@@ -232,6 +294,17 @@ export class MockApi implements HarnessApi {
       items: t.items.map((i) => ({ ...i })),
       usage: { ...t.usage },
       todos: t.todos.map((todo) => ({ ...todo })),
+    };
+  }
+
+  async getChanges(id: string): Promise<Changes> {
+    await this.tick();
+    if (!this.transcripts.has(id)) throw new Error(`session ${id} not found`);
+    const files = mockChanges();
+    return {
+      files,
+      added: files.reduce((n, f) => n + f.added, 0),
+      removed: files.reduce((n, f) => n + f.removed, 0),
     };
   }
 

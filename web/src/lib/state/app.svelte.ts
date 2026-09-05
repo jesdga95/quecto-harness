@@ -1,6 +1,7 @@
 import { ApiError, api } from "../api";
 import { dismissSticky, toast } from "./toast.svelte";
 import type {
+  Changes,
   Config,
   Effort,
   HarnessEvent,
@@ -31,6 +32,8 @@ export const app = $state({
   sessionId: "",
   items: [] as TranscriptItem[],
   todos: [] as Todo[],
+  changes: { files: [], added: 0, removed: 0 } as Changes,
+  changesOpen: false,
   usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: 131072 } as Usage,
   status: "idle" as TurnStatus,
   allowlist: [] as string[],
@@ -121,8 +124,10 @@ export async function selectSession(id: string): Promise<void> {
   app.usage = t.usage;
   app.todos = t.todos;
   app.status = "idle";
+  app.changes = { files: [], added: 0, removed: 0 };
   if (app.config) app.config.model = t.session.model;
   unsubscribe = api.events(id, onEvent);
+  void loadChanges();
 }
 
 /** Prefers a model already in memory, since an unloaded one loads on first use. */
@@ -172,6 +177,7 @@ export async function removeProject(path: string): Promise<void> {
     app.sessionId = "";
     app.items = [];
     app.todos = [];
+    app.changes = { files: [], added: 0, removed: 0 };
     const next = projects[0];
     if (next) await selectProject(next.path);
     else app.projectPath = "";
@@ -192,6 +198,7 @@ export async function deleteSession(id: string): Promise<void> {
     app.sessionId = "";
     app.items = [];
     app.todos = [];
+    app.changes = { files: [], added: 0, removed: 0 };
   }
   await loadSessions();
   if (wasActive) {
@@ -368,6 +375,24 @@ export async function setPermMode(mode: PermMode): Promise<void> {
   void guard(() => api.updateConfig({ permissions: mode }));
 }
 
+/** Refetches the change list. It fails quietly: the panel is a second view of
+    work the transcript already reported, so a stale list is better than a
+    toast on every write. */
+export async function loadChanges(): Promise<void> {
+  const id = app.sessionId;
+  if (!id) return;
+  try {
+    const changes = await api.getChanges(id);
+    if (app.sessionId === id) app.changes = changes;
+  } catch {
+    // Keep what was there.
+  }
+}
+
+export function toggleChanges(): void {
+  app.changesOpen = !app.changesOpen;
+}
+
 function onEvent(event: HarnessEvent): void {
   if (event.type === "resync") {
     app.items = event.transcript.items;
@@ -402,6 +427,13 @@ function onEvent(event: HarnessEvent): void {
   }
 
   applyEvent(app.items, event);
+
+  // A write is the only thing that changes the file list, and the event
+  // carries an id rather than a name, so the card it filled is what names it.
+  if (event.type === "tool_output") {
+    const card = app.items.find((i) => i.id === event.id);
+    if (card?.kind === "tool" && card.name === "write_file") void loadChanges();
+  }
 
   if (event.type === "usage") {
     app.usage = {

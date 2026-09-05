@@ -52,6 +52,7 @@ type Session struct {
 	LastUsage   *llama.Usage
 	Compactions int
 	Todos       []store.Todo
+	Baselines   []store.Baseline
 
 	caps           llama.Caps
 	lastUsageEntry int
@@ -79,6 +80,7 @@ func fromDoc(d *store.Session) *Session {
 		LastUsage:   d.LastUsage,
 		Compactions: d.Compactions,
 		Todos:       append([]store.Todo(nil), d.Todos...),
+		Baselines:   append([]store.Baseline(nil), d.Baselines...),
 		state:       StateIdle,
 		// A reloaded session has no usage anchor, so the next fill is
 		// estimated from the entries rather than trusted from a past turn.
@@ -93,8 +95,9 @@ func (s *Session) doc() *store.Session {
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, LastUsage: s.LastUsage,
-		Todos:   append([]store.Todo(nil), s.Todos...),
-		Entries: append([]store.Entry(nil), s.Entries...),
+		Todos:     append([]store.Todo(nil), s.Todos...),
+		Baselines: append([]store.Baseline(nil), s.Baselines...),
+		Entries:   append([]store.Entry(nil), s.Entries...),
 	}
 }
 

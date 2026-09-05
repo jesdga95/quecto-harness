@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,20 +26,37 @@ import (
 const testToken = "test-token"
 
 type fixture struct {
-	srv       *Server
-	handler   http.Handler
-	cfg       *config.Store
-	hub       *Hub
-	engine    *agent.Engine
-	perms     *perms.Broker
-	project   string
-	upstream  *httptest.Server
-	chatBlock chan struct{}
+	srv      *Server
+	handler  http.Handler
+	cfg      *config.Store
+	hub      *Hub
+	engine   *agent.Engine
+	perms    *perms.Broker
+	project  string
+	upstream *httptest.Server
 
 	// The frames are swapped between turns while an earlier turn's request
 	// may still be reading them, so they are guarded.
 	framesMu   sync.Mutex
 	chatFrames []string
+	chatQueue  [][]string
+	chatBlock  chan struct{}
+}
+
+// block makes every chat request hang until the test ends, which is how a
+// session is held busy.
+func (f *fixture) block(t *testing.T) {
+	ch := make(chan struct{})
+	f.framesMu.Lock()
+	f.chatBlock = ch
+	f.framesMu.Unlock()
+	t.Cleanup(func() { close(ch) })
+}
+
+func (f *fixture) blocked() chan struct{} {
+	f.framesMu.Lock()
+	defer f.framesMu.Unlock()
+	return f.chatBlock
 }
 
 func (f *fixture) setFrames(frames ...string) {
@@ -47,9 +65,23 @@ func (f *fixture) setFrames(frames ...string) {
 	f.chatFrames = frames
 }
 
+// nextFrames answers one request with its own frames, ahead of whatever
+// setFrames left standing. A turn that calls a tool needs the reply that ends
+// it to differ from the one that started it.
+func (f *fixture) nextFrames(frames ...string) {
+	f.framesMu.Lock()
+	defer f.framesMu.Unlock()
+	f.chatQueue = append(f.chatQueue, frames)
+}
+
 func (f *fixture) frames() []string {
 	f.framesMu.Lock()
 	defer f.framesMu.Unlock()
+	if len(f.chatQueue) > 0 {
+		next := f.chatQueue[0]
+		f.chatQueue = f.chatQueue[1:]
+		return next
+	}
 	return append([]string(nil), f.chatFrames...)
 }
 
@@ -93,11 +125,11 @@ func newFixture(t *testing.T) *fixture {
 		case "/v1/chat/completions":
 			w.Header().Set("Content-Type", "text/event-stream")
 			flusher, _ := w.(http.Flusher)
-			if f.chatBlock != nil {
+			if block := f.blocked(); block != nil {
 				if flusher != nil {
 					flusher.Flush()
 				}
-				<-f.chatBlock
+				<-block
 				return
 			}
 			for _, fr := range f.frames() {
@@ -511,8 +543,7 @@ func TestMessageStopAndCompact(t *testing.T) {
 func TestBusySessionReturns409(t *testing.T) {
 	f := newFixture(t)
 	id := f.newSession(t)
-	f.chatBlock = make(chan struct{})
-	t.Cleanup(func() { close(f.chatBlock) })
+	f.block(t)
 
 	f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "hi"})
 	deadline := time.Now().Add(3 * time.Second)
@@ -586,6 +617,79 @@ func TestPermissionRoute(t *testing.T) {
 	w = f.do(t, "POST", "/api/permissions/perm_x", map[string]string{"decision": "nonsense"})
 	if w.Code != 400 {
 		t.Errorf("bad decision = %d", w.Code)
+	}
+}
+
+// TestChangesRoute drives a write through a turn and reads the panel's route,
+// which is the whole path from the tool keeping a copy to the browser getting
+// a diff.
+func TestChangesRoute(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
+
+	target := filepath.Join(f.project, "hub.go")
+	if err := os.WriteFile(target, []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id := f.newSession(t)
+
+	// A session with no writes has an empty list, not an error.
+	body := decode(t, f.do(t, "GET", "/api/sessions/"+id+"/changes", nil))
+	if files, _ := body["files"].([]any); len(files) != 0 {
+		t.Fatalf("an untouched session lists %v", body["files"])
+	}
+
+	args := `{"path":"hub.go","content":"one\nTWO\nthree\n"}`
+	// The first request asks for the write; everything after it, the title
+	// request included, is a plain reply.
+	f.nextFrames(
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"write_file","arguments":`+strconv.Quote(args)+`}}]}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	)
+	f.setFrames(
+		`data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	)
+	if w := f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "edit it"}); w.Code != http.StatusAccepted {
+		t.Fatalf("message = %d: %s", w.Code, w.Body.String())
+	}
+	f.waitIdle(t, id)
+
+	if written, err := os.ReadFile(target); err != nil || string(written) != "one\nTWO\nthree\n" {
+		t.Fatalf("hub.go = %q %v", written, err)
+	}
+
+	body = decode(t, f.do(t, "GET", "/api/sessions/"+id+"/changes", nil))
+	if body["added"] != 1.0 || body["removed"] != 1.0 {
+		t.Errorf("totals = +%v -%v, want +1 -1", body["added"], body["removed"])
+	}
+	files, _ := body["files"].([]any)
+	if len(files) != 1 {
+		t.Fatalf("files = %v", body["files"])
+	}
+	file, _ := files[0].(map[string]any)
+	if file["path"] != "hub.go" || file["status"] != "changed" {
+		t.Fatalf("file = %v", file)
+	}
+	hunks, _ := file["hunks"].([]any)
+	if len(hunks) != 1 {
+		t.Fatalf("hunks = %v", file["hunks"])
+	}
+	hunk, _ := hunks[0].(map[string]any)
+	lines, _ := hunk["lines"].([]any)
+	var removed, added string
+	for _, l := range lines {
+		line, _ := l.(map[string]any)
+		switch line["kind"] {
+		case "removed":
+			removed, _ = line["text"].(string)
+		case "added":
+			added, _ = line["text"].(string)
+		}
+	}
+	if removed != "two" || added != "TWO" {
+		t.Errorf("the hunk turns %q into %q", removed, added)
 	}
 }
 

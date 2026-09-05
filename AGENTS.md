@@ -65,10 +65,14 @@ the user's first chat message to it.
 
 ## Dependencies
 
-A new dependency is close to a no. The backend is standard library only, and part of
-the point is that there is very little here to patch. A dependency has to do something
-the standard library genuinely cannot. The frontend list is Svelte, Vite, Tailwind,
-one font package and one icon package; adding to it is the same conversation.
+A new dependency is close to a no. Part of the point is that there is very little
+here to patch. A dependency has to do something the standard library genuinely
+cannot. The frontend list is Svelte, Vite, Tailwind, one font package and one icon
+package; adding to it is the same conversation.
+
+The backend has one module, `go-udiff`, and reaching two is that conversation again.
+The standard library exports no diff, a line diff that is wrong at the edges is worse
+than none, and this one is a port of the diff the Go tools use with nothing under it.
 
 ## Compatibility
 

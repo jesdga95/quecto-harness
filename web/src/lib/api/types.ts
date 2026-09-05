@@ -165,6 +165,47 @@ export interface Attached {
   bytes: number;
 }
 
+/** What a file this session wrote became. Only changed and new carry hunks;
+    the rest name why there is nothing to draw. */
+export type ChangeStatus =
+  | "changed"
+  | "new"
+  | "deleted"
+  | "same"
+  | "binary"
+  | "large"
+  | "lost";
+
+export type DiffKind = "context" | "added" | "removed";
+
+/** One row of a hunk. The text carries no sign; the kind is the sign. */
+export interface DiffLine {
+  kind: DiffKind;
+  text: string;
+}
+
+export interface DiffHunk {
+  old_start: number;
+  new_start: number;
+  lines: DiffLine[];
+}
+
+export interface FileChange {
+  path: string;
+  status: ChangeStatus;
+  added: number;
+  removed: number;
+  /** Lines past the server's limit that were counted but not sent. */
+  omitted: number;
+  hunks: DiffHunk[];
+}
+
+export interface Changes {
+  files: FileChange[];
+  added: number;
+  removed: number;
+}
+
 export interface Usage {
   prompt_tokens: number;
   completion_tokens: number;
@@ -196,6 +237,9 @@ export interface HarnessApi {
   /** Points an idle session at another model, keeping its history. */
   setSessionModel(id: string, model: string): Promise<void>;
   getSession(id: string): Promise<Transcript>;
+  /** Every file the session wrote, against the copy kept before its first
+      write and the file on disk now. */
+  getChanges(id: string): Promise<Changes>;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string): Promise<void>;
   /** Files are read by the harness and inlined into the message. */

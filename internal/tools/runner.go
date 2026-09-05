@@ -23,6 +23,10 @@ type Runner struct {
 	OutputLimit int
 	ReadLimit   int
 	ReadLines   int
+
+	// Baseline receives each written file as it stood before the write, when
+	// something is keeping them. Nil runs the tools with nothing recorded.
+	Baseline func(Snapshot)
 }
 
 // Result is what the model is told. Output is already truncated and, for
