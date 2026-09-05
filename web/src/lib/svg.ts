@@ -58,10 +58,7 @@ function clean(el: Element): void {
   for (const child of [...el.children]) {
     const name = child.localName;
     if (child.namespaceURI !== SVG_NS || !ELEMENTS.has(name)) child.remove();
-    else if (
-      name === "style" &&
-      /@import|url\(\s*(?!#)/i.test(child.textContent ?? "")
-    )
+    else if (name === "style" && /@import|url\(\s*(?!#)/i.test(child.textContent ?? ""))
       child.remove();
     else clean(child);
   }
@@ -75,9 +72,7 @@ export function drawing(source: string): SVGSVGElement | null {
   const markup = source.slice(0, lastTagEnd(source));
   if (!markup) return null;
 
-  const root = new DOMParser()
-    .parseFromString(markup, "text/html")
-    .body.querySelector("svg");
+  const root = new DOMParser().parseFromString(markup, "text/html").body.querySelector("svg");
   if (!root) return null;
   clean(root);
 
