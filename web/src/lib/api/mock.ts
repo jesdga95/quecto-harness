@@ -313,6 +313,8 @@ export class MockApi implements HarnessApi {
       items: t.items.map((i) => ({ ...i })),
       usage: { ...t.usage },
       todos: t.todos.map((todo) => ({ ...todo })),
+      steer: t.steer ? { text: t.steer.text, files: [...t.steer.files] } : null,
+      status: this.running?.session === id ? "streaming" : "idle",
     };
   }
 
@@ -376,6 +378,8 @@ export class MockApi implements HarnessApi {
       items: [],
       usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: this.ctxOf(model) },
       todos: [],
+      steer: null,
+      status: "idle",
     });
     return { ...session };
   }
@@ -439,17 +443,29 @@ export class MockApi implements HarnessApi {
 
   async sendMessage(session: string, text: string, files: string[] = []): Promise<Sent> {
     const t = this.transcripts.get(session);
-    if (!t) return { seq: 0, files: [] };
+    if (!t) return { queued: false, seq: 0, files: [], steer: null };
     const attached: Attached[] = files.map((path) => ({
       path,
       kind: /\.(png|jpe?g|gif|webp)$/i.test(path) ? "image" : "text",
       bytes: 2400,
     }));
+    // A message typed while a turn runs waits for it, joined to whatever is
+    // already waiting.
+    if (this.running?.session === session) {
+      const held = t.steer;
+      t.steer = {
+        text: held && held.text ? `${held.text}\n${text}` : text,
+        files: [...(held?.files ?? []), ...attached],
+      };
+      const queued = { text: t.steer.text, files: [...t.steer.files] };
+      this.emit(session, { type: "queued", steer: queued });
+      return { queued: true, seq: 0, files: [], steer: queued };
+    }
     const seq = this.mintSeq(session);
     pushUser(t.items, text, attached, seq);
     if (t.session.title === "New session") t.session.title = title(text);
     void this.runTurn(session, t);
-    return { seq, files: attached };
+    return { queued: false, seq, files: attached, steer: null };
   }
 
   // The harness rewrites the history and tells every tab to refetch, which is
@@ -580,6 +596,7 @@ export class MockApi implements HarnessApi {
         cached_pct: Math.min(94, 61 + index * 6),
       });
       this.emit(session, { type: "usage", ...t.usage });
+      if (this.absorb(session, t)) return;
       this.finish(session, t);
       if (index === 0) this.nameSession(session, t);
     } catch (err) {
@@ -591,7 +608,27 @@ export class MockApi implements HarnessApi {
       this.finish(session, t);
     } finally {
       if (this.running === turn) this.running = null;
+      // A turn that ended without picking the message up leaves it to be sent
+      // as an ordinary one, which is what a stop does with it.
+      if (t.steer) {
+        const held = t.steer;
+        t.steer = null;
+        void this.sendMessage(session, held.text, held.files.map((f) => f.path));
+      }
     }
+  }
+
+  /** Picks up a message typed against this turn, so it carries on with it. */
+  private absorb(session: string, t: Transcript): boolean {
+    const held = t.steer;
+    if (!held) return false;
+    t.steer = null;
+    const seq = this.mintSeq(session);
+    pushUser(t.items, held.text, held.files, seq);
+    this.emit(session, { type: "message", seq, text: held.text, files: held.files });
+    if (this.running?.session === session) this.running = null;
+    void this.runTurn(session, t);
+    return true;
   }
 
   // The harness asks the model for a title after the first turn, and the
@@ -727,6 +764,8 @@ export class MockApi implements HarnessApi {
       items,
       usage: split({ prompt_tokens: 39400, completion_tokens: 2600, n_ctx: 131072 }),
       todos: MOCK_TODOS.map((todo) => ({ ...todo })),
+      steer: null,
+      status: "idle",
     });
     for (const s of [second, third]) {
       this.transcripts.set(s.id, {
@@ -734,6 +773,8 @@ export class MockApi implements HarnessApi {
         items: [],
         usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: this.ctxOf(s.model) },
         todos: [],
+        steer: null,
+        status: "idle",
       });
     }
   }

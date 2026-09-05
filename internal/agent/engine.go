@@ -190,37 +190,60 @@ func (e *Engine) State(id string) State {
 	return s.State()
 }
 
-// Send appends the user entry and starts the turn goroutine. It returns as
-// soon as the goroutine is running; everything else arrives on the stream.
-// Attached files are read here, so a file that cannot be read refuses the
-// message rather than reaching the model half sent.
-func (e *Engine) Send(id, text string, files []string) error {
+// Sent reports what became of a message: the entry it was appended as, or the
+// queue it joined behind a turn that was already running.
+type Sent struct {
+	Queued bool
+	Seq    int
+	Steer  *Steer
+}
+
+// Send starts a turn with the message, or queues it against the one running.
+// It returns as soon as the goroutine is running; everything else arrives on
+// the stream. Attached files are read here, so a file that cannot be read
+// refuses the message rather than reaching the model half sent.
+func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 	if strings.TrimSpace(text) == "" && len(files) == 0 {
-		return ErrEmptyText
+		return Sent{}, ErrEmptyText
 	}
 	s, err := e.Get(id)
 	if err != nil {
-		return err
+		return Sent{}, err
 	}
 	attachments, err := e.readAttachments(files)
 	if err != nil {
-		return err
+		return Sent{}, err
 	}
 	s.mu.Lock()
 	model := s.Model
 	s.mu.Unlock()
+	// A model that cannot read pictures refuses the message where it was
+	// typed, rather than when the turn picks the message up.
 	if err := e.checkImages(model, attachments); err != nil {
-		return err
+		return Sent{}, err
 	}
+	return e.deliver(s, text, attachments)
+}
+
+// deliver starts a turn with the message, or queues it. Every path that
+// delivers a message goes through here, so a turn that starts between the
+// caller's check and this one queues the message rather than refusing it.
+func (e *Engine) deliver(s *Session, text string, attachments []store.Attachment) (Sent, error) {
 	s.mu.Lock()
 	if s.state != StateIdle {
+		if err := s.queue(text, attachments); err != nil {
+			s.mu.Unlock()
+			return Sent{}, err
+		}
 		s.mu.Unlock()
-		return ErrBusy
+		held := s.Steer()
+		e.publish(s.ID, ev("queued", steerFields(held)))
+		return Sent{Queued: true, Steer: held}, nil
 	}
 	s.state = StatePreflight
 	ctx, cancel := context.WithCancel(e.ctx)
 	s.cancel = cancel
-	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text,
+	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text,
 		Attachments: attachments, InContext: true, Visible: true})
 	if s.Title == "" {
 		s.Title = store.Title(text)
@@ -230,7 +253,75 @@ func (e *Engine) Send(id, text string, files []string) error {
 	e.save(s)
 	e.publish(s.ID, ev("status", map[string]any{"state": string(StatePreflight)}))
 	e.startTurn(ctx, s, cancel)
-	return nil
+	return Sent{Seq: entry.Seq}, nil
+}
+
+// absorbSteer appends the queued message, so the turn carries on with it in
+// the history. It reports whether there was one.
+func (e *Engine) absorbSteer(s *Session) bool {
+	s.mu.Lock()
+	held := s.steer
+	if held == nil {
+		s.mu.Unlock()
+		return false
+	}
+	s.steer = nil
+	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: held.Text,
+		Attachments: held.Attachments, InContext: true, Visible: true})
+	s.mu.Unlock()
+
+	e.save(s)
+	e.publishMessage(s, entry)
+	return true
+}
+
+// publishMessage draws a message no browser has drawn for itself. A message
+// typed into a composer is on the page before the harness has it; one taken
+// off the queue is not.
+func (e *Engine) publishMessage(s *Session, entry store.Entry) {
+	e.publish(s.ID, ev("message", map[string]any{"seq": entry.Seq, "text": entry.Content,
+		"attachments": AttachmentFields(entry.Attachments)}))
+}
+
+// flushSteer sends a message the turn ended without picking up. A stop leaves
+// one behind, and the message was typed to be delivered.
+func (e *Engine) flushSteer(s *Session) {
+	s.mu.Lock()
+	held := s.steer
+	s.steer = nil
+	s.mu.Unlock()
+	if held == nil {
+		return
+	}
+	sent, err := e.deliver(s, held.Text, held.Attachments)
+	if err != nil {
+		e.publish(s.ID, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
+		return
+	}
+	if !sent.Queued {
+		e.publishMessage(s, store.Entry{Seq: sent.Seq, Content: held.Text, Attachments: held.Attachments})
+	}
+}
+
+// steerFields renders a queued message for the browser.
+func steerFields(held *Steer) map[string]any {
+	if held == nil {
+		return map[string]any{"text": "", "attachments": []map[string]any{}}
+	}
+	return map[string]any{"text": held.Text, "attachments": AttachmentFields(held.Attachments)}
+}
+
+// AttachmentFields is what a browser needs to draw an attachment. The content
+// of a text file is left out: the page has no use for it and it is already in
+// the prompt.
+func AttachmentFields(attachments []store.Attachment) []map[string]any {
+	out := []map[string]any{}
+	for _, a := range attachments {
+		out = append(out, map[string]any{
+			"path": a.Path, "kind": a.Kind, "bytes": a.Bytes, "file": a.File,
+		})
+	}
+	return out
 }
 
 // Resend replaces the last message and runs its turn again, returning the
@@ -700,6 +791,7 @@ func (e *Engine) fail(s *Session, err error) {
 	e.save(s)
 	e.publish(s.ID, ev("error", map[string]any{"kind": kind, "message": err.Error()}))
 	e.finish(s, StateIdle, "error", 0)
+	e.flushSteer(s)
 }
 
 // finish publishes done and returns the session to idle, which is the only
@@ -729,6 +821,10 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 
 	for iteration := 0; ; iteration++ {
 		e.setState(s, StatePreflight)
+		// A message typed during the last step joins the history here, once
+		// the work that was already under way has finished. It lands before
+		// the context is measured, so one large enough to need it compacts.
+		e.absorbSteer(s)
 
 		s.mu.Lock()
 		fill := s.computeFill()
@@ -796,11 +892,16 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				Content: res.Content, Reasoning: res.Reasoning, InContext: true, Visible: true})
 			s.lastUsageEntry = len(s.Entries) - 1
 			s.mu.Unlock()
-			e.setState(s, StateFinal)
 			e.save(s)
 			e.probeProps(s, false)
 			e.probeContextBase(s)
 			e.publishUsage(s)
+			// A message that landed while the model was answering makes this
+			// the middle of the turn rather than the end of it.
+			if e.absorbSteer(s) {
+				continue
+			}
+			e.setState(s, StateFinal)
 			e.finish(s, StateIdle, res.FinishReason, iteration+1)
 			e.titleSession(s)
 			return
@@ -867,6 +968,7 @@ func (e *Engine) markStopped(s *Session) {
 	e.setState(s, StateStopped)
 	e.save(s)
 	e.finish(s, StateIdle, "stopped", 0)
+	e.flushSteer(s)
 }
 
 // stopWith records the refused call so the assistant message keeps its pair

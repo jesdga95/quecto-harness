@@ -11,6 +11,10 @@ Ordered by size. Take from the top.
 
 ## Done
 
+- Steering: a message typed while the turn runs waits for it as a queue of
+  one, joined a line each if you type again. It is picked up once the
+  step under way has finished, so no work is thrown away, and a stop delivers
+  it as an ordinary message.
 - Editing a message and sending it again. The last message only: the pencil
   and the circular arrow sit under it, the reply to it is discarded, and the
   attachments ride along unchanged. What the discarded turn wrote to disk

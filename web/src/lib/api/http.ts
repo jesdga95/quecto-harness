@@ -16,6 +16,7 @@ import type {
   Sent,
   Session,
   State,
+  Steer,
   Todo,
   Transcript,
   TranscriptItem,
@@ -118,6 +119,24 @@ interface WireEntry {
   meta?: Record<string, unknown> | null;
 }
 
+interface WireAttachment {
+  path?: string;
+  kind?: string;
+  bytes?: number;
+  file?: string;
+}
+
+interface WireSteer {
+  text?: string;
+  attachments?: WireAttachment[];
+}
+
+// A message either became an entry or joined the queue, and the two answers
+// carry different things.
+type WireSent =
+  | { queued: true; steer: WireSteer }
+  | { queued: false; seq: number; attachments?: WireAttachment[] };
+
 interface WireSnapshot {
   id?: string;
   project?: string;
@@ -129,6 +148,8 @@ interface WireSnapshot {
   entries?: WireEntry[];
   todos?: { text?: string; status?: string }[] | null;
   pending?: WirePermission[];
+  state?: string;
+  steer?: WireSteer | null;
   last_seq?: number;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
   breakdown?: { system?: number; tools?: number; messages?: number } | null;
@@ -154,6 +175,7 @@ interface WireEvent {
   decision?: string;
   reason?: string;
   content?: string;
+  attachments?: WireAttachment[];
   prompt_tokens?: number;
   completion_tokens?: number;
   cached_tokens?: number;
@@ -518,6 +540,20 @@ function toChanges(wire: WireChanges): Changes {
   return { files, added: wire.added ?? 0, removed: wire.removed ?? 0 };
 }
 
+function toAttached(wire: WireAttachment[] | undefined): Attached[] {
+  return (wire ?? []).map((a) => ({
+    path: a.path ?? "",
+    kind: a.kind === "image" ? "image" : "text",
+    bytes: a.bytes ?? 0,
+    file: a.file,
+  }));
+}
+
+function toSteer(wire: WireSteer | null | undefined): Steer | null {
+  if (!wire) return null;
+  return { text: wire.text ?? "", files: toAttached(wire.attachments) };
+}
+
 function toTranscript(snap: WireSnapshot): Transcript {
   const entries = (snap.entries ?? []).filter((e) => e.visible !== false);
   const items: TranscriptItem[] = [];
@@ -554,7 +590,14 @@ function toTranscript(snap: WireSnapshot): Transcript {
   const highest = entries.reduce((max, e) => Math.max(max, e.seq ?? 0), 0);
   seqs.set(id, snap.last_seq ?? highest);
 
-  return { session, items, usage, todos: toTodos(snap.todos) };
+  return {
+    session,
+    items,
+    usage,
+    todos: toTodos(snap.todos),
+    steer: toSteer(snap.steer),
+    status: toStatus(snap.state),
+  };
 }
 
 // stream
@@ -578,6 +621,8 @@ const EVENT_NAMES = [
   "title",
   "todos",
   "compacted",
+  "queued",
+  "message",
   "done",
   "resync",
 ];
@@ -681,6 +726,19 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
         },
       ];
 
+    case "queued":
+      return [{ type: "queued", steer: { text: ev.text ?? "", files: toAttached(ev.attachments) } }];
+
+    case "message":
+      return [
+        {
+          type: "message",
+          seq: ev.seq ?? 0,
+          text: ev.text ?? "",
+          files: toAttached(ev.attachments),
+        },
+      ];
+
     case "error":
       return [{ type: "error", message: ev.message ?? "The turn failed" }];
 
@@ -781,19 +839,15 @@ class HttpApi implements HarnessApi {
   }
 
   async sendMessage(id: string, text: string, files: string[] = []): Promise<Sent> {
-    const wire = await call<{
-      seq: number;
-      attachments?: { path?: string; kind?: string; bytes?: number; file?: string }[];
-    }>(`/sessions/${encodeURIComponent(id)}/message`, "POST", { text, attachments: files });
-    return {
-      seq: wire.seq,
-      files: (wire.attachments ?? []).map((a) => ({
-        path: a.path ?? "",
-        kind: a.kind === "image" ? "image" : "text",
-        bytes: a.bytes ?? 0,
-        file: a.file,
-      })),
-    };
+    const wire = await call<WireSent>(
+      `/sessions/${encodeURIComponent(id)}/message`,
+      "POST",
+      { text, attachments: files },
+    );
+    if (wire.queued) {
+      return { queued: true, seq: 0, files: [], steer: toSteer(wire.steer) };
+    }
+    return { queued: false, seq: wire.seq, files: toAttached(wire.attachments), steer: null };
   }
 
   // The harness rewrites the history and tells every tab to refetch, so

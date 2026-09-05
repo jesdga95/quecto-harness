@@ -52,6 +52,7 @@
   // moment they scroll up.
   $effect(() => {
     void count;
+    void app.steer?.text.length;
     void (tail && tail.kind === "assistant" ? tail.text.length : 0);
     if (scroller && atBottom) scroller.scrollTop = scroller.scrollHeight;
   });
@@ -198,6 +199,20 @@
           <StepRow {item} />
         {/if}
       {/each}
+
+      {#if app.steer}
+        <div class="mt-4 flex flex-col items-end gap-1">
+          <div class="bubble bubble-queued">
+            {#if app.steer.files.length > 0}
+              {@render attachments(app.steer.files)}
+            {/if}
+            {#if app.steer.text}
+              <p class="bubble-text">{app.steer.text}</p>
+            {/if}
+          </div>
+          <span class="text-[12px] text-muted">Waiting for this turn</span>
+        </div>
+      {/if}
     </div>
   </div>
 

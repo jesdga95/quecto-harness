@@ -1,6 +1,7 @@
 import { ApiError, api } from "../api";
 import { dismissSticky, toast } from "./toast.svelte";
 import type {
+  Attached,
   Changes,
   Config,
   Effort,
@@ -10,6 +11,7 @@ import type {
   PermissionDecision,
   Project,
   Session,
+  Steer,
   Todo,
   TranscriptItem,
   TurnStatus,
@@ -31,6 +33,8 @@ export const app = $state({
   projectPath: "",
   sessionId: "",
   items: [] as TranscriptItem[],
+  // A message typed while the turn runs, waiting for it to pick it up.
+  steer: null as Steer | null,
   todos: [] as Todo[],
   changes: { files: [], added: 0, removed: 0 } as Changes,
   changesOpen: false,
@@ -123,7 +127,10 @@ export async function selectSession(id: string): Promise<void> {
   app.items = t.items;
   app.usage = t.usage;
   app.todos = t.todos;
-  app.status = "idle";
+  app.steer = t.steer;
+  // A session opened while its turn runs is running, and the snapshot is the
+  // only thing that says so.
+  app.status = t.status;
   app.changes = { files: [], added: 0, removed: 0 };
   if (app.config) app.config.model = t.session.model;
   unsubscribe = api.events(id, onEvent);
@@ -222,17 +229,32 @@ export async function pickAttachments(): Promise<string[]> {
 export async function send(text: string, files: string[] = []): Promise<void> {
   const message = text.trim();
   if (!app.sessionId || (!message && files.length === 0)) return;
-  pushUser(
-    app.items,
-    message,
-    files.map((path) => ({ path, kind: looksLikeImage(path) ? "image" : "text", bytes: 0 })),
-  );
+  const attached: Attached[] = files.map((path) => ({
+    path,
+    kind: looksLikeImage(path) ? "image" : "text",
+    bytes: 0,
+  }));
+  // A message typed while the turn runs waits for it, and shows as the queue
+  // rather than as a message the model has already been given.
+  if (app.status !== "idle") {
+    const queued = await guard(() => api.sendMessage(app.sessionId, message, files));
+    if (queued) app.steer = queued.steer;
+    return;
+  }
+  pushUser(app.items, message, attached);
   // The harness reads the attachments, so a file it refuses refuses the whole
   // message. The bubble comes back off the transcript when that happens.
   const item = app.items[app.items.length - 1];
   const sent = await guard(() => api.sendMessage(app.sessionId, message, files));
   if (sent === null) {
     app.items = app.items.filter((i) => i.id !== item?.id);
+    return;
+  }
+  // A turn that started between the check and the call takes the message as a
+  // queued one, so the bubble it was drawn as comes back off the transcript.
+  if (sent.queued) {
+    app.items = app.items.filter((i) => i.id !== item?.id);
+    app.steer = sent.steer;
     return;
   }
   // The harness stored the files and gave each one an id, which is what the
@@ -465,6 +487,22 @@ function onEvent(event: HarnessEvent): void {
     app.items = event.transcript.items;
     app.usage = event.transcript.usage;
     app.todos = event.transcript.todos;
+    app.steer = event.transcript.steer;
+    app.status = event.transcript.status;
+    return;
+  }
+
+  if (event.type === "queued") {
+    app.steer = event.steer;
+    return;
+  }
+
+  // The turn picked the queued message up, so it becomes an ordinary bubble.
+  if (event.type === "message") {
+    app.steer = null;
+    if (!app.items.some((i) => i.kind === "user" && i.seq === event.seq)) {
+      pushUser(app.items, event.text, event.files, event.seq);
+    }
     return;
   }
 

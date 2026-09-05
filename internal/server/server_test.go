@@ -551,30 +551,58 @@ func TestMessageStopAndCompact(t *testing.T) {
 	}
 }
 
-func TestBusySessionReturns409(t *testing.T) {
+func TestBusySession(t *testing.T) {
 	f := newFixture(t)
 	id := f.newSession(t)
 	f.block(t)
 
 	f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "hi"})
+	// Waiting for the request to reach the model, rather than for any busy
+	// state: a message queued before it gets picked up in the same turn.
 	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && f.engine.State(id) == agent.StateIdle {
+	for time.Now().Before(deadline) && f.engine.State(id) != agent.StateStreaming {
 		time.Sleep(time.Millisecond)
 	}
-	if f.engine.State(id) == agent.StateIdle {
-		t.Fatal("the turn never started")
+	if f.engine.State(id) != agent.StateStreaming {
+		t.Fatalf("the turn is %s, want it waiting on the model", f.engine.State(id))
 	}
-	for _, path := range []string{"/message", "/compact"} {
-		w := f.do(t, "POST", "/api/sessions/"+id+path, map[string]string{"text": "again"})
-		if w.Code != http.StatusConflict {
-			t.Errorf("%s while busy = %d, want 409", path, w.Code)
-		}
+	// A message waits for the turn rather than being refused, and the snapshot
+	// carries it so a tab that refetches still draws it.
+	w := f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "again"})
+	if w.Code != http.StatusAccepted || decode(t, w)["queued"] != true {
+		t.Errorf("message while busy = %d: %s", w.Code, w.Body.String())
+	}
+	steer, _ := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))["steer"].(map[string]any)
+	if steer == nil || steer["text"] != "again" {
+		t.Errorf("snapshot steer = %v, want the queued message", steer)
+	}
+	if w := f.do(t, "POST", "/api/sessions/"+id+"/compact", nil); w.Code != http.StatusConflict {
+		t.Errorf("compact while busy = %d, want 409", w.Code)
 	}
 	if w := f.do(t, "PUT", "/api/sessions/"+id, map[string]string{"model": "Delta3.8-27B Q5"}); w.Code != http.StatusConflict {
 		t.Errorf("rebind while busy = %d", w.Code)
 	}
 	if w := f.do(t, "DELETE", "/api/sessions/"+id, nil); w.Code != http.StatusConflict {
 		t.Errorf("delete while busy = %d", w.Code)
+	}
+	// The stop delivers the queued message, which starts a turn of its own.
+	// The entry is the signal that the delivery happened, since the session is
+	// busy either way until it does.
+	f.do(t, "POST", "/api/sessions/"+id+"/stop", nil)
+	deadline = time.Now().Add(5 * time.Second)
+	delivered := false
+	for time.Now().Before(deadline) && !delivered {
+		entries, _ := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))["entries"].([]any)
+		for _, e := range entries {
+			row, _ := e.(map[string]any)
+			if row["content"] == "again" {
+				delivered = true
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !delivered {
+		t.Fatal("the stop did not deliver the queued message")
 	}
 	f.do(t, "POST", "/api/sessions/"+id+"/stop", nil)
 	f.waitIdle(t, id)

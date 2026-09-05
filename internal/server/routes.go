@@ -335,6 +335,8 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	}
 	body := map[string]any{
 		"id": doc.ID, "project": doc.Project, "model": doc.Model,
+		// A tab that refetches still draws the message waiting for the turn.
+		"steer": steerJSON(sess.Steer()),
 		"state": string(state), "n_ctx": nctx, "n_ctx_source": source,
 		"fill": fill, "compactions": doc.Compactions,
 		"pending": pending, "entries": entries, "todos": todos,
@@ -447,19 +449,39 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	if err := s.engine.Send(sess.ID, body.Text, body.Attachments); err != nil {
+	sent, err := s.engine.Send(sess.ID, body.Text, body.Attachments)
+	if err != nil {
 		writeEngineError(w, err)
+		return
+	}
+	_, state, _, _ := sess.Snapshot()
+	// A message typed while a turn was running waits for it. What comes back
+	// is the queue as it now stands, so a tab that added to one draws the
+	// joined message rather than its own half.
+	if sent.Queued {
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"state": string(state), "queued": true, "steer": steerJSON(sent.Steer),
+		})
 		return
 	}
 	// The attachments come back with the ids the harness gave them, so the
 	// page can draw the image it just sent without refetching the session.
 	// The sequence number is what an edit of this message names it by.
-	seq, attachments := sentMessage(sess)
+	_, attachments := sentMessage(sess)
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"state":       string(agent.StatePreflight),
-		"seq":         seq,
+		"state":       string(state),
+		"queued":      false,
+		"seq":         sent.Seq,
 		"attachments": attachments,
 	})
+}
+
+// steerJSON renders the message waiting for a running turn.
+func steerJSON(held *agent.Steer) map[string]any {
+	if held == nil {
+		return nil
+	}
+	return map[string]any{"text": held.Text, "attachments": agent.AttachmentFields(held.Attachments)}
 }
 
 // postResend runs the last message again, with the text rewritten when the

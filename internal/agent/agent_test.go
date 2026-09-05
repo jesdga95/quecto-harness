@@ -162,7 +162,7 @@ func waitIdle(t *testing.T, s *Session) {
 func TestPlainReply(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt")
 	s := h.session(t)
-	if err := h.engine.Send(s.ID, "what is here", nil); err != nil {
+	if _, err := h.engine.Send(s.ID, "what is here", nil); err != nil {
 		t.Fatal(err)
 	}
 	waitIdle(t, s)
@@ -250,7 +250,7 @@ func TestPreserveReasoningFollowsTheCapability(t *testing.T) {
 	// The title request follows the first turn, so the second turn is the
 	// third request rather than the second.
 	waitForRequests(t, h, 2)
-	if err := h.engine.Send(s.ID, "second", nil); err != nil {
+	if _, err := h.engine.Send(s.ID, "second", nil); err != nil {
 		t.Fatal(err)
 	}
 	waitIdle(t, s)
@@ -470,15 +470,20 @@ func TestStopOnIdleIsANoOp(t *testing.T) {
 	}
 }
 
-func TestSendWhileBusyIsRefused(t *testing.T) {
-	h := newHarness(t, "stream_tool.txt")
+// A message sent while a card is open waits for the turn rather than being
+// refused, and the stop that answers the card delivers it.
+func TestSendWhileBusyIsQueued(t *testing.T) {
+	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "list", nil)
 	waitForCard(t, h, s.ID)
-	if err := h.engine.Send(s.ID, "again", nil); err != ErrBusy {
-		t.Errorf("Send while busy = %v, want ErrBusy", err)
+
+	sent, err := h.engine.Send(s.ID, "again", nil)
+	if err != nil || !sent.Queued {
+		t.Fatalf("Send while busy = %+v %v, want it queued", sent, err)
 	}
 	h.engine.Stop(s.ID)
+	waitForEntry(t, s, "again")
 	waitIdle(t, s)
 }
 
@@ -852,7 +857,7 @@ func TestAttachmentReachesThePrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := h.engine.Send(s.ID, "read this", []string{path}); err != nil {
+	if _, err := h.engine.Send(s.ID, "read this", []string{path}); err != nil {
 		t.Fatal(err)
 	}
 	waitIdle(t, s)
@@ -874,7 +879,7 @@ func TestAttachmentReachesThePrompt(t *testing.T) {
 	}
 
 	// A file that cannot be read refuses the message rather than sending half.
-	if err := h.engine.Send(s.ID, "and this", []string{filepath.Join(t.TempDir(), "gone.md")}); err == nil {
+	if _, err := h.engine.Send(s.ID, "and this", []string{filepath.Join(t.TempDir(), "gone.md")}); err == nil {
 		t.Error("a missing attachment was accepted")
 	}
 	doc, _, _, _ = s.Snapshot()
@@ -896,7 +901,7 @@ func TestImageReachesThePromptAsParts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := h.engine.Send(s.ID, "what is this", []string{png}); err != nil {
+	if _, err := h.engine.Send(s.ID, "what is this", []string{png}); err != nil {
 		t.Fatal(err)
 	}
 	waitIdle(t, s)
@@ -949,7 +954,7 @@ func TestImageNeedsAModelThatTakesOne(t *testing.T) {
 	if err := os.WriteFile(png, onePixelPNG(), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.engine.Send(s.ID, "look", []string{png}); err == nil {
+	if _, err := h.engine.Send(s.ID, "look", []string{png}); err == nil {
 		t.Fatal("an image went to a model the server does not have")
 	}
 	doc, _, _, _ := s.Snapshot()

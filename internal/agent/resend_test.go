@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"quecto-harness/internal/config"
 	"quecto-harness/internal/llama"
@@ -22,6 +23,21 @@ func lastUserSeq(t *testing.T, s *Session) int {
 	}
 	t.Fatal("the session has no user entry")
 	return 0
+}
+
+// waitForTitle blocks until the session carries the name, which is how a test
+// waits for the request that follows a first turn to have landed.
+func waitForTitle(t *testing.T, s *Session, want string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if doc, _, _, _ := s.Snapshot(); doc.Title == want {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	doc, _, _, _ := s.Snapshot()
+	t.Fatalf("title = %q, want %q", doc.Title, want)
 }
 
 func TestResendReplacesTheLastTurn(t *testing.T) {
@@ -111,7 +127,7 @@ func TestResendKeepsTheAttachment(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt", "stream_title.txt", "stream_plain.txt")
 	s := h.session(t)
 	path := filepath.Join(h.project, "file.txt")
-	if err := h.engine.Send(s.ID, "read this", []string{path}); err != nil {
+	if _, err := h.engine.Send(s.ID, "read this", []string{path}); err != nil {
 		t.Fatal(err)
 	}
 	waitIdle(t, s)
@@ -145,6 +161,9 @@ func TestResendRenamesFromTheOpeningMessage(t *testing.T) {
 	h.engine.Send(s.ID, "what is here", nil)
 	waitIdle(t, s)
 	waitForRequests(t, h, 2)
+	// The name the model wrote lands first, so the rewrite is what replaces it
+	// rather than the other way round.
+	waitForTitle(t, s, "Read the project layout")
 
 	text := "what is in the internal folder"
 	if _, err := h.engine.Resend(s.ID, lastUserSeq(t, s), &text); err != nil {

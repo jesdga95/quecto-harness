@@ -51,7 +51,7 @@
   }
 
   function submit() {
-    if (disabled || running || (!text.trim() && files.length === 0)) return;
+    if (disabled || (!text.trim() && files.length === 0)) return;
     const value = text;
     const attached = files;
     text = "";
@@ -108,6 +108,13 @@
           <span class="spinner" aria-label="Working"></span>
         {/if}
         <ModelChip />
+        <!-- Stop keeps its place while a turn runs, and a message typed
+             against that turn is sent from the button beside it. -->
+        {#if running && (text.trim() || files.length > 0)}
+          <button class="round" aria-label="Send" onclick={submit}>
+            <ArrowUp />
+          </button>
+        {/if}
         {#if running}
           <button class="round round-brand" aria-label="Stop" onclick={() => stop()}>
             <Square weight="fill" />

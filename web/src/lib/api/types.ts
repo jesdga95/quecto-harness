@@ -130,6 +130,11 @@ export type HarnessEvent =
   | { type: "compacted"; before: number; after: number; summary: string }
   /** The model rewrote the plan. It replaces the one held. */
   | { type: "todos"; todos: Todo[] }
+  /** A message is waiting for the running turn, as it now stands. */
+  | { type: "queued"; steer: Steer }
+  /** The harness appended a user message, which is a queued one being picked
+      up by the turn it was typed against. */
+  | { type: "message"; seq: number; text: string; files: Attached[] }
   | { type: "error"; message: string }
   | { type: "done" }
   /** The stream fell too far behind to replay, so it carries a fresh snapshot. */
@@ -164,9 +169,18 @@ export type TranscriptItem =
   | { kind: "status"; id: string; text: string }
   | { kind: "error"; id: string; message: string };
 
-/** A message as the harness stored it. */
+/** A message as the harness took it: the entry it became, or the queue it
+    joined behind a turn that was already running. */
 export interface Sent {
+  queued: boolean;
   seq: number;
+  files: Attached[];
+  steer: Steer | null;
+}
+
+/** A message typed while a turn was running, waiting for it. */
+export interface Steer {
+  text: string;
   files: Attached[];
 }
 
@@ -242,6 +256,11 @@ export interface Transcript {
   items: TranscriptItem[];
   usage: Usage;
   todos: Todo[];
+  /** What the session is doing. A snapshot is what a page reloaded mid-turn
+      has to read this from. */
+  status: TurnStatus;
+  /** The message waiting for a turn that is still running. */
+  steer: Steer | null;
 }
 
 export type EventHandler = (event: HarnessEvent) => void;

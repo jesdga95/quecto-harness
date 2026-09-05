@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,11 @@ type Session struct {
 	Compactions    int
 	Todos          []store.Todo
 	Baselines      []store.Baseline
+
+	// steer is the message waiting for the running turn to pick it up. It is
+	// not part of the document: a message that outlives the turn it was typed
+	// against is sent as an ordinary one instead.
+	steer *Steer
 
 	caps           llama.Caps
 	lastUsageEntry int
@@ -127,6 +133,54 @@ func (s *Session) Snapshot() (*store.Session, State, int, llama.Caps) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.doc(), s.state, s.computeFill(), s.caps
+}
+
+// Steer is a message typed while a turn was running. There is one per
+// session: a second joins the first, since the model reads them as one turn
+// either way.
+type Steer struct {
+	Text        string
+	Attachments []store.Attachment
+}
+
+// Steer is the message waiting for the running turn, or nil.
+func (s *Session) Steer() *Steer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.steer == nil {
+		return nil
+	}
+	held := *s.steer
+	held.Attachments = append([]store.Attachment(nil), s.steer.Attachments...)
+	return &held
+}
+
+// queue adds a message to the one waiting, on a line of its own. A set of
+// attachments that would
+// take the joined message over the cap is refused whole, so the queue is
+// never left holding half of what was typed. The caller holds the lock.
+func (s *Session) queue(text string, attachments []store.Attachment) error {
+	next := &Steer{Text: text, Attachments: attachments}
+	if s.steer != nil {
+		next.Text = joinMessages(s.steer.Text, text)
+		next.Attachments = append(append([]store.Attachment(nil), s.steer.Attachments...), attachments...)
+	}
+	if len(next.Attachments) > maxAttachments {
+		return fmt.Errorf("Attach %d files: at most %d fit in one message", len(next.Attachments), maxAttachments)
+	}
+	s.steer = next
+	return nil
+}
+
+// joinMessages puts two messages on their own lines.
+func joinMessages(first, second string) string {
+	if first == "" {
+		return second
+	}
+	if second == "" {
+		return first
+	}
+	return first + "\n" + second
 }
 
 // appendEntry numbers and stamps one entry. The caller holds the lock.

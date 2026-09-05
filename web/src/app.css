@@ -967,6 +967,12 @@
     /* A tile sets its own edge, so the bubble tightens around it. */
     padding: 8px;
   }
+  /* A message typed while the turn runs, held until it is picked up. */
+  .bubble-queued {
+    background: none;
+    border: 1px dashed var(--edge);
+    color: var(--text-2);
+  }
   .bubble-text {
     margin: 0;
     font-size: 14px;
