@@ -1,6 +1,6 @@
 <script lang="ts">
   import CaretRight from "phosphor-svelte/lib/CaretRight";
-  import Copy from "phosphor-svelte/lib/Copy";
+  import CopyButton from "./CopyButton.svelte";
   import DiffBlock from "./DiffBlock.svelte";
   import type { FileChange } from "../api";
   import { unifiedPatch } from "../patch";
@@ -32,10 +32,6 @@
     if (f.status === "lost") return "The kept copy is gone";
     return "";
   }
-
-  function copy() {
-    void navigator.clipboard?.writeText(patch);
-  }
 </script>
 
 <aside class="changes">
@@ -46,9 +42,7 @@
       <span class="stat-del ml-1.5">&minus;{app.changes.removed}</span>
     </span>
     {#if patch}
-      <button class="icon-btn changes-copy" aria-label="Copy diff" onclick={copy}>
-        <Copy />
-      </button>
+      <CopyButton text={patch} label="Copy diff" extra="changes-copy" />
     {/if}
   </div>
 

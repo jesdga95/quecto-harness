@@ -491,6 +491,10 @@
     width: 15px;
     height: 15px;
   }
+  .icon-btn.is-copied,
+  .icon-btn.is-copied:hover {
+    color: var(--ok);
+  }
 
   .btn {
     display: inline-flex;

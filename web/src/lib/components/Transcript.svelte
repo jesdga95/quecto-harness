@@ -2,9 +2,9 @@
   import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
   import ArrowDown from "phosphor-svelte/lib/ArrowDown";
   import ArrowsLeftRight from "phosphor-svelte/lib/ArrowsLeftRight";
-  import Copy from "phosphor-svelte/lib/Copy";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
   import Warning from "phosphor-svelte/lib/Warning";
+  import CopyButton from "./CopyButton.svelte";
   import PermissionCard from "./PermissionCard.svelte";
   import Prose from "./Prose.svelte";
   import StepRow from "./StepRow.svelte";
@@ -75,10 +75,6 @@
   function toBottom() {
     atBottom = true;
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
-  }
-
-  function copy(text: string) {
-    void navigator.clipboard?.writeText(text);
   }
 
   // A reply is split around the tool calls the model made in the middle of
@@ -194,9 +190,7 @@
                 <span class="mr-1 text-[12px] text-muted">Edited</span>
               {/if}
               {#if item.text}
-                <button class="icon-btn" aria-label="Copy message" onclick={() => copy(item.text)}>
-                  <Copy />
-                </button>
+                <CopyButton text={item.text} label="Copy message" />
               {/if}
               {#if canResend(item)}
                 <button class="icon-btn" aria-label="Edit message" onclick={() => edit(item)}>
@@ -216,13 +210,7 @@
                  two tool calls. -->
             {#if item.cost}
               <div class="mt-0.5 flex items-center gap-2">
-                <button
-                  class="icon-btn"
-                  aria-label="Copy reply"
-                  onclick={() => copy(replies.get(item.id) ?? item.text)}
-                >
-                  <Copy />
-                </button>
+                <CopyButton text={replies.get(item.id) ?? item.text} label="Copy reply" />
                 <span class="num text-[12px] text-muted">
                   {k(item.cost.tokens)} tokens &middot; {duration(item.cost.ms)}
                   {#if item.cost.tokPerS > 0}
