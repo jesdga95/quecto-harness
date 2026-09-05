@@ -14,9 +14,6 @@ all: build
 # The UI is embedded at compile time, so it is rebuilt before the binary.
 web:
 	cd web && npm ci && npm run build
-# KaTeX declares every face in woff2, woff and ttf. A browser takes the woff2
-# and never asks for the rest, but go:embed would carry all of it.
-	find internal/web/dist -name '*.woff' -o -name '*.ttf' | xargs rm -f
 
 build: web
 	CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/quecto-harness

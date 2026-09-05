@@ -835,4 +835,7 @@ function seededEvents(): HarnessEvent[] {
   ];
 }
 
-export const mockApi: HarnessApi = new MockApi();
+// The annotation is what keeps this file out of a normal build. Constructing
+// a class counts as a side effect, so without it the bundler keeps the whole
+// module and its sample data even though nothing reaches the export.
+export const mockApi: HarnessApi = /* @__PURE__ */ new MockApi();

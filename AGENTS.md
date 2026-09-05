@@ -1,5 +1,14 @@
 # Working in this repo
 
+## Replies
+
+Answer in as few words as the question needs, and stop. A sentence or two, or
+a short list. No preamble, no restating the question, no summary of work the
+diff already shows. Technical detail comes when it is asked for.
+
+This rule is about messages to the reader. The rest of this file is about text
+that ends up in the repository.
+
 ## Prose
 
 Comments, prompts, docs and commit messages state what is true and stop. Cut:
