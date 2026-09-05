@@ -94,15 +94,7 @@
     ></textarea>
 
     <div class="mt-2 flex items-center gap-2">
-      <AddMenu up />
-      <button
-        class="round"
-        aria-label="Attach a file"
-        disabled={disabled || files.length >= maxFiles}
-        onclick={attach}
-      >
-        <Paperclip />
-      </button>
+      <AddMenu up onattach={attach} canAttach={!disabled && files.length < maxFiles} />
       <PermissionChip />
       <EffortChip up />
 

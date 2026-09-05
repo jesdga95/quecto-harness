@@ -575,8 +575,18 @@
     color: var(--text);
     font-size: 13px;
   }
-  .popover-item:hover {
+  .popover-item:hover:not(:disabled) {
     background: var(--surface-2);
+  }
+  .popover-item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .popover-item > svg {
+    width: 15px;
+    height: 15px;
+    flex: none;
+    color: var(--muted);
   }
   /* A checkbox drawn as a track and a knob, for a setting inside a popover. */
   .switch {

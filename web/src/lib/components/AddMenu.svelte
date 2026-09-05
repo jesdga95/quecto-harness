@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Paperclip from "phosphor-svelte/lib/Paperclip";
   import Plus from "phosphor-svelte/lib/Plus";
   import Popover from "./Popover.svelte";
   import {
@@ -8,7 +9,11 @@
     setPreserveReasoning,
   } from "../state/app.svelte";
 
-  let { up = false }: { up?: boolean } = $props();
+  let {
+    up = false,
+    onattach,
+    canAttach = true,
+  }: { up?: boolean; onattach?: () => void; canAttach?: boolean } = $props();
   let open = $state(false);
 
   const preserve = $derived(preserveReasoning());
@@ -29,6 +34,24 @@
 
   {#if open}
     <Popover onclose={() => (open = false)} {up} width={292}>
+      <div class="popover-head">Message</div>
+      <button
+        class="popover-item"
+        disabled={!canAttach}
+        onclick={() => {
+          open = false;
+          onattach?.();
+        }}
+      >
+        <Paperclip />
+        <span class="min-w-0 flex-1">
+          <span class="block">Attach a file</span>
+          <span class="block text-[12px] text-muted">
+            Up to five, read into the message with their path
+          </span>
+        </span>
+      </button>
+
       <div class="popover-head">Thinking</div>
       <label class="popover-item cursor-pointer">
         <span class="min-w-0 flex-1">
