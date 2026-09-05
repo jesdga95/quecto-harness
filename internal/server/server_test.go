@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,16 +25,32 @@ import (
 const testToken = "test-token"
 
 type fixture struct {
-	srv        *Server
-	handler    http.Handler
-	cfg        *config.Store
-	hub        *Hub
-	engine     *agent.Engine
-	perms      *perms.Broker
-	project    string
-	upstream   *httptest.Server
+	srv       *Server
+	handler   http.Handler
+	cfg       *config.Store
+	hub       *Hub
+	engine    *agent.Engine
+	perms     *perms.Broker
+	project   string
+	upstream  *httptest.Server
+	chatBlock chan struct{}
+
+	// The frames are swapped between turns while an earlier turn's request
+	// may still be reading them, so they are guarded.
+	framesMu   sync.Mutex
 	chatFrames []string
-	chatBlock  chan struct{}
+}
+
+func (f *fixture) setFrames(frames ...string) {
+	f.framesMu.Lock()
+	defer f.framesMu.Unlock()
+	f.chatFrames = frames
+}
+
+func (f *fixture) frames() []string {
+	f.framesMu.Lock()
+	defer f.framesMu.Unlock()
+	return append([]string(nil), f.chatFrames...)
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -83,7 +100,7 @@ func newFixture(t *testing.T) *fixture {
 				<-f.chatBlock
 				return
 			}
-			for _, fr := range f.chatFrames {
+			for _, fr := range f.frames() {
 				fmt.Fprint(w, fr+"\n\n")
 				if flusher != nil {
 					flusher.Flush()
@@ -454,11 +471,11 @@ func TestRebindRoute(t *testing.T) {
 
 func TestMessageStopAndCompact(t *testing.T) {
 	f := newFixture(t)
-	f.chatFrames = []string{
+	f.setFrames(
 		`data: {"choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}]}`,
 		`data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}`,
 		`data: [DONE]`,
-	}
+	)
 	id := f.newSession(t)
 
 	w := f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "hi"})
@@ -477,10 +494,10 @@ func TestMessageStopAndCompact(t *testing.T) {
 		t.Errorf("stop on idle = %d %s", w.Code, w.Body.String())
 	}
 
-	f.chatFrames = []string{
+	f.setFrames(
 		`data: {"choices":[{"delta":{"content":"a summary"},"finish_reason":"stop"}]}`,
 		`data: [DONE]`,
-	}
+	)
 	if w := f.do(t, "POST", "/api/sessions/"+id+"/compact", nil); w.Code != http.StatusAccepted {
 		t.Errorf("compact = %d: %s", w.Code, w.Body.String())
 	}
