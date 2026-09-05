@@ -25,10 +25,27 @@ function tokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
+/** Event types that put a new item below whatever text is being streamed. */
+const APPENDING = new Set([
+  "status_entry",
+  "reasoning",
+  "tool_call",
+  "permission",
+  "compacted",
+  "error",
+]);
+
 // Folds one stream event into the transcript. The store and the mock server
 // both use it, so a replayed session looks like a live one.
 export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
   const last = items[items.length - 1];
+
+  // Anything landing under the text ends the block above it, so the caret comes
+  // off there rather than only at the end of the turn. A later delta opens a new
+  // block, which is what a message split around a tool call is.
+  if (APPENDING.has(event.type) && last && last.kind === "assistant") {
+    last.streaming = false;
+  }
 
   switch (event.type) {
     case "delta": {
