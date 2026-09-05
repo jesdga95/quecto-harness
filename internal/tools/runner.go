@@ -1,6 +1,7 @@
-// Package tools executes read_file, write_file, replace_in_file and run_shell
-// against one project root. It knows nothing about who approved a call; its only policy is
-// the path guard, which is a correctness property of the tool.
+// Package tools executes read_file, find, write_file, replace_in_file and
+// run_shell against one project root. It knows nothing about who approved a
+// call; its only policy is the path guard, which is a correctness property of
+// the tool.
 package tools
 
 import (
@@ -91,6 +92,13 @@ type ReplaceInFileArgs struct {
 	Path      string `json:"path"`
 	OldString string `json:"old_string"`
 	NewString string `json:"new_string"`
+}
+
+type FindArgs struct {
+	Path  string `json:"path"`
+	Name  string `json:"name"`
+	Text  string `json:"text"`
+	Regex bool   `json:"regex"`
 }
 
 type RunShellArgs struct {

@@ -8,6 +8,7 @@ import (
 func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 	for name, get := range map[string]func() string{
 		"tool_read_file.md":       ToolReadFile,
+		"tool_find.md":            ToolFind,
 		"tool_write_file.md":      ToolWriteFile,
 		"tool_replace_in_file.md": ToolReplaceInFile,
 		"tool_run_shell.md":       ToolRunShell,
@@ -42,6 +43,9 @@ func TestToolDescriptionsNameTheirArguments(t *testing.T) {
 	}
 	if !strings.Contains(ToolRunShell(), "exit code") {
 		t.Errorf("run_shell description omits the exit code: %q", ToolRunShell())
+	}
+	if !strings.Contains(ToolFind(), "text") || !strings.Contains(ToolFind(), "name") || !strings.Contains(ToolFind(), "path") {
+		t.Errorf("find description omits its arguments: %q", ToolFind())
 	}
 	if !strings.Contains(ToolReplaceInFile(), "old_string") || !strings.Contains(ToolReplaceInFile(), "new_string") {
 		t.Errorf("replace_in_file description omits its arguments: %q", ToolReplaceInFile())

@@ -1086,6 +1086,8 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 		switch call.Function.Name {
 		case "read_file":
 			res, err = runner.ReadFile(ctx, args)
+		case "find":
+			res, err = runner.Find(ctx, args)
 		case "write_file":
 			res, err = runner.WriteFile(ctx, args)
 		case "replace_in_file":
@@ -1095,7 +1097,7 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 		case "write_todos":
 			res, err = e.writeTodos(s, args)
 		default:
-			err = fmt.Errorf("no tool named %s: use read_file, write_file, replace_in_file, run_shell or write_todos", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read_file, find, write_file, replace_in_file, run_shell or write_todos", call.Function.Name)
 		}
 		if err != nil {
 			content = err.Error()

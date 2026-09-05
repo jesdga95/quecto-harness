@@ -370,7 +370,7 @@ func TestLooksBinary(t *testing.T) {
 
 func TestSchemasMatchTheDescriptions(t *testing.T) {
 	s := Schemas()
-	names := []string{"read_file", "write_file", "replace_in_file", "write_todos", "run_shell"}
+	names := []string{"read_file", "find", "write_file", "replace_in_file", "write_todos", "run_shell"}
 	if len(s) != len(names) {
 		t.Fatalf("got %d schemas, want %d", len(s), len(names))
 	}
@@ -670,4 +670,186 @@ func tail(s string, n int) string {
 		return "..." + s[len(s)-n:]
 	}
 	return s
+}
+
+func findTree(t *testing.T) *Runner {
+	t.Helper()
+	base := t.TempDir()
+	files := map[string]string{
+		"web/Chat.tsx":              "const line = 1\n<div class=\"chat-line\">\n",
+		"web/Chat.css":              ".chat-line { color: red }\n",
+		"web/Chat.module.css":       ".x {}\n",
+		"web/other.tsx":             "nothing here\n",
+		"node_modules/dep/index.js": "chat-line lives here too\n",
+		"internal/thing.go":         "package thing\n\nfunc Chat() {}\n",
+	}
+	for name, body := range files {
+		p := filepath.Join(base, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := NewRunner(base, config.Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func find(t *testing.T, r *Runner, args string) string {
+	t.Helper()
+	res, err := r.Find(context.Background(), json.RawMessage(args))
+	if err != nil {
+		t.Fatalf("find %s: %v", args, err)
+	}
+	return res.Output
+}
+
+func TestFindTextIgnoresCaseAndIsLiteral(t *testing.T) {
+	r := findTree(t)
+	out := find(t, r, `{"text":"CHAT-LINE"}`)
+	for _, want := range []string{"web/Chat.css:1:", "web/Chat.tsx:2:", "2 matches in 2 files"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q:\n%s", want, out)
+		}
+	}
+	// A literal search takes the dot as a dot rather than as any character.
+	if out := find(t, r, `{"text":"chat.line"}`); !strings.Contains(out, "no match for") {
+		t.Errorf("literal search matched a regular expression:\n%s", out)
+	}
+	if out := find(t, r, `{"text":"chat.line","regex":true}`); !strings.Contains(out, "2 matches") {
+		t.Errorf("regex search did not match:\n%s", out)
+	}
+}
+
+func TestFindSkipsInstalledCodeUntilNamed(t *testing.T) {
+	r := findTree(t)
+	out := find(t, r, `{"text":"chat-line"}`)
+	if strings.Contains(out, "node_modules") == false || !strings.Contains(out, "passed over") {
+		t.Errorf("the skip was not reported:\n%s", out)
+	}
+	if strings.Contains(out, "node_modules/dep/index.js") {
+		t.Errorf("node_modules was searched without being named:\n%s", out)
+	}
+	named := find(t, r, `{"text":"chat-line","path":"node_modules"}`)
+	if !strings.Contains(named, "node_modules/dep/index.js:1:") {
+		t.Errorf("naming the folder did not search it:\n%s", named)
+	}
+	if strings.Contains(named, "passed over") {
+		t.Errorf("a named path still reported a skip:\n%s", named)
+	}
+}
+
+func TestFindRelatedFilesAreSiblingsOfAMatch(t *testing.T) {
+	r := findTree(t)
+	out := find(t, r, `{"text":"const line"}`)
+	if !strings.Contains(out, "related files:") {
+		t.Fatalf("no related files for a search in one file:\n%s", out)
+	}
+	for _, want := range []string{"web/Chat.css", "web/Chat.module.css"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("related files omit %s:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "web/other.tsx") {
+		t.Errorf("a file with another name was called related:\n%s", out)
+	}
+}
+
+func TestFindRelatedIsSuppressedWhenTheSearchIsBroad(t *testing.T) {
+	base := t.TempDir()
+	for _, name := range []string{"a", "b", "c"} {
+		if err := os.WriteFile(filepath.Join(base, name+".go"), []byte("hit\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(base, name+".css"), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := NewRunner(base, config.Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := find(t, r, `{"text":"hit"}`); strings.Contains(out, "related files:") {
+		t.Errorf("related files listed for a search in three files:\n%s", out)
+	}
+}
+
+func TestFindByNameListsPaths(t *testing.T) {
+	r := findTree(t)
+	out := find(t, r, `{"name":"*.css"}`)
+	if !strings.Contains(out, "web/Chat.css") || !strings.Contains(out, "2 files") {
+		t.Errorf("name search did not list the stylesheets:\n%s", out)
+	}
+	if strings.Contains(out, ":1:") {
+		t.Errorf("name search returned lines:\n%s", out)
+	}
+	if out := find(t, r, `{"name":"*.rs"}`); !strings.Contains(out, "no file named *.rs") {
+		t.Errorf("a name that matches nothing did not say so:\n%s", out)
+	}
+}
+
+func TestFindNameAndTextTogetherNarrow(t *testing.T) {
+	r := findTree(t)
+	out := find(t, r, `{"text":"chat-line","name":"*.css"}`)
+	if !strings.Contains(out, "web/Chat.css:1:") || !strings.Contains(out, "1 match in 1 file") {
+		t.Errorf("the name did not narrow the text search:\n%s", out)
+	}
+	if strings.Contains(out, "web/Chat.tsx:2:") {
+		t.Errorf("a file outside the name pattern was searched:\n%s", out)
+	}
+}
+
+func TestFindBadInput(t *testing.T) {
+	r := findTree(t)
+	if _, err := r.Find(context.Background(), json.RawMessage(`{}`)); err == nil {
+		t.Error("find with no name and no text was accepted")
+	}
+	if _, err := r.Find(context.Background(), json.RawMessage(`{"text":"x","path":"../outside"}`)); err == nil {
+		t.Error("find escaped the project")
+	}
+	if _, err := r.Find(context.Background(), json.RawMessage(`{"text":"x","path":"nope"}`)); err == nil {
+		t.Error("find accepted a path that does not exist")
+	}
+	out := find(t, r, `{"text":"(unclosed","regex":true}`)
+	if !strings.Contains(out, "not a valid regular expression") || !strings.Contains(out, "without regex") {
+		t.Errorf("a bad expression did not say how to retry:\n%s", out)
+	}
+}
+
+func TestFindClipsAndCaps(t *testing.T) {
+	base := t.TempDir()
+	long := "needle " + strings.Repeat("x", 900)
+	var many strings.Builder
+	for i := 0; i < 50; i++ {
+		many.WriteString("needle\n")
+	}
+	if err := os.WriteFile(filepath.Join(base, "long.txt"), []byte(long+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "many.txt"), []byte(many.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "bin.dat"), []byte("needle\x00needle"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRunner(base, config.Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := find(t, r, `{"text":"needle"}`)
+	for _, line := range strings.Split(out, "\n") {
+		if len(line) > findLineClip+64 {
+			t.Errorf("a result line was not clipped: %d bytes", len(line))
+		}
+	}
+	if strings.Count(out, "many.txt:") > findMaxPerFile+1 {
+		t.Errorf("the per-file cap did not hold:\n%s", out)
+	}
+	if strings.Contains(out, "bin.dat") {
+		t.Errorf("a binary file was searched:\n%s", out)
+	}
 }

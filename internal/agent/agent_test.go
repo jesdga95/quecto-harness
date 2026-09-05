@@ -14,6 +14,7 @@ import (
 	"quecto-harness/internal/llama"
 	"quecto-harness/internal/perms"
 	"quecto-harness/internal/store"
+	"quecto-harness/internal/tools"
 )
 
 // recorder collects published events so a test can assert what a browser
@@ -217,9 +218,9 @@ func TestEffortReachesTheRequestBody(t *testing.T) {
 	if body["reasoning_format"] != "deepseek" {
 		t.Errorf("reasoning_format = %v", body["reasoning_format"])
 	}
-	tools, _ := body["tools"].([]any)
-	if len(tools) != 5 {
-		t.Errorf("tools = %d, want 5", len(tools))
+	sent, _ := body["tools"].([]any)
+	if want := len(tools.Schemas()); len(sent) != want {
+		t.Errorf("tools = %d, want %d", len(sent), want)
 	}
 	msgs, _ := body["messages"].([]any)
 	if len(msgs) != 2 {

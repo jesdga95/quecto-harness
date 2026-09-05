@@ -4,6 +4,7 @@
   import CaretRight from "phosphor-svelte/lib/CaretRight";
   import FileText from "phosphor-svelte/lib/FileText";
   import ListChecks from "phosphor-svelte/lib/ListChecks";
+  import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
   import Terminal from "phosphor-svelte/lib/Terminal";
@@ -23,12 +24,21 @@
     item.kind === "tool" && typeof item.args.path === "string" ? item.args.path : "",
   );
 
+  // What find was asked for, which is the text unless the call only named files.
+  const query = $derived.by(() => {
+    if (item.kind !== "tool" || item.name !== "find") return "";
+    const { text, name } = item.args;
+    if (typeof text === "string" && text !== "") return text;
+    return typeof name === "string" ? name : "";
+  });
+
   const name = $derived.by(() => {
     if (item.kind === "reasoning") return "Think";
     if (item.kind === "permission") return "Permission";
     if (item.kind === "compaction") return "Compacted";
     if (item.kind !== "tool") return "Step";
     if (item.name === "read_file") return "Read";
+    if (item.name === "find") return "Find";
     if (item.name === "write_file") return "Write";
     if (item.name === "replace_in_file") return "Edit";
     if (item.name === "write_todos") return "Plan";
@@ -44,6 +54,7 @@
       const done = todos.filter((t) => t.status === "done").length;
       return `${done} of ${todos.length} done`;
     }
+    if (item.name === "find") return query;
     return path || describeCommand(command);
   });
 
@@ -62,7 +73,7 @@
       .filter((t) => t.text !== "");
   });
 
-  const isPath = $derived(item.kind === "tool" && path !== "");
+  const isPath = $derived(item.kind === "tool" && item.name !== "find" && path !== "");
   // A compaction with no summary is a divider and nothing more.
   const expandable = $derived(item.kind !== "compaction" || item.summary !== "");
 </script>
@@ -77,6 +88,8 @@
       <ArrowsIn />
     {:else if item.kind === "tool" && item.name === "read_file"}
       <FileText />
+    {:else if item.kind === "tool" && item.name === "find"}
+      <MagnifyingGlass />
     {:else if item.kind === "tool" && (item.name === "write_file" || item.name === "replace_in_file")}
       <PencilSimple />
     {:else if item.kind === "tool" && item.name === "write_todos"}
