@@ -919,73 +919,97 @@
     background: var(--accent-bg);
     color: var(--text);
   }
-  .bubble:has(.bubble-shots) {
-    /* Pictures set their own edge, so the bubble tightens around them. */
+  .bubble:has(.tiles) {
+    /* A tile sets its own edge, so the bubble tightens around it. */
     padding: 8px;
-  }
-  /* Pictures sit side by side and keep their own height; a file that is not a
-     picture is a line of its own, so neither is stretched by the other. */
-  .bubble-shots {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    justify-content: flex-end;
-    gap: 6px;
-  }
-  .bubble-docs {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 4px;
-  }
-  .bubble-shots:not(:last-child),
-  .bubble-docs:not(:last-child) {
-    margin-bottom: 6px;
   }
   .bubble-text {
     margin: 0;
     font-size: 14px;
     white-space: pre-wrap;
   }
-  .bubble:has(.bubble-shots) .bubble-text {
-    padding: 2px 6px 4px;
-  }
-  /* A file that is not a picture: its name and what it weighs, on a surface
-     of its own so it reads as a thing rather than as more message. */
-  .bubble-file {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    max-width: 100%;
-    padding: 6px 10px;
-    border-radius: 10px;
-    background: var(--surface);
-    font-size: 12.5px;
-    color: var(--text-2);
-  }
-  .bubble-file svg {
-    width: 14px;
-    height: 14px;
-    flex: none;
-    color: var(--muted);
+  .bubble:has(.tiles) .bubble-text {
+    padding: 4px 6px 4px;
   }
 
-  /* An image attached to a message, at the size of a thumbnail and opened
-     full size in a tab. */
-  .shot {
-    display: block;
-    max-width: 220px;
-    border-radius: 10px;
-    overflow: hidden;
-    line-height: 0;
+  /* One tile per attachment, every tile the same square, so a picture and a
+     file sit together without either stretching the other. */
+  .tiles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
   }
-  .shot img {
+  .tiles:not(:last-child) {
+    margin-bottom: 6px;
+  }
+  .tile {
+    position: relative;
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    justify-content: space-between;
+    width: 112px;
+    height: 112px;
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--surface);
+    color: var(--text-2);
+    text-decoration: none;
+  }
+  .tile-shot img {
     display: block;
-    max-width: 100%;
-    max-height: 220px;
-    object-fit: contain;
-    background: var(--surface-2);
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .tile-doc {
+    padding: 9px 10px;
+  }
+  .tile-kind {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    color: var(--text-2);
+  }
+  .tile-size {
+    color: var(--muted);
+  }
+  /* The name is what the tile is for, so it takes as many lines as it can
+     before the tile runs out. */
+  .tile-name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--text);
+  }
+  /* Sits on the tile it removes, dark enough to read over a picture. */
+  .tile-x {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 999px;
+    background: rgb(15 23 42 / 0.62);
+    color: #fff;
+    cursor: pointer;
+  }
+  .tile-x:hover {
+    background: rgb(15 23 42 / 0.82);
+  }
+  .tile-x svg {
+    width: 13px;
+    height: 13px;
   }
 
   /* The plan the model keeps, sitting above the composer. */

@@ -214,9 +214,9 @@ export function looksLikeImage(path: string): boolean {
   return /\.(png|jpe?g|gif|webp)$/i.test(path);
 }
 
-/** Asks the host for a file to attach. Null when the dialog is dismissed. */
-export async function pickAttachment(): Promise<string | null> {
-  return (await guard(() => api.pickFile())) ?? null;
+/** Asks the host for files to attach. Empty when the dialog is dismissed. */
+export async function pickAttachments(): Promise<string[]> {
+  return (await guard(() => api.pickFiles())) ?? [];
 }
 
 export async function send(text: string, files: string[] = []): Promise<void> {

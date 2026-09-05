@@ -2,21 +2,12 @@
   import AddMenu from "./AddMenu.svelte";
   import ArrowUp from "phosphor-svelte/lib/ArrowUp";
   import EffortChip from "./EffortChip.svelte";
-  import ImageIcon from "phosphor-svelte/lib/Image";
-  import Paperclip from "phosphor-svelte/lib/Paperclip";
   import Square from "phosphor-svelte/lib/Square";
   import ModelChip from "./ModelChip.svelte";
   import PermissionChip from "./PermissionChip.svelte";
   import X from "phosphor-svelte/lib/X";
-  import {
-    app,
-    looksLikeImage,
-    pendingPermission,
-    pickAttachment,
-    send,
-    stop,
-  } from "../state/app.svelte";
-  import { fileName } from "../format";
+  import { app, pendingPermission, pickAttachments, send, stop } from "../state/app.svelte";
+  import { fileKind, fileName } from "../format";
 
   let { placeholder }: { placeholder: string } = $props();
 
@@ -48,9 +39,15 @@
   const running = $derived(app.status !== "idle");
   const disabled = $derived(blocked || !app.sessionId);
 
+  // The dialog takes several files at once, and the harness caps a message at
+  // five, so what comes back past the cap is dropped rather than sent.
   async function attach() {
-    const path = await pickAttachment();
-    if (path && !files.includes(path)) files = [...files, path];
+    const picked = await pickAttachments();
+    const next = [...files];
+    for (const path of picked) {
+      if (!next.includes(path) && next.length < maxFiles) next.push(path);
+    }
+    files = next;
   }
 
   function submit() {
@@ -74,17 +71,13 @@
 <div class="w-full">
   <div class="composer px-4 pt-4 pb-3">
     {#if files.length > 0}
-      <div class="mb-2 flex flex-wrap gap-1.5">
+      <div class="tiles mb-3">
         {#each files as path (path)}
-          <span class="chip chip-solid cursor-default" title={path}>
-            {#if looksLikeImage(path)}
-              <ImageIcon />
-            {:else}
-              <Paperclip />
-            {/if}
-            <span class="max-w-[220px] truncate">{fileName(path)}</span>
+          <span class="tile tile-doc" title={path}>
+            <span class="tile-kind">{fileKind(path)}</span>
+            <span class="tile-name">{fileName(path)}</span>
             <button
-              class="icon-btn -mr-1.5 h-5 w-5"
+              class="tile-x"
               aria-label="Remove {fileName(path)}"
               onclick={() => (files = files.filter((f) => f !== path))}
             >

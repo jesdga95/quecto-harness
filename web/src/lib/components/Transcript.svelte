@@ -2,14 +2,12 @@
   import ArrowDown from "phosphor-svelte/lib/ArrowDown";
   import ArrowsLeftRight from "phosphor-svelte/lib/ArrowsLeftRight";
   import Copy from "phosphor-svelte/lib/Copy";
-  import ImageIcon from "phosphor-svelte/lib/Image";
-  import Paperclip from "phosphor-svelte/lib/Paperclip";
   import Warning from "phosphor-svelte/lib/Warning";
   import PermissionCard from "./PermissionCard.svelte";
   import Prose from "./Prose.svelte";
   import StepRow from "./StepRow.svelte";
   import { app } from "../state/app.svelte";
-  import { bytes, fileName } from "../format";
+  import { bytes, fileKind, fileName } from "../format";
 
   let scroller = $state<HTMLDivElement | null>(null);
   let atBottom = $state(true);
@@ -46,36 +44,28 @@
         {#if item.kind === "user"}
           <div class="mt-4 flex flex-col items-end gap-1">
             <div class="bubble">
-              {#if item.files.some((f) => f.kind === "image" && f.file)}
-                <div class="bubble-shots">
-                  {#each item.files.filter((f) => f.kind === "image" && f.file) as file (file.path)}
-                    <a
-                      class="shot"
-                      href="/api/files/{file.file}"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title={file.path}
-                    >
-                      <img src="/api/files/{file.file}" alt={fileName(file.path)} />
-                    </a>
-                  {/each}
-                </div>
-              {/if}
-
-              {#if item.files.some((f) => f.kind !== "image" || !f.file)}
-                <div class="bubble-docs">
-                  {#each item.files.filter((f) => f.kind !== "image" || !f.file) as file (file.path)}
-                    <span class="bubble-file" title={file.path}>
-                      {#if file.kind === "image"}
-                        <ImageIcon />
-                      {:else}
-                        <Paperclip />
-                      {/if}
-                      <span class="truncate">{fileName(file.path)}</span>
-                      {#if file.bytes > 0}
-                        <span class="text-muted">{bytes(file.bytes)}</span>
-                      {/if}
-                    </span>
+              {#if item.files.length > 0}
+                <div class="tiles">
+                  {#each item.files as file (file.path)}
+                    {#if file.kind === "image" && file.file}
+                      <a
+                        class="tile tile-shot"
+                        href="/api/files/{file.file}"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={file.path}
+                      >
+                        <img src="/api/files/{file.file}" alt={fileName(file.path)} />
+                      </a>
+                    {:else}
+                      <span class="tile tile-doc" title={file.path}>
+                        <span class="tile-kind">
+                          {fileKind(file.path)}
+                          {#if file.bytes > 0}<span class="tile-size">{bytes(file.bytes)}</span>{/if}
+                        </span>
+                        <span class="tile-name">{fileName(file.path)}</span>
+                      </span>
+                    {/if}
                   {/each}
                 </div>
               {/if}

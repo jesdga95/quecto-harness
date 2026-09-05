@@ -271,13 +271,16 @@ export class MockApi implements HarnessApi {
     return answer?.trim() ? answer.trim() : null;
   }
 
-  async pickFile(): Promise<string | null> {
+  async pickFiles(): Promise<string[]> {
     await this.tick();
     const answer = window.prompt(
-      "The real harness opens the host file dialog here.",
-      "/Users/jay/Projects/Personal/quecto-harness/AGENTS.md",
+      "The real harness opens the host file dialog here. Several paths, comma separated.",
+      "/Users/jay/Projects/Personal/quecto-harness/AGENTS.md,/Users/jay/Pictures/tree.jpg",
     );
-    return answer?.trim() ? answer.trim() : null;
+    return (answer ?? "")
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
   }
 
   async listSessions(project: string): Promise<Session[]> {

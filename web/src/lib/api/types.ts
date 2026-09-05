@@ -233,8 +233,9 @@ export interface HarnessApi {
   listModels(refresh?: boolean): Promise<Model[]>;
   /** Opens the host's folder dialog. Resolves to null when it is dismissed. */
   pickDirectory(): Promise<string | null>;
-  /** Opens the host's file dialog. Resolves to null when it is dismissed. */
-  pickFile(): Promise<string | null>;
+  /** Opens the host's file dialog, which takes several files at once. Empty
+      when it is dismissed. */
+  pickFiles(): Promise<string[]>;
   addProject(path: string): Promise<Project[]>;
   removeProject(path: string): Promise<Project[]>;
   listSessions(project: string): Promise<Session[]>;

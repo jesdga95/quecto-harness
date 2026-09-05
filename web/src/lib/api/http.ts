@@ -697,9 +697,9 @@ class HttpApi implements HarnessApi {
     return wire.path ?? null;
   }
 
-  async pickFile(): Promise<string | null> {
-    const wire = await call<{ path?: string | null }>("/fs/pick", "POST", { kind: "file" });
-    return wire.path ?? null;
+  async pickFiles(): Promise<string[]> {
+    const wire = await call<{ paths?: string[] }>("/fs/pick", "POST", { kind: "file" });
+    return wire.paths ?? [];
   }
 
   async addProject(path: string): Promise<Project[]> {

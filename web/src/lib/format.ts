@@ -22,7 +22,15 @@ export function fileName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
-/** What a file weighs, for an attachment chip. */
+/** The extension, as the label on an attachment tile. */
+export function fileKind(path: string): string {
+  const name = fileName(path);
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot + 1) : "";
+  return ext ? ext.slice(0, 4).toUpperCase() : "FILE";
+}
+
+/** What a file weighs, for an attachment tile. */
 export function bytes(n: number): string {
   return n < 1024 ? `${n} b` : `${Math.round(n / 1024)} kb`;
 }

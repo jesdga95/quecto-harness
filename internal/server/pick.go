@@ -19,7 +19,7 @@ var errNoDialog = errors.New("No file dialog on this system: install zenity, or 
 // without opening a dialog on the machine running the tests.
 var (
 	folderPicker = pickFolder
-	filePicker   = pickFile
+	filePicker   = pickFiles
 )
 
 // postPick opens the host's own chooser and returns what the user picked, a
@@ -38,17 +38,18 @@ func (s *Server) postPick(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), pickTimeout)
 	defer cancel()
 
-	pick := folderPicker
+	// A file dialog takes several at once and answers with a list; the folder
+	// dialog takes one and answers with it.
 	if body.Kind == "file" {
-		pick = filePicker
-	}
-	path, err := pick(ctx)
-	switch {
-	case errors.Is(err, errNoDialog):
-		writeError(w, http.StatusNotImplemented, errNoDialog.Error())
+		paths, err := filePicker(ctx)
+		if !pickOK(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"paths": paths})
 		return
-	case err != nil:
-		writeError(w, http.StatusInternalServerError, err.Error())
+	}
+	path, err := folderPicker(ctx)
+	if !pickOK(w, err) {
 		return
 	}
 	if path == "" {
@@ -56,6 +57,20 @@ func (s *Server) postPick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"path": path})
+}
+
+// pickOK writes the failure a dialog reported, and reports whether the
+// handler should carry on.
+func pickOK(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, errNoDialog):
+		writeError(w, http.StatusNotImplemented, errNoDialog.Error())
+		return false
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return false
+	}
+	return true
 }
 
 // pickFolder runs the platform's dialog. An empty path means the user
@@ -75,25 +90,63 @@ func pickFolder(ctx context.Context) (string, error) {
 	return "", errNoDialog
 }
 
-// pickFile runs the platform's file chooser. An empty path means the user
-// dismissed it.
-func pickFile(ctx context.Context) (string, error) {
-	if runtime.GOOS == "darwin" {
-		return runDialog(ctx, "osascript", "-e",
-			`POSIX path of (choose file with prompt "Choose a file to attach")`)
+// chooseFiles asks for as many files as the user cares to select and prints
+// one path per line, which is the only shape that survives a path with a
+// space in it.
+const chooseFiles = `set picked to choose file with prompt "Choose files to attach" with multiple selections allowed
+set out to ""
+repeat with item_ in picked
+	set out to out & POSIX path of item_ & linefeed
+end repeat
+return out`
+
+// pickFiles runs the platform's file chooser, which takes several files at
+// once. An empty list means the user dismissed it.
+func pickFiles(ctx context.Context) ([]string, error) {
+	var raw string
+	var err error
+	switch {
+	case runtime.GOOS == "darwin":
+		raw, err = runDialogRaw(ctx, "osascript", "-e", chooseFiles)
+	case hasBinary("zenity"):
+		raw, err = runDialogRaw(ctx, "zenity", "--file-selection", "--multiple", "--separator=\n")
+	case hasBinary("kdialog"):
+		// kdialog separates several files with spaces, which a path can
+		// contain, so it is asked for one.
+		raw, err = runDialogRaw(ctx, "kdialog", "--getopenfilename", homeDir())
+	default:
+		return nil, errNoDialog
 	}
-	if _, err := exec.LookPath("zenity"); err == nil {
-		return runDialog(ctx, "zenity", "--file-selection")
+	if err != nil {
+		return nil, err
 	}
-	if _, err := exec.LookPath("kdialog"); err == nil {
-		return runDialog(ctx, "kdialog", "--getopenfilename", homeDir())
+	out := []string{}
+	for _, line := range strings.Split(raw, "\n") {
+		if p := strings.TrimSpace(line); p != "" {
+			out = append(out, filepath.Clean(p))
+		}
 	}
-	return "", errNoDialog
+	return out, nil
 }
 
-// runDialog treats a non-zero exit as a dismissal, which is what both zenity
-// and osascript report when the user cancels.
+func hasBinary(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+// runDialog is one path, cleaned. osascript reports a folder with a trailing
+// slash, and the path is a key everywhere else.
 func runDialog(ctx context.Context, name string, args ...string) (string, error) {
+	out, err := runDialogRaw(ctx, name, args...)
+	if err != nil || out == "" {
+		return "", err
+	}
+	return filepath.Clean(out), nil
+}
+
+// runDialogRaw treats a non-zero exit as a dismissal, which is what both
+// zenity and osascript report when the user cancels.
+func runDialogRaw(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	out, err := cmd.Output()
 	if err != nil {
@@ -112,13 +165,7 @@ func runDialog(ctx context.Context, name string, args ...string) (string, error)
 		}
 		return "", errors.New("Open the folder dialog: " + err.Error())
 	}
-	// osascript reports a folder with a trailing slash. The path is a key
-	// everywhere else, so it is cleaned before it leaves this package.
-	path := strings.TrimRight(string(out), "\r\n")
-	if path == "" {
-		return "", nil
-	}
-	return filepath.Clean(path), nil
+	return strings.TrimRight(string(out), "\r\n"), nil
 }
 
 // noGUISession recognises the refusals a headless session produces, so the
