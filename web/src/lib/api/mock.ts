@@ -1,4 +1,5 @@
 import type {
+  Attached,
   Changes,
   Config,
   EventHandler,
@@ -423,20 +424,18 @@ export class MockApi implements HarnessApi {
     };
   }
 
-  async sendMessage(session: string, text: string, files: string[] = []): Promise<void> {
+  async sendMessage(session: string, text: string, files: string[] = []): Promise<Attached[]> {
     const t = this.transcripts.get(session);
-    if (!t) return;
-    pushUser(
-      t.items,
-      text,
-      files.map((path) => ({
-        path,
-        kind: /\.(png|jpe?g|gif|webp)$/i.test(path) ? ("image" as const) : ("text" as const),
-        bytes: 2400,
-      })),
-    );
+    if (!t) return [];
+    const attached: Attached[] = files.map((path) => ({
+      path,
+      kind: /\.(png|jpe?g|gif|webp)$/i.test(path) ? "image" : "text",
+      bytes: 2400,
+    }));
+    pushUser(t.items, text, attached);
     if (t.session.title === "New session") t.session.title = title(text);
     void this.runTurn(session, t);
+    return attached;
   }
 
   // internals

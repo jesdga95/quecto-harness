@@ -753,11 +753,16 @@ class HttpApi implements HarnessApi {
     summaries.delete(id);
   }
 
-  async sendMessage(id: string, text: string, files: string[] = []): Promise<void> {
-    await call(`/sessions/${encodeURIComponent(id)}/message`, "POST", {
-      text,
-      attachments: files,
-    });
+  async sendMessage(id: string, text: string, files: string[] = []): Promise<Attached[]> {
+    const wire = await call<{
+      attachments?: { path?: string; kind?: string; bytes?: number; file?: string }[];
+    }>(`/sessions/${encodeURIComponent(id)}/message`, "POST", { text, attachments: files });
+    return (wire.attachments ?? []).map((a) => ({
+      path: a.path ?? "",
+      kind: a.kind === "image" ? "image" : "text",
+      bytes: a.bytes ?? 0,
+      file: a.file,
+    }));
   }
 
   async stop(id: string): Promise<void> {

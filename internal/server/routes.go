@@ -447,7 +447,32 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"state": string(agent.StatePreflight)})
+	// The attachments come back with the ids the harness gave them, so the
+	// page can draw the image it just sent without refetching the session.
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"state":       string(agent.StatePreflight),
+		"attachments": sentAttachments(sess),
+	})
+}
+
+// sentAttachments describes the files on the message that was just appended.
+// The content of a text file is left out: the page has no use for it and it
+// is already in the prompt.
+func sentAttachments(sess *agent.Session) []map[string]any {
+	doc, _, _, _ := sess.Snapshot()
+	out := []map[string]any{}
+	for i := len(doc.Entries) - 1; i >= 0; i-- {
+		if doc.Entries[i].Kind != "user" {
+			continue
+		}
+		for _, a := range doc.Entries[i].Attachments {
+			out = append(out, map[string]any{
+				"path": a.Path, "kind": a.Kind, "bytes": a.Bytes, "file": a.File,
+			})
+		}
+		break
+	}
+	return out
 }
 
 func (s *Server) postStop(w http.ResponseWriter, r *http.Request) {

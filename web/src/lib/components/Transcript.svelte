@@ -45,45 +45,45 @@
       {#each app.items as item (item.id)}
         {#if item.kind === "user"}
           <div class="mt-4 flex flex-col items-end gap-1">
-            {#if item.files.length > 0}
-              <div class="flex max-w-[80%] flex-wrap justify-end gap-1.5">
-                {#each item.files as file (file.path)}
-                  {#if file.kind === "image" && file.file}
-                    <a
-                      class="shot"
-                      href="/api/files/{file.file}"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title={file.path}
-                    >
-                      <img src="/api/files/{file.file}" alt={fileName(file.path)} />
-                    </a>
-                  {:else}
-                    <span class="chip chip-solid cursor-default" title={file.path}>
-                      {#if file.kind === "image"}
-                        <ImageIcon />
-                      {:else}
-                        <Paperclip />
-                      {/if}
-                      <span class="max-w-[220px] truncate">{fileName(file.path)}</span>
-                      {#if file.bytes > 0}
-                        <span class="text-muted">{bytes(file.bytes)}</span>
-                      {/if}
-                    </span>
-                  {/if}
-                {/each}
-              </div>
-            {/if}
+            <div class="bubble">
+              {#if item.files.length > 0}
+                <div class="bubble-files">
+                  {#each item.files as file (file.path)}
+                    {#if file.kind === "image" && file.file}
+                      <a
+                        class="shot"
+                        href="/api/files/{file.file}"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={file.path}
+                      >
+                        <img src="/api/files/{file.file}" alt={fileName(file.path)} />
+                      </a>
+                    {:else}
+                      <span class="bubble-file" title={file.path}>
+                        {#if file.kind === "image"}
+                          <ImageIcon />
+                        {:else}
+                          <Paperclip />
+                        {/if}
+                        <span class="truncate">{fileName(file.path)}</span>
+                        {#if file.bytes > 0}
+                          <span class="text-muted">{bytes(file.bytes)}</span>
+                        {/if}
+                      </span>
+                    {/if}
+                  {/each}
+                </div>
+              {/if}
+              {#if item.text}
+                <p class="bubble-text">{item.text}</p>
+              {/if}
+            </div>
             {#if item.text}
-              <p
-                class="max-w-[80%] rounded-[14px] bg-accent-bg px-3.5 py-2.5 text-[14px] whitespace-pre-wrap text-ink"
-              >
-                {item.text}
-              </p>
+              <button class="icon-btn" aria-label="Copy message" onclick={() => copy(item.text)}>
+                <Copy />
+              </button>
             {/if}
-            <button class="icon-btn" aria-label="Copy message" onclick={() => copy(item.text)}>
-              <Copy />
-            </button>
           </div>
         {:else if item.kind === "assistant"}
           <div class="my-2">

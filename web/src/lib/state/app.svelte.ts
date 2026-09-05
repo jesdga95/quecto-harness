@@ -229,12 +229,15 @@ export async function send(text: string, files: string[] = []): Promise<void> {
   );
   // The harness reads the attachments, so a file it refuses refuses the whole
   // message. The bubble comes back off the transcript when that happens.
-  const id = app.items[app.items.length - 1]?.id;
+  const item = app.items[app.items.length - 1];
   const sent = await guard(() => api.sendMessage(app.sessionId, message, files));
   if (sent === null) {
-    app.items = app.items.filter((i) => i.id !== id);
+    app.items = app.items.filter((i) => i.id !== item?.id);
     return;
   }
+  // The harness stored the files and gave each one an id, which is what the
+  // bubble needs to show a picture rather than the name of one.
+  if (item?.kind === "user" && sent.length > 0) item.files = sent;
   await loadSessions();
 }
 

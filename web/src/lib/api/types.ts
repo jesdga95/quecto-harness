@@ -247,8 +247,9 @@ export interface HarnessApi {
   getChanges(id: string): Promise<Changes>;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string): Promise<void>;
-  /** Files are read by the harness and inlined into the message. */
-  sendMessage(id: string, text: string, files?: string[]): Promise<void>;
+  /** Files are read by the harness and inlined into the message. What comes
+      back is the attachments as it stored them, ids included. */
+  sendMessage(id: string, text: string, files?: string[]): Promise<Attached[]>;
   stop(id: string): Promise<void>;
   compact(id: string): Promise<void>;
   decide(permissionId: string, decision: PermissionDecision): Promise<void>;
