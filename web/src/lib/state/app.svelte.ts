@@ -42,7 +42,6 @@ export const app = $state({
   status: "idle" as TurnStatus,
   allowlist: [] as string[],
   sidebar: true,
-  saved: false,
   error: "",
   connected: true,
   // Empty once a model server has answered. Drives the setup screen.
@@ -402,8 +401,6 @@ export async function saveConfig(patch: Partial<Config>): Promise<void> {
   const config = await guard(() => api.updateConfig(patch));
   if (!config) return;
   app.config = config;
-  app.saved = true;
-  setTimeout(() => (app.saved = false), 1600);
 }
 
 /** A turn talks to the session's model, not to the configuration, so an open
