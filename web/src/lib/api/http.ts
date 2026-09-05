@@ -20,6 +20,7 @@ import type {
   Todo,
   Transcript,
   TranscriptItem,
+  TurnCost,
   TurnStatus,
   Usage,
 } from "./types";
@@ -187,6 +188,10 @@ interface WireEvent {
   todos?: { text?: string; status?: string }[] | null;
   message?: string;
   breakdown?: { system?: number; tools?: number; messages?: number } | null;
+  tokens?: number;
+  ms?: number;
+  tok_per_s?: number;
+  requests?: number;
 }
 
 // transport
@@ -365,6 +370,18 @@ function thoughtTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
+/** The turn cost, from a done event or from the meta of the entry that ended
+    the turn. Absent where the turn was stopped or failed before it counted. */
+function toCost(src: WireEvent | Record<string, unknown> | null | undefined): TurnCost | undefined {
+  if (!src || typeof src.tokens !== "number" || typeof src.ms !== "number") return undefined;
+  return {
+    tokens: src.tokens,
+    ms: src.ms,
+    tokPerS: typeof src.tok_per_s === "number" ? src.tok_per_s : 0,
+    requests: typeof src.requests === "number" ? src.requests : 0,
+  };
+}
+
 // One stored entry can hold a thought, a reply and several calls at once, so
 // it expands into as many rows as it carries. A tool entry fills the card its
 // call opened rather than adding one.
@@ -402,7 +419,13 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
       });
     }
     if (e.content) {
-      items.push({ kind: "assistant", id: `a${seq}`, text: e.content, streaming: false });
+      items.push({
+        kind: "assistant",
+        id: `a${seq}`,
+        text: e.content,
+        streaming: false,
+        cost: toCost(e.meta),
+      });
     }
     (e.tool_calls ?? []).forEach((c, i) => {
       items.push({
@@ -580,10 +603,16 @@ function toTranscript(snap: WireSnapshot): Transcript {
   };
   summaries.set(id, session);
 
+  // The rate the chip shows is the last turn's, which is on the entry that
+  // ended it rather than in the snapshot's own usage.
+  const last = [...items].reverse().find((i) => i.kind === "assistant" && i.cost);
+  const rate = last?.kind === "assistant" ? last.cost?.tokPerS : undefined;
+
   const usage: Usage = {
     prompt_tokens: snap.last_usage?.prompt_tokens ?? snap.fill ?? 0,
     completion_tokens: snap.last_usage?.completion_tokens ?? 0,
     n_ctx: snap.n_ctx ?? 0,
+    tok_per_s: rate && rate > 0 ? Math.round(rate) : undefined,
     breakdown: toBreakdown(snap.breakdown),
   };
 
@@ -743,7 +772,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       return [{ type: "error", message: ev.message ?? "The turn failed" }];
 
     case "done":
-      return [{ type: "done" }];
+      return [{ type: "done", cost: toCost(ev) }];
 
     default:
       return [];

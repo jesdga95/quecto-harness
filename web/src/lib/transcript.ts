@@ -164,7 +164,10 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
       break;
     }
     case "done": {
-      if (last && last.kind === "assistant") last.streaming = false;
+      if (last && last.kind === "assistant") {
+        last.streaming = false;
+        if (event.cost) last.cost = event.cost;
+      }
       break;
     }
   }

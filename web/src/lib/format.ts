@@ -10,6 +10,14 @@ export function pct(part: number, whole: number): number {
   return Math.min(100, Math.round((part / whole) * 100));
 }
 
+/** How long a turn took, at the resolution a reader cares about. */
+export function duration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const secs = ms / 1000;
+  if (secs < 60) return `${secs < 10 ? secs.toFixed(1) : Math.round(secs)}s`;
+  return `${Math.floor(secs / 60)}m ${Math.round(secs % 60)}s`;
+}
+
 export function level(ratio: number): "ok" | "warn" | "crit" {
   if (ratio >= 0.8) return "crit";
   if (ratio >= 0.6) return "warn";

@@ -10,7 +10,7 @@
   import StepRow from "./StepRow.svelte";
   import type { Attached, TranscriptItem } from "../api";
   import { app, canResend, resend } from "../state/app.svelte";
-  import { bytes, fileKind, fileName } from "../format";
+  import { bytes, duration, fileKind, fileName, k } from "../format";
 
   let scroller = $state<HTMLDivElement | null>(null);
   let atBottom = $state(true);
@@ -180,6 +180,21 @@
         {:else if item.kind === "assistant"}
           <div class="my-2">
             <Prose text={item.text} streaming={item.streaming} />
+            {#if !item.streaming}
+              <div class="mt-0.5 flex items-center gap-2">
+                <button class="icon-btn" aria-label="Copy reply" onclick={() => copy(item.text)}>
+                  <Copy />
+                </button>
+                {#if item.cost}
+                  <span class="num text-[12px] text-muted">
+                    {k(item.cost.tokens)} tokens &middot; {duration(item.cost.ms)}
+                    {#if item.cost.tokPerS > 0}
+                      &middot; {Math.round(item.cost.tokPerS)} tok/s
+                    {/if}
+                  </span>
+                {/if}
+              </div>
+            {/if}
           </div>
         {:else if item.kind === "status"}
           <div class="flex items-center gap-2 px-2 py-1 text-[13px] text-muted">

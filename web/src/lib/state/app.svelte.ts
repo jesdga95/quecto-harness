@@ -568,6 +568,10 @@ function onEvent(event: HarnessEvent): void {
   // than sitting on a spinner until the next status event.
   if (event.type === "done" || event.type === "error") app.status = "idle";
 
+  if (event.type === "done" && event.cost && event.cost.tokPerS > 0) {
+    app.usage.tok_per_s = Math.round(event.cost.tokPerS);
+  }
+
   if (event.type === "status") {
     app.status = event.status;
     void refreshModels();

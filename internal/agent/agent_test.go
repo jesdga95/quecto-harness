@@ -197,6 +197,69 @@ func TestPlainReply(t *testing.T) {
 	}
 }
 
+func TestTurnCostIsRecordedOnTheEntryThatEndedIt(t *testing.T) {
+	// Two requests in one turn, so the tokens are a sum rather than the last
+	// response's own count: 22 for the tool call and 48 for the answer.
+	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "list the files here", nil)
+
+	id := waitForCard(t, h, s.ID)
+	if err := h.broker.Resolve(id, perms.Decision{Kind: perms.DecideOnce}); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	last := doc.Entries[len(doc.Entries)-1]
+	if last.Kind != "assistant" {
+		t.Fatalf("last entry = %s, want assistant", last.Kind)
+	}
+	if last.Meta["tokens"] != 70 {
+		t.Errorf("tokens = %v, want 70", last.Meta["tokens"])
+	}
+	if last.Meta["requests"] != 2 {
+		t.Errorf("requests = %v, want 2", last.Meta["requests"])
+	}
+	if ms, ok := last.Meta["ms"].(int64); !ok || ms < 0 {
+		t.Errorf("ms = %v", last.Meta["ms"])
+	}
+	// The rate is measured from the first token of each response, so a replay
+	// served from memory reports a large one rather than none at all.
+	if rate, ok := last.Meta["tok_per_s"].(float64); !ok || rate <= 0 {
+		t.Errorf("tok_per_s = %v", last.Meta["tok_per_s"])
+	}
+
+	done := h.rec.ofType("done")
+	if len(done) != 1 {
+		t.Fatalf("done events = %d", len(done))
+	}
+	if done[0].Fields["tokens"] != 70 {
+		t.Errorf("done tokens = %v, want 70", done[0].Fields["tokens"])
+	}
+}
+
+// A turn the user stopped has no assistant entry to carry the cost, and the
+// done event that ends it reports none.
+func TestStoppedTurnReportsNoCost(t *testing.T) {
+	h := newHarness(t, "stream_sleep.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "sleep", nil)
+	waitForCard(t, h, s.ID)
+	if _, err := h.engine.Stop(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	done := h.rec.ofType("done")
+	if len(done) != 1 {
+		t.Fatalf("done events = %d", len(done))
+	}
+	if _, ok := done[0].Fields["tokens"]; ok {
+		t.Errorf("a stopped turn reported a cost: %+v", done[0].Fields)
+	}
+}
+
 func TestEffortReachesTheRequestBody(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt")
 	if _, err := h.cfg.Update(func(c *config.Config) { c.Effort = config.EffortHigh }); err != nil {

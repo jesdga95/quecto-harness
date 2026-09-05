@@ -510,7 +510,7 @@ func (e *Engine) Compact(id string) error {
 			e.fail(s, err)
 			return
 		}
-		e.finish(s, StateIdle, "", 0)
+		e.finish(s, StateIdle, "", 0, nil)
 	}()
 	return nil
 }
@@ -790,19 +790,89 @@ func (e *Engine) fail(s *Session, err error) {
 	e.setState(s, StateFailed)
 	e.save(s)
 	e.publish(s.ID, ev("error", map[string]any{"kind": kind, "message": err.Error()}))
-	e.finish(s, StateIdle, "error", 0)
+	e.finish(s, StateIdle, "error", 0, nil)
 	e.flushSteer(s)
 }
 
+// turnCost is what one turn spent, summed over every request it made. Elapsed
+// covers the tool calls between those requests; generating does not, so the
+// rate below is the model's and not the harness's.
+type turnCost struct {
+	started    time.Time
+	requests   int
+	tokens     int
+	generating time.Duration
+}
+
+// add folds in one finished request. first is when its stream began to
+// produce, which is zero for a request that produced nothing.
+func (c *turnCost) add(res llama.Result, first time.Time) {
+	c.requests++
+	if res.Usage != nil {
+		c.tokens += res.Usage.CompletionTokens
+	}
+	if !first.IsZero() {
+		c.generating += time.Since(first)
+	}
+}
+
+// fields renders the numbers for the transcript. The rate is measured rather
+// than read from the response, since only some servers report one.
+func (c *turnCost) fields() map[string]any {
+	rate := 0.0
+	if secs := c.generating.Seconds(); secs > 0 {
+		rate = float64(c.tokens) / secs
+	}
+	return map[string]any{
+		"tokens":    c.tokens,
+		"ms":        time.Since(c.started).Milliseconds(),
+		"tok_per_s": rate,
+		"requests":  c.requests,
+	}
+}
+
+// carriesOutput reports whether an event is part of the generation. Usage and
+// the finish reason arrive after the last token and would put the start of
+// generation at the end of the stream.
+func carriesOutput(kind llama.EventKind) bool {
+	switch kind {
+	case llama.EventContent, llama.EventReasoning, llama.EventToolCall:
+		return true
+	}
+	return false
+}
+
 // finish publishes done and returns the session to idle, which is the only
-// state a new message is accepted in.
-func (e *Engine) finish(s *Session, next State, finishReason string, iterations int) {
+// state a new message is accepted in. cost is nil for a turn that ended
+// before it could be counted.
+func (e *Engine) finish(s *Session, next State, finishReason string, iterations int, cost map[string]any) {
 	s.mu.Lock()
 	s.state = next
 	s.cancel = nil
 	s.mu.Unlock()
-	e.publish(s.ID, ev("done", map[string]any{"finish_reason": finishReason, "iterations": iterations}))
+	fields := map[string]any{"finish_reason": finishReason, "iterations": iterations}
+	for k, v := range cost {
+		fields[k] = v
+	}
+	e.publish(s.ID, ev("done", fields))
 	e.publish(s.ID, ev("status", map[string]any{"state": string(next)}))
+}
+
+// noteCost records what the turn spent on the assistant entry that ended it,
+// so a reloaded page draws the line the stream drew.
+func (e *Engine) noteCost(s *Session, cost map[string]any) {
+	s.mu.Lock()
+	i := s.lastUsageEntry
+	if i >= 0 && i < len(s.Entries) && s.Entries[i].Kind == "assistant" {
+		if s.Entries[i].Meta == nil {
+			s.Entries[i].Meta = map[string]any{}
+		}
+		for k, v := range cost {
+			s.Entries[i].Meta[k] = v
+		}
+	}
+	s.mu.Unlock()
+	e.save(s)
 }
 
 func (e *Engine) run(ctx context.Context, s *Session) {
@@ -818,6 +888,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// only thing that ends a runaway turn is the Stop button.
 	budget := cfg.MaxToolCalls
 	calls := 0
+	cost := turnCost{started: time.Now()}
 
 	for iteration := 0; ; iteration++ {
 		e.setState(s, StatePreflight)
@@ -861,7 +932,14 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		}
 		s.mu.Unlock()
 
+		// first is when this request began to produce, which is what the
+		// generation rate is measured against. Chat calls on synchronously
+		// from its read loop, so no lock is needed here.
+		var first time.Time
 		res, err := e.llama().Chat(ctx, req, func(event llama.Event) error {
+			if first.IsZero() && carriesOutput(event.Kind) {
+				first = time.Now()
+			}
 			e.forward(s, event)
 			return nil
 		})
@@ -869,6 +947,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			e.endWithError(s, err, iteration)
 			return
 		}
+		cost.add(res, first)
 		if res.Dropped > 0 {
 			e.publish(s.ID, ev("error", map[string]any{"kind": "malformed",
 				"message": fmt.Sprintf("The model server sent %d frames that could not be read: some output was lost", res.Dropped)}))
@@ -902,7 +981,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				continue
 			}
 			e.setState(s, StateFinal)
-			e.finish(s, StateIdle, res.FinishReason, iteration+1)
+			counted := cost.fields()
+			e.noteCost(s, counted)
+			e.finish(s, StateIdle, res.FinishReason, iteration+1, counted)
 			e.titleSession(s)
 			return
 		}
@@ -967,7 +1048,7 @@ func (e *Engine) markStopped(s *Session) {
 	s.mu.Unlock()
 	e.setState(s, StateStopped)
 	e.save(s)
-	e.finish(s, StateIdle, "stopped", 0)
+	e.finish(s, StateIdle, "stopped", 0, nil)
 	e.flushSteer(s)
 }
 

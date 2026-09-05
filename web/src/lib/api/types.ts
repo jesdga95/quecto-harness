@@ -136,7 +136,7 @@ export type HarnessEvent =
       up by the turn it was typed against. */
   | { type: "message"; seq: number; text: string; files: Attached[] }
   | { type: "error"; message: string }
-  | { type: "done" }
+  | { type: "done"; cost?: TurnCost }
   /** The stream fell too far behind to replay, so it carries a fresh snapshot. */
   | { type: "resync"; transcript: Transcript }
   | { type: "connection"; connected: boolean; message?: string };
@@ -145,7 +145,7 @@ export type TranscriptItem =
   /** seq names the entry to the harness, which is how a message is sent
       again. It is 0 until the harness has stored the message. */
   | { kind: "user"; id: string; seq: number; text: string; files: Attached[]; edited: boolean }
-  | { kind: "assistant"; id: string; text: string; streaming: boolean }
+  | { kind: "assistant"; id: string; text: string; streaming: boolean; cost?: TurnCost }
   | { kind: "reasoning"; id: string; text: string; tokens: number; open: boolean }
   | {
       kind: "tool";
@@ -249,6 +249,16 @@ export interface Usage {
   tok_per_s?: number;
   cached_pct?: number;
   breakdown?: Breakdown;
+}
+
+/** What one turn spent. ms is the wall clock from the message to the answer,
+    tool calls included; tokPerS is the rate while the model was generating,
+    which excludes them. */
+export interface TurnCost {
+  tokens: number;
+  ms: number;
+  tokPerS: number;
+  requests: number;
 }
 
 export interface Transcript {

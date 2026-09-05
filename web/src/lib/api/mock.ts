@@ -255,6 +255,9 @@ export class MockApi implements HarnessApi {
     | { id: string; session: string; settle: (d: PermissionDecision) => void }
     | null = null;
   private running: { session: string; cancelled: boolean } | null = null;
+  // When the running turn began, so the cost line under the answer is real
+  // wall clock rather than a made-up number.
+  private turnStart = 0;
 
   constructor() {
     this.seed();
@@ -511,6 +514,7 @@ export class MockApi implements HarnessApi {
   private async runTurn(session: string, t: Transcript): Promise<void> {
     const turn = { session, cancelled: false };
     this.running = turn;
+    this.turnStart = Date.now();
     const index = this.turnIndex.get(session) ?? 0;
     const script = SCRIPT[index % SCRIPT.length]!;
     this.turnIndex.set(session, index + 1);
@@ -648,7 +652,15 @@ export class MockApi implements HarnessApi {
   }
 
   private finish(session: string, t: Transcript): void {
-    this.send(session, t, { type: "done" });
+    const ms = Date.now() - this.turnStart;
+    const tokens = t.items.reduce(
+      (n, i) => n + (i.kind === "assistant" || i.kind === "reasoning" ? tokensIn(i.text) : 0),
+      0,
+    );
+    this.send(session, t, {
+      type: "done",
+      cost: { tokens, ms, tokPerS: 52, requests: 2 },
+    });
     this.emit(session, { type: "status", status: "idle" });
   }
 
@@ -784,6 +796,11 @@ export class MockApi implements HarnessApi {
       });
     }
   }
+}
+
+/** Rough count for the mock's cost line, four characters to a token. */
+function tokensIn(text: string): number {
+  return Math.ceil(text.length / 4);
 }
 
 function chunks(text: string, parts: number): string[] {
