@@ -224,3 +224,15 @@
   vertical-align: -0.13em;
   background: var(--accent);
 }
+
+/* A drawing is coloured for paper, so it gets paper rather than the theme
+   background. */
+.md-svg {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto 12px;
+  padding: 10px;
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  background: #ffffff;
+}
