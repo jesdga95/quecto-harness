@@ -387,8 +387,10 @@ export async function connectServer(url: string, token: string): Promise<string>
         ? "That server needs an API key"
         : "That server refused the API key";
     }
+    // A server that failed said why, and its own words name the cause.
+    if (app.modelsError !== "") return app.modelsError;
     // Any web server answers a GET. Only a model list proves this is llama.cpp.
-    if (app.modelsError !== "" || app.models.length === 0) {
+    if (app.models.length === 0) {
       return "That address answered, but it did not return a model list";
     }
     return "";
