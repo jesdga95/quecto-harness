@@ -77,7 +77,7 @@
       </div>
     </div>
 
-    <div class="flex items-center gap-3 px-5 pt-1 pb-4">
+    <div class="flex items-center justify-end gap-3 px-5 pt-1 pb-4">
       <button class="btn btn-primary" onclick={save}>Save</button>
       <button class="btn btn-ghost" onclick={onclose}>Close</button>
       {#if app.saved}
