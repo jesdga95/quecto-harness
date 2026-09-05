@@ -126,6 +126,9 @@ type ChatRequest struct {
 	// in the prompt rather than dropping it.
 	PreserveReasoning bool
 	Caps              Caps
+	// MaxTokens caps the generation. Zero leaves it to the server, which is
+	// what a turn wants; a request sent only for its usage report sets it to 1.
+	MaxTokens int
 }
 
 type Usage struct {
@@ -184,6 +187,9 @@ func buildBody(req ChatRequest) ([]byte, error) {
 	}
 	if len(req.Tools) > 0 {
 		body["tools"] = req.Tools
+	}
+	if req.MaxTokens > 0 {
+		body["max_tokens"] = req.MaxTokens
 	}
 	kwargs := map[string]any{}
 	applyEffort(body, kwargs, req.Effort, req.Caps)

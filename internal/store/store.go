@@ -95,11 +95,25 @@ type Session struct {
 	NCtxSource  string       `json:"n_ctx_source"`
 	Compactions int          `json:"compactions"`
 	LastUsage   *llama.Usage `json:"last_usage,omitempty"`
+	// LastToolTokens is the tool schema cost inside LastUsage. It is zero when
+	// the request that produced LastUsage was sent without tools.
+	LastToolTokens int `json:"last_tool_tokens,omitempty"`
+	// ContextBase is the measured fixed part of every prompt this model sees.
+	ContextBase *ContextBase `json:"context_base,omitempty"`
 	Todos       []Todo       `json:"todos,omitempty"`
 	// Baselines are the files this session has written to, as they stood
 	// before its first write to each. The copies live beside this document.
 	Baselines []Baseline `json:"baselines,omitempty"`
 	Entries   []Entry    `json:"entries"`
+}
+
+// ContextBase is the token cost of the two parts of a prompt that never
+// change: the system message and the tool schemas. Both are measured against
+// the model named here, so a rebind discards them.
+type ContextBase struct {
+	Model  string `json:"model"`
+	System int    `json:"system"`
+	Tools  int    `json:"tools"`
 }
 
 // Summary is what the sidebar needs, cheap enough to keep for every session.

@@ -842,6 +842,48 @@
     background: var(--crit);
   }
 
+  /* The context in prompt order: the two fixed parts, then everything the
+     conversation added. One hue at three weights, so the fill level still
+     reads off the colour. */
+  .ctxparts .ctxsplit {
+    display: flex;
+    height: 3px;
+    border-radius: 999px;
+    background: var(--hair);
+    overflow: hidden;
+  }
+  .ctxparts .ctxsplit span {
+    flex: none;
+    height: 100%;
+    background: var(--ok);
+    transition: width 220ms ease;
+  }
+  .ctxparts.is-warn .ctxsplit span {
+    background: var(--warn);
+  }
+  .ctxparts.is-crit .ctxsplit span {
+    background: var(--crit);
+  }
+  .ctxdot {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--ok);
+  }
+  .ctxparts.is-warn .ctxdot {
+    background: var(--warn);
+  }
+  .ctxparts.is-crit .ctxdot {
+    background: var(--crit);
+  }
+  .part-system {
+    opacity: 0.4;
+  }
+  .part-tools {
+    opacity: 0.68;
+  }
+
   /* The row and its menu share one line. The menu is always there, so a row
      never changes shape when the pointer crosses it. */
   .row-wrap {

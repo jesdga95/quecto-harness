@@ -14,8 +14,21 @@ import type {
   Todo,
   Transcript,
   TranscriptItem,
+  Usage,
 } from "./types";
 import { applyEvent, nextId, outcomeLabel, pushUser } from "../transcript";
+
+// What a measurement of the fixed parts comes back with. The harness measures
+// them after the first turn, so a session with no turn behind it has no split.
+const MOCK_SYSTEM = 154;
+const MOCK_TOOLS = 1026;
+
+/** The split as the harness reports it: two measured parts and the rest. */
+function split(usage: Usage): Usage {
+  const messages = usage.prompt_tokens + usage.completion_tokens - MOCK_SYSTEM - MOCK_TOOLS;
+  if (messages < 0) return usage;
+  return { ...usage, breakdown: { system: MOCK_SYSTEM, tools: MOCK_TOOLS, messages } };
+}
 
 // One of every row the panel has to draw, so the states with no diff are
 // exercised as well as the ones with one.
@@ -402,19 +415,14 @@ export class MockApi implements HarnessApi {
     const before = t.usage.prompt_tokens + t.usage.completion_tokens;
     const after = Math.min(before, Math.max(600, Math.round(before * 0.062)));
     await this.tick(1100);
-    t.usage = { prompt_tokens: after, completion_tokens: 0, n_ctx: t.usage.n_ctx };
+    t.usage = split({ prompt_tokens: after, completion_tokens: 0, n_ctx: t.usage.n_ctx });
     this.emit(session, {
       type: "compacted",
       before,
       after,
       summary: MOCK_SUMMARY,
     });
-    this.emit(session, {
-      type: "usage",
-      prompt_tokens: after,
-      completion_tokens: 0,
-      n_ctx: t.usage.n_ctx,
-    });
+    this.emit(session, { type: "usage", ...t.usage });
     this.emit(session, { type: "status", status: "idle" });
   }
 
@@ -529,13 +537,13 @@ export class MockApi implements HarnessApi {
       await this.stream(session, t, allowed ? script.reply : script.denied, turn);
 
       const grown = allowed ? 2600 + script.output.length : 900;
-      t.usage = {
+      t.usage = split({
         prompt_tokens: t.usage.prompt_tokens + grown,
         completion_tokens: t.usage.completion_tokens + 240,
         n_ctx: this.ctxOf(t.session.model),
         tok_per_s: 52,
         cached_pct: Math.min(94, 61 + index * 6),
-      };
+      });
       this.emit(session, { type: "usage", ...t.usage });
       this.finish(session, t);
       if (index === 0) this.nameSession(session, t);
@@ -681,7 +689,7 @@ export class MockApi implements HarnessApi {
     this.transcripts.set(first.id, {
       session: first,
       items,
-      usage: { prompt_tokens: 39400, completion_tokens: 2600, n_ctx: 131072 },
+      usage: split({ prompt_tokens: 39400, completion_tokens: 2600, n_ctx: 131072 }),
       todos: MOCK_TODOS.map((todo) => ({ ...todo })),
     });
     for (const s of [second, third]) {

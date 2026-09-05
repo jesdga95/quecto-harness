@@ -1,5 +1,6 @@
 import type {
   Attached,
+  Breakdown,
   Changes,
   Config,
   Effort,
@@ -128,6 +129,7 @@ interface WireSnapshot {
   pending?: WirePermission[];
   last_seq?: number;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+  breakdown?: { system?: number; tools?: number; messages?: number } | null;
 }
 
 interface WireEvent {
@@ -160,6 +162,7 @@ interface WireEvent {
   title?: string;
   todos?: { text?: string; status?: string }[] | null;
   message?: string;
+  breakdown?: { system?: number; tools?: number; messages?: number } | null;
 }
 
 // transport
@@ -292,6 +295,19 @@ function toTodos(wire: { text?: string; status?: string }[] | null | undefined):
       text: t.text ?? "",
       status: t.status === "doing" || t.status === "done" ? t.status : "todo",
     }));
+}
+
+/** The split is dropped unless all three parts are present, since a partial
+ *  one would read as a measurement it is not. */
+function toBreakdown(
+  wire: { system?: number; tools?: number; messages?: number } | null | undefined,
+): Breakdown | undefined {
+  if (!wire) return undefined;
+  const { system, tools, messages } = wire;
+  if (typeof system !== "number" || typeof tools !== "number" || typeof messages !== "number") {
+    return undefined;
+  }
+  return { system, tools, messages };
 }
 
 function count(value: unknown): number {
@@ -523,6 +539,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
     prompt_tokens: snap.last_usage?.prompt_tokens ?? snap.fill ?? 0,
     completion_tokens: snap.last_usage?.completion_tokens ?? 0,
     n_ctx: snap.n_ctx ?? 0,
+    breakdown: toBreakdown(snap.breakdown),
   };
 
   const highest = entries.reduce((max, e) => Math.max(max, e.seq ?? 0), 0);
@@ -631,6 +648,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           completion_tokens: ev.completion_tokens ?? 0,
           n_ctx: ev.n_ctx ?? 0,
           cached_pct: prompt > 0 ? Math.round((cached / prompt) * 100) : undefined,
+          breakdown: toBreakdown(ev.breakdown),
         },
       ];
     }

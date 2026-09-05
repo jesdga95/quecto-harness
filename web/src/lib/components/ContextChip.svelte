@@ -13,6 +13,12 @@
   const stats = $derived(turnStats());
   const running = $derived(app.status !== "idle");
 
+  // The parts are measured against the whole window, so each segment is its
+  // own share of it and the tail of the bar is what is still free. They arrive
+  // once the first turn has been measured, so the bar is plain until then.
+  const parts = $derived(app.usage.breakdown);
+  const share = (n: number) => pct(n, app.usage.n_ctx);
+
   // Circumference of the r=7 track, so the dash offset is a percentage of it.
   const circumference = 2 * Math.PI * 7;
   const dash = $derived((percent / 100) * circumference);
@@ -50,19 +56,42 @@
           <span class="num text-[12px] text-muted">{k(fill)} / {k(app.usage.n_ctx)}</span>
         </div>
 
-        <div class="ctxtrack mt-2" class:is-warn={tone === "warn"} class:is-crit={tone === "crit"}>
-          <span style="width:{percent}%"></span>
-        </div>
+        {#if parts}
+          <div class="ctxparts" class:is-warn={tone === "warn"} class:is-crit={tone === "crit"}>
+            <div class="ctxsplit mt-2">
+              <span class="part-system" style="width:{share(parts.system)}%"></span>
+              <span class="part-tools" style="width:{share(parts.tools)}%"></span>
+              <span style="width:{share(parts.messages)}%"></span>
+            </div>
+
+            <dl class="mt-3 space-y-1 text-[12px]">
+              <div class="flex items-center justify-between">
+                <dt class="flex items-center gap-1.5 text-muted">
+                  <span class="ctxdot part-system"></span> System prompt
+                </dt>
+                <dd class="num">{k(parts.system)}</dd>
+              </div>
+              <div class="flex items-center justify-between">
+                <dt class="flex items-center gap-1.5 text-muted">
+                  <span class="ctxdot part-tools"></span> Tools
+                </dt>
+                <dd class="num">{k(parts.tools)}</dd>
+              </div>
+              <div class="flex items-center justify-between">
+                <dt class="flex items-center gap-1.5 text-muted">
+                  <span class="ctxdot"></span> Messages
+                </dt>
+                <dd class="num">{k(parts.messages)}</dd>
+              </div>
+            </dl>
+          </div>
+        {:else}
+          <div class="ctxtrack mt-2" class:is-warn={tone === "warn"} class:is-crit={tone === "crit"}>
+            <span style="width:{percent}%"></span>
+          </div>
+        {/if}
 
         <dl class="mt-3 space-y-1 text-[12px]">
-          <div class="flex justify-between">
-            <dt class="text-muted">Prompt</dt>
-            <dd class="num">{k(app.usage.prompt_tokens)}</dd>
-          </div>
-          <div class="flex justify-between">
-            <dt class="text-muted">Completion</dt>
-            <dd class="num">{k(app.usage.completion_tokens)}</dd>
-          </div>
           {#if app.usage.cached_pct}
             <div class="flex justify-between">
               <dt class="text-muted">Cache hit</dt>

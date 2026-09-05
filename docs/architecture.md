@@ -645,11 +645,12 @@ const (
 // ChatRequest is the harness-level request. Wire fields are derived from it by
 // buildBody, so the effort mapping lives in one place.
 type ChatRequest struct {
-	Model    string
-	Messages []Message
-	Tools    []Tool
-	Effort   Effort
-	Caps     Caps
+	Model     string
+	Messages  []Message
+	Tools     []Tool
+	Effort    Effort
+	Caps      Caps
+	MaxTokens int // 0 leaves the cap to the server
 }
 ```
 
@@ -688,6 +689,9 @@ type ChatRequest struct {
   "reasoning_budget": 8192
 }
 ```
+
+`max_tokens` appears between `tools` and `tool_choice` when `MaxTokens` is greater than
+zero, which only the context measurement of section 8.6 sets.
 
 The example is a medium-effort turn against `Gemma4-12B`, whose template reports
 `supports_reasoning_effort: false`. That is why it carries `reasoning_budget: 8192` and no
@@ -1679,10 +1683,12 @@ type Session struct {
 	Entries []store.Entry // full transcript, including out-of-context entries
 
 	// Accounting.
-	NCtx        int         // resolved context size, 0 when unknown
-	NCtxSource  string      // "props", "meta", "args", ""
-	LastUsage   *llama.Usage
-	Compactions int
+	NCtx           int    // resolved context size, 0 when unknown
+	NCtxSource     string // "props", "meta", "args", ""
+	LastUsage      *llama.Usage
+	LastToolTokens int                 // schema cost inside LastUsage, 0 when none were sent
+	ContextBase    *store.ContextBase  // measured system and schema cost, nil until measured
+	Compactions    int
 
 	state   State
 	cancel  context.CancelFunc
@@ -1812,11 +1818,15 @@ run(turn):
       }
       res, err = client.Chat(ctx, req, publishEvent)
       if err != nil { classify: canceled -> stop(); else fail(err); return }
-      if res.Usage != nil { session.LastUsage = res.Usage; publish usage }
+      if res.Usage != nil {
+          session.LastUsage = res.Usage
+          session.LastToolTokens = tools were sent ? ContextBase.Tools : 0
+          publish usage
+      }
       if len(res.ToolCalls) == 0 {
           append Entry{Kind: assistant, Content: res.Content, Reasoning: res.Reasoning,
                        InContext: true, Visible: true}
-          state = final; persist; publish done; return
+          state = final; persist; probeContextBase(); publish done; return
       }
       append Entry{Kind: assistant, Content: res.Content, Reasoning: res.Reasoning,
                    ToolCalls: res.ToolCalls, InContext: true, Visible: true}
@@ -1912,10 +1922,63 @@ store.Entry{Kind: "status", Content: "model changed to " + model,
 ```
 
 The entry is visible so the transcript shows where the model changed, and out of context so
-the model is never told about it. The session is then persisted and the `Props` probe above
-runs.
+the model is never told about it. The measurement of section 8.6 is discarded with the rest,
+since it was taken against the previous tokenizer. The session is then persisted and the
+`Props` probe above runs.
 
-### 8.6 Effort mapping
+### 8.6 The context breakdown
+
+`computeFill` answers how full the window is. What the window is full of is a separate
+question, and the model server answers it with one number for the whole prompt. The two
+parts that never change within a session are measured instead:
+
+```go
+count := func(schemas []llama.Tool) int {
+	res, _ := client.Chat(ctx, llama.ChatRequest{
+		Model: model, Messages: []llama.Message{system}, Tools: schemas,
+		Effort: llama.EffortOff, Caps: caps, MaxTokens: 1}, nil)
+	return res.Usage.PromptTokens
+}
+bare, armed := count(nil), count(tools.Schemas())
+ContextBase{Model: model, System: bare, Tools: armed - bare}
+```
+
+Both completions carry the system message and differ only in whether the schemas are
+attached, so `bare` is the system cost including whatever scaffolding the template puts
+around it, and the difference is the schema cost. The measurement is stored against the
+model it was taken against; `Rebind` discards it along with `LastUsage` and the caps.
+
+Everything else is then subtraction on a real usage report:
+
+```go
+func (s *Session) breakdown() *Breakdown {
+	if s.LastUsage == nil || s.ContextBase == nil || s.ContextBase.Model != s.Model {
+		return nil
+	}
+	b := Breakdown{System: s.ContextBase.System, Tools: s.LastToolTokens}
+	b.Messages = s.LastUsage.PromptTokens + s.LastUsage.CompletionTokens - b.System - b.Tools
+	if b.Messages < 0 {
+		return nil
+	}
+	return &b
+}
+```
+
+`LastToolTokens` rather than `ContextBase.Tools` because a turn that spends its call budget
+sends no schemas, and that turn's prompt did not carry their cost. All three parts are
+counts the model server gave, not characters divided by four. A remainder below zero means
+the measurement no longer describes the prompt, and reports nothing rather than a number.
+
+`probeContextBase` runs after a turn has streamed rather than before one, since a completion
+loads a model and the first chat message is the only request allowed to do that. It runs at
+most once per model per session, whether or not it succeeded, so a server that will not
+answer it is not asked again every turn. Until it has answered there is no breakdown, and
+the meter shows the unsegmented bar.
+
+Against `Qwen3.8-27B Q5` the measurement is 154 tokens of system prompt and 1026 of schemas,
+1180 of a 262144-token window.
+
+### 8.7 Effort mapping
 
 | UI level | caps known and `supports_reasoning_effort` | otherwise |
 |----------|--------------------------------------------|-----------|
@@ -1933,7 +1996,7 @@ unknown, so the budget column is used. For `Gemma4-12B` as captured, caps become
 turn one and still select the budget column, because that template reports
 `supports_reasoning_effort: false`.
 
-### 8.7 Compaction
+### 8.8 Compaction
 
 Triggers:
 
@@ -1991,7 +2054,7 @@ What the UI keeps versus what the model sees:
 `Reasoning` is never included in `contextMessages`. It is stored, shown, and dropped from
 the request.
 
-### 8.8 Persistence points
+### 8.9 Persistence points
 
 The session file is written at each of these, and nowhere else:
 
@@ -2009,7 +2072,7 @@ something to resume from.
 Writes go through `store.Sessions.Save`, which serialises per session and uses the atomic
 replace. A save failure publishes an `error` event and does not stop the turn.
 
-### 8.9 Concurrent turns
+### 8.10 Concurrent turns
 
 Turns are not serialised. Two sessions can stream at once, and the engine does nothing to
 prevent it.
@@ -2095,6 +2158,8 @@ from `crypto/rand`.
     "total_tokens": 4311,
     "cached_tokens": 3968
   },
+  "last_tool_tokens": 1026,
+  "context_base": {"model": "Gemma4-12B", "system": 154, "tools": 1026},
   "entries": [
     {
       "seq": 1, "kind": "user", "role": "user",
@@ -2458,12 +2523,15 @@ Response is the created `Summary` plus `"state": "idle"`.
   "n_ctx": 131072,
   "n_ctx_source": "props",
   "fill": 4311,
+  "breakdown": {"system": 154, "tools": 1026, "messages": 3131},
   "compactions": 1,
   "pending": [],
   "entries": [ ... as in section 9.2 ... ],
   "last_seq": 41
 }
 ```
+
+`breakdown` is absent until the parts have been measured, which is section 8.6.
 
 `pending` carries any unanswered `perms.Request` for this session, so a page reload restores
 the blocked composer. `last_seq` is the SSE sequence number at the moment the snapshot was
@@ -2563,7 +2631,7 @@ Event payloads:
 {"type":"tool_call","seq":123,"index":0,"id":"call_0","name":"run_shell","arguments":"{\"comm"}
 {"type":"permission","seq":124,"id":"perm_7fq2ka9mzx01","tool":"run_shell","command":"ls","prefix":"ls","args":"{\"command\":\"ls\"}"}
 {"type":"tool_output","seq":125,"index":0,"id":"call_0","name":"run_shell","output":"AGENTS.md\n...","exit_code":0,"truncated":false}
-{"type":"usage","seq":126,"prompt_tokens":4193,"completion_tokens":118,"cached_tokens":3968,"fill":4311,"n_ctx":131072}
+{"type":"usage","seq":126,"prompt_tokens":4193,"completion_tokens":118,"cached_tokens":3968,"fill":4311,"n_ctx":131072,"breakdown":{"system":154,"tools":1026,"messages":3131}}
 {"type":"compacted","seq":127,"before":104857,"after":3120,"summary":"Listed the repository root."}
 {"type":"error","seq":128,"kind":"model_loading","message":"model \"Gemma4-12B\" is loading: send the message again in a moment"}
 {"type":"done","seq":129,"finish_reason":"stop","iterations":2}
@@ -2903,7 +2971,8 @@ export type ServerEvent =
   | { type: "permission";  seq: number; id: string; tool: string; command?: string;
                            path?: string; prefix: string; args: string }
   | { type: "usage";       seq: number; prompt_tokens: number; completion_tokens: number;
-                           cached_tokens: number; fill: number; n_ctx: number }
+                           cached_tokens: number; fill: number; n_ctx: number;
+                           breakdown?: { system: number; tools: number; messages: number } }
   | { type: "compacted";   seq: number; before: number; after: number; summary: string }
   | { type: "error";       seq: number; kind: string; message: string }
   | { type: "done";        seq: number; finish_reason: string; iterations: number }
@@ -3068,7 +3137,7 @@ typing, but Send is disabled while `connected` is false.
 | `tool_call` | matches `toolCalls[]` on `index`, creating the entry on first sight, appends the argument fragment, and updates `id` and `name` from the event; renders the arguments as they arrive in a mono block |
 | `permission` | sets `session.pending` and appends a `PermissionCard` inline at the end of the transcript |
 | `tool_output` | finds the tool card on `index`, fills its output, exit code badge and truncation notice |
-| `usage` | updates `fill`, `nCtx`, `cached`; the context meter recolours at 60 and 80 percent |
+| `usage` | updates `fill`, `nCtx`, `cached` and the breakdown; the context meter recolours at 60 and 80 percent, and its popover shows one bar segmented into system, tools and messages once the breakdown arrives |
 | `compacted` | appends a divider entry; everything above it is dimmed and marked `out of context`, matching the server's `in_context` flags |
 | `error` | appends a red row with the message; does not clear the transcript |
 | `done` | sets `streaming: false` on the last assistant entry, `state` returns to `idle` |
@@ -3153,7 +3222,7 @@ Each session row in the sidebar carries a remove control that calls
 | `prompts` | every embedded file is non-empty; `System` renders with both fields substituted and leaves no `{{`; the tool descriptions match the schema descriptions by name |
 | `tools` | path guard table (section 13.3); `read_file` numbering, offset, limit, byte cap, empty file, directory, binary; `write_file` creates parents, preserves mode, atomic replace leaves the old content on a failed write; `run_shell` exit code, merged streams, timeout kill, process group kill of a forked child, truncation head and tail, `Truncate` boundary cases |
 | `perms` | `Evaluate` matrix over tool times auto times allowlist times operators, with a case per entry of the operator list and a case proving `${` does not prompt; `Ask` and `Resolve` happy path; `Resolve` on an unknown id; cancel while blocked; double resolve; `always` writes the allowlist before returning; denial content string |
-| `agent` | the state machine transitions; the loop against the replay server for a plain reply, a single tool call, two tool calls, a denial, a stop mid-command, 50 iterations; `Get` on a live id, on an id only on disk, and on an unknown id; `computeFill` before and after a usage report; the `assumed` fallback arms auto compaction; effort mapping into the recorded request body; `Rebind` resets `NCtx`, caps and `LastUsage`, appends the visible out-of-context status entry, and returns `ErrBusy` when not idle; the props probe fires at creation for a loaded model and after the first response for an unloaded one, always with `autoload=false`; compaction rewrites `in_context` and leaves `visible` alone; the unanswered-tool-call repair |
+| `agent` | the state machine transitions; the loop against the replay server for a plain reply, a single tool call, two tool calls, a denial, a stop mid-command, 50 iterations; `Get` on a live id, on an id only on disk, and on an unknown id; `computeFill` before and after a usage report; the `assumed` fallback arms auto compaction; effort mapping into the recorded request body; `Rebind` resets `NCtx`, caps, `LastUsage` and the context measurement, appends the visible out-of-context status entry, and returns `ErrBusy` when not idle; the props probe fires at creation for a loaded model and after the first response for an unloaded one, always with `autoload=false`; the context measurement sends the system message twice, once with the schemas and once without, and runs once per model per session; the breakdown subtracts the measured parts from a real usage report; compaction rewrites `in_context` and leaves `visible` alone; the unanswered-tool-call repair |
 | `store` | round trip of a session with every entry kind; index built at `Open`; a corrupt file is skipped and named; `List` ordering; concurrent `Save` of two sessions under `-race` |
 | `server` | auth: token to cookie, bearer, 401 without either, constant-time compare, a token file present at start is reused rather than replaced, a missing one is created 0600; origin rejection; every route's happy path and its documented error status, including `PUT /api/sessions/{id}` (200 idle, 409 busy, 400 unknown model), `DELETE /api/sessions/{id}` (204, 409 busy, 404 unknown, hub channel dropped), `GET /api/allowlist` (empty array for an unknown project) and `DELETE /api/allowlist` (200 with the unchanged list for a prefix that is absent); `tool_call` and `tool_output` payloads carry `index`; the folder browser rules including hidden exclusion and a non-absolute path; SSE replay from `Last-Event-ID`, from `?from=`, and the `resync` path when the ring has rolled; a slow subscriber gets `resync` and is not disconnected; embed fallback page when `Built()` is false |
 | `service` | `UnitText` golden output for both platforms, asserted on whichever platform the test runs on; XML escaping of a home directory containing `&`; a binary under `/tmp` is refused; the install command sequence recorded by a stub `launchctl` placed first on `PATH`, asserted in order so that `enable` precedes `bootstrap`; `Report` parses a recorded `launchctl print` and a recorded `systemctl is-active` output |
@@ -3313,7 +3382,7 @@ reflected in the sections above.
 2. **The "off" effort row.** Off sends both `reasoning_budget: 0` and
    `chat_template_kwargs: {"enable_thinking": false}`, regardless of what the caps report.
    A template that does not know the keyword ignores it, and the budget covers the case
-   where it does. Sections 4.5, 8.6.
+   where it does. Sections 4.5, 8.7.
 
 3. **Parallel tool calls.** A batch of calls in one assistant message is executed
    sequentially, one permission card at a time, in the order the model listed them.
@@ -3324,7 +3393,7 @@ reflected in the sections above.
 
 5. **Manual compaction.** Compact stays idle-only. A user watching a turn that needs
    compacting presses Stop first. This keeps the rewrite away from a history whose tool
-   results have not been appended yet. Sections 8.7, 10.4.
+   results have not been appended yet. Sections 8.8, 10.4.
 
 6. **The operator rejection list.** It is `;`, `&`, `|`, `>`, `<`, backtick, `$(`, `\n`,
    `\r`. Bare `&` subsumes `&&` and catches backgrounding, which would otherwise escape the
@@ -3333,7 +3402,7 @@ reflected in the sections above.
 
 7. **Concurrent turns.** Not serialised. llama.cpp queues a request when every slot is busy,
    so a second session sits in `status: streaming` with no deltas until a slot frees. This
-   is documented behaviour and nothing is built for it. Section 8.9.
+   is documented behaviour and nothing is built for it. Section 8.10.
 
 8. **Model picker versus session model.** The picker rebinds the currently selected session
    when it is idle, through `PUT /api/sessions/{id}`, and also sets `config.model` as the

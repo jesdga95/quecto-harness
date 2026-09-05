@@ -24,6 +24,7 @@ type replay struct {
 	Delay    time.Duration
 	Status   int
 	Requests []map[string]any
+	Probes   []map[string]any
 	Queries  []string
 }
 
@@ -88,6 +89,22 @@ func (r *replay) Server() *httptest.Server {
 func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 	var body map[string]any
 	json.NewDecoder(req.Body).Decode(&body)
+
+	// A completion capped at one token is a context measurement, not a turn.
+	// It answers from its own fixture so the queued scripts stay lined up with
+	// the turns the test is about.
+	if body["max_tokens"] == float64(1) {
+		r.mu.Lock()
+		r.Probes = append(r.Probes, body)
+		r.mu.Unlock()
+		name := "probe_system.txt"
+		if _, ok := body["tools"]; ok {
+			name = "probe_tools.txt"
+		}
+		r.stream(w, frames(r.t, name))
+		return
+	}
+
 	r.mu.Lock()
 	r.Requests = append(r.Requests, body)
 	script := []string(nil)
@@ -95,7 +112,7 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 		script = r.scripts[r.next]
 		r.next++
 	}
-	status, delay := r.Status, r.Delay
+	status := r.Status
 	r.mu.Unlock()
 
 	if status != 0 && status != 200 {
@@ -108,6 +125,14 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 		fmt.Fprint(w, `{"error":{"message":"the replay server ran out of scripted responses"}}`)
 		return
 	}
+	r.stream(w, script)
+}
+
+func (r *replay) stream(w http.ResponseWriter, script []string) {
+	r.mu.Lock()
+	delay := r.Delay
+	r.mu.Unlock()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(200)
 	f, _ := w.(http.Flusher)

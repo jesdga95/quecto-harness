@@ -47,18 +47,30 @@ type Session struct {
 
 	Entries []store.Entry
 
-	NCtx        int
-	NCtxSource  string
-	LastUsage   *llama.Usage
-	Compactions int
-	Todos       []store.Todo
-	Baselines   []store.Baseline
+	NCtx       int
+	NCtxSource string
+	LastUsage  *llama.Usage
+	// LastToolTokens is the tool schema cost inside LastUsage. A turn that
+	// spent its call budget sends no tools, and the breakdown says so rather
+	// than charging for schemas the prompt did not carry.
+	LastToolTokens int
+	ContextBase    *store.ContextBase
+	Compactions    int
+	Todos          []store.Todo
+	Baselines      []store.Baseline
 
 	caps           llama.Caps
 	lastUsageEntry int
-	state          State
-	cancel         context.CancelFunc
-	turnSeq        int
+	// lastSentTools reports whether the request behind LastUsage carried the
+	// tool schemas. A turn that spent its call budget sends none.
+	lastSentTools bool
+	// baseProbed stops the measurement being retried every turn against a
+	// server that will not answer it.
+	baseProbed bool
+
+	state   State
+	cancel  context.CancelFunc
+	turnSeq int
 }
 
 func newSession(id, project, model string) *Session {
@@ -74,14 +86,16 @@ func fromDoc(d *store.Session) *Session {
 	return &Session{
 		ID: d.ID, Project: d.Project, Model: d.Model,
 		Created: d.Created, Updated: d.Updated, Title: d.Title, Named: d.Named,
-		Entries:     append([]store.Entry(nil), d.Entries...),
-		NCtx:        d.NCtx,
-		NCtxSource:  d.NCtxSource,
-		LastUsage:   d.LastUsage,
-		Compactions: d.Compactions,
-		Todos:       append([]store.Todo(nil), d.Todos...),
-		Baselines:   append([]store.Baseline(nil), d.Baselines...),
-		state:       StateIdle,
+		Entries:        append([]store.Entry(nil), d.Entries...),
+		NCtx:           d.NCtx,
+		NCtxSource:     d.NCtxSource,
+		LastUsage:      d.LastUsage,
+		LastToolTokens: d.LastToolTokens,
+		ContextBase:    d.ContextBase,
+		Compactions:    d.Compactions,
+		Todos:          append([]store.Todo(nil), d.Todos...),
+		Baselines:      append([]store.Baseline(nil), d.Baselines...),
+		state:          StateIdle,
 		// A reloaded session has no usage anchor, so the next fill is
 		// estimated from the entries rather than trusted from a past turn.
 		lastUsageEntry: -1,
@@ -95,6 +109,7 @@ func (s *Session) doc() *store.Session {
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, LastUsage: s.LastUsage,
+		LastToolTokens: s.LastToolTokens, ContextBase: s.ContextBase,
 		Todos:     append([]store.Todo(nil), s.Todos...),
 		Baselines: append([]store.Baseline(nil), s.Baselines...),
 		Entries:   append([]store.Entry(nil), s.Entries...),
@@ -284,4 +299,35 @@ func (s *Session) effectiveNCtx() (int, string) {
 		return s.NCtx, s.NCtxSource
 	}
 	return assumedNCtx, "assumed"
+}
+
+// Breakdown splits the context into the three parts a reader can act on. It
+// is reported only from a measured base and a real usage report, so a session
+// with either missing shows no breakdown rather than a guess.
+type Breakdown struct {
+	System   int `json:"system"`
+	Tools    int `json:"tools"`
+	Messages int `json:"messages"`
+}
+
+// Breakdown is breakdown under the lock, for a handler.
+func (s *Session) Breakdown() *Breakdown {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.breakdown()
+}
+
+// breakdown subtracts the fixed parts from the last usage report. Messages is
+// the remainder, which is exact because every part of it came from the model
+// server rather than from counting characters. The caller holds the lock.
+func (s *Session) breakdown() *Breakdown {
+	if s.LastUsage == nil || s.ContextBase == nil || s.ContextBase.Model != s.Model {
+		return nil
+	}
+	b := Breakdown{System: s.ContextBase.System, Tools: s.LastToolTokens}
+	b.Messages = s.LastUsage.PromptTokens + s.LastUsage.CompletionTokens - b.System - b.Tools
+	if b.Messages < 0 {
+		return nil
+	}
+	return &b
 }

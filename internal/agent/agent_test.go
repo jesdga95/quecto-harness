@@ -1108,3 +1108,86 @@ func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+func waitForProbes(t *testing.T, h *harness, n int) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		h.replay.mu.Lock()
+		got := len(h.replay.Probes)
+		h.replay.mu.Unlock()
+		if got >= n {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("the context measurement did not run")
+}
+
+func TestContextBreakdownFromMeasuredParts(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_title.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "what is in this project", nil)
+	waitIdle(t, s)
+	waitForProbes(t, h, 2)
+
+	// The fixtures report 20 tokens for the system message alone and 35 with
+	// the schemas attached, so the schemas cost 15.
+	var parts *Breakdown
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if parts = s.Breakdown(); parts != nil {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if parts == nil {
+		t.Fatal("no breakdown after the parts were measured")
+	}
+	if parts.System != 20 {
+		t.Errorf("system = %d, want 20", parts.System)
+	}
+	if parts.Tools != 15 {
+		t.Errorf("tools = %d, want 15", parts.Tools)
+	}
+	// The turn reported 44 prompt and 48 completion tokens.
+	if want := 44 + 48 - 20 - 15; parts.Messages != want {
+		t.Errorf("messages = %d, want %d", parts.Messages, want)
+	}
+
+	h.replay.mu.Lock()
+	first, second := h.replay.Probes[0], h.replay.Probes[1]
+	h.replay.mu.Unlock()
+	if _, ok := first["tools"]; ok {
+		t.Error("the first measurement carried tools, so it cannot isolate the system message")
+	}
+	if _, ok := second["tools"]; !ok {
+		t.Error("the second measurement carried no tools, so the difference is not the schema cost")
+	}
+	msgs, _ := first["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("the measurement carried %d messages, want the system message alone", len(msgs))
+	}
+	if m, _ := msgs[0].(map[string]any); m["role"] != "system" {
+		t.Errorf("measured message role = %v, want system", m["role"])
+	}
+}
+
+func TestContextMeasurementRunsOncePerSession(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_title.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "first", nil)
+	waitIdle(t, s)
+	waitForProbes(t, h, 2)
+
+	h.engine.Send(s.ID, "second", nil)
+	waitIdle(t, s)
+	waitForRequests(t, h, 3)
+
+	h.replay.mu.Lock()
+	got := len(h.replay.Probes)
+	h.replay.mu.Unlock()
+	if got != 2 {
+		t.Errorf("the parts were measured %d times, want twice for one model", got)
+	}
+}

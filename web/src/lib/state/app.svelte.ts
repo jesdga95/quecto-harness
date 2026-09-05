@@ -328,6 +328,9 @@ export async function setModel(id: string): Promise<void> {
       if (app.config) app.config.model = previous;
       return;
     }
+    // The split was measured against the previous model, so it goes with it
+    // rather than being shown beside a total the new model reported.
+    app.usage.breakdown = undefined;
   }
   void guard(() => api.updateConfig({ model: id }));
 }
@@ -453,6 +456,7 @@ function onEvent(event: HarnessEvent): void {
       n_ctx: event.n_ctx,
       tok_per_s: event.tok_per_s ?? app.usage.tok_per_s,
       cached_pct: event.cached_pct ?? app.usage.cached_pct,
+      breakdown: event.breakdown,
     };
   }
 

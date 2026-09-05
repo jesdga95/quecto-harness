@@ -366,6 +366,10 @@ func (e *Engine) Rebind(id, model string, hint int, hintSource string) error {
 	s.NCtx, s.NCtxSource = hint, hintSource
 	s.caps = llama.Caps{}
 	s.LastUsage = nil
+	s.LastToolTokens = 0
+	s.lastSentTools = false
+	s.ContextBase = nil
+	s.baseProbed = false
 	s.lastUsageEntry = -1
 	entry := s.appendEntry(store.Entry{Kind: "status", Content: "Model changed to " + model,
 		InContext: false, Visible: true})
@@ -541,6 +545,64 @@ func (e *Engine) probeProps(s *Session, onlyIfLoaded bool) {
 	}()
 }
 
+// probeContextBase measures the fixed parts of a prompt against the model that
+// will read them. Two completions capped at one token carry the system message
+// and differ only in whether the tool schemas are attached, so one prompt count
+// is the system cost and the difference is the schema cost. Everything else in
+// the context is then the remainder of a real usage report.
+//
+// It runs only after a turn has streamed, since a completion loads a model and
+// the first chat message is the only request allowed to do that.
+func (e *Engine) probeContextBase(s *Session) {
+	s.mu.Lock()
+	model, caps := s.Model, s.caps
+	done := s.baseProbed || (s.ContextBase != nil && s.ContextBase.Model == model)
+	system := llama.Message{Role: "system",
+		Content: prompts.System(prompts.SystemVars{Project: s.Project, OS: e.os})}
+	s.mu.Unlock()
+	if model == "" || done {
+		return
+	}
+	// Counted like a turn, so a shutdown waits for the write it ends in
+	// rather than racing it.
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		ctx, cancel := context.WithTimeout(e.ctx, 60*time.Second)
+		defer cancel()
+		count := func(schemas []llama.Tool) (int, bool) {
+			res, err := e.llama().Chat(ctx, llama.ChatRequest{
+				Model: model, Messages: []llama.Message{system}, Tools: schemas,
+				Effort: llama.EffortOff, Caps: caps, MaxTokens: 1}, nil)
+			if err != nil || res.Usage == nil || res.Usage.PromptTokens <= 0 {
+				return 0, false
+			}
+			return res.Usage.PromptTokens, true
+		}
+		bare, okBare := count(nil)
+		armed, okArmed := count(tools.Schemas())
+
+		s.mu.Lock()
+		s.baseProbed = true
+		stale := s.Model != model
+		measured := okBare && okArmed && armed >= bare && !stale
+		if measured {
+			s.ContextBase = &store.ContextBase{Model: model, System: bare, Tools: armed - bare}
+			// The turn that triggered the probe already reported its usage, so
+			// it is attributed here rather than a turn later.
+			if s.LastUsage != nil && s.lastSentTools {
+				s.LastToolTokens = s.ContextBase.Tools
+			}
+		}
+		s.mu.Unlock()
+		if !measured {
+			return
+		}
+		e.save(s)
+		e.publishUsage(s)
+	}()
+}
+
 // SetModelHint records a context hint from the model list for a session whose
 // model has never been loaded.
 func (e *Engine) SetModelHint(s *Session, hint int, source string) {
@@ -644,6 +706,11 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		if res.Usage != nil {
 			s.mu.Lock()
 			s.LastUsage = res.Usage
+			s.lastSentTools = !spent
+			s.LastToolTokens = 0
+			if !spent && s.ContextBase != nil && s.ContextBase.Model == s.Model {
+				s.LastToolTokens = s.ContextBase.Tools
+			}
 			s.mu.Unlock()
 		}
 
@@ -658,6 +725,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			e.setState(s, StateFinal)
 			e.save(s)
 			e.probeProps(s, false)
+			e.probeContextBase(s)
 			e.publishUsage(s)
 			e.finish(s, StateIdle, res.FinishReason, iteration+1)
 			e.titleSession(s)
@@ -756,13 +824,18 @@ func (e *Engine) publishUsage(s *Session) {
 	u := s.LastUsage
 	fill := s.computeFill()
 	nctx, _ := s.effectiveNCtx()
+	parts := s.breakdown()
 	s.mu.Unlock()
 	if u == nil {
 		return
 	}
-	e.publish(s.ID, ev("usage", map[string]any{
+	payload := map[string]any{
 		"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens,
-		"cached_tokens": u.CachedTokens, "fill": fill, "n_ctx": nctx}))
+		"cached_tokens": u.CachedTokens, "fill": fill, "n_ctx": nctx}
+	if parts != nil {
+		payload["breakdown"] = parts
+	}
+	e.publish(s.ID, ev("usage", payload))
 }
 
 // decide applies the policy and, when it says prompt, blocks on the browser.
@@ -960,6 +1033,7 @@ func (e *Engine) compact(ctx context.Context, s *Session) error {
 		Content: summary, InContext: true, Visible: true,
 		Meta: map[string]any{"before": before, "n": s.Compactions}})
 	s.LastUsage = nil
+	s.LastToolTokens = 0
 	s.lastUsageEntry = len(s.Entries) - 1
 	after := s.computeFill()
 	s.Entries[len(s.Entries)-1].Meta["after"] = after

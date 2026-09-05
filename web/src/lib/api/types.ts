@@ -120,6 +120,7 @@ export type HarnessEvent =
       n_ctx: number;
       tok_per_s?: number;
       cached_pct?: number;
+      breakdown?: Breakdown;
     }
   | { type: "status"; status: TurnStatus }
   /** A line the harness writes into the transcript, such as a model change. */
@@ -211,12 +212,21 @@ export interface Changes {
   removed: number;
 }
 
+/** The three parts of the context, each measured rather than estimated. It is
+ *  absent until the fixed parts have been measured against the model. */
+export interface Breakdown {
+  system: number;
+  tools: number;
+  messages: number;
+}
+
 export interface Usage {
   prompt_tokens: number;
   completion_tokens: number;
   n_ctx: number;
   tok_per_s?: number;
   cached_pct?: number;
+  breakdown?: Breakdown;
 }
 
 export interface Transcript {
