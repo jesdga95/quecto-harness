@@ -71,6 +71,27 @@
     void navigator.clipboard?.writeText(text);
   }
 
+  // A reply is split around the tool calls the model made in the middle of
+  // it, so the copy button takes the blocks before the one it sits under as
+  // well. Keyed by the id of the last block of each turn.
+  const replies = $derived.by(() => {
+    const out = new Map<string, string>();
+    let parts: string[] = [];
+    let last = "";
+    for (const item of app.items) {
+      if (item.kind === "user") {
+        if (last) out.set(last, parts.join("\n\n"));
+        parts = [];
+        last = "";
+      } else if (item.kind === "assistant") {
+        parts.push(item.text);
+        last = item.id;
+      }
+    }
+    if (last) out.set(last, parts.join("\n\n"));
+    return out;
+  });
+
   // The box opens with the caret at the end of the message and grows with it,
   // so a long message is edited whole rather than through a slot three lines
   // high.
@@ -180,19 +201,24 @@
         {:else if item.kind === "assistant"}
           <div class="my-2">
             <Prose text={item.text} streaming={item.streaming} />
-            {#if !item.streaming}
+            <!-- The cost arrives when the turn ends, so it is also what says
+                 this block is the end of one rather than a fragment between
+                 two tool calls. -->
+            {#if item.cost}
               <div class="mt-0.5 flex items-center gap-2">
-                <button class="icon-btn" aria-label="Copy reply" onclick={() => copy(item.text)}>
+                <button
+                  class="icon-btn"
+                  aria-label="Copy reply"
+                  onclick={() => copy(replies.get(item.id) ?? item.text)}
+                >
                   <Copy />
                 </button>
-                {#if item.cost}
-                  <span class="num text-[12px] text-muted">
-                    {k(item.cost.tokens)} tokens &middot; {duration(item.cost.ms)}
-                    {#if item.cost.tokPerS > 0}
-                      &middot; {Math.round(item.cost.tokPerS)} tok/s
-                    {/if}
-                  </span>
-                {/if}
+                <span class="num text-[12px] text-muted">
+                  {k(item.cost.tokens)} tokens &middot; {duration(item.cost.ms)}
+                  {#if item.cost.tokPerS > 0}
+                    &middot; {Math.round(item.cost.tokPerS)} tok/s
+                  {/if}
+                </span>
               </div>
             {/if}
           </div>
