@@ -34,6 +34,7 @@ const (
 type Server struct {
 	cfg    *config.Store
 	store  *store.Sessions
+	files  *store.Files
 	engine *agent.Engine
 	perms  *perms.Broker
 	client *llama.Client
@@ -53,10 +54,10 @@ type Server struct {
 	infoErr   error
 }
 
-func New(cfg *config.Store, st *store.Sessions, engine *agent.Engine, pb *perms.Broker,
-	cl *llama.Client, hub *Hub, token, listen, version string) *Server {
+func New(cfg *config.Store, st *store.Sessions, files *store.Files, engine *agent.Engine,
+	pb *perms.Broker, cl *llama.Client, hub *Hub, token, listen, version string) *Server {
 	return &Server{
-		cfg: cfg, store: st, engine: engine, perms: pb, client: cl, hub: hub,
+		cfg: cfg, store: st, files: files, engine: engine, perms: pb, client: cl, hub: hub,
 		token: token, listen: listen, version: version, ui: web.Handler(),
 	}
 }
@@ -85,6 +86,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/models", s.getModels)
 	mux.HandleFunc("GET /api/models/props", s.getModelProps)
 	mux.HandleFunc("POST /api/fs/pick", s.postPick)
+	mux.HandleFunc("GET /api/files/{id}", s.getFile)
 	mux.HandleFunc("POST /api/projects", s.postProject)
 	mux.HandleFunc("DELETE /api/projects", s.deleteProject)
 	mux.HandleFunc("GET /api/allowlist", s.getAllowlist)

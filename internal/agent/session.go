@@ -153,9 +153,27 @@ func (s *Session) firstUserMessage() string {
 	return ""
 }
 
+// imageRefs lists the file ids the in-context messages need, so the bytes are
+// read before the lock is taken rather than under it.
+func (s *Session) imageRefs() []string {
+	var out []string
+	for _, e := range s.Entries {
+		if !e.InContext {
+			continue
+		}
+		for _, a := range e.Attachments {
+			if a.File != "" {
+				out = append(out, a.File)
+			}
+		}
+	}
+	return out
+}
+
 // contextMessages is the system prompt followed by every in-context entry,
-// with the invariants the wire format requires repaired.
-func (s *Session) contextMessages(osName string) []llama.Message {
+// with the invariants the wire format requires repaired. images maps a file
+// id to the part built from it.
+func (s *Session) contextMessages(osName string, images map[string]llama.Part) []llama.Message {
 	msgs := []llama.Message{{
 		Role:    "system",
 		Content: prompts.System(prompts.SystemVars{Project: s.Project, OS: osName}),
@@ -167,7 +185,7 @@ func (s *Session) contextMessages(osName string) []llama.Message {
 		}
 		switch e.Kind {
 		case "user":
-			msgs = append(msgs, llama.Message{Role: "user", Content: userContent(e)})
+			msgs = append(msgs, userMessage(e, images))
 		case "compaction":
 			msgs = append(msgs, llama.Message{Role: "user", Content: prompts.Compaction(e.Content)})
 		case "assistant":
@@ -182,18 +200,29 @@ func (s *Session) contextMessages(osName string) []llama.Message {
 	return msgs
 }
 
-// userContent is the message as typed, with each attached file under it.
-func userContent(e store.Entry) string {
-	if len(e.Attachments) == 0 {
-		return e.Content
-	}
+// userMessage is the message as typed, with each attached text file under it
+// and each image beside it. A message with an image is an array of parts,
+// which is the only shape that carries one.
+func userMessage(e store.Entry, images map[string]llama.Part) llama.Message {
 	var b strings.Builder
 	b.WriteString(e.Content)
+	var parts []llama.Part
 	for _, a := range e.Attachments {
+		if a.Kind == "image" {
+			if part, ok := images[a.File]; ok {
+				parts = append(parts, part)
+				b.WriteString("\n\n")
+				b.WriteString(prompts.Image(a.Path))
+			}
+			continue
+		}
 		b.WriteString("\n\n")
 		b.WriteString(prompts.Attachment(a.Path, a.Content))
 	}
-	return b.String()
+	if len(parts) == 0 {
+		return llama.Message{Role: "user", Content: b.String()}
+	}
+	return llama.Message{Role: "user", Parts: append([]llama.Part{llama.TextPart(b.String())}, parts...)}
 }
 
 // repairToolResults returns one tool message per call, synthesising the ones

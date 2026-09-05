@@ -177,3 +177,44 @@ func TestNewIDAndTitle(t *testing.T) {
 		t.Errorf("Title kept %d runes, want 60", len([]rune(got)))
 	}
 }
+
+func TestFilesRoundTripAndGuardTheID(t *testing.T) {
+	dir := t.TempDir()
+	files, err := OpenFiles(filepath.Join(dir, "files"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(dir, "shot.png")
+	if err := os.WriteFile(src, []byte("not really a png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	id, size, err := files.Put(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != 16 {
+		t.Errorf("size = %d, want 16", size)
+	}
+	raw, err := files.Read(id)
+	if err != nil || string(raw) != "not really a png" {
+		t.Errorf("read back %q, err %v", raw, err)
+	}
+
+	// Nothing but an id this store minted can name a file.
+	for _, bad := range []string{"", "..", "../config.json", "file_x", id + "/../../config.json"} {
+		if _, err := files.Path(bad); err == nil {
+			t.Errorf("Path(%q) resolved", bad)
+		}
+	}
+
+	if err := files.Remove(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := files.Read(id); err == nil {
+		t.Error("the file survived the remove")
+	}
+	if err := files.Remove(id); err != nil {
+		t.Errorf("removing a file that is already gone: %v", err)
+	}
+}

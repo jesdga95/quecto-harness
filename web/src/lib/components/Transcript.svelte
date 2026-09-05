@@ -2,6 +2,7 @@
   import ArrowDown from "phosphor-svelte/lib/ArrowDown";
   import ArrowsLeftRight from "phosphor-svelte/lib/ArrowsLeftRight";
   import Copy from "phosphor-svelte/lib/Copy";
+  import ImageIcon from "phosphor-svelte/lib/Image";
   import Paperclip from "phosphor-svelte/lib/Paperclip";
   import Warning from "phosphor-svelte/lib/Warning";
   import PermissionCard from "./PermissionCard.svelte";
@@ -47,13 +48,29 @@
             {#if item.files.length > 0}
               <div class="flex max-w-[80%] flex-wrap justify-end gap-1.5">
                 {#each item.files as file (file.path)}
-                  <span class="chip chip-solid cursor-default" title={file.path}>
-                    <Paperclip />
-                    <span class="max-w-[220px] truncate">{fileName(file.path)}</span>
-                    {#if file.bytes > 0}
-                      <span class="text-muted">{bytes(file.bytes)}</span>
-                    {/if}
-                  </span>
+                  {#if file.kind === "image" && file.file}
+                    <a
+                      class="shot"
+                      href="/api/files/{file.file}"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={file.path}
+                    >
+                      <img src="/api/files/{file.file}" alt={fileName(file.path)} />
+                    </a>
+                  {:else}
+                    <span class="chip chip-solid cursor-default" title={file.path}>
+                      {#if file.kind === "image"}
+                        <ImageIcon />
+                      {:else}
+                        <Paperclip />
+                      {/if}
+                      <span class="max-w-[220px] truncate">{fileName(file.path)}</span>
+                      {#if file.bytes > 0}
+                        <span class="text-muted">{bytes(file.bytes)}</span>
+                      {/if}
+                    </span>
+                  {/if}
                 {/each}
               </div>
             {/if}

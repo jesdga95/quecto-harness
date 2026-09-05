@@ -1,6 +1,7 @@
 <script lang="ts">
   import CaretDown from "phosphor-svelte/lib/CaretDown";
   import Check from "phosphor-svelte/lib/Check";
+  import ImageIcon from "phosphor-svelte/lib/Image";
   import Popover from "./Popover.svelte";
   import StatusDot from "./StatusDot.svelte";
   import { app, setModel } from "../state/app.svelte";
@@ -42,6 +43,9 @@
                   <span class="block text-[12px] text-muted">Loads on first message</span>
                 {/if}
               </span>
+              {#if model.vision}
+                <ImageIcon size={14} class="text-muted" />
+              {/if}
               <span class="num text-[12px] text-muted">{k(model.ctx)}</span>
               {#if model.id === app.config?.model}
                 <Check size={14} class="text-accent" />

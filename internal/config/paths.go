@@ -15,6 +15,7 @@ type Paths struct {
 	Config    string
 	Allowlist string
 	Sessions  string
+	Files     string
 	Log       string
 	Token     string
 	URL       string
@@ -43,6 +44,7 @@ func DiscoverPathsIn(home string) Paths {
 		Config:    filepath.Join(home, "config.json"),
 		Allowlist: filepath.Join(home, "allowlist.json"),
 		Sessions:  filepath.Join(home, "sessions"),
+		Files:     filepath.Join(home, "files"),
 		Log:       filepath.Join(home, "log"),
 		Token:     filepath.Join(home, "token"),
 		URL:       filepath.Join(home, "url"),
@@ -52,7 +54,7 @@ func DiscoverPathsIn(home string) Paths {
 // EnsureDirs creates the state directories at 0700. An existing directory is
 // left alone, mode included.
 func (p Paths) EnsureDirs() error {
-	for _, d := range []string{p.Home, p.Sessions, p.Log} {
+	for _, d := range []string{p.Home, p.Sessions, p.Files, p.Log} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return errors.New("create " + d + ": check the permissions on its parent")
 		}

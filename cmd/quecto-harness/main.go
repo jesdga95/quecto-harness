@@ -130,6 +130,10 @@ func serve(argv []string) error {
 	if err != nil {
 		return err
 	}
+	blobs, err := store.OpenFiles(p.Files)
+	if err != nil {
+		return err
+	}
 	token, err := loadToken(p.Token)
 	if err != nil {
 		return err
@@ -156,8 +160,8 @@ func serve(argv []string) error {
 	broker := perms.New(cfg, func(sessionID string, r perms.Request) {
 		hub.Publish(sessionID, agent.PermissionEvent(r))
 	})
-	engine := agent.NewEngine(ctx, cfg, sessions, client, broker, hub)
-	srv := server.New(cfg, sessions, engine, broker, client, hub, token, listen, version)
+	engine := agent.NewEngine(ctx, cfg, sessions, blobs, client, broker, hub)
+	srv := server.New(cfg, sessions, blobs, engine, broker, client, hub, token, listen, version)
 
 	go srv.Detect(ctx)
 

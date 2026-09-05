@@ -208,6 +208,12 @@ export async function deleteSession(id: string): Promise<void> {
   }
 }
 
+/** What the composer draws before the harness has read the file. The harness
+    decides what a file really is when the message arrives. */
+export function looksLikeImage(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp)$/i.test(path);
+}
+
 /** Asks the host for a file to attach. Null when the dialog is dismissed. */
 export async function pickAttachment(): Promise<string | null> {
   return (await guard(() => api.pickFile())) ?? null;
@@ -219,7 +225,7 @@ export async function send(text: string, files: string[] = []): Promise<void> {
   pushUser(
     app.items,
     message,
-    files.map((path) => ({ path, bytes: 0 })),
+    files.map((path) => ({ path, kind: looksLikeImage(path) ? "image" : "text", bytes: 0 })),
   );
   // The harness reads the attachments, so a file it refuses refuses the whole
   // message. The bubble comes back off the transcript when that happens.

@@ -2,12 +2,20 @@
   import AddMenu from "./AddMenu.svelte";
   import ArrowUp from "phosphor-svelte/lib/ArrowUp";
   import EffortChip from "./EffortChip.svelte";
+  import ImageIcon from "phosphor-svelte/lib/Image";
   import Paperclip from "phosphor-svelte/lib/Paperclip";
   import Square from "phosphor-svelte/lib/Square";
   import ModelChip from "./ModelChip.svelte";
   import PermissionChip from "./PermissionChip.svelte";
   import X from "phosphor-svelte/lib/X";
-  import { app, pendingPermission, pickAttachment, send, stop } from "../state/app.svelte";
+  import {
+    app,
+    looksLikeImage,
+    pendingPermission,
+    pickAttachment,
+    send,
+    stop,
+  } from "../state/app.svelte";
   import { fileName } from "../format";
 
   let { placeholder }: { placeholder: string } = $props();
@@ -69,7 +77,11 @@
       <div class="mb-2 flex flex-wrap gap-1.5">
         {#each files as path (path)}
           <span class="chip chip-solid cursor-default" title={path}>
-            <Paperclip />
+            {#if looksLikeImage(path)}
+              <ImageIcon />
+            {:else}
+              <Paperclip />
+            {/if}
             <span class="max-w-[220px] truncate">{fileName(path)}</span>
             <button
               class="icon-btn -mr-1.5 h-5 w-5"

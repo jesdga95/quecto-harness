@@ -79,12 +79,12 @@ function mockChanges(): FileChange[] {
 class Cancelled extends Error {}
 
 const MODELS: Model[] = [
-  { id: "Gemma4-12B", status: "loaded", ctx: 131072, ctxIsHint: false },
-  { id: "Muse Glimmer 30B Q5", status: "unloaded", ctx: 131072, ctxIsHint: true },
-  { id: "Qwen3.6-35B-A3B Q5", status: "unloaded", ctx: 131072, ctxIsHint: true },
-  { id: "Qwen3.8-27B Q5", status: "unloaded", ctx: 131072, ctxIsHint: true },
-  { id: "Qwen3.8-27B Q8", status: "unloaded", ctx: 131072, ctxIsHint: true },
-  { id: "Qwen3.8-Flash-Next IQ4", status: "unloaded", ctx: 65536, ctxIsHint: true },
+  { id: "Gemma4-12B", status: "loaded", vision: true, ctx: 131072, ctxIsHint: false },
+  { id: "Muse Glimmer 30B Q5", status: "unloaded", vision: false, ctx: 131072, ctxIsHint: true },
+  { id: "Qwen3.6-35B-A3B Q5", status: "unloaded", vision: true, ctx: 131072, ctxIsHint: true },
+  { id: "Qwen3.8-27B Q5", status: "unloaded", vision: true, ctx: 131072, ctxIsHint: true },
+  { id: "Qwen3.8-27B Q8", status: "unloaded", vision: true, ctx: 131072, ctxIsHint: true },
+  { id: "Qwen3.8-Flash-Next IQ4", status: "unloaded", vision: false, ctx: 65536, ctxIsHint: true },
 ];
 
 interface ScriptedTurn {
@@ -429,7 +429,11 @@ export class MockApi implements HarnessApi {
     pushUser(
       t.items,
       text,
-      files.map((path) => ({ path, bytes: 2400 })),
+      files.map((path) => ({
+        path,
+        kind: /\.(png|jpe?g|gif|webp)$/i.test(path) ? ("image" as const) : ("text" as const),
+        bytes: 2400,
+      })),
     );
     if (t.session.title === "New session") t.session.title = title(text);
     void this.runTurn(session, t);

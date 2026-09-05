@@ -28,6 +28,7 @@ const testToken = "test-token"
 type fixture struct {
 	srv      *Server
 	handler  http.Handler
+	files    *store.Files
 	cfg      *config.Store
 	hub      *Hub
 	engine   *agent.Engine
@@ -102,6 +103,10 @@ func newFixture(t *testing.T) *fixture {
 	}
 	real, _ := filepath.EvalSymlinks(project)
 
+	blobs, err := store.OpenFiles(p.Files)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sessions, err := store.Open(p.Sessions)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +153,7 @@ func newFixture(t *testing.T) *fixture {
 	hub := NewHub()
 	broker := perms.New(cfg, func(sid string, r perms.Request) { hub.Publish(sid, agent.PermissionEvent(r)) })
 	ctx, cancel := context.WithCancel(context.Background())
-	engine := agent.NewEngine(ctx, cfg, sessions, client, broker, hub)
+	engine := agent.NewEngine(ctx, cfg, sessions, blobs, client, broker, hub)
 	// The temporary home goes away when the test ends, so nothing the engine
 	// started may still be writing sessions into it.
 	t.Cleanup(func() {
@@ -156,8 +161,9 @@ func newFixture(t *testing.T) *fixture {
 		engine.Wait(5 * time.Second)
 	})
 
-	srv := New(cfg, sessions, engine, broker, client, hub, testToken, "127.0.0.1:7331", "0.1.0-test")
+	srv := New(cfg, sessions, blobs, engine, broker, client, hub, testToken, "127.0.0.1:7331", "0.1.0-test")
 	f.srv, f.handler, f.hub, f.engine, f.perms = srv, srv.Handler(), hub, engine, broker
+	f.files = blobs
 	return f
 }
 
@@ -987,5 +993,40 @@ func TestConfigRepointsEngine(t *testing.T) {
 	}
 	if after.BaseURL != "http://192.0.2.9:9999" {
 		t.Errorf("engine BaseURL = %q, want the address just saved", after.BaseURL)
+	}
+}
+
+// TestFileRouteServesAnAttachment asserts that an image is served back by its
+// id, typed from its own bytes, and that nothing else names a file.
+func TestFileRouteServesAnAttachment(t *testing.T) {
+	f := newFixture(t)
+	src := filepath.Join(t.TempDir(), "shot.png")
+	png := []byte{
+		0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89,
+	}
+	if err := os.WriteFile(src, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := f.files.Put(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := f.do(t, "GET", "/api/files/"+id, nil)
+	if w.Code != 200 {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); got != "image/png" {
+		t.Errorf("content type = %q", got)
+	}
+	if !bytes.Equal(w.Body.Bytes(), png) {
+		t.Errorf("body = %d bytes, want %d", w.Body.Len(), len(png))
+	}
+
+	if w := f.do(t, "GET", "/api/files/file_nope", nil); w.Code != 404 {
+		t.Errorf("an id that was never minted returned %d", w.Code)
 	}
 }

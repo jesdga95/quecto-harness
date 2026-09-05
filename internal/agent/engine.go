@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"runtime"
 	"strings"
 	"sync"
@@ -34,6 +35,7 @@ var (
 type Engine struct {
 	cfg      *config.Store
 	store    *store.Sessions
+	files    *store.Files
 	clientMu sync.RWMutex
 	client   *llama.Client
 	perms    *perms.Broker
@@ -47,12 +49,45 @@ type Engine struct {
 	wg   sync.WaitGroup
 }
 
-func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, cl *llama.Client,
-	pb *perms.Broker, hub Publisher) *Engine {
+func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files *store.Files,
+	cl *llama.Client, pb *perms.Broker, hub Publisher) *Engine {
 	return &Engine{
-		cfg: cfg, store: st, client: cl, perms: pb, hub: hub,
+		cfg: cfg, store: st, files: files, client: cl, perms: pb, hub: hub,
 		ctx: ctx, os: runtime.GOOS, live: map[string]*Session{},
 	}
+}
+
+// messages builds the prompt for a session. The image bytes are read between
+// the two locks, so nothing does file IO while the session is held.
+func (e *Engine) messages(s *Session) []llama.Message {
+	s.mu.Lock()
+	refs := s.imageRefs()
+	s.mu.Unlock()
+
+	images := map[string]llama.Part{}
+	for _, id := range refs {
+		raw, err := e.files.Read(id)
+		if err != nil {
+			// A file that has gone is left out rather than failing the turn:
+			// the message still says an image was attached.
+			continue
+		}
+		images[id] = llama.ImagePart(mimeOf(raw), raw)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.contextMessages(e.os, images)
+}
+
+// mimeOf reads the type back off the bytes, so the data URI says what the
+// file is rather than what an entry claimed months ago.
+func mimeOf(raw []byte) string {
+	head := raw
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	return strings.SplitN(http.DetectContentType(head), ";", 2)[0]
 }
 
 func (e *Engine) publish(sessionID string, event Event) {
@@ -166,8 +201,14 @@ func (e *Engine) Send(id, text string, files []string) error {
 	if err != nil {
 		return err
 	}
-	attachments, err := readAttachments(files)
+	attachments, err := e.readAttachments(files)
 	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	model := s.Model
+	s.mu.Unlock()
+	if err := e.checkImages(model, attachments); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -198,8 +239,9 @@ func (e *Engine) Send(id, text string, files []string) error {
 }
 
 // readAttachments reads every attached file at once, so the message is either
-// sent with all of them or not sent at all.
-func readAttachments(paths []string) ([]store.Attachment, error) {
+// sent with all of them or not sent at all. Text is kept with the entry;
+// an image goes to the file store and the entry keeps its id.
+func (e *Engine) readAttachments(paths []string) ([]store.Attachment, error) {
 	if len(paths) == 0 {
 		return nil, nil
 	}
@@ -208,13 +250,55 @@ func readAttachments(paths []string) ([]store.Attachment, error) {
 	}
 	out := make([]store.Attachment, 0, len(paths))
 	for _, p := range paths {
-		content, err := tools.ReadAttachment(p)
+		read, err := tools.ReadAttachment(p)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, store.Attachment{Path: p, Bytes: len(content), Content: content})
+		a := store.Attachment{Path: p, Kind: read.Kind, Mime: read.Mime,
+			Bytes: read.Bytes, Content: read.Content}
+		if read.Kind == "image" {
+			id, size, err := e.files.Put(p)
+			if err != nil {
+				return nil, err
+			}
+			a.File, a.Bytes, a.Content = id, size, ""
+		}
+		out = append(out, a)
 	}
 	return out, nil
+}
+
+// checkImages asks the model server what the model takes before an image is
+// sent to it, since a model with no vision answers a request carrying one
+// with an error that says nothing about the picture.
+func (e *Engine) checkImages(model string, attachments []store.Attachment) error {
+	images := false
+	for _, a := range attachments {
+		if a.Kind == "image" {
+			images = true
+		}
+	}
+	if !images {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
+	defer cancel()
+	models, err := e.llama().Models(ctx)
+	if err != nil {
+		return fmt.Errorf("Ask the model server what %s takes: %w", model, err)
+	}
+	for _, m := range models {
+		if m.ID != model {
+			continue
+		}
+		for _, mod := range m.Modalities {
+			if mod == "image" {
+				return nil
+			}
+		}
+		return fmt.Errorf("%s does not take images: pick a model that does", model)
+	}
+	return fmt.Errorf("%s is not on the model server: pick another from the model list", model)
 }
 
 // Stop cancels the turn. It never appends: the loop reaches stopped and
@@ -319,8 +403,18 @@ func (e *Engine) Delete(id string) error {
 	if s.State() != StateIdle {
 		return ErrBusy
 	}
+	doc, _, _, _ := s.Snapshot()
 	if err := e.store.Delete(id); err != nil {
 		return err
+	}
+	// The files an attachment left behind belong to the session, so they go
+	// with it rather than sitting in the store with nothing pointing at them.
+	for _, entry := range doc.Entries {
+		for _, a := range entry.Attachments {
+			if a.File != "" {
+				e.files.Remove(a.File)
+			}
+		}
 	}
 	e.mu.Lock()
 	delete(e.live, id)
@@ -347,13 +441,13 @@ func (e *Engine) Wait(d time.Duration) {
 // the prompt cached and the next turn does not reprocess it.
 func (e *Engine) titleSession(s *Session) {
 	s.mu.Lock()
-	if !s.firstTurn() {
-		s.mu.Unlock()
-		return
-	}
-	msgs := append(s.contextMessages(e.os), llama.Message{Role: "user", Content: prompts.Title()})
+	first := s.firstTurn()
 	model, caps := s.Model, s.caps
 	s.mu.Unlock()
+	if !first {
+		return
+	}
+	msgs := append(e.messages(s), llama.Message{Role: "user", Content: prompts.Title()})
 
 	e.wg.Add(1)
 	go func() {
@@ -521,10 +615,11 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		}
 
 		e.setState(s, StateStreaming)
+		msgs := e.messages(s)
 		s.mu.Lock()
 		req := llama.ChatRequest{
 			Model:             s.Model,
-			Messages:          s.contextMessages(e.os),
+			Messages:          msgs,
 			Effort:            cfg.Effort,
 			PreserveReasoning: cfg.PreserveReasoning,
 			Caps:              s.caps,
@@ -839,9 +934,9 @@ func argSummary(call llama.ToolCall) (command, path string) {
 // compact replaces the in-context set with one summary. A failure leaves the
 // history untouched, so a failed compaction never loses context.
 func (e *Engine) compact(ctx context.Context, s *Session) error {
+	msgs := append(e.messages(s), llama.Message{Role: "user", Content: prompts.Compact()})
 	s.mu.Lock()
 	before := s.computeFill()
-	msgs := append(s.contextMessages(e.os), llama.Message{Role: "user", Content: prompts.Compact()})
 	model, caps := s.Model, s.caps
 	s.mu.Unlock()
 

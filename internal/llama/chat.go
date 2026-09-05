@@ -1,12 +1,16 @@
 package llama
 
 import (
+	"encoding/base64"
 	"encoding/json"
 )
 
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content,omitempty"`
+	// Parts carry a message the endpoint takes as an array rather than a
+	// string, which is how an image travels. They replace Content when set.
+	Parts []Part `json:"-"`
 	// ReasoningContent is the thinking that came with an assistant message.
 	// Sent back so the prompt matches what the model generated; a template
 	// that cannot place it ignores it.
@@ -14,6 +18,51 @@ type Message struct {
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
 	Name             string     `json:"name,omitempty"`
+}
+
+// Part is one piece of a multimodal message: a run of text, or an image as a
+// data URI.
+type Part struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+type ImageURL struct {
+	URL string `json:"url"`
+}
+
+func TextPart(text string) Part { return Part{Type: "text", Text: text} }
+
+// ImagePart carries the bytes inline, which is the only shape the endpoint
+// takes: it has no route to a file on this machine.
+func ImagePart(mime string, data []byte) Part {
+	return Part{Type: "image_url", ImageURL: &ImageURL{
+		URL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
+	}}
+}
+
+// MarshalJSON writes content as a string, or as the array of parts when the
+// message carries one, which is the shape the endpoint takes for both.
+func (m Message) MarshalJSON() ([]byte, error) {
+	wire := struct {
+		Role             string     `json:"role"`
+		Content          any        `json:"content,omitempty"`
+		ReasoningContent string     `json:"reasoning_content,omitempty"`
+		ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+		ToolCallID       string     `json:"tool_call_id,omitempty"`
+		Name             string     `json:"name,omitempty"`
+	}{
+		Role: m.Role, ReasoningContent: m.ReasoningContent,
+		ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID, Name: m.Name,
+	}
+	switch {
+	case len(m.Parts) > 0:
+		wire.Content = m.Parts
+	case m.Content != "":
+		wire.Content = m.Content
+	}
+	return json.Marshal(wire)
 }
 
 type ToolCall struct {

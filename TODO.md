@@ -8,11 +8,12 @@ Ordered by size. Take from the top.
    or by a small set of read-only routes. Decide which before starting. The
    change panel is the view to extend; what it lacks is anything a shell
    command touched.
-2. **Image attachments.** Multimodal request shape, storage, a picker, and a
-   view. Three of the six models report vision, so the caps are there.
 
 ## Done
 
+- Image attachments: picked in the same dialog, kept in a file store beside the
+  sessions, sent as the array of parts the endpoint takes, and shown in the
+  transcript. A model that does not report image input refuses the message.
 - `replace_in_file`, which swaps one exact run of text for another. The match
   must be unique, and a call that matches nothing or several writes nothing and
   says which. `write_file` stays for new files and whole rewrites.

@@ -19,6 +19,8 @@ export type TurnStatus =
 export interface Model {
   id: string;
   status: ModelStatus;
+  /** The model reads images as well as text. */
+  vision: boolean;
   /** Per slot context window. A hint parsed from the launch args until loaded. */
   ctx: number;
   ctxIsHint: boolean;
@@ -159,10 +161,13 @@ export type TranscriptItem =
   | { kind: "status"; id: string; text: string }
   | { kind: "error"; id: string; message: string };
 
-/** One file attached to a message, as the transcript shows it. */
+/** One file attached to a message, as the transcript shows it. An image is
+    fetched back from the harness by its id; text is already in the prompt. */
 export interface Attached {
   path: string;
+  kind: "text" | "image";
   bytes: number;
+  file?: string;
 }
 
 /** What a file this session wrote became. Only changed and new carry hunks;

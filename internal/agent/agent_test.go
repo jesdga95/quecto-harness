@@ -84,6 +84,10 @@ func newHarness(t *testing.T, fixtures ...string) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	blobs, err := store.OpenFiles(paths.Files)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rp := newReplay(t, fixtures...)
 	srv := rp.Server()
 	t.Cleanup(srv.Close)
@@ -91,7 +95,7 @@ func newHarness(t *testing.T, fixtures ...string) *harness {
 	rec := &recorder{}
 	broker := perms.New(cfg, func(sid string, r perms.Request) { rec.Publish(sid, PermissionEvent(r)) })
 	ctx, cancel := context.WithCancel(context.Background())
-	engine := NewEngine(ctx, cfg, st, llama.New(srv.URL, ""), broker, rec)
+	engine := NewEngine(ctx, cfg, st, blobs, llama.New(srv.URL, ""), broker, rec)
 	// The temporary home goes away when the test ends, so nothing the engine
 	// started may still be writing sessions into it.
 	t.Cleanup(func() {
@@ -620,7 +624,7 @@ func TestCompactionRewritesInContextOnly(t *testing.T) {
 	// The entry keeps the summary alone; the framing is added to the message
 	// built from it, so the transcript can show the summary as it was written.
 	s.mu.Lock()
-	msgs := s.contextMessages("darwin")
+	msgs := s.contextMessages("darwin", nil)
 	s.mu.Unlock()
 	sent := msgs[len(msgs)-1]
 	if sent.Role != "user" || !strings.HasPrefix(sent.Content, "Summary of earlier work:") ||
@@ -738,7 +742,7 @@ func TestUnansweredToolCallIsRepaired(t *testing.T) {
 	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
 		ToolCalls: []llama.ToolCall{{ID: "call_x", Type: "function",
 			Function: llama.FunctionCall{Name: "run_shell", Arguments: `{"command":"ls"}`}}}})
-	msgs := s.contextMessages("darwin")
+	msgs := s.contextMessages("darwin", nil)
 	s.mu.Unlock()
 
 	last := msgs[len(msgs)-1]
@@ -878,6 +882,90 @@ func TestAttachmentReachesThePrompt(t *testing.T) {
 		if e.Kind == "user" && e.Content == "and this" {
 			t.Error("the refused message was written to the session")
 		}
+	}
+}
+
+// TestImageReachesThePromptAsParts asserts that an image goes to the file
+// store rather than into the session document, and travels in the message as
+// the array of parts the endpoint takes.
+func TestImageReachesThePromptAsParts(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	png := filepath.Join(t.TempDir(), "shot.png")
+	if err := os.WriteFile(png, onePixelPNG(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := h.engine.Send(s.ID, "what is this", []string{png}); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	att := doc.Entries[0].Attachments
+	if len(att) != 1 || att[0].Kind != "image" || att[0].File == "" {
+		t.Fatalf("attachments = %+v", att)
+	}
+	if att[0].Content != "" {
+		t.Error("the image bytes were written into the session document")
+	}
+	if raw, err := h.engine.files.Read(att[0].File); err != nil || len(raw) != att[0].Bytes {
+		t.Errorf("the file store holds %d bytes, err %v", len(raw), err)
+	}
+
+	msgs, _ := h.replay.Body(0)["messages"].([]any)
+	user, _ := msgs[len(msgs)-1].(map[string]any)
+	parts, ok := user["content"].([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("user content = %v", user["content"])
+	}
+	text, _ := parts[0].(map[string]any)
+	if text["type"] != "text" || !strings.Contains(text["text"].(string), png) {
+		t.Errorf("first part = %v", text)
+	}
+	image, _ := parts[1].(map[string]any)
+	url, _ := image["image_url"].(map[string]any)
+	if image["type"] != "image_url" || !strings.HasPrefix(url["url"].(string), "data:image/png;base64,") {
+		t.Errorf("second part = %v", image)
+	}
+
+	// Deleting the session takes the file with it.
+	id := att[0].File
+	h.engine.Stop(s.ID)
+	if err := h.engine.Delete(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.engine.files.Read(id); err == nil {
+		t.Error("the file outlived the session that held it")
+	}
+}
+
+// TestImageNeedsAModelThatTakesOne asserts the message is refused before it
+// is written, rather than failing inside the turn.
+func TestImageNeedsAModelThatTakesOne(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	s := h.sessionWith(t, "No-Such-Model")
+	png := filepath.Join(t.TempDir(), "shot.png")
+	if err := os.WriteFile(png, onePixelPNG(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.Send(s.ID, "look", []string{png}); err == nil {
+		t.Fatal("an image went to a model the server does not have")
+	}
+	doc, _, _, _ := s.Snapshot()
+	if len(doc.Entries) != 0 {
+		t.Errorf("the refused message was written: %+v", doc.Entries)
+	}
+}
+
+// onePixelPNG is the smallest header that sniffs as a png.
+func onePixelPNG() []byte {
+	return []byte{
+		0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89,
 	}
 }
 

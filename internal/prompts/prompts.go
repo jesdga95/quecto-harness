@@ -9,13 +9,14 @@ import (
 	"text/template"
 )
 
-//go:embed system.md tool_read_file.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md compact.md compaction.md title.md attachment.md
+//go:embed system.md tool_read_file.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md compact.md compaction.md title.md attachment.md image.md
 var files embed.FS
 
 var (
 	systemTmpl     = template.Must(template.New("system").Parse(mustRead("system.md")))
 	compactionTmpl = template.Must(template.New("compaction").Parse(mustRead("compaction.md")))
 	attachmentTmpl = template.Must(template.New("attachment").Parse(mustRead("attachment.md")))
+	imageTmpl      = template.Must(template.New("image").Parse(mustRead("image.md")))
 )
 
 func mustRead(name string) string {
@@ -55,6 +56,16 @@ func Attachment(path, content string) string {
 	var b strings.Builder
 	if err := attachmentTmpl.Execute(&b, struct{ Path, Content string }{path, content}); err != nil {
 		panic("prompts: render attachment.md: " + err.Error())
+	}
+	return b.String()
+}
+
+// Image names an image travelling with the message, since the picture itself
+// carries no file name.
+func Image(path string) string {
+	var b strings.Builder
+	if err := imageTmpl.Execute(&b, struct{ Path string }{path}); err != nil {
+		panic("prompts: render image.md: " + err.Error())
 	}
 	return b.String()
 }

@@ -48,12 +48,18 @@ type Entry struct {
 	Meta      map[string]any `json:"meta,omitempty"`
 }
 
-// Attachment is a text file the user attached to a message. Its content is
-// inlined into the message the model is sent.
+// Attachment is a file the user attached to a message. Text is kept here and
+// inlined into the prompt; an image lives in the file store and Kind says
+// which of the two this is.
 type Attachment struct {
-	Path    string `json:"path"`
-	Bytes   int    `json:"bytes"`
-	Content string `json:"content"`
+	Path  string `json:"path"`
+	Kind  string `json:"kind"`
+	Mime  string `json:"mime,omitempty"`
+	Bytes int    `json:"bytes"`
+	// File is the id in the file store, for an image.
+	File string `json:"file,omitempty"`
+	// Content is the whole file, for text.
+	Content string `json:"content,omitempty"`
 }
 
 // PermissionRecord is the decision as it was made, kept so a reloaded page

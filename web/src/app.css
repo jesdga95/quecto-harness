@@ -910,6 +910,24 @@
     color: var(--muted);
   }
 
+  /* An image attached to a message, shown at the size of a thumbnail and
+     opened full size in a tab. */
+  .shot {
+    display: block;
+    max-width: 240px;
+    border-radius: 12px;
+    border: 1px solid var(--hair);
+    overflow: hidden;
+    line-height: 0;
+  }
+  .shot img {
+    display: block;
+    max-width: 100%;
+    max-height: 220px;
+    object-fit: contain;
+    background: var(--surface-2);
+  }
+
   /* The plan the model keeps, sitting above the composer. */
   .plan {
     border: 1px solid var(--hair);

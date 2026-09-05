@@ -405,8 +405,8 @@ func TestReadAttachment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read a text file: %v", err)
 	}
-	if got != "one\ntwo\n" {
-		t.Errorf("content = %q", got)
+	if got.Kind != "text" || got.Content != "one\ntwo\n" {
+		t.Errorf("attached = %+v", got)
 	}
 
 	binary := filepath.Join(dir, "blob.bin")
@@ -430,6 +430,31 @@ func TestReadAttachment(t *testing.T) {
 	}
 	if _, err := ReadAttachment(dir); err == nil {
 		t.Error("a folder was attached")
+	}
+
+	// A png sniffs as an image, which is read as bytes rather than as text
+	// and is left on disk for the file store to copy.
+	png := filepath.Join(dir, "shot.png")
+	if err := os.WriteFile(png, onePixelPNG(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	image, err := ReadAttachment(png)
+	if err != nil {
+		t.Fatalf("attach a png: %v", err)
+	}
+	if image.Kind != "image" || image.Mime != "image/png" || image.Content != "" {
+		t.Errorf("attached = %+v", image)
+	}
+}
+
+// onePixelPNG is the smallest file that sniffs as a png.
+func onePixelPNG() []byte {
+	return []byte{
+		0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89,
 	}
 }
 

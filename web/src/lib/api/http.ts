@@ -1,4 +1,5 @@
 import type {
+  Attached,
   Changes,
   Config,
   Effort,
@@ -42,6 +43,7 @@ export class ApiError extends Error {
 interface WireModel {
   id?: string;
   status?: string;
+  modalities?: string[];
   ctx_hint?: number;
   ctx_source?: string;
 }
@@ -108,7 +110,7 @@ interface WireEntry {
   exit_code?: number | null;
   truncated?: boolean;
   permission?: WirePermission | null;
-  attachments?: { path?: string; bytes?: number }[] | null;
+  attachments?: { path?: string; kind?: string; bytes?: number; file?: string }[] | null;
   visible?: boolean;
   meta?: Record<string, unknown> | null;
 }
@@ -243,6 +245,7 @@ function toModel(m: WireModel): Model {
   return {
     id: m.id ?? "",
     status,
+    vision: (m.modalities ?? []).includes("image"),
     ctx: m.ctx_hint ?? 0,
     ctxIsHint: !MEASURED_CTX.has(m.ctx_source ?? ""),
   };
@@ -329,9 +332,11 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
   const seq = e.seq ?? items.length;
 
   if (e.kind === "user") {
-    const files = (e.attachments ?? []).map((a) => ({
+    const files: Attached[] = (e.attachments ?? []).map((a) => ({
       path: a.path ?? "",
+      kind: a.kind === "image" ? "image" : "text",
       bytes: a.bytes ?? 0,
+      file: a.file,
     }));
     if (e.content || files.length > 0) {
       items.push({ kind: "user", id: `u${seq}`, text: e.content ?? "", files });

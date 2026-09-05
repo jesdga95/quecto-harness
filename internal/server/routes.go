@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -634,4 +636,42 @@ func orEmpty(v []string) []string {
 		return []string{}
 	}
 	return v
+}
+
+// getFile serves an attached image to the page that shows it. The type is
+// read back off the bytes rather than trusted from anything stored, and the
+// id is the only thing that can name a file, so nothing here takes a path.
+func (s *Server) getFile(w http.ResponseWriter, r *http.Request) {
+	path, err := s.files.Path(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "No file with that id: the session may have been deleted")
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "No file with that id: the session may have been deleted")
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Read the file: "+err.Error())
+		return
+	}
+	// An id is minted once and never reused, so the browser may keep it.
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Type", fileType(f))
+	http.ServeContent(w, r, "", info.ModTime(), f)
+}
+
+// fileType sniffs the content type and leaves the reader where it found it.
+func fileType(f *os.File) string {
+	head := make([]byte, 512)
+	n, _ := f.Read(head)
+	f.Seek(0, io.SeekStart)
+	if n == 0 {
+		return "application/octet-stream"
+	}
+	return strings.SplitN(http.DetectContentType(head[:n]), ";", 2)[0]
 }
