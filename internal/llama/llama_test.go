@@ -229,16 +229,19 @@ func TestReasoningContentRidesTheAssistantMessage(t *testing.T) {
 	}
 }
 
-func TestModelURLAlwaysDisablesAutoload(t *testing.T) {
+func TestModelURLStatesAutoload(t *testing.T) {
 	c := New("http://example/", "")
-	u := c.modelURL("/props", "Beta 30B Q5", nil)
+	u := c.modelURL("/props", "Beta 30B Q5", false, nil)
 	if !strings.Contains(u, "autoload=false") {
-		t.Fatalf("modelURL = %q, autoload=false is not optional", u)
+		t.Fatalf("modelURL = %q, a read must say autoload=false", u)
 	}
 	if !strings.Contains(u, "model=Beta+30B+Q5") {
 		t.Errorf("modelURL = %q, model id not escaped", u)
 	}
-	if got := c.modelURL("/props", "", nil); got != "http://example/props" {
+	if u := c.modelURL("/props", "Beta 30B Q5", true, nil); !strings.Contains(u, "autoload=true") {
+		t.Errorf("modelURL = %q, a load must say autoload=true", u)
+	}
+	if got := c.modelURL("/props", "", false, nil); got != "http://example/props" {
 		t.Errorf("unscoped modelURL = %q", got)
 	}
 }

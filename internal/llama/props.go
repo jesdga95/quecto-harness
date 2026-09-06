@@ -27,9 +27,15 @@ type Props struct {
 // a model that is not loaded answers 4xx rather than being started.
 func (c *Client) Props(ctx context.Context, model string) (Props, error) {
 	var body propsBody
-	if err := c.getJSON(ctx, "props", model, c.modelURL("/props", model, nil), &body); err != nil {
+	if err := c.getJSON(ctx, "props", model, c.modelURL("/props", model, false, nil), &body); err != nil {
 		return Props{}, err
 	}
+	return fromPropsBody(body), nil
+}
+
+// fromPropsBody reduces one /props response, scoped or not, to the fields the
+// harness reads.
+func fromPropsBody(body propsBody) Props {
 	p := Props{
 		Model:      deref(body.ModelAlias),
 		TotalSlots: deref(body.TotalSlots),
@@ -49,5 +55,5 @@ func (c *Client) Props(ctx context.Context, model string) (Props, error) {
 			PreserveReasoning: body.ChatTemplateCaps["supports_preserve_reasoning"],
 		}
 	}
-	return p, nil
+	return p
 }

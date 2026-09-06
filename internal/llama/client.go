@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -48,16 +49,18 @@ func (c *Client) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
-// modelURL builds a model-scoped GET. autoload=false is not optional: a
-// model-scoped GET without it loads the model on a router.
-func (c *Client) modelURL(path, model string, extra url.Values) string {
+// modelURL builds a model-scoped GET. autoload says whether the server may
+// start the model to answer, so every caller states which it is asking for.
+// Only Prepare passes true; naming a model with autoload on is what turns a
+// read into a load.
+func (c *Client) modelURL(path, model string, autoload bool, extra url.Values) string {
 	q := url.Values{}
 	for k, v := range extra {
 		q[k] = v
 	}
 	if model != "" {
 		q.Set("model", model)
-		q.Set("autoload", "false")
+		q.Set("autoload", strconv.FormatBool(autoload))
 	}
 	if len(q) == 0 {
 		return c.BaseURL + path
