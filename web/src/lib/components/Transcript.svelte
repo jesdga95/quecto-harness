@@ -239,6 +239,15 @@
         {/if}
       {/each}
 
+      <!-- The stretch between asking the model and its first output draws
+           nothing of its own, so the wait is shown where the reply will land. -->
+      {#if app.awaitingModel}
+        <div class="step" aria-live="polite">
+          <span class="spinner"></span>
+          <span class="text-muted">Working</span>
+        </div>
+      {/if}
+
       {#if app.steer}
         <div class="mt-4 flex flex-col items-end gap-1">
           <div class="bubble bubble-queued">

@@ -40,6 +40,11 @@ export const app = $state({
   changesOpen: false,
   usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: 131072 } as Usage,
   status: "idle" as TurnStatus,
+  // The model has been asked and nothing has come back yet. True from the
+  // moment a turn starts, and again after each tool result while the model
+  // reads it, which is the one stretch of a turn that draws nothing. Not the
+  // "waiting" turn status, which is a permission card waiting on a person.
+  awaitingModel: false,
   allowlist: [] as string[],
   sidebar: true,
   error: "",
@@ -247,6 +252,8 @@ export async function send(text: string, files: string[] = []): Promise<void> {
     return;
   }
   pushUser(app.items, message, attached);
+  // The first status event is a round trip away, and the wait starts now.
+  app.awaitingModel = true;
   // The harness reads the attachments, so a file it refuses refuses the whole
   // message. The bubble comes back off the transcript when that happens.
   const item = app.items[app.items.length - 1];
@@ -492,6 +499,7 @@ function onEvent(event: HarnessEvent): void {
     app.todos = event.transcript.todos;
     app.steer = event.transcript.steer;
     app.status = event.transcript.status;
+    app.awaitingModel = false;
     return;
   }
 
@@ -534,6 +542,12 @@ function onEvent(event: HarnessEvent): void {
     return;
   }
 
+  // Anything the model produces ends the wait; the next request starts it
+  // again on its status event.
+  if (event.type === "delta" || event.type === "reasoning" || event.type === "tool_call") {
+    app.awaitingModel = false;
+  }
+
   applyEvent(app.items, event);
 
   // Only the file tools change the list, and the event carries an id rather
@@ -558,7 +572,10 @@ function onEvent(event: HarnessEvent): void {
 
   // A turn that ends in an error still ends, so the composer comes back rather
   // than sitting on a spinner until the next status event.
-  if (event.type === "done" || event.type === "error") app.status = "idle";
+  if (event.type === "done" || event.type === "error") {
+    app.status = "idle";
+    app.awaitingModel = false;
+  }
 
   if (event.type === "done" && event.cost && event.cost.tokPerS > 0) {
     app.usage.tok_per_s = Math.round(event.cost.tokPerS);
@@ -566,6 +583,8 @@ function onEvent(event: HarnessEvent): void {
 
   if (event.type === "status") {
     app.status = event.status;
+    if (event.status === "thinking" || event.status === "streaming") app.awaitingModel = true;
+    if (event.status === "idle" || event.status === "loading") app.awaitingModel = false;
     void refreshModels();
   }
 }

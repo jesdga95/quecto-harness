@@ -815,8 +815,14 @@
   .dot-loaded {
     background: var(--ok);
   }
-  .dot-loading {
-    background: var(--warn);
+  .dot-spin {
+    width: 9px;
+    height: 9px;
+    flex: none;
+    border-radius: 999px;
+    border: 1.5px solid var(--border-2);
+    border-top-color: var(--accent);
+    animation: spin 700ms linear infinite;
   }
 
   /* Sits directly under the composer, so the fill is the only thing that moves. */

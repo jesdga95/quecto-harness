@@ -5,12 +5,17 @@
   import Popover from "./Popover.svelte";
   import StatusDot from "./StatusDot.svelte";
   import { app, setModel } from "../state/app.svelte";
+  import type { ModelStatus } from "../api";
   import { k } from "../format";
 
   let open = $state(false);
   // There is one model, and it is the harness's. Every session uses it.
   const chosen = $derived(app.config?.model ?? "");
   const current = $derived(app.models.find((m) => m.id === chosen));
+  // The harness is reading the model whatever the cached list says.
+  const status = $derived<ModelStatus>(
+    app.status === "loading" ? "loading" : (current?.status ?? "unloaded"),
+  );
   const loaded = $derived(app.models.filter((m) => m.status !== "unloaded"));
   const available = $derived(app.models.filter((m) => m.status === "unloaded"));
 
@@ -23,7 +28,7 @@
 <div class="relative">
   <button class="chip" aria-haspopup="listbox" aria-expanded={open} onclick={() => (open = !open)}>
     {#if current}
-      <StatusDot status={current.status} />
+      <StatusDot {status} />
       <span class="max-w-[190px] truncate">{current.id}</span>
     {:else}
       <span>Select model</span>
@@ -41,9 +46,6 @@
               <StatusDot status={model.status} />
               <span class="min-w-0 flex-1">
                 <span class="block truncate">{model.id}</span>
-                {#if model.status === "unloaded"}
-                  <span class="block text-[12px] text-muted">Loads when you pick it</span>
-                {/if}
               </span>
               {#if model.vision}
                 <ImageIcon size={14} class="text-muted" />
