@@ -107,7 +107,9 @@
   }
 
   function submit() {
-    if (disabled || (!text.trim() && files.length === 0)) return;
+    // Sending waits for the model, so the field keeps what was typed rather
+    // than clearing it into a message that is refused.
+    if (disabled || loading || (!text.trim() && files.length === 0)) return;
     const value = text;
     const attached = files;
     text = "";
