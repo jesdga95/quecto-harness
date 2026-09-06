@@ -338,14 +338,6 @@ export class MockApi implements HarnessApi {
     };
   }
 
-  async setSessionModel(id: string, model: string): Promise<void> {
-    await this.tick();
-    const t = this.transcripts.get(id);
-    if (!t) throw new Error(`session ${id} not found`);
-    t.session.model = model;
-    this.emit(id, { type: "status_entry", text: "Model changed to " + model });
-  }
-
   async renameSession(id: string, title: string): Promise<void> {
     await this.tick();
     const session = this.sessions.find((s) => s.id === id);
@@ -372,8 +364,9 @@ export class MockApi implements HarnessApi {
     return this.config.projects.map((p) => ({ path: p, name: baseName(p) }));
   }
 
-  async createSession(project: string, model: string): Promise<Session> {
+  async createSession(project: string): Promise<Session> {
     await this.tick();
+    const model = this.config.model;
     const session: Session = {
       id: nextId("s"),
       project,
@@ -395,7 +388,15 @@ export class MockApi implements HarnessApi {
 
   async updateConfig(patch: Partial<Config>): Promise<Config> {
     await this.tick(160);
+    const before = this.config.model;
     this.config = { ...this.config, ...patch };
+    // One model: choosing it points every session at it.
+    if (this.config.model !== before) {
+      for (const [id, t] of this.transcripts) {
+        t.session.model = this.config.model;
+        this.emit(id, { type: "status_entry", text: "Model changed to " + this.config.model });
+      }
+    }
     return { ...this.config };
   }
 

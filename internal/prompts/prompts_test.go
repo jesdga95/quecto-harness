@@ -14,11 +14,21 @@ func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 		"tool_run_shell.md":       ToolRunShell,
 		"tool_write_todos.md":     ToolWriteTodos,
 		"compact.md":              Compact,
-		"title.md":                Title,
+		"title.md":                func() string { return Title("name this") },
 	} {
 		if strings.TrimSpace(get()) == "" {
 			t.Errorf("%s is empty", name)
 		}
+	}
+}
+
+func TestTitleCarriesTheMessage(t *testing.T) {
+	got := Title("count the digits of pi")
+	if !strings.Contains(got, "count the digits of pi") {
+		t.Errorf("title prompt did not substitute: %q", got)
+	}
+	if strings.Contains(got, "{{") {
+		t.Errorf("title prompt left a template action: %q", got)
 	}
 }
 

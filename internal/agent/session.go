@@ -19,6 +19,7 @@ type State string
 
 const (
 	StateIdle       State = "idle"
+	StateLoading    State = "loading"
 	StatePreflight  State = "preflight"
 	StateCompacting State = "compacting"
 	StateStreaming  State = "streaming"
@@ -73,10 +74,32 @@ type Session struct {
 	// baseProbed stops the measurement being retried every turn against a
 	// server that will not answer it.
 	baseProbed bool
+	// prepared reports that the model has been read: its window and its chat
+	// template are known and a request can be shaped for it.
+	prepared bool
 
 	state   State
 	cancel  context.CancelFunc
 	turnSeq int
+}
+
+// repoint moves the session to a model and forgets everything the previous
+// model's tokenizer implied. It returns the entry that records the change,
+// which is visible so the transcript shows where it happened and out of
+// context so the model is never told about it. The caller holds the lock.
+func (s *Session) repoint(model string) store.Entry {
+	s.Model = model
+	s.NCtx, s.NCtxSource = 0, ""
+	s.caps = llama.Caps{}
+	s.prepared = false
+	s.LastUsage = nil
+	s.LastToolTokens = 0
+	s.lastSentTools = false
+	s.ContextBase = nil
+	s.baseProbed = false
+	s.lastUsageEntry = -1
+	return s.appendEntry(store.Entry{Kind: "status", Content: "Model changed to " + model,
+		InContext: false, Visible: true})
 }
 
 func newSession(id, project, model string) *Session {

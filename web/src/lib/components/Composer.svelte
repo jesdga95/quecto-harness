@@ -57,8 +57,11 @@
     grow();
   });
   const blocked = $derived(pendingPermission() !== undefined);
-  const running = $derived(app.status !== "idle");
-  const disabled = $derived(blocked || !app.sessionId);
+  // Loading is the model being read, not a turn: there is nothing to stop and
+  // nothing for a message to join, so the field is closed rather than queuing.
+  const loading = $derived(app.status === "loading");
+  const running = $derived(app.status !== "idle" && !loading);
+  const disabled = $derived(blocked || loading || !app.sessionId);
 
   // The dialog takes several files at once, and the harness caps a message at
   // five, so what comes back past the cap is dropped rather than sent.
@@ -144,7 +147,11 @@
       bind:this={field}
       class="textarea"
       rows="1"
-      placeholder={blocked ? "Answer the permission card first" : placeholder}
+      placeholder={blocked
+        ? "Answer the permission card first"
+        : loading
+          ? "Loading the model"
+          : placeholder}
       bind:value={text}
       {onkeydown}
       {onpaste}
@@ -157,8 +164,8 @@
       <EffortChip up />
 
       <div class="ml-auto flex items-center gap-2">
-        {#if running}
-          <span class="spinner" aria-label="Working"></span>
+        {#if running || loading}
+          <span class="spinner" aria-label={loading ? "Loading the model" : "Working"}></span>
         {/if}
         <ModelChip />
         <!-- Stop keeps its place while a turn runs, and a message typed

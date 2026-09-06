@@ -19,12 +19,24 @@ import (
 	"quecto-harness/internal/tools"
 )
 
+// titleTimeout and titleTokens bound the naming request, since it stands
+// between the message and the first token of the reply.
+const (
+	titleTimeout = 30 * time.Second
+	titleTokens  = 32
+)
+
+// loadTimeout bounds a model load. It is generous because the work is a large
+// file being read into memory on another machine.
+const loadTimeout = 10 * time.Minute
+
 // maxAttachments bounds what one message can carry, since every attachment is
 // inlined into the prompt.
 const maxAttachments = 5
 
 var (
 	ErrBusy      = errors.New("The session is busy: stop the current turn first")
+	ErrLoading   = errors.New("The model is still loading: wait for it to finish")
 	ErrNotFound  = errors.New("No session with that id")
 	ErrEmptyText = errors.New("The message is empty: type something or attach a file")
 	ErrNotLast   = errors.New("That is not the last message: only the last one can be sent again")
@@ -38,7 +50,7 @@ type Engine struct {
 	store    *store.Sessions
 	files    *store.Files
 	clientMu sync.RWMutex
-	client   *llama.Client
+	client   Backend
 	perms    *perms.Broker
 	hub      Publisher
 
@@ -51,7 +63,7 @@ type Engine struct {
 }
 
 func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files *store.Files,
-	cl *llama.Client, pb *perms.Broker, hub Publisher) *Engine {
+	cl Backend, pb *perms.Broker, hub Publisher) *Engine {
 	return &Engine{
 		cfg: cfg, store: st, files: files, client: cl, perms: pb, hub: hub,
 		ctx: ctx, os: runtime.GOOS, live: map[string]*Session{},
@@ -99,10 +111,17 @@ func (e *Engine) publish(sessionID string, event Event) {
 
 // setState records the state and tells the browser, which drives the spinner
 // and the Stop button off this one event.
+// setState publishes the state the session moved to. A state it is already in
+// is not republished, so a step that sets the same one twice reads as one
+// change on the stream.
 func (e *Engine) setState(s *Session, st State) {
 	s.mu.Lock()
+	same := s.state == st
 	s.state = st
 	s.mu.Unlock()
+	if same {
+		return
+	}
 	e.publish(s.ID, ev("status", map[string]any{"state": string(st)}))
 }
 
@@ -118,28 +137,26 @@ func (e *Engine) save(s *Session) {
 // Create starts a session in a project the user has added, bound to a model.
 // SetClient re-points the engine after the server address changes. A turn
 // already running keeps the client it started with.
-func (e *Engine) SetClient(cl *llama.Client) {
+func (e *Engine) SetClient(cl Backend) {
 	e.clientMu.Lock()
 	e.client = cl
 	e.clientMu.Unlock()
 }
 
-// Llama is the client a turn would use right now.
-func (e *Engine) Llama() *llama.Client { return e.llama() }
+// Llama is the backend a turn would use right now.
+func (e *Engine) Llama() Backend { return e.llama() }
 
-func (e *Engine) llama() *llama.Client {
+func (e *Engine) llama() Backend {
 	e.clientMu.RLock()
 	defer e.clientMu.RUnlock()
 	return e.client
 }
 
-func (e *Engine) Create(project, model string) (*Session, error) {
+func (e *Engine) Create(project string) (*Session, error) {
 	if !e.cfg.HasProject(project) {
 		return nil, ErrNoProject
 	}
-	if model == "" {
-		model = e.cfg.Config().Model
-	}
+	model := e.cfg.Config().Model
 	if model == "" {
 		return nil, ErrNoModel
 	}
@@ -148,7 +165,7 @@ func (e *Engine) Create(project, model string) (*Session, error) {
 	e.live[s.ID] = s
 	e.mu.Unlock()
 	e.save(s)
-	e.probeProps(s, true)
+	e.prepare(s)
 	return s, nil
 }
 
@@ -214,12 +231,10 @@ func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 	if err != nil {
 		return Sent{}, err
 	}
-	s.mu.Lock()
-	model := s.Model
-	s.mu.Unlock()
 	// A model that cannot read pictures refuses the message where it was
-	// typed, rather than when the turn picks the message up.
-	if err := e.checkImages(model, attachments); err != nil {
+	// typed, rather than when the turn picks the message up. The check is
+	// against the harness's model, which is the one that will answer.
+	if err := e.checkImages(e.cfg.Config().Model, attachments); err != nil {
 		return Sent{}, err
 	}
 	return e.deliver(s, text, attachments)
@@ -230,6 +245,12 @@ func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 // caller's check and this one queues the message rather than refusing it.
 func (e *Engine) deliver(s *Session, text string, attachments []store.Attachment) (Sent, error) {
 	s.mu.Lock()
+	// A message typed while a model loads has no turn to join, so it is
+	// refused where it was typed rather than queued against nothing.
+	if s.state == StateLoading {
+		s.mu.Unlock()
+		return Sent{}, ErrLoading
+	}
 	if s.state != StateIdle {
 		if err := s.queue(text, attachments); err != nil {
 			s.mu.Unlock()
@@ -339,12 +360,12 @@ func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 		s.mu.Unlock()
 		return 0, ErrNotLast
 	}
-	model, attachments := s.Model, s.Entries[i].Attachments
+	attachments := s.Entries[i].Attachments
 	s.mu.Unlock()
 
-	// The message was accepted once, but the session may have been pointed at
+	// The message was accepted once, but the harness may have been pointed at
 	// another model since, and that one may not read pictures.
-	if err := e.checkImages(model, attachments); err != nil {
+	if err := e.checkImages(e.cfg.Config().Model, attachments); err != nil {
 		return 0, err
 	}
 
@@ -506,7 +527,8 @@ func (e *Engine) Compact(id string) error {
 	go func() {
 		defer e.wg.Done()
 		defer cancel()
-		if err := e.compact(ctx, s); err != nil {
+		model, caps := e.turnModel(s)
+		if err := e.compact(ctx, s, model, caps); err != nil {
 			e.fail(s, err)
 			return
 		}
@@ -515,35 +537,61 @@ func (e *Engine) Compact(id string) error {
 	return nil
 }
 
-// Rebind points an idle session at another model and forgets everything the
-// previous model's tokenizer implied.
-func (e *Engine) Rebind(id, model string, hint int, hintSource string) error {
-	s, err := e.Get(id)
-	if err != nil {
-		return err
+// SetModel points the harness at a model. There is one model and every session
+// uses it, so this reads it once and hands the answer to all of them.
+func (e *Engine) SetModel(model string) {
+	e.mu.Lock()
+	live := make([]*Session, 0, len(e.live))
+	for _, s := range e.live {
+		live = append(live, s)
 	}
-	s.mu.Lock()
-	if s.state != StateIdle {
-		s.mu.Unlock()
-		return ErrBusy
-	}
-	s.Model = model
-	s.NCtx, s.NCtxSource = hint, hintSource
-	s.caps = llama.Caps{}
-	s.LastUsage = nil
-	s.LastToolTokens = 0
-	s.lastSentTools = false
-	s.ContextBase = nil
-	s.baseProbed = false
-	s.lastUsageEntry = -1
-	entry := s.appendEntry(store.Entry{Kind: "status", Content: "Model changed to " + model,
-		InContext: false, Visible: true})
-	s.mu.Unlock()
+	e.mu.Unlock()
 
-	e.save(s)
-	e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
-	e.probeProps(s, true)
-	return nil
+	var idle []*Session
+	for _, s := range live {
+		s.mu.Lock()
+		if s.Model == model {
+			s.mu.Unlock()
+			continue
+		}
+		entry := s.repoint(model)
+		ready := s.state == StateIdle
+		if ready {
+			s.state = StateLoading
+		}
+		s.mu.Unlock()
+		e.save(s)
+		e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
+		if ready {
+			idle = append(idle, s)
+			e.publish(s.ID, ev("status", map[string]any{"state": string(StateLoading)}))
+		}
+	}
+	if len(idle) == 0 {
+		return
+	}
+
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		ctx, cancel := context.WithTimeout(e.ctx, loadTimeout)
+		defer cancel()
+		r, err := e.llama().Prepare(ctx, model)
+		for _, s := range idle {
+			if err == nil {
+				e.apply(s, model, r)
+			}
+			// A session busy again on its own account is left alone; the turn
+			// it is running prepared the model itself.
+			if s.State() == StateLoading {
+				if err != nil {
+					e.fail(s, err)
+					continue
+				}
+				e.setState(s, StateIdle)
+			}
+		}
+	}()
 }
 
 // Rename sets the session title. An empty title hands it back to the harness,
@@ -605,46 +653,51 @@ func (e *Engine) Wait(d time.Duration) {
 	}
 }
 
-// titleSession asks the model to name the conversation after its first turn.
-// The request continues the session's own messages, so the model server has
-// the prompt cached and the next turn does not reprocess it.
-func (e *Engine) titleSession(s *Session) {
+// titleSession names the conversation from its opening message, before the
+// turn answers it.
+//
+// It goes first because the model server holds one prompt at a time. A title
+// request made after the turn would evict what the turn left cached, and the
+// next message would reprocess the conversation from the start. Made here, it
+// runs against a slot that holds nothing worth keeping, and it carries the
+// opening message alone rather than the conversation, so it is a few hundred
+// tokens either way.
+//
+// A failure is not an error: the session keeps the title cut from the message.
+func (e *Engine) titleSession(ctx context.Context, s *Session, model string, caps llama.Caps) {
 	s.mu.Lock()
-	first := s.firstTurn()
-	model, caps := s.Model, s.caps
+	first, text := s.firstTurn(), s.firstUserMessage()
 	s.mu.Unlock()
-	if !first {
+	if !first || strings.TrimSpace(text) == "" {
 		return
 	}
-	msgs := append(e.messages(s), llama.Message{Role: "user", Content: prompts.Title()})
-
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
-		ctx, cancel := context.WithTimeout(e.ctx, 60*time.Second)
-		defer cancel()
-		res, err := e.llama().Chat(ctx, llama.ChatRequest{
-			Model: model, Messages: msgs, Effort: llama.EffortOff,
-			PreserveReasoning: e.cfg.Config().PreserveReasoning, Caps: caps}, nil)
-		if err != nil {
-			return
-		}
-		title := cleanTitle(res.Content)
-		if title == "" {
-			return
-		}
-		s.mu.Lock()
-		// A rename or a second message while the request was in flight wins,
-		// since both say more about the session than the model does.
-		if !s.firstTurn() {
-			s.mu.Unlock()
-			return
-		}
-		s.Title = title
+	tctx, cancel := context.WithTimeout(ctx, titleTimeout)
+	defer cancel()
+	res, err := e.llama().Chat(tctx, llama.ChatRequest{
+		Model:     model,
+		Messages:  []llama.Message{{Role: "user", Content: prompts.Title(text)}},
+		Effort:    llama.EffortOff,
+		Caps:      caps,
+		MaxTokens: titleTokens,
+	}, nil)
+	if err != nil {
+		return
+	}
+	title := cleanTitle(res.Content)
+	if title == "" {
+		return
+	}
+	s.mu.Lock()
+	// A rename while the request was in flight wins, since it says more about
+	// the session than the model does.
+	if !s.firstTurn() {
 		s.mu.Unlock()
-		e.save(s)
-		e.publish(s.ID, ev("title", map[string]any{"title": title}))
-	}()
+		return
+	}
+	s.Title = title
+	s.mu.Unlock()
+	e.save(s)
+	e.publish(s.ID, ev("title", map[string]any{"title": title}))
 }
 
 // cleanTitle takes the first line of a reply and strips what a model wraps a
@@ -658,56 +711,86 @@ func cleanTitle(reply string) string {
 	return store.Title(line)
 }
 
-// probeProps fills n_ctx and caps from a model-scoped read that carries
-// autoload=false. onlyIfLoaded keeps it off a model the router would have to
-// start.
-func (e *Engine) probeProps(s *Session, onlyIfLoaded bool) {
+// prepare reads the model in the background, holding the session in
+// StateLoading, which is what refuses a message meanwhile.
+func (e *Engine) prepare(s *Session) {
 	s.mu.Lock()
-	model, source := s.Model, s.NCtxSource
-	s.mu.Unlock()
-	if model == "" || source == "props" {
+	if s.state != StateIdle {
+		s.mu.Unlock()
 		return
 	}
-	// Counted like a turn, so a shutdown waits for the write it ends in
-	// rather than racing it.
+	s.state = StateLoading
+	s.mu.Unlock()
+	e.publish(s.ID, ev("status", map[string]any{"state": string(StateLoading)}))
+
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
-		ctx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
+		ctx, cancel := context.WithTimeout(e.ctx, loadTimeout)
 		defer cancel()
-		if onlyIfLoaded {
-			models, err := e.llama().Models(ctx)
-			if err != nil {
-				return
-			}
-			loaded := false
-			for _, m := range models {
-				if m.ID == model && m.Status == llama.StatusLoaded {
-					loaded = true
-				}
-			}
-			if !loaded {
-				return
-			}
-		}
-		props, err := e.llama().Props(ctx, model)
-		if err != nil {
+		if err := e.ensureReady(ctx, s); err != nil {
+			e.fail(s, err)
 			return
 		}
-		s.mu.Lock()
-		stale := s.Model != model
-		if !stale {
-			if props.NCtx > 0 {
-				s.NCtx, s.NCtxSource = props.NCtx, "props"
-			}
-			s.caps = props.Caps
-		}
-		s.mu.Unlock()
-		if stale {
-			return
-		}
-		e.save(s)
+		e.setState(s, StateIdle)
 	}()
+}
+
+// ensureReady points the session at the harness's model and makes sure it has
+// been read. A session that last ran against another model forgets what that
+// tokenizer implied and takes this one.
+func (e *Engine) ensureReady(ctx context.Context, s *Session) error {
+	model := e.cfg.Config().Model
+	if model == "" {
+		return ErrNoModel
+	}
+	s.mu.Lock()
+	var entry store.Entry
+	changed := s.Model != model
+	if changed {
+		entry = s.repoint(model)
+	}
+	done := s.prepared
+	s.mu.Unlock()
+	if changed {
+		e.save(s)
+		e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
+	}
+	if done {
+		return nil
+	}
+	e.setState(s, StateLoading)
+	r, err := e.llama().Prepare(ctx, model)
+	if err != nil {
+		return err
+	}
+	e.apply(s, model, r)
+	return nil
+}
+
+// apply writes what a model answered onto a session, unless it has moved to
+// another model since the read began.
+func (e *Engine) apply(s *Session, model string, r llama.Ready) {
+	s.mu.Lock()
+	if s.Model != model {
+		s.mu.Unlock()
+		return
+	}
+	if r.NCtx > 0 {
+		s.NCtx, s.NCtxSource = r.NCtx, r.Source
+	}
+	s.caps = r.Caps
+	s.prepared = true
+	s.mu.Unlock()
+	e.save(s)
+	e.publishUsage(s)
+}
+
+// turnModel is the model and the capabilities a whole turn is shaped by.
+func (e *Engine) turnModel(s *Session) (string, llama.Caps) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Model, s.caps
 }
 
 // probeContextBase measures the fixed parts of a prompt against the model that
@@ -716,8 +799,8 @@ func (e *Engine) probeProps(s *Session, onlyIfLoaded bool) {
 // is the system cost and the difference is the schema cost. Everything else in
 // the context is then the remainder of a real usage report.
 //
-// It runs only after a turn has streamed, since a completion loads a model and
-// the first chat message is the only request allowed to do that.
+// It runs after a turn has streamed rather than beside the preparation, so a
+// session that is ready to type into is not waiting on a measurement.
 func (e *Engine) probeContextBase(s *Session) {
 	s.mu.Lock()
 	model, caps := s.Model, s.caps
@@ -766,17 +849,6 @@ func (e *Engine) probeContextBase(s *Session) {
 		e.save(s)
 		e.publishUsage(s)
 	}()
-}
-
-// SetModelHint records a context hint from the model list for a session whose
-// model has never been loaded.
-func (e *Engine) SetModelHint(s *Session, hint int, source string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.NCtxSource == "props" || hint <= 0 {
-		return
-	}
-	s.NCtx, s.NCtxSource = hint, source
 }
 
 func (e *Engine) fail(s *Session, err error) {
@@ -876,7 +948,18 @@ func (e *Engine) noteCost(s *Session, cost map[string]any) {
 }
 
 func (e *Engine) run(ctx context.Context, s *Session) {
+	if err := e.ensureReady(ctx, s); err != nil {
+		e.endWithError(s, err, 0)
+		return
+	}
 	cfg := e.cfg.Config()
+	// The model, the settings and the capabilities are read once and hold for
+	// the whole turn. All three decide how the template renders the prompt, so
+	// a change that lands between two steps of one turn would change the prompt
+	// under the model and cost a reprocess of everything before it. A change
+	// made meanwhile is used by the next turn.
+	model, caps := e.turnModel(s)
+	e.titleSession(ctx, s, model, caps)
 	runner, err := tools.NewRunner(s.Project, cfg)
 	if err != nil {
 		e.fail(s, err)
@@ -903,7 +986,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		s.mu.Unlock()
 		if float64(fill) >= cfg.CompactAt*float64(nctx) {
 			e.setState(s, StateCompacting)
-			if err := e.compact(ctx, s); err != nil {
+			if err := e.compact(ctx, s, model, caps); err != nil {
 				e.endWithError(s, err, iteration)
 				return
 			}
@@ -921,11 +1004,11 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		msgs := e.messages(s)
 		s.mu.Lock()
 		req := llama.ChatRequest{
-			Model:             s.Model,
+			Model:             model,
 			Messages:          msgs,
 			Effort:            cfg.Effort,
 			PreserveReasoning: cfg.PreserveReasoning,
-			Caps:              s.caps,
+			Caps:              caps,
 		}
 		if !spent {
 			req.Tools = tools.Schemas()
@@ -972,7 +1055,6 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			s.lastUsageEntry = len(s.Entries) - 1
 			s.mu.Unlock()
 			e.save(s)
-			e.probeProps(s, false)
 			e.probeContextBase(s)
 			e.publishUsage(s)
 			// A message that landed while the model was answering makes this
@@ -984,7 +1066,6 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			counted := cost.fields()
 			e.noteCost(s, counted)
 			e.finish(s, StateIdle, res.FinishReason, iteration+1, counted)
-			e.titleSession(s)
 			return
 		}
 
@@ -996,7 +1077,6 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		s.mu.Unlock()
 		e.save(s)
 		e.publishUsage(s)
-		e.probeProps(s, false)
 
 		for i, call := range res.ToolCalls {
 			calls++
@@ -1265,11 +1345,10 @@ func argSummary(call llama.ToolCall) (command, path string) {
 
 // compact replaces the in-context set with one summary. A failure leaves the
 // history untouched, so a failed compaction never loses context.
-func (e *Engine) compact(ctx context.Context, s *Session) error {
+func (e *Engine) compact(ctx context.Context, s *Session, model string, caps llama.Caps) error {
 	msgs := append(e.messages(s), llama.Message{Role: "user", Content: prompts.Compact()})
 	s.mu.Lock()
 	before := s.computeFill()
-	model, caps := s.Model, s.caps
 	s.mu.Unlock()
 
 	res, err := e.llama().Chat(ctx, llama.ChatRequest{

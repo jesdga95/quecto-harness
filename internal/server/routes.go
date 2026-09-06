@@ -276,39 +276,21 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Project string `json:"project"`
-		Model   string `json:"model"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
-	sess, err := s.engine.Create(body.Project, body.Model)
+	sess, err := s.engine.Create(body.Project)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.applyModelHint(r.Context(), sess)
 	doc, state, _, _ := sess.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": doc.ID, "project": doc.Project, "model": doc.Model, "title": doc.Title,
 		"created": doc.Created, "updated": doc.Updated, "messages": 0, "bytes": 0,
 		"state": string(state),
 	})
-}
-
-// applyModelHint gives a new session a context size from the cached model
-// list, which costs no request to the model server.
-func (s *Server) applyModelHint(ctx context.Context, sess *agent.Session) {
-	models, err := s.models(ctx, false)
-	if err != nil {
-		return
-	}
-	doc, _, _, _ := sess.Snapshot()
-	for _, m := range models {
-		if m.ID == doc.Model {
-			s.engine.SetModelHint(sess, m.CtxHint, m.CtxSource)
-			return
-		}
-	}
 }
 
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
@@ -376,52 +358,20 @@ func (s *Server) rebindSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Model string  `json:"model"`
-		Title *string `json:"title"`
+		Title string `json:"title"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
-	// A title alone renames and answers; a model changes what the session talks to.
-	if body.Title != nil && body.Model == "" {
-		title := strings.TrimSpace(*body.Title)
-		if len([]rune(title)) > 120 {
-			title = string([]rune(title)[:120])
-		}
-		if err := s.engine.Rename(sess.ID, title); err != nil {
-			writeEngineError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": sess.ID, "title": title})
-		return
+	title := strings.TrimSpace(body.Title)
+	if len([]rune(title)) > 120 {
+		title = string([]rune(title)[:120])
 	}
-	models, err := s.models(r.Context(), false)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
-		return
-	}
-	var picked *llama.Model
-	for i := range models {
-		if models[i].ID == body.Model {
-			picked = &models[i]
-		}
-	}
-	if picked == nil {
-		writeError(w, http.StatusBadRequest, "Model \""+body.Model+"\" is not on the model server: pick another from the model list")
-		return
-	}
-	if err := s.engine.Rebind(sess.ID, picked.ID, picked.CtxHint, picked.CtxSource); err != nil {
+	if err := s.engine.Rename(sess.ID, title); err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	doc, _, fill, _ := sess.Snapshot()
-	nctx, source := doc.NCtx, doc.NCtxSource
-	if nctx <= 0 {
-		nctx, source = 32768, "assumed"
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id": doc.ID, "model": doc.Model, "n_ctx": nctx, "n_ctx_source": source, "fill": fill,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"id": sess.ID, "title": title})
 }
 
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
@@ -675,6 +625,11 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		s.SetClient(client)
 		s.engine.SetClient(client)
 		go s.Detect(context.Background())
+	}
+	// The model is the harness's, not a session's, so choosing one repoints
+	// every session and reads it once.
+	if cfg.Model != before.Model {
+		s.engine.SetModel(cfg.Model)
 	}
 	out := toConfigJSON(cfg)
 	if body.Listen != nil && cfg.Listen != before.Listen {

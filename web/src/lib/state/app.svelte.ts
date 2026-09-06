@@ -131,15 +131,8 @@ export async function selectSession(id: string): Promise<void> {
   // only thing that says so.
   app.status = t.status;
   app.changes = { files: [], added: 0, removed: 0 };
-  if (app.config) app.config.model = t.session.model;
   unsubscribe = api.events(id, onEvent);
   void loadChanges();
-}
-
-/** Prefers a model already in memory, since an unloaded one loads on first use. */
-function defaultModel(): string {
-  const loaded = app.models.find((m) => m.status === "loaded");
-  return loaded?.id ?? app.models[0]?.id ?? "";
 }
 
 export async function newSession(): Promise<void> {
@@ -149,8 +142,7 @@ export async function newSession(): Promise<void> {
     await selectSession(empty.id);
     return;
   }
-  const model = app.config.model || defaultModel();
-  const session = await guard(() => api.createSession(app.projectPath, model));
+  const session = await guard(() => api.createSession(app.projectPath));
   if (!session) return;
   await loadSessions();
   await selectSession(session.id);
@@ -244,6 +236,9 @@ export async function send(text: string, files: string[] = []): Promise<void> {
     kind: looksLikeImage(path) ? "image" : "text",
     bytes: 0,
   }));
+  // A model still loading has no turn to wait for, and the composer is closed
+  // until it is ready.
+  if (app.status === "loading") return;
   // A message typed while the turn runs waits for it, and shows as the queue
   // rather than as a message the model has already been given.
   if (app.status !== "idle") {
@@ -407,19 +402,17 @@ export async function saveConfig(patch: Partial<Config>): Promise<void> {
 
 /** A turn talks to the session's model, not to the configuration, so an open
     session is repointed as well as the default for the next one. */
+/** There is one model. Choosing it points every session at it, and the harness
+    reads it before anything is sent. */
 export async function setModel(id: string): Promise<void> {
   const previous = app.config?.model ?? "";
   if (app.config) app.config.model = id;
-  if (app.sessionId) {
-    if ((await guard(() => api.setSessionModel(app.sessionId, id))) === null) {
-      if (app.config) app.config.model = previous;
-      return;
-    }
-    // The split was measured against the previous model, so it goes with it
-    // rather than being shown beside a total the new model reported.
-    app.usage.breakdown = undefined;
+  // The split was measured against the previous model, so it goes with it
+  // rather than being shown beside a total the new model reported.
+  app.usage.breakdown = undefined;
+  if ((await guard(() => api.updateConfig({ model: id }))) === null) {
+    if (app.config) app.config.model = previous;
   }
-  void guard(() => api.updateConfig({ model: id }));
 }
 
 export function setEffort(effort: Effort): void {

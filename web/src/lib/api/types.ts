@@ -10,6 +10,7 @@ export type ModelStatus =
 export type Effort = "auto" | "off" | "low" | "medium" | "high";
 export type TurnStatus =
   | "idle"
+  | "loading"
   | "thinking"
   | "streaming"
   | "running"
@@ -289,9 +290,8 @@ export interface HarnessApi {
   addProject(path: string): Promise<Project[]>;
   removeProject(path: string): Promise<Project[]>;
   listSessions(project: string): Promise<Session[]>;
-  createSession(project: string, model: string): Promise<Session>;
+  createSession(project: string): Promise<Session>;
   /** Points an idle session at another model, keeping its history. */
-  setSessionModel(id: string, model: string): Promise<void>;
   getSession(id: string): Promise<Transcript>;
   /** Every file the session wrote, against the copy kept before its first
       write and the file on disk now. */

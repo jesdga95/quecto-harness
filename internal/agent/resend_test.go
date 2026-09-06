@@ -41,13 +41,10 @@ func waitForTitle(t *testing.T, s *Session, want string) {
 }
 
 func TestResendReplacesTheLastTurn(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_title.txt", "stream_plain.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "what is here", nil)
 	waitIdle(t, s)
-	// The title request follows the first turn and would otherwise take the
-	// script the resend is about.
-	waitForRequests(t, h, 2)
 
 	h.engine.Send(s.ID, "and the tests", nil)
 	waitIdle(t, s)
@@ -103,11 +100,10 @@ func TestResendReplacesTheLastTurn(t *testing.T) {
 
 // A retry carries no text and leaves the message, and its edited mark, alone.
 func TestResendWithoutTextIsARetry(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_title.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "what is here", nil)
 	waitIdle(t, s)
-	waitForRequests(t, h, 2)
 
 	if _, err := h.engine.Resend(s.ID, lastUserSeq(t, s), nil); err != nil {
 		t.Fatal(err)
@@ -124,14 +120,13 @@ func TestResendWithoutTextIsARetry(t *testing.T) {
 }
 
 func TestResendKeepsTheAttachment(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_title.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
 	path := filepath.Join(h.project, "file.txt")
 	if _, err := h.engine.Send(s.ID, "read this", []string{path}); err != nil {
 		t.Fatal(err)
 	}
 	waitIdle(t, s)
-	waitForRequests(t, h, 2)
 
 	text := "read this properly"
 	if _, err := h.engine.Resend(s.ID, lastUserSeq(t, s), &text); err != nil {
@@ -156,11 +151,10 @@ func TestResendKeepsTheAttachment(t *testing.T) {
 
 // The opening message names the session, so rewriting it renames.
 func TestResendRenamesFromTheOpeningMessage(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_title.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "what is here", nil)
 	waitIdle(t, s)
-	waitForRequests(t, h, 2)
 	// The name the model wrote lands first, so the rewrite is what replaces it
 	// rather than the other way round.
 	waitForTitle(t, s, "Read the project layout")
@@ -179,11 +173,10 @@ func TestResendRenamesFromTheOpeningMessage(t *testing.T) {
 }
 
 func TestResendRefusesAnEarlierMessage(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_title.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "what is here", nil)
 	waitIdle(t, s)
-	waitForRequests(t, h, 2)
 	first := lastUserSeq(t, s)
 
 	h.engine.Send(s.ID, "and the tests", nil)
@@ -222,7 +215,6 @@ func TestResendRefusesAnEmptyMessage(t *testing.T) {
 	s := h.session(t)
 	h.engine.Send(s.ID, "what is here", nil)
 	waitIdle(t, s)
-	waitForRequests(t, h, 2)
 
 	empty := "   "
 	if _, err := h.engine.Resend(s.ID, lastUserSeq(t, s), &empty); err != ErrEmptyText {

@@ -103,6 +103,11 @@ func newFixture(t *testing.T) *fixture {
 	if _, err := cfg.AddProject(project); err != nil {
 		t.Fatal(err)
 	}
+	// There is one model and it is the harness's, so a session takes it from
+	// here rather than being created against one.
+	if _, err := cfg.Update(func(c *config.Config) { c.Model = "Alpha-12B" }); err != nil {
+		t.Fatal(err)
+	}
 	real, _ := filepath.EvalSymlinks(project)
 
 	blobs, err := store.OpenFiles(p.Files)
@@ -122,8 +127,8 @@ func newFixture(t *testing.T) *fixture {
 	f.upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/props":
-			if r.URL.Query().Get("model") != "" && r.URL.Query().Get("autoload") != "false" {
-				http.Error(w, "model-scoped GET without autoload=false", 500)
+			if r.URL.Query().Get("model") != "" && r.URL.Query().Get("autoload") == "" {
+				http.Error(w, "model-scoped GET without autoload", 500)
 				return
 			}
 			if r.URL.Query().Get("model") != "" {
@@ -136,6 +141,22 @@ func newFixture(t *testing.T) *fixture {
 		case "/v1/chat/completions":
 			w.Header().Set("Content-Type", "text/event-stream")
 			flusher, _ := w.(http.Flusher)
+			// The naming request stands on its own: one message and no
+			// schemas. It answers here so it does not take the frames a test
+			// queued for a turn.
+			var body struct {
+				Messages []json.RawMessage `json:"messages"`
+				Tools    []json.RawMessage `json:"tools"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			if len(body.Messages) == 1 && len(body.Tools) == 0 {
+				fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"A name"},"finish_reason":"stop"}]}`+"\n\n")
+				fmt.Fprint(w, "data: [DONE]\n\n")
+				if flusher != nil {
+					flusher.Flush()
+				}
+				return
+			}
 			if block := f.blocked(); block != nil {
 				if flusher != nil {
 					flusher.Flush()
@@ -463,9 +484,12 @@ func TestSessionLifecycle(t *testing.T) {
 	created := decode(t, f.do(t, "POST", "/api/sessions",
 		map[string]string{"project": f.project, "model": "Alpha-12B"}))
 	id, _ := created["id"].(string)
-	if id == "" || created["state"] != "idle" {
+	// A session is created reading its model, and answers as idle once that
+	// has finished.
+	if id == "" || created["state"] != "loading" {
 		t.Fatalf("created = %v", created)
 	}
+	f.waitIdle(t, id)
 
 	list := decode(t, f.do(t, "GET", "/api/sessions?project="+f.project, nil))
 	if got, _ := list["sessions"].([]any); len(got) != 1 {
@@ -499,22 +523,31 @@ func TestSessionLifecycle(t *testing.T) {
 
 func TestCreateSessionRejectsUnknownProject(t *testing.T) {
 	f := newFixture(t)
-	w := f.do(t, "POST", "/api/sessions", map[string]string{"project": "/nope", "model": "Alpha-12B"})
+	w := f.do(t, "POST", "/api/sessions", map[string]string{"project": "/nope"})
 	if w.Code != 400 {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
 
-func TestRebindRoute(t *testing.T) {
+// The model is chosen for the harness, and every session takes it.
+func TestModelRouteRepointsEverySession(t *testing.T) {
 	f := newFixture(t)
-	id := f.newSession(t)
-	body := decode(t, f.do(t, "PUT", "/api/sessions/"+id, map[string]string{"model": "Delta3.8-27B Q5"}))
-	if body["model"] != "Delta3.8-27B Q5" || body["n_ctx"] != 262144.0 || body["n_ctx_source"] != "args" {
-		t.Errorf("rebind = %v", body)
+	first := f.newSession(t)
+	second := f.newSession(t)
+
+	w := f.do(t, "PUT", "/api/config", map[string]any{"model": "Delta3.8-27B Q5"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
-	w := f.do(t, "PUT", "/api/sessions/"+id, map[string]string{"model": "no such model"})
-	if w.Code != 400 {
-		t.Errorf("unknown model = %d, want 400", w.Code)
+	if decode(t, w)["model"] != "Delta3.8-27B Q5" {
+		t.Errorf("config = %v", decode(t, w))
+	}
+	for _, id := range []string{first, second} {
+		f.waitIdle(t, id)
+		doc := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
+		if doc["model"] != "Delta3.8-27B Q5" {
+			t.Errorf("session %s = %v", id, doc["model"])
+		}
 	}
 }
 
@@ -584,9 +617,6 @@ func TestBusySession(t *testing.T) {
 	}
 	if w := f.do(t, "POST", "/api/sessions/"+id+"/compact", nil); w.Code != http.StatusConflict {
 		t.Errorf("compact while busy = %d, want 409", w.Code)
-	}
-	if w := f.do(t, "PUT", "/api/sessions/"+id, map[string]string{"model": "Delta3.8-27B Q5"}); w.Code != http.StatusConflict {
-		t.Errorf("rebind while busy = %d", w.Code)
 	}
 	if w := f.do(t, "DELETE", "/api/sessions/"+id, nil); w.Code != http.StatusConflict {
 		t.Errorf("delete while busy = %d", w.Code)
@@ -1040,6 +1070,7 @@ func (f *fixture) newSession(t *testing.T) string {
 	if id == "" {
 		t.Fatalf("no session id: %v", body)
 	}
+	f.waitIdle(t, id)
 	return id
 }
 
@@ -1130,8 +1161,12 @@ func TestConfigRepointsEngine(t *testing.T) {
 	if after == before {
 		t.Fatal("the engine kept the old client, so a turn would still use the old address")
 	}
-	if after.BaseURL != "http://192.0.2.9:9999" {
-		t.Errorf("engine BaseURL = %q, want the address just saved", after.BaseURL)
+	cl, ok := after.(*llama.Client)
+	if !ok {
+		t.Fatalf("engine backend = %T, want a llama client", after)
+	}
+	if cl.BaseURL != "http://192.0.2.9:9999" {
+		t.Errorf("engine BaseURL = %q, want the address just saved", cl.BaseURL)
 	}
 }
 

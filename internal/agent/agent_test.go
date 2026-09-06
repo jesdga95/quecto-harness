@@ -114,24 +114,17 @@ func (h *harness) session(t *testing.T) *Session {
 
 func (h *harness) sessionWith(t *testing.T, model string) *Session {
 	t.Helper()
-	s, err := h.engine.Create(h.project, model)
+	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = model }); err != nil {
+		t.Fatal(err)
+	}
+	s, err := h.engine.Create(h.project)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Choosing a model reads it, and a session refuses a message until that
+	// has finished, which is what the composer does.
+	waitIdle(t, s)
 	return s
-}
-
-// waitForCaps blocks until the props read that follows a turn has landed.
-func waitForCaps(t *testing.T, s *Session) {
-	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, _, _, caps := s.Snapshot(); caps.Known {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatal("the capabilities never arrived")
 }
 
 // waitForRequests blocks until the replay server has been asked n times, which
@@ -175,14 +168,15 @@ func TestPlainReply(t *testing.T) {
 	if doc.Entries[1].Kind != "assistant" || !strings.Contains(doc.Entries[1].Content, "cmd, internal and web") {
 		t.Errorf("assistant entry = %+v", doc.Entries[1])
 	}
-	if doc.Title != "what is here" {
+	if doc.Title != "Read the project layout" {
 		t.Errorf("title = %q", doc.Title)
 	}
 	if fill == 0 {
 		t.Error("fill was not computed")
 	}
 	states := h.rec.states()
-	want := []string{"preflight", "preflight", "streaming", "final", "idle"}
+	// Choosing the model reads it, which is the loading pair in front.
+	want := []string{"loading", "idle", "preflight", "streaming", "final", "idle"}
 	if strings.Join(states, ",") != strings.Join(want, ",") {
 		t.Errorf("states = %v, want %v", states, want)
 	}
@@ -295,10 +289,10 @@ func TestEffortReachesTheRequestBody(t *testing.T) {
 	}
 }
 
-// The kwarg is not known to apply until the model is loaded and read, so the
-// first request to a cold model carries none.
-func TestPreserveReasoningFollowsTheCapability(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_plain.txt", "stream_plain.txt")
+// The model is read when it is chosen, so the first request of a session is
+// already shaped by what its template accepts.
+func TestFirstRequestIsShapedByTheTemplate(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
 	if _, err := h.cfg.Update(func(c *config.Config) { c.PreserveReasoning = false }); err != nil {
 		t.Fatal(err)
 	}
@@ -306,26 +300,41 @@ func TestPreserveReasoningFollowsTheCapability(t *testing.T) {
 	h.engine.Send(s.ID, "first", nil)
 	waitIdle(t, s)
 
-	if _, ok := h.replay.Body(0)["chat_template_kwargs"]; ok {
-		t.Error("a kwarg was sent before the template had been read")
+	first := h.replay.Body(0)
+	kw, _ := first["chat_template_kwargs"].(map[string]any)
+	if kw == nil || kw["preserve_reasoning"] != false {
+		t.Errorf("chat_template_kwargs = %v, want preserve_reasoning false", first["chat_template_kwargs"])
 	}
+	if first["reasoning_effort"] != "medium" {
+		t.Errorf("reasoning_effort = %v, want medium", first["reasoning_effort"])
+	}
+	if _, ok := first["reasoning_budget"]; ok {
+		t.Error("reasoning_budget was sent to a template that takes named levels")
+	}
+}
 
-	waitForCaps(t, s)
-	// The title request follows the first turn, so the second turn is the
-	// third request rather than the second.
-	waitForRequests(t, h, 2)
-	if _, err := h.engine.Send(s.ID, "second", nil); err != nil {
+// A props read that lands between two steps of one turn does not change the
+// shape of the requests. The flags reach the template, so a turn that changes
+// them renders a different prompt and the model server reprocesses everything
+// before the change.
+func TestCapsDoNotChangeMidTurn(t *testing.T) {
+	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
+	s := h.sessionWith(t, "Delta3.8-27B Q5")
+	h.engine.Send(s.ID, "list the files here", nil)
+
+	id := waitForCard(t, h, s.ID)
+	if err := h.broker.Resolve(id, perms.Decision{Kind: perms.DecideOnce}); err != nil {
 		t.Fatal(err)
 	}
 	waitIdle(t, s)
 
-	second := h.replay.Body(2)
-	kw, _ := second["chat_template_kwargs"].(map[string]any)
-	if kw == nil || kw["preserve_reasoning"] != false {
-		t.Errorf("chat_template_kwargs = %v, want preserve_reasoning false", second["chat_template_kwargs"])
-	}
-	if second["reasoning_effort"] != "medium" {
-		t.Errorf("reasoning_effort = %v, want medium", second["reasoning_effort"])
+	first, second := h.replay.Body(0), h.replay.Body(1)
+	for _, field := range []string{"reasoning_effort", "reasoning_budget", "chat_template_kwargs"} {
+		a, _ := json.Marshal(first[field])
+		b, _ := json.Marshal(second[field])
+		if string(a) != string(b) {
+			t.Errorf("%s = %s, was %s", field, b, a)
+		}
 	}
 }
 
@@ -612,11 +621,14 @@ func TestGetResolvesLiveThenDiskThenNotFound(t *testing.T) {
 
 func TestCreateRejectsUnknownProject(t *testing.T) {
 	h := newHarness(t)
-	if _, err := h.engine.Create("/not/a/project", "Alpha-12B"); err != ErrNoProject {
+	if _, err := h.engine.Create("/not/a/project"); err != ErrNoProject {
 		t.Errorf("Create = %v, want ErrNoProject", err)
 	}
-	if _, err := h.engine.Create(h.project, ""); err != ErrNoModel {
-		t.Errorf("Create without a model = %v", err)
+	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = "" }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.engine.Create(h.project); err != ErrNoModel {
+		t.Errorf("Create with no model chosen = %v", err)
 	}
 }
 
@@ -731,76 +743,117 @@ func TestCompactRefusedWhileBusy(t *testing.T) {
 	waitIdle(t, s)
 }
 
-func TestRebindResetsAccounting(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt")
+// Choosing a model points every session at it and forgets what the previous
+// model's tokenizer implied.
+func TestSetModelRepointsAndResets(t *testing.T) {
+	h := newHarness(t)
 	s := h.session(t)
 	s.mu.Lock()
 	s.NCtx, s.NCtxSource = 131072, "props"
-	s.caps = llama.Caps{Known: true, ReasoningEffort: true}
 	s.LastUsage = &llama.Usage{PromptTokens: 100}
 	s.mu.Unlock()
 
-	if err := h.engine.Rebind(s.ID, "Delta3.8-27B Q5", 262144, "args"); err != nil {
+	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = "Delta3.8-27B Q5" }); err != nil {
 		t.Fatal(err)
 	}
+	h.engine.SetModel("Delta3.8-27B Q5")
+	waitIdle(t, s)
+
 	doc, _, _, caps := s.Snapshot()
-	if doc.Model != "Delta3.8-27B Q5" || doc.NCtx != 262144 || doc.NCtxSource != "args" {
-		t.Errorf("session = %+v", doc)
-	}
-	if caps.Known {
-		t.Error("caps were not reset")
+	if doc.Model != "Delta3.8-27B Q5" {
+		t.Errorf("session model = %q", doc.Model)
 	}
 	if doc.LastUsage != nil {
 		t.Error("last usage was carried across models")
+	}
+	// The new model was read, so its window and its template stand.
+	if doc.NCtxSource != "props" || !caps.Known {
+		t.Errorf("the new model was not read: n_ctx from %q caps %+v", doc.NCtxSource, caps)
 	}
 	last := doc.Entries[len(doc.Entries)-1]
 	if last.Kind != "status" || last.Content != "Model changed to Delta3.8-27B Q5" {
 		t.Errorf("entry = %+v", last)
 	}
 	if last.InContext || !last.Visible {
-		t.Errorf("the rebind entry must be visible and out of context: %+v", last)
+		t.Errorf("the entry must be visible and out of context: %+v", last)
 	}
 }
 
-func TestRebindRefusedWhileBusy(t *testing.T) {
-	h := newHarness(t, "stream_tool.txt")
-	s := h.session(t)
-	h.engine.Send(s.ID, "list", nil)
-	waitForCard(t, h, s.ID)
-	if err := h.engine.Rebind(s.ID, "Delta3.8-27B Q5", 1024, "args"); err != ErrBusy {
-		t.Errorf("Rebind while busy = %v", err)
-	}
-	h.engine.Stop(s.ID)
-	waitIdle(t, s)
-}
-
-func TestPropsProbeCarriesAutoloadFalse(t *testing.T) {
+// A session that was not open when the model changed takes it at its next
+// message rather than answering with the model it last ran against.
+func TestSessionTakesTheModelAtItsNextTurn(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt")
 	s := h.session(t)
+	// Changed behind the session's back, as a session on disk would see it.
+	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = "Delta3.8-27B Q5" }); err != nil {
+		t.Fatal(err)
+	}
 	h.engine.Send(s.ID, "hello", nil)
 	waitIdle(t, s)
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		h.replay.mu.Lock()
-		n := len(h.replay.Queries)
-		h.replay.mu.Unlock()
-		if n > 0 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	if got := h.replay.Body(0)["model"]; got != "Delta3.8-27B Q5" {
+		t.Errorf("the turn asked %v, want the harness's model", got)
 	}
+	doc, _, _, _ := s.Snapshot()
+	if doc.Model != "Delta3.8-27B Q5" {
+		t.Errorf("session model = %q", doc.Model)
+	}
+}
+
+func TestOnlyALoadCarriesAutoloadTrue(t *testing.T) {
+	h := newHarness(t)
+	// Alpha-12B is loaded in the model list, so reading it must not offer to
+	// start it. Delta is not, so preparing it is a load.
+	h.sessionWith(t, "Alpha-12B")
+
 	h.replay.mu.Lock()
 	queries := append([]string(nil), h.replay.Queries...)
+	loads := append([]string(nil), h.replay.Loads...)
 	h.replay.mu.Unlock()
 	if len(queries) == 0 {
-		t.Fatal("the props probe never ran")
+		t.Fatal("the model was never read")
 	}
 	for _, q := range queries {
 		if !strings.Contains(q, "autoload=false") {
-			t.Errorf("model-scoped GET %q is missing autoload=false", q)
+			t.Errorf("a loaded model was read with %q", q)
 		}
 	}
+	if len(loads) != 0 {
+		t.Errorf("loads = %v, want none for a model already loaded", loads)
+	}
+
+	h.sessionWith(t, "Delta3.8-27B Q5")
+	h.replay.mu.Lock()
+	loads = append([]string(nil), h.replay.Loads...)
+	h.replay.mu.Unlock()
+	if len(loads) != 1 || loads[0] != "Delta3.8-27B Q5" {
+		t.Errorf("loads = %v, want the unloaded model loaded once", loads)
+	}
+}
+
+// A message typed while the model loads has no turn to join, so it is refused
+// rather than queued against nothing.
+func TestMessageIsRefusedWhileTheModelLoads(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	h.replay.Props = 300 * time.Millisecond
+	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = "Delta3.8-27B Q5" }); err != nil {
+		t.Fatal(err)
+	}
+	s, err := h.engine.Create(h.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.engine.Send(s.ID, "too early", nil); err != ErrLoading {
+		t.Errorf("Send while loading = %v, want ErrLoading", err)
+	}
+	h.replay.mu.Lock()
+	h.replay.Props = 0
+	h.replay.mu.Unlock()
+	waitIdle(t, s)
+	if _, err := h.engine.Send(s.ID, "now", nil); err != nil {
+		t.Fatalf("Send once ready = %v", err)
+	}
+	waitIdle(t, s)
 }
 
 func TestUnansweredToolCallIsRepaired(t *testing.T) {
@@ -854,10 +907,8 @@ func TestToolCallLimit(t *testing.T) {
 	h.engine.Send(s.ID, "loop forever", nil)
 	waitIdle(t, s)
 
-	// Three turns, and the title request that follows a first turn.
-	waitForRequests(t, h, 4)
-	if h.replay.Count() != 4 {
-		t.Errorf("model calls = %d, want 4", h.replay.Count())
+	if h.replay.Count() != 3 {
+		t.Errorf("model calls = %d, want 3 turns", h.replay.Count())
 	}
 	doc, _, _, _ := s.Snapshot()
 	noted := false
@@ -1038,24 +1089,14 @@ func onePixelPNG() []byte {
 	}
 }
 
-// TestTitleAfterFirstTurn asserts that the model names the session once, that
-// the request continues the session's own messages, and that a title the user
-// typed is left alone.
-func TestTitleAfterFirstTurn(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_title.txt", "stream_plain.txt")
+// The model names the session from its opening message, before the turn that
+// answers it, and a title the user typed is left alone.
+func TestTitleBeforeFirstReply(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "what is in this project", nil)
 	waitIdle(t, s)
-	waitForRequests(t, h, 2)
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		doc, _, _, _ := s.Snapshot()
-		if doc.Title == "Read the project layout" {
-			break
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
 	doc, _, _, _ := s.Snapshot()
 	if doc.Title != "Read the project layout" {
 		t.Errorf("title = %q, want the one the model wrote", doc.Title)
@@ -1064,14 +1105,26 @@ func TestTitleAfterFirstTurn(t *testing.T) {
 		t.Error("a title the harness asked for was recorded as one the user typed")
 	}
 
-	body := h.replay.Body(1)
-	msgs, _ := body["messages"].([]any)
-	if len(msgs) < 3 {
-		t.Fatalf("the title request carried %d messages, want the conversation", len(msgs))
+	h.replay.mu.Lock()
+	titles := append([]map[string]any(nil), h.replay.Titles...)
+	h.replay.mu.Unlock()
+	if len(titles) != 1 {
+		t.Fatalf("naming requests = %d, want one", len(titles))
 	}
-	last, _ := msgs[len(msgs)-1].(map[string]any)
-	if last["role"] != "user" || !strings.Contains(last["content"].(string), "Six words at most") {
-		t.Errorf("last message = %v", last)
+	msgs, _ := titles[0]["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("the naming request carried %d messages, want the opening one alone", len(msgs))
+	}
+	only, _ := msgs[0].(map[string]any)
+	content, _ := only["content"].(string)
+	if only["role"] != "user" || !strings.Contains(content, "Six words at most") {
+		t.Errorf("message = %v", only)
+	}
+	if !strings.Contains(content, "what is in this project") {
+		t.Error("the naming request did not carry the message it is naming")
+	}
+	if titles[0]["reasoning_budget"] != 0.0 {
+		t.Errorf("the naming request did not turn thinking off: %v", titles[0]["reasoning_budget"])
 	}
 
 	// A typed title outlives a second turn, which asks for no title at all.
@@ -1084,8 +1137,15 @@ func TestTitleAfterFirstTurn(t *testing.T) {
 	if doc.Title != "Mine" || !doc.Named {
 		t.Errorf("title = %q named = %v", doc.Title, doc.Named)
 	}
-	if h.replay.Count() != 3 {
-		t.Errorf("model calls = %d, want 3", h.replay.Count())
+	h.replay.mu.Lock()
+	again := len(h.replay.Titles)
+	h.replay.mu.Unlock()
+	if again != 1 {
+		t.Errorf("naming requests = %d, want the session named once", again)
+	}
+
+	if h.replay.Count() != 2 {
+		t.Errorf("model calls = %d, want the two turns", h.replay.Count())
 	}
 }
 
@@ -1243,7 +1303,7 @@ func TestContextBreakdownFromMeasuredParts(t *testing.T) {
 }
 
 func TestContextMeasurementRunsOncePerSession(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_title.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "first", nil)
 	waitIdle(t, s)
@@ -1251,7 +1311,6 @@ func TestContextMeasurementRunsOncePerSession(t *testing.T) {
 
 	h.engine.Send(s.ID, "second", nil)
 	waitIdle(t, s)
-	waitForRequests(t, h, 3)
 
 	h.replay.mu.Lock()
 	got := len(h.replay.Probes)

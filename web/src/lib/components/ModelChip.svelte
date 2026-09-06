@@ -8,7 +8,9 @@
   import { k } from "../format";
 
   let open = $state(false);
-  const current = $derived(app.models.find((m) => m.id === app.config?.model));
+  // There is one model, and it is the harness's. Every session uses it.
+  const chosen = $derived(app.config?.model ?? "");
+  const current = $derived(app.models.find((m) => m.id === chosen));
   const loaded = $derived(app.models.filter((m) => m.status !== "unloaded"));
   const available = $derived(app.models.filter((m) => m.status === "unloaded"));
 
@@ -40,14 +42,14 @@
               <span class="min-w-0 flex-1">
                 <span class="block truncate">{model.id}</span>
                 {#if model.status === "unloaded"}
-                  <span class="block text-[12px] text-muted">Loads on first message</span>
+                  <span class="block text-[12px] text-muted">Loads when you pick it</span>
                 {/if}
               </span>
               {#if model.vision}
                 <ImageIcon size={14} class="text-muted" />
               {/if}
               <span class="num text-[12px] text-muted">{k(model.ctx)}</span>
-              {#if model.id === app.config?.model}
+              {#if model.id === chosen}
                 <Check size={14} class="text-accent" />
               {/if}
             </button>

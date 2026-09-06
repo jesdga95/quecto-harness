@@ -180,8 +180,8 @@ Why each boundary exists:
 - **config** is the only package that reads or writes `~/.quecto-harness/config.json` and
   `allowlist.json`. Anything else takes a resolved value or a `*config.Store`. This keeps
   the "every field optional on read" rule in one file and makes defaults testable without a
-  filesystem. It imports `llama` for one type alias and nothing else, which cannot create a
-  cycle because `llama` imports no internal package.
+  filesystem. It imports `llama` for one type alias and nothing
+  else, which cannot create a cycle because `llama` imports no internal package.
 - **llama** knows nothing about sessions, tools or permissions. It converts HTTP and SSE
   into Go values and back. It owns the `Effort` type, because effort only means something
   as a set of request fields and that translation lives here. It is the package with the
@@ -1724,12 +1724,12 @@ type Publisher interface {
 func NewEngine(cfg *config.Store, st *store.Sessions, cl *llama.Client,
 	pb *perms.Broker, hub Publisher) *Engine
 
-func (e *Engine) Create(project, model string) (*Session, error)
+func (e *Engine) Create(project string) (*Session, error)  // takes the harness's model
 func (e *Engine) Get(id string) (*Session, error)
 func (e *Engine) Send(id, text string) error     // returns once the turn is started
 func (e *Engine) Stop(id string) error
 func (e *Engine) Compact(id string) error
-func (e *Engine) Rebind(id, model string) error  // change the session's model
+func (e *Engine) SetModel(model string)          // points every session at it
 func (e *Engine) Delete(id string) error
 func (e *Engine) State(id string) State
 ```
@@ -1751,7 +1751,7 @@ SSE hub publish into a session no request is currently touching. The memory cost
 transcript, and a process holding every session a person opened in one sitting is not a
 size worth managing.
 
-`Rebind` requires `StateIdle` and returns `ErrBusy` otherwise. It is described in 8.5.
+`SetModel` is called by `PUT /api/config` when the model changed. It is described in 8.5.
 
 `Delete` requires `StateIdle`, removes the file through `store.Delete`, removes the live
 entry, and drops the hub channel for the id.
@@ -1763,6 +1763,7 @@ type State string
 
 const (
 	StateIdle      State = "idle"
+	StateLoading   State = "loading"
 	StatePreflight State = "preflight"
 	StateCompacting State = "compacting"
 	StateStreaming State = "streaming"
@@ -1777,7 +1778,8 @@ const (
 
 | state | entered when | work done | leaves to |
 |-------|--------------|-----------|-----------|
-| `idle` | session created; any terminal state completes | none | `preflight` on Send, `compacting` on Compact |
+| `idle` | the model has been read; any terminal state completes | none | `preflight` on Send, `compacting` on Compact, `loading` on a model change |
+| `loading` | a model was chosen, or a turn found one not read | read the model: its window and its chat template | `idle` when it answers; `failed` when it does not |
 | `preflight` | top of each loop iteration | check iteration count, compute fill, compare with `compact_at * n_ctx`, build the request | `limit` when iteration is 50; `compacting` when over threshold; `streaming` otherwise |
 | `compacting` | threshold hit, or Compact pressed | run the compaction request, rewrite the in-context set | `preflight` when it came from the loop; `idle` when it came from the Compact button; `failed` on error |
 | `streaming` | request sent | read the SSE stream, publish `delta`, `reasoning`, `tool_call`, `usage` | `final` when no tool calls; `deciding` when there are; `stopped` on cancel; `failed` on error |
@@ -1801,6 +1803,10 @@ Send(text):
 
 run(turn):
   ctx, cancel = context.WithCancel(engine root ctx); session.cancel = cancel
+  ensureReady(ctx)                              // take cfg.Model, read it if new
+  cfg = config.Config()                         // read once, hold for the turn
+  model, caps = session.Model, session.caps     // the same, for the same reason
+  titleSession(ctx)                             // first turn only, before the reply
   for iteration = 0; iteration < 50; iteration++ {
       state = preflight
       fill = computeFill()
@@ -1810,11 +1816,11 @@ run(turn):
       }
       state = streaming
       req = llama.ChatRequest{
-          Model:    session.Model,
+          Model:    model,
           Messages: session.contextMessages(),
           Tools:    tools.Schemas(),
           Effort:   cfg.Effort,
-          Caps:     session.caps,
+          Caps:     caps,
       }
       res, err = client.Chat(ctx, req, publishEvent)
       if err != nil { classify: canceled -> stop(); else fail(err); return }
@@ -1890,31 +1896,60 @@ has counted yet, and the threshold check at the top of the next iteration has to
 
 `NCtx` resolution, best available first:
 
-1. `Props(model).NCtx`. Source `"props"`.
+1. `Prepare(model).NCtx`. Source `"props"`.
 2. `Model.CtxHint` with source `"meta"`.
 3. `Model.CtxHint` with source `"args"`.
 4. 32768 with source `"assumed"`. Automatic compaction stays armed against the assumed
    value, and the meter reads `<fill> / ~32k` so the number is visibly a guess.
 
-`Props` is called at two points, both with `autoload=false`, both from a goroutine that does
-not block the caller:
+**Preparation.** Nothing about a model can be read until it is loaded, because the chat
+template is inside the model file, and a model-scoped read carrying `autoload=false` answers
+`400 model is not loaded`. So the window and the template arrive together or not at all, and
+they arrive when a person picks a model rather than when a turn needs them.
 
-- At session creation, and again on a model rebind, when the cached model list already
-  reports that model `loaded`. The model is loaded, so the call cannot load anything, and
-  caps are known from turn one.
-- Immediately after the first successful response for a session that still has
-  `NCtxSource != "props"`. This is the path for a model that was unloaded when the session
-  was created; by the time a response has arrived it is certainly loaded.
+`Backend.Prepare(ctx, model)` is that step. It is the only request allowed to name a model
+with autoload on. Behind the interface:
 
-Either call fills `session.NCtx`, `session.NCtxSource` and `session.caps`. Caps decide
-whether the effort mapping uses the effort column or the budget column, so a model that was
-already loaded gets the right column on its first request.
+- Read `/props` unscoped. A server that does not answer `role: "router"` holds one model
+  and it is already up, so that response is the answer.
+- On a router, take the model's status from the cached list. Loaded means a read with
+  `autoload=false`. Anything else means the same request with autoload on, which loads the
+  model and then answers for it.
 
-**Rebind.** `Rebind(id, model)` is only accepted on an idle session. Under the session lock
-it sets `session.Model`, resets `NCtx` and `NCtxSource` from the new model's hint, sets
-`session.caps = llama.Caps{}` so caps are unknown again, sets `session.LastUsage = nil` so
-the next fill is re-estimated from the entries rather than carried over from a different
-model's tokenizer, and appends
+It returns `llama.Ready{NCtx, Source, Caps}`, and the engine writes all three onto the
+session. A backend that keeps everything loaded implements `Prepare` as a read and no
+caller can tell the difference.
+
+`Create` and `SetModel` run it in a goroutine with the session in `loading`, which is what
+refuses a message: a message typed then has no turn to join, so it is refused rather than
+queued. A read whose model changed under it discards its result. `run` calls `ensureReady`
+at the top of a turn, which covers a session read from disk, a failed read, and a model the
+router has unloaded since.
+
+Caps decide whether the effort mapping uses the effort column or the budget column and
+whether `preserve_reasoning` is sent. Those, the settings and the model itself are all
+inputs to the rendered prompt, so a turn that changed one would render a different prompt
+from the step before it and the model server would reprocess everything before the change.
+`run` reads all three once at the top and holds them for the whole turn. A model chosen
+while a turn runs takes effect on the next message.
+
+**Naming.** A session with no typed title asks the model for one, from a request carrying
+the opening message and `title.md` alone, with thinking off and a 32 token cap. It runs
+before the turn that answers the message, not after it. The model server holds one prompt at
+a time, so a naming request made after the turn would evict what the turn left cached and
+the next message would reprocess the conversation from the start. Made first, it runs
+against a slot holding nothing worth keeping. A failure is not an error: the session keeps
+the title cut from the message.
+
+**One model.** The model lives in `config.json` and nowhere else. A session records the one
+it last ran against, which is a note rather than a choice: `ensureReady` compares it with
+`cfg.Model` at the top of every turn and repoints the session when they differ.
+`PUT /api/config` with a new model calls `Engine.SetModel`, which repoints every live
+session, reads the model once and hands the answer to all of them, so a session already open
+does not wait for its next message. `session.repoint` sets `session.Model`, clears `NCtx`,
+`NCtxSource`, `caps` and `prepared` so the new model is read before it is used, sets
+`session.LastUsage = nil` so the next fill is re-estimated from the entries rather than
+carried over from a different model's tokenizer, and appends
 
 ```go
 store.Entry{Kind: "status", Content: "model changed to " + model,
@@ -1946,7 +1981,7 @@ ContextBase{Model: model, System: bare, Tools: armed - bare}
 Both completions carry the system message and differ only in whether the schemas are
 attached, so `bare` is the system cost including whatever scaffolding the template puts
 around it, and the difference is the schema cost. The measurement is stored against the
-model it was taken against; `Rebind` discards it along with `LastUsage` and the caps.
+model it was taken against; `repoint` discards it along with `LastUsage` and the caps.
 
 Everything else is then subtraction on a real usage report:
 
@@ -1991,10 +2026,9 @@ Against `Qwen3.8-27B Q5` the measurement is 154 tokens of system prompt and 1026
 `reasoning_format: "deepseek"` on every request in every row. The budget constants are Go
 constants in `internal/llama`, not configuration.
 
-For the first turn of a session against a model that has never been loaded, caps are
-unknown, so the budget column is used. For `Gemma4-12B` as captured, caps become known after
-turn one and still select the budget column, because that template reports
-`supports_reasoning_effort: false`.
+A model is read before the first message can be sent, so the column is chosen from what its
+template actually reports rather than from a default. For `Gemma4-12B` as captured that is
+the budget column, because it reports `supports_reasoning_effort: false`.
 
 ### 8.8 Compaction
 
@@ -2555,18 +2589,16 @@ Empty body. 202 `{"state":"compacting"}`. 409 when the session is not idle.
 
 #### PUT /api/sessions/{id}
 
-Request `{"model": "Qwen3.8-27B Q5"}`. Rebinds the session to another model, as described in
-8.5. Response:
+Request `{"title": "Digits of pi"}`. Renames the session. An empty title hands the name back
+to the harness, which takes it from the first message. Response:
 
 ```json
-{"id": "sess_k4m9x2q7ta5vb1nc", "model": "Qwen3.8-27B Q5",
- "n_ctx": 262144, "n_ctx_source": "args", "fill": 4311}
+{"id": "sess_k4m9x2q7ta5vb1nc", "title": "Digits of pi"}
 ```
 
-409 `{"error":"the session is busy: stop the current turn first"}` when the session is not
-idle. 400 when the model id is not in the current model list. The `status` entry the rebind
-appends also arrives on the event stream, so an open transcript shows the change without a
-refetch.
+The model is not a session's to change: it is one field in `config.json`, and
+`PUT /api/config` moves every session at once. The `status` entry that records the change
+arrives on each session's event stream, so an open transcript shows it without a refetch.
 
 #### DELETE /api/sessions/{id}
 
@@ -2598,9 +2630,9 @@ Request carries only the fields being changed:
  "server": {"url": "http://192.168.2.205:8080", "token": ""}}
 ```
 
-Response is the same shape as `state.config`. Changing `model` sets the default for sessions
-created afterwards; it does not rebind an existing session, which is what
-`PUT /api/sessions/{id}` is for. Changing `server.url` invalidates the detect and models
+Response is the same shape as `state.config`. Changing `model` points every session at it,
+open ones included, and the harness reads the new model before anything is sent to it.
+Changing `server.url` invalidates the detect and models
 caches and triggers a fresh `Detect`. Changing `listen` is accepted and persisted
 but takes effect on the next start; the response includes
 `"note": "listen changes take effect on restart"`. `compact_at`, `shell`,
@@ -3085,9 +3117,8 @@ export interface Api {
   allowlist(project: string): Promise<string[]>;
   removeAllow(project: string, prefix: string): Promise<string[]>;
   listSessions(project?: string): Promise<SessionSummary[]>;
-  createSession(project: string, model: string): Promise<SessionSummary>;
+  createSession(project: string): Promise<SessionSummary>;
   getSession(id: string): Promise<SessionSnapshot>;
-  rebindSession(id: string, model: string): Promise<RebindResponse>;
   deleteSession(id: string): Promise<void>;
   send(id: string, text: string): Promise<void>;
   stop(id: string): Promise<void>;
@@ -3180,14 +3211,13 @@ without waiting for a server event, so the composer unblocks immediately.
 The picker lists every model from `/api/state`. Each row: a status dot (grey `unloaded`,
 amber `loading` with a pulse, green `loaded`, grey `sleeping`, amber `downloading`), the id,
 and the context to the right, shown as `131k` from `ctx_hint`. A row whose status is not
-`loaded` is dimmed and carries the note `loads on first message`.
+`loaded` is dimmed and carries the note `Loads when you pick it`.
 
-Selecting a model does two things. It calls `PUT /api/config` so the choice is the default
-for new sessions, and, when a session is selected and idle, it calls
-`PUT /api/sessions/{id}` to rebind that session. A 409 from the rebind leaves the picker on
-the old model and shows `stop the current turn first` under it. Nothing model-scoped is
-fetched from the model server by either call; the props probe that follows a rebind happens
-on the server side and only for a model already reported loaded.
+Selecting a model calls `PUT /api/config` and nothing else. The picker draws `config.model`,
+which is the harness's one choice: it does not change when a project or a session is opened,
+and every session answers with it. The harness reads the model on the way, loading it when
+the router does not have it, and the sessions it points sit in `loading` with the composer
+closed until it answers.
 
 The meter reads `42k / 131k` with a filled bar, green below 60 percent, amber to 80, red
 above. When `n_ctx_source` is `assumed` it reads `42k / ~32k`, with the tilde as the only
@@ -3222,7 +3252,7 @@ Each session row in the sidebar carries a remove control that calls
 | `prompts` | every embedded file is non-empty; `System` renders with both fields substituted and leaves no `{{`; the tool descriptions match the schema descriptions by name |
 | `tools` | path guard table (section 13.3); `read_file` numbering, offset, limit, byte cap, empty file, directory, binary; `write_file` creates parents, preserves mode, atomic replace leaves the old content on a failed write; `run_shell` exit code, merged streams, timeout kill, process group kill of a forked child, truncation head and tail, `Truncate` boundary cases |
 | `perms` | `Evaluate` matrix over tool times auto times allowlist times operators, with a case per entry of the operator list and a case proving `${` does not prompt; `Ask` and `Resolve` happy path; `Resolve` on an unknown id; cancel while blocked; double resolve; `always` writes the allowlist before returning; denial content string |
-| `agent` | the state machine transitions; the loop against the replay server for a plain reply, a single tool call, two tool calls, a denial, a stop mid-command, 50 iterations; `Get` on a live id, on an id only on disk, and on an unknown id; `computeFill` before and after a usage report; the `assumed` fallback arms auto compaction; effort mapping into the recorded request body; `Rebind` resets `NCtx`, caps, `LastUsage` and the context measurement, appends the visible out-of-context status entry, and returns `ErrBusy` when not idle; the props probe fires at creation for a loaded model and after the first response for an unloaded one, always with `autoload=false`; the context measurement sends the system message twice, once with the schemas and once without, and runs once per model per session; the breakdown subtracts the measured parts from a real usage report; compaction rewrites `in_context` and leaves `visible` alone; the unanswered-tool-call repair |
+| `agent` | the state machine transitions; the loop against the replay server for a plain reply, a single tool call, two tool calls, a denial, a stop mid-command, 50 iterations; `Get` on a live id, on an id only on disk, and on an unknown id; `computeFill` before and after a usage report; the `assumed` fallback arms auto compaction; effort mapping into the recorded request body; `SetModel` repoints every live session, resetting `NCtx`, caps, `LastUsage` and the context measurement and appending the visible out-of-context status entry, a session that was not live takes the model at its next turn, and the turn asks the model it started with; preparation reads a loaded model with `autoload=false` and loads an unloaded one, the first request of a session is already shaped by what came back, a message sent while it runs is refused rather than queued, and the caps a turn was started with shape every request in it; the naming request carries the opening message alone, runs before the reply, and happens once per session; the context measurement sends the system message twice, once with the schemas and once without, and runs once per model per session; the breakdown subtracts the measured parts from a real usage report; compaction rewrites `in_context` and leaves `visible` alone; the unanswered-tool-call repair |
 | `store` | round trip of a session with every entry kind; index built at `Open`; a corrupt file is skipped and named; `List` ordering; concurrent `Save` of two sessions under `-race` |
 | `server` | auth: token to cookie, bearer, 401 without either, constant-time compare, a token file present at start is reused rather than replaced, a missing one is created 0600; origin rejection; every route's happy path and its documented error status, including `PUT /api/sessions/{id}` (200 idle, 409 busy, 400 unknown model), `DELETE /api/sessions/{id}` (204, 409 busy, 404 unknown, hub channel dropped), `GET /api/allowlist` (empty array for an unknown project) and `DELETE /api/allowlist` (200 with the unchanged list for a prefix that is absent); `tool_call` and `tool_output` payloads carry `index`; the folder browser rules including hidden exclusion and a non-absolute path; SSE replay from `Last-Event-ID`, from `?from=`, and the `resync` path when the ring has rolled; a slow subscriber gets `resync` and is not disconnected; embed fallback page when `Built()` is false |
 | `service` | `UnitText` golden output for both platforms, asserted on whichever platform the test runs on; XML escaping of a home directory containing `&`; a binary under `/tmp` is refused; the install command sequence recorded by a stub `launchctl` placed first on `PATH`, asserted in order so that `enable` precedes `bootstrap`; `Report` parses a recorded `launchctl print` and a recorded `systemctl is-active` output |
@@ -3352,10 +3382,11 @@ Run against `http://192.168.2.205:8080`. Steps 1 to 3 are read-only and load not
     the browser: the same tab keeps working, and `~/.quecto-harness/url` carries the same
     token as before. Delete `~/.quecto-harness/token`, restart, and the tab now gets a 401
     and the `not authorized` page.
-12. Rebind the model on an idle session through the picker. The transcript gains
-    `model changed to <id>`, the meter denominator changes, and the next turn's usage event
-    reports against the new model. Try the same during a turn and confirm the picker refuses
-    with `stop the current turn first`.
+12. Pick another model. Every open transcript gains `Model changed to <id>`, the composer
+    closes while it loads, the meter denominator changes, and the next turn's usage event
+    reports against the new model. Switch project and confirm the picker still reads the
+    model you chose. Pick one during a turn and confirm the running turn finishes on the
+    model it started with.
 13. Remove an "allow always" rule from the settings panel, then send the same command again
     with auto on. The permission card comes back.
 14. Delete a session from the sidebar. The file is gone from
@@ -3404,12 +3435,12 @@ reflected in the sections above.
    so a second session sits in `status: streaming` with no deltas until a slot frees. This
    is documented behaviour and nothing is built for it. Section 8.10.
 
-8. **Model picker versus session model.** The picker rebinds the currently selected session
-   when it is idle, through `PUT /api/sessions/{id}`, and also sets `config.model` as the
-   default for new sessions. A rebind changes `session.Model`, resets `NCtx` and caps to the
-   new model's hint and unknown, clears `LastUsage` so fill is re-estimated, and appends a
-   visible out-of-context `status` entry reading `model changed to <id>`. 409 when the
-   session is busy. Sections 8.1, 8.5, 10.4, 12.8.
+8. **One model.** `config.model` is the only model choice there is. `PUT /api/config` points
+   every session at it: each one clears `NCtx`, caps and `LastUsage` so nothing measured
+   against the previous tokenizer is carried over, and appends a visible out-of-context
+   `status` entry reading `Model changed to <id>`. A session that was not live takes it at
+   the top of its next turn. A turn already running finishes on the model it started with.
+   Sections 8.1, 8.5, 10.4, 12.8.
 
 9. **Unknown context size.** The last resort is 32768 with source `"assumed"`. Automatic
    compaction stays armed against it, and the meter renders `42k / ~32k` so the guess is

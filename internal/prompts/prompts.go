@@ -17,6 +17,7 @@ var (
 	compactionTmpl = template.Must(template.New("compaction").Parse(mustRead("compaction.md")))
 	attachmentTmpl = template.Must(template.New("attachment").Parse(mustRead("attachment.md")))
 	imageTmpl      = template.Must(template.New("image").Parse(mustRead("image.md")))
+	titleTmpl      = template.Must(template.New("title").Parse(mustRead("title.md")))
 )
 
 func mustRead(name string) string {
@@ -77,4 +78,14 @@ func ToolReplaceInFile() string { return mustRead("tool_replace_in_file.md") }
 func ToolRunShell() string      { return mustRead("tool_run_shell.md") }
 func ToolWriteTodos() string    { return mustRead("tool_write_todos.md") }
 func Compact() string           { return mustRead("compact.md") }
-func Title() string             { return mustRead("title.md") }
+
+// Title asks for a name for the task the opening message describes. It carries
+// that message rather than following the conversation, so the request stands on
+// its own and can be made before the conversation exists.
+func Title(text string) string {
+	var b strings.Builder
+	if err := titleTmpl.Execute(&b, struct{ Text string }{text}); err != nil {
+		panic("prompts: render title.md: " + err.Error())
+	}
+	return b.String()
+}

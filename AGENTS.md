@@ -66,11 +66,11 @@ itself.
 
 ## The model endpoint
 
-Never send a model-scoped GET to a router without `autoload=false`. With autoload on,
-naming a model in a query parameter loads it on the remote machine, so a passive read
-becomes a write. Every model-scoped request goes through the one helper in
-`internal/llama` that adds the parameter. The only request allowed to load a model is
-the user's first chat message to it.
+Naming a model in a query parameter with autoload on loads it on the remote machine, so
+a passive read becomes a write. Every model-scoped request goes through the one helper in
+`internal/llama`, which takes the choice as an argument so that each caller states which
+it is asking for. `Prepare` is the only one that asks to load, and it runs when a person
+picks a model.
 
 ## Dependencies
 

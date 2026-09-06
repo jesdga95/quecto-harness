@@ -253,6 +253,7 @@ const MEASURED_CTX = new Set(["props", "meta"]);
 // several collapse onto one. Anything terminal reads as idle.
 const TURN_STATES: Record<string, TurnStatus> = {
   idle: "idle",
+  loading: "loading",
   preflight: "thinking",
   compacting: "compacting",
   streaming: "streaming",
@@ -838,8 +839,8 @@ class HttpApi implements HarnessApi {
     return list;
   }
 
-  async createSession(project: string, model: string): Promise<Session> {
-    const wire = await call<WireSummary>("/sessions", "POST", { project, model });
+  async createSession(project: string): Promise<Session> {
+    const wire = await call<WireSummary>("/sessions", "POST", { project });
     const session = toSession(wire);
     summaries.set(session.id, session);
     return session;
@@ -859,12 +860,6 @@ class HttpApi implements HarnessApi {
     await call<unknown>(`/sessions/${encodeURIComponent(id)}`, "PUT", { title });
     const known = summaries.get(id);
     if (known) summaries.set(id, { ...known, title });
-  }
-
-  async setSessionModel(id: string, model: string): Promise<void> {
-    await call<unknown>(`/sessions/${encodeURIComponent(id)}`, "PUT", { model });
-    const known = summaries.get(id);
-    if (known) summaries.set(id, { ...known, model });
   }
 
   async deleteSession(id: string): Promise<void> {

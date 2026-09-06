@@ -22,10 +22,13 @@ type replay struct {
 	scripts  [][]string
 	next     int
 	Delay    time.Duration
+	Props    time.Duration
 	Status   int
 	Requests []map[string]any
 	Probes   []map[string]any
+	Titles   []map[string]any
 	Queries  []string
+	Loads    []string
 }
 
 func newReplay(t *testing.T, fixtures ...string) *replay {
@@ -56,14 +59,29 @@ func (r *replay) Server() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		switch req.URL.Path {
 		case "/props":
+			r.mu.Lock()
+			hold := r.Props
+			r.mu.Unlock()
+			if hold > 0 {
+				time.Sleep(hold)
+			}
 			// A model-scoped read without autoload=false would load a model
 			// on the router, so it fails here rather than in production.
 			if model := req.URL.Query().Get("model"); model != "" {
 				r.mu.Lock()
 				r.Queries = append(r.Queries, req.URL.RawQuery)
 				r.mu.Unlock()
-				if req.URL.Query().Get("autoload") != "false" {
-					http.Error(w, "model-scoped GET without autoload=false", 500)
+				// A model-scoped read has to say which it is asking for. On a
+				// router, autoload=true is what loads the model, so a request
+				// that says neither fails here rather than in production.
+				switch req.URL.Query().Get("autoload") {
+				case "false":
+				case "true":
+					r.mu.Lock()
+					r.Loads = append(r.Loads, model)
+					r.mu.Unlock()
+				default:
+					http.Error(w, "model-scoped GET without autoload", 500)
 					return
 				}
 				// One capture reports a template that takes named levels and
@@ -103,6 +121,19 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 		}
 		r.stream(w, frames(r.t, name))
 		return
+	}
+
+	// The naming request stands on its own: one message and no schemas. Like
+	// the measurement, it answers from its own fixture so the queued scripts
+	// stay lined up with the turns the test is about.
+	if msgs, _ := body["messages"].([]any); len(msgs) == 1 {
+		if _, hasTools := body["tools"]; !hasTools {
+			r.mu.Lock()
+			r.Titles = append(r.Titles, body)
+			r.mu.Unlock()
+			r.stream(w, frames(r.t, "stream_title.txt"))
+			return
+		}
 	}
 
 	r.mu.Lock()
