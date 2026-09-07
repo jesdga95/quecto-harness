@@ -597,22 +597,25 @@ function onEvent(event: HarnessEvent): void {
   }
 
   if (event.type === "status") {
+    const settled = app.status === "loading" && event.status !== "loading";
     app.status = event.status;
     if (event.status === "thinking" || event.status === "streaming") app.awaitingModel = true;
     if (event.status === "idle" || event.status === "loading") app.awaitingModel = false;
-    void refreshModels();
+    void refreshModels(settled);
   }
 }
 
 let refreshedAt = 0;
 
-// Status events land several times a turn and the model list changes at most
-// once, when the model finishes loading.
-async function refreshModels(): Promise<void> {
+/** Status events land several times a turn and the model list changes at most
+    once, when a load finishes. That reading is the one the dots are drawn
+    from, so it is taken past both caches rather than from a list fetched
+    before the load began. */
+async function refreshModels(settled = false): Promise<void> {
   const now = Date.now();
-  if (now - refreshedAt < 5000) return;
+  if (!settled && now - refreshedAt < 5000) return;
   refreshedAt = now;
-  const models = await guard(() => api.listModels());
+  const models = await guard(() => api.listModels(settled));
   if (models) app.models = models;
 }
 
