@@ -35,13 +35,14 @@ const loadTimeout = 10 * time.Minute
 const maxAttachments = 5
 
 var (
-	ErrBusy      = errors.New("The session is busy: stop the current turn first")
-	ErrLoading   = errors.New("The model is still loading: wait for it to finish")
-	ErrNotFound  = errors.New("No session with that id")
-	ErrEmptyText = errors.New("The message is empty: type something or attach a file")
-	ErrNotLast   = errors.New("That is not the last message: only the last one can be sent again")
-	ErrNoProject = errors.New("That folder is not in the project list: add it first")
-	ErrNoModel   = errors.New("No model is selected: pick one from the model list")
+	ErrBusy       = errors.New("The session is busy: stop the current turn first")
+	ErrLoading    = errors.New("The model is still loading: wait for it to finish")
+	ErrNotFound   = errors.New("No session with that id")
+	ErrEmptyText  = errors.New("The message is empty: type something or attach a file")
+	ErrNotLast    = errors.New("That is not the last message: only the last one can be sent again")
+	ErrNoProject  = errors.New("That folder is not in the project list: add it first")
+	ErrNoModel    = errors.New("No model is selected: pick one from the model list")
+	ErrCompacting = errors.New("The conversation is being compacted: that finishes on its own")
 )
 
 // Engine owns every live session and dispatches turns.
@@ -521,6 +522,15 @@ func (e *Engine) checkImages(model string, attachments []store.Attachment) error
 
 // Stop cancels the turn. It never appends: the loop reaches stopped and
 // writes the marker itself, so entry order is one goroutine's order.
+//
+// Cancelling closes the connection, which is the only signal the HTTP API has
+// for it. A server part way through a prompt is writing nothing and does not
+// see the close, so it finishes that work and the next request queues behind
+// it. What a stop reaches is this harness.
+//
+// A compaction is refused for that reason: it draws nothing to take back, and
+// stopping it would leave the session where it started with the server busy
+// for the same length of time either way.
 func (e *Engine) Stop(id string) (State, error) {
 	s, err := e.Get(id)
 	if err != nil {
@@ -532,6 +542,9 @@ func (e *Engine) Stop(id string) (State, error) {
 	s.mu.Unlock()
 	if state == StateIdle || cancel == nil {
 		return StateIdle, nil
+	}
+	if state == StateCompacting {
+		return state, ErrCompacting
 	}
 	cancel()
 	e.perms.CancelSession(id)
@@ -561,10 +574,13 @@ func (e *Engine) Compact(id string) error {
 		defer cancel()
 		model, caps := e.turnModel(s)
 		if err := e.compact(ctx, s, model, caps); err != nil {
-			e.fail(s, err)
+			e.endWithError(s, err, 0)
 			return
 		}
 		e.finish(s, StateIdle, "", 0, nil)
+		// A message typed while the summary was being written has no turn to
+		// join, so it starts one of its own.
+		e.flushSteer(s)
 	}()
 	return nil
 }
@@ -1176,10 +1192,13 @@ func (e *Engine) endWithError(s *Session, err error, iteration int) {
 
 func (e *Engine) markStopped(s *Session) {
 	s.mu.Lock()
-	s.appendEntry(store.Entry{Kind: "status", Content: "Stopped", InContext: false, Visible: true})
+	entry := s.appendEntry(store.Entry{Kind: "status", Content: "Stopped", InContext: false, Visible: true})
 	s.mu.Unlock()
 	e.setState(s, StateStopped)
 	e.save(s)
+	// A stop between two requests draws nothing of its own, so the marker is
+	// published rather than left for the next time the page is loaded.
+	e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
 	e.finish(s, StateIdle, "stopped", 0, nil)
 	e.flushSteer(s)
 }

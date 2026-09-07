@@ -141,6 +141,20 @@ func waitForRequests(t *testing.T, h *harness, n int) {
 	t.Fatalf("the replay server was asked %d times, want %d", h.replay.Count(), n)
 }
 
+// waitState blocks until the session reaches one state, which is how a test
+// catches a turn in the middle of a request it means to stop.
+func waitState(t *testing.T, s *Session, want State) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.State() == want {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("session stayed in %s, want %s", s.State(), want)
+}
+
 func waitIdle(t *testing.T, s *Session) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -728,6 +742,75 @@ func TestCompactionRewritesInContextOnly(t *testing.T) {
 	}
 	if len(h.rec.ofType("compacted")) != 1 {
 		t.Error("no compacted event")
+	}
+}
+
+// A compaction is not stoppable. Stop is refused where it was pressed and the
+// summary lands as it would have.
+func TestCompactRefusesAStop(t *testing.T) {
+	h := newHarness(t, "stream_summary.txt")
+	s := h.session(t)
+	h.replay.Delay = 200 * time.Millisecond
+	s.mu.Lock()
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "earlier work", InContext: true, Visible: true})
+	s.mu.Unlock()
+
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, s, StateCompacting)
+	// The refusal has to be the state's, not a race with the request.
+	waitForRequests(t, h, 1)
+	if state, err := h.engine.Stop(s.ID); err != ErrCompacting {
+		t.Errorf("Stop during a compaction = %s, %v", state, err)
+	}
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	if doc.Compactions != 1 {
+		t.Errorf("compactions = %d, want the compaction to have finished", doc.Compactions)
+	}
+	last := doc.Entries[len(doc.Entries)-1]
+	if last.Kind != "compaction" {
+		t.Errorf("last entry = %+v, want the summary", last)
+	}
+	if len(h.rec.ofType("error")) != 0 || len(h.rec.ofType("status_entry")) != 0 {
+		t.Error("the refused stop reached the transcript")
+	}
+}
+
+// A message typed while a compaction runs has no turn to join, so it starts
+// one once the summary has landed.
+func TestCompactDeliversQueuedMessage(t *testing.T) {
+	h := newHarness(t, "stream_summary.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.replay.Delay = 200 * time.Millisecond
+	s.mu.Lock()
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "earlier work", InContext: true, Visible: true})
+	s.mu.Unlock()
+
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, s, StateCompacting)
+	sent, err := h.engine.Send(s.ID, "and now this", nil)
+	if err != nil || !sent.Queued {
+		t.Fatalf("Send during a compaction = %+v, %v", sent, err)
+	}
+	waitForRequests(t, h, 2)
+	waitIdle(t, s)
+
+	if held := s.Steer(); held != nil {
+		t.Fatalf("the queued message was left behind: %+v", held)
+	}
+	doc, _, _, _ := s.Snapshot()
+	kinds := []string{}
+	for _, e := range doc.Entries {
+		kinds = append(kinds, e.Kind)
+	}
+	want := []string{"user", "compaction", "user", "assistant"}
+	if strings.Join(kinds, ",") != strings.Join(want, ",") {
+		t.Errorf("entries = %v, want %v", kinds, want)
 	}
 }
 

@@ -1861,12 +1861,12 @@ const (
 | `idle` | the model has been read; any terminal state completes | none | `preflight` on Send, `compacting` on Compact, `loading` on a model change |
 | `loading` | a model was chosen, a session was created or opened, or a turn found one not read | read the model: its window and its chat template | `idle` when it answers; `failed` when it does not |
 | `preflight` | top of each loop iteration | check iteration count, compute fill, compare with `compact_at * n_ctx`, build the request | `limit` when iteration is 50; `compacting` when over threshold; `streaming` otherwise |
-| `compacting` | threshold hit, or Compact pressed | run the compaction request, rewrite the in-context set | `preflight` when it came from the loop; `idle` when it came from the Compact button; `failed` on error |
+| `compacting` | threshold hit, or Compact pressed | run the compaction request, rewrite the in-context set | `preflight` when it came from the loop; `idle` when it came from the Compact button; `failed` on error. Stop is refused here |
 | `streaming` | request sent | read the SSE stream, publish `delta`, `reasoning`, `tool_call`, `usage` | `final` when no tool calls; `deciding` when there are; `stopped` on cancel; `failed` on error |
 | `deciding` | assistant asked for tools | for each call in order: `Evaluate`, then `Ask` when it says prompt | `executing` for the call just decided; `stopped` on cancel |
 | `executing` | a call was allowed or denied | run the tool or synthesise the denial, append the tool entry | `deciding` for the next call; `preflight` when the calls are exhausted |
 | `final` | assistant replied with no tool calls | append the assistant entry, persist, publish `done` | `idle` |
-| `stopped` | Stop pressed, or shutdown | kill the command, cancel pending decisions, append a stopped marker, persist | `idle` |
+| `stopped` | Stop pressed, or shutdown | kill the command, cancel pending decisions, append and publish a stopped marker, persist, send any queued message | `idle` |
 | `failed` | any non-cancel error | append an error entry, persist, publish `error` and `done` | `idle` |
 | `limit` | 50 iterations without a plain reply | append `turn limit reached`, persist, publish `error` and `done` | `idle` |
 
@@ -2119,7 +2119,8 @@ Procedure:
    prompts.Compact()}]`, `tools` omitted, `Effort: off`, `stream: true` (the stream is read
    but no `delta` events are published; the UI shows a status row instead).
 3. Send with the session's normal model. A failure moves the turn to `failed` and leaves the
-   history untouched, so a failed compaction never loses context.
+   history untouched, so a failed compaction never loses context. Stop is refused while this
+   runs: `POST /api/sessions/{id}/stop` answers 409 and the request is left to finish.
 4. On success, take `res.Content` as the summary. An empty summary is treated as a failure
    with the message `the model returned an empty summary: try again or start a new session`.
 5. Under the session lock: set `InContext = false` on every existing entry, then append
@@ -2141,6 +2142,9 @@ Procedure:
    than carried over from before the compaction, and `lastUsageEntry = len(Entries) - 1`.
 7. Persist.
 8. Publish `{"type":"compacted","before":<int>,"after":<int>,"summary":"..."}`.
+9. A message typed while the summary was being written was queued against the compaction and
+   has no turn to join, so it is sent as an ordinary message once the session is idle. A
+   compaction that failed or was stopped sends it too.
 
 What the UI keeps versus what the model sees:
 
@@ -2655,7 +2659,8 @@ arrives on the event stream.
 
 #### POST /api/sessions/{id}/stop
 
-Empty body. 200 `{"state":"stopped"}` or `{"state":"idle"}` when nothing was running.
+Empty body. 200 `{"state":"stopped"}` or `{"state":"idle"}` when nothing was running. 409
+while the session is compacting, which is the one state a stop does not reach.
 
 #### POST /api/sessions/{id}/compact
 
@@ -2739,6 +2744,7 @@ Event payloads:
 {"type":"tool_output","seq":125,"index":0,"id":"call_0","name":"run_shell","output":"AGENTS.md\n...","exit_code":0,"truncated":false}
 {"type":"usage","seq":126,"prompt_tokens":4193,"completion_tokens":118,"cached_tokens":3968,"fill":4311,"n_ctx":131072,"breakdown":{"system":154,"tools":1026,"messages":3131}}
 {"type":"compacted","seq":127,"before":104857,"after":3120,"summary":"Listed the repository root."}
+{"type":"status_entry","seq":127,"content":"Stopped"}
 {"type":"error","seq":128,"kind":"model_loading","message":"model \"Gemma4-12B\" is loading: send the message again in a moment"}
 {"type":"done","seq":129,"finish_reason":"stop","iterations":2}
 {"type":"resync","seq":130}
@@ -3244,6 +3250,7 @@ typing, but Send is disabled while `connected` is false.
 | `tool_output` | finds the tool card on `index`, fills its output, exit code badge and truncation notice |
 | `usage` | updates `fill`, `nCtx`, `cached` and the breakdown; the context meter recolours at 60 and 80 percent, and its popover shows one bar segmented into system, tools and messages once the breakdown arrives |
 | `compacted` | appends a divider entry; everything above it is dimmed and marked `out of context`, matching the server's `in_context` flags |
+| `status_entry` | appends a plain row for something the harness did rather than the model: the stopped marker and the tool call limit |
 | `error` | appends a red row with the message; does not clear the transcript |
 | `done` | sets `streaming: false` on the last assistant entry, `state` returns to `idle` |
 | `resync` | triggers the snapshot refetch of 12.5 |
@@ -3275,6 +3282,10 @@ While `session.pending !== null`:
 - The Send button is disabled.
 - The Stop button stays enabled, because stopping is the way out of a decision the user does
   not want to make.
+
+The Stop button is drawn while a turn runs and not while a compaction does, which the harness
+refuses to stop. A compaction leaves the send button in place, and what it takes joins the
+queue the way a message typed against a turn does.
 
 Once the POST returns 200, the card renders its answered state (`allowed once`,
 `allowed always: go test`, `denied: wrong directory`) and `pending` is cleared locally
@@ -3497,50 +3508,72 @@ reflected in the sections above.
    bounds on a runaway turn. Section 4.5.
 
 5. **Manual compaction.** Compact stays idle-only. A user watching a turn that needs
-   compacting presses Stop first. This keeps the rewrite away from a history whose tool
-   results have not been appended yet. Sections 8.8, 10.4.
+   compacting presses Stop first. This keeps the rewrite away from
+   a history whose tool results have not been appended yet. Sections 8.8, 10.4.
 
-6. **The operator rejection list.** It is `;`, `&`, `|`, `>`, `<`, backtick, `$(`, `\n`,
+6. **What Stop reaches.** The session, and not the model server. The turn is cancelled, the
+   command is killed, the history stops where it stood and the connection is closed, which is
+   the only signal the HTTP API has. A llama.cpp slot part way through a prompt is writing
+   nothing, so it does not see the close: measured against a router holding Gemma4-12B, a
+   request cancelled two seconds into a 100k token prompt left the slot processing that same
+   task for another half minute, and the next request queued behind it for 13 seconds where
+   an idle server answers in 50 milliseconds. Nothing in the protocol cancels work already
+   started. Sections 8.8, 8.10.
+
+7. **Stopping a compaction.** Refused, with `ErrCompacting`. A turn stopped part way has
+   output on the page and tool calls it will not now make, so stopping it changes what
+   happens next. A compaction has neither: the request would run on the server for the same
+   length of time and the session would come back to a context that still needs compacting.
+   The composer offers no Stop while it runs. Sections 8.8, 12.7.
+
+   No deadline bounds it either. The one thing a timeout could cap is the prefill of a full
+   context, which is exactly the part with no honest number: it grows with the window, the
+   hardware and whatever else is queued on the server, and cutting it off would throw away
+   work that was nearly done. A session left compacting by a server that answers neither way
+   is cleared by restarting the harness, which loses nothing, since the rewrite is applied
+   only after the summary arrives.
+
+8. **The operator rejection list.** It is `;`, `&`, `|`, `>`, `<`, backtick, `$(`, `\n`,
    `\r`. Bare `&` subsumes `&&` and catches backgrounding, which would otherwise escape the
    process group wait. Bare `|` subsumes `||`. `${` is not on the list, since parameter
    expansion cannot start a second command. Section 7.4.
 
-7. **Concurrent turns.** Not serialised. llama.cpp queues a request when every slot is busy,
+9. **Concurrent turns.** Not serialised. llama.cpp queues a request when every slot is busy,
    so a second session sits in `status: streaming` with no deltas until a slot frees. This
    is documented behaviour and nothing is built for it. Section 8.10.
 
-8. **One model.** `config.model` is the only model choice there is. `PUT /api/config` points
+10. **One model.** `config.model` is the only model choice there is. `PUT /api/config` points
    every session at it: each one clears `NCtx`, caps and `LastUsage` so nothing measured
    against the previous tokenizer is carried over, and the transcript records nothing.
    A session that was not live takes it at
    the top of its next turn. A turn already running finishes on the model it started with.
    Sections 8.1, 8.5, 10.4, 12.8.
 
-9. **Unknown context size.** The last resort is 32768 with source `"assumed"`. Automatic
+11. **Unknown context size.** The last resort is 32768 with source `"assumed"`. Automatic
    compaction stays armed against it, and the meter renders `42k / ~32k` so the guess is
    visible. `n_ctx` is therefore never zero. Sections 8.5, 12.3, 12.8.
 
-10. **Large tool arguments in the session file.** Accepted as it is. There is no cap on
+12. **Large tool arguments in the session file.** Accepted as it is. There is no cap on
     stored `tool_calls[].function.arguments`, because a truncated argument makes the stored
     history unusable for a resend. A session that writes several large files produces a
     large file. Section 9.5.
 
-11. **Single-model detection.** Confirmed: `role == "router"` selects router mode and the
+13. **Single-model detection.** Confirmed: `role == "router"` selects router mode and the
     absence of `role` selects single mode. `model_alias` is not a discriminator, since the
     router returns it too. Section 4.2.
 
-12. **Allowlist entries for a removed project.** They stay on disk, so re-adding the project
+14. **Allowlist entries for a removed project.** They stay on disk, so re-adding the project
     restores its rules. Two routes make them reachable: `GET /api/allowlist?project=` and
     `DELETE /api/allowlist`. The settings panel lists the current project's rules with a
     remove control, which is the only caller of `config.Store.RemoveAllow`. Sections 10.4,
     12.4, 12.9.
 
-13. **Deleting a session.** `DELETE /api/sessions/{id}` returns 204 on success, 409 when the
+15. **Deleting a session.** `DELETE /api/sessions/{id}` returns 204 on success, 409 when the
     session is busy, and 404 when the id is unknown. It removes the file, the live engine
     entry and the hub channel. The sidebar exposes it behind a confirmation, since there is
     no undo. Sections 8.1, 10.4, 12.9.
 
-14. **Reasoning dropped from the history.** Noted, no action. Reasoning is stored and shown
+16. **Reasoning dropped from the history.** Noted, no action. Reasoning is stored and shown
     but never replayed to the model, so a template reporting
     `supports_preserve_reasoning: true` will not receive the trace it is built for. Section
     8.7.

@@ -650,7 +650,8 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) (*agent.Session
 
 func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrNotLast):
+	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrNotLast),
+		errors.Is(err, agent.ErrCompacting):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, agent.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())

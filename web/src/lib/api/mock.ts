@@ -254,7 +254,9 @@ export class MockApi implements HarnessApi {
   private pending:
     | { id: string; session: string; settle: (d: PermissionDecision) => void }
     | null = null;
-  private running: { session: string; cancelled: boolean } | null = null;
+  // The work in flight. A compaction holds the session the way a turn does, so
+  // a message typed against it waits, but a stop does not reach it.
+  private running: { session: string; cancelled: boolean; compacting?: boolean } | null = null;
   // When the running turn began, so the cost line under the answer is real
   // wall clock rather than a made-up number.
   private turnStart = 0;
@@ -317,13 +319,14 @@ export class MockApi implements HarnessApi {
     await this.tick();
     const t = this.transcripts.get(id);
     if (!t) throw new Error(`session ${id} not found`);
+    const run = this.running?.session === id ? this.running : null;
     return {
       session: { ...t.session },
       items: t.items.map((i) => ({ ...i })),
       usage: { ...t.usage },
       todos: t.todos.map((todo) => ({ ...todo })),
       steer: t.steer ? { text: t.steer.text, files: [...t.steer.files] } : null,
-      status: this.running?.session === id ? "streaming" : "idle",
+      status: run ? (run.compacting ? "compacting" : "streaming") : "idle",
     };
   }
 
@@ -419,19 +422,24 @@ export class MockApi implements HarnessApi {
 
   async stop(session: string): Promise<void> {
     await this.tick();
-    if (this.running && this.running.session === session) this.running.cancelled = true;
+    const run = this.running;
+    // A compaction is not stoppable, the way the harness refuses it.
+    if (run && run.session === session && !run.compacting) run.cancelled = true;
     if (this.pending) this.resolvePending({ decision: "deny", reason: "stopped" });
   }
 
   async compact(session: string): Promise<void> {
     const t = this.transcripts.get(session);
     if (!t) return;
+    const run = { session, cancelled: false, compacting: true };
+    this.running = run;
     this.emit(session, { type: "status", status: "compacting" });
     const before = t.usage.prompt_tokens + t.usage.completion_tokens;
     const after = Math.min(before, Math.max(600, Math.round(before * 0.062)));
     await this.tick(1100);
+    if (this.running === run) this.running = null;
     t.usage = split({ prompt_tokens: after, completion_tokens: 0, n_ctx: t.usage.n_ctx });
-    this.emit(session, {
+    this.send(session, t, {
       type: "compacted",
       before,
       after,
@@ -439,6 +447,7 @@ export class MockApi implements HarnessApi {
     });
     this.emit(session, { type: "usage", ...t.usage });
     this.emit(session, { type: "status", status: "idle" });
+    this.flushSteer(session, t);
   }
 
   // stream
@@ -618,14 +627,17 @@ export class MockApi implements HarnessApi {
       this.finish(session, t);
     } finally {
       if (this.running === turn) this.running = null;
-      // A turn that ended without picking the message up leaves it to be sent
-      // as an ordinary one, which is what a stop does with it.
-      if (t.steer) {
-        const held = t.steer;
-        t.steer = null;
-        void this.sendMessage(session, held.text, held.files.map((f) => f.path));
-      }
+      this.flushSteer(session, t);
     }
+  }
+
+  /** Sends a message the work it was typed against ended without picking up.
+      A stop leaves one behind, and so does a compaction. */
+  private flushSteer(session: string, t: Transcript): void {
+    const held = t.steer;
+    if (!held) return;
+    t.steer = null;
+    void this.sendMessage(session, held.text, held.files.map((f) => f.path));
   }
 
   /** Picks up a message typed against this turn, so it carries on with it. */

@@ -42,9 +42,10 @@ export const app = $state({
   usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: 131072 } as Usage,
   status: "idle" as TurnStatus,
   // The model has been asked and nothing has come back yet. True from the
-  // moment a turn starts, and again after each tool result while the model
-  // reads it, which is the one stretch of a turn that draws nothing. Not the
-  // "waiting" turn status, which is a permission card waiting on a person.
+  // moment a turn starts, again after each tool result while the model reads
+  // it, and for the whole of a compaction, which are the stretches that draw
+  // nothing. Not the "waiting" turn status, which is a permission card waiting
+  // on a person.
   awaitingModel: false,
   allowlist: [] as string[],
   sidebar: true,
@@ -137,8 +138,10 @@ export async function selectSession(id: string): Promise<void> {
   app.todos = t.todos;
   app.steer = t.steer;
   // A session opened while its turn runs is running, and the snapshot is the
-  // only thing that says so.
+  // only thing that says so. A compaction draws nothing until it lands, so the
+  // wait it is in is taken from the status.
   app.status = t.status;
+  app.awaitingModel = t.status === "compacting";
   app.changes = { files: [], added: 0, removed: 0 };
   unsubscribe = api.events(id, onEvent);
   void loadChanges();
@@ -507,6 +510,9 @@ export function toggleChanges(): void {
   app.changesOpen = !app.changesOpen;
 }
 
+// Statuses that mean a request is out and nothing has come back for it.
+const ASKED = new Set<TurnStatus>(["thinking", "streaming", "compacting"]);
+
 function onEvent(event: HarnessEvent): void {
   if (event.type === "resync") {
     app.items = event.transcript.items;
@@ -514,7 +520,7 @@ function onEvent(event: HarnessEvent): void {
     app.todos = event.transcript.todos;
     app.steer = event.transcript.steer;
     app.status = event.transcript.status;
-    app.awaitingModel = false;
+    app.awaitingModel = event.transcript.status === "compacting";
     return;
   }
 
@@ -599,7 +605,7 @@ function onEvent(event: HarnessEvent): void {
   if (event.type === "status") {
     const settled = app.status === "loading" && event.status !== "loading";
     app.status = event.status;
-    if (event.status === "thinking" || event.status === "streaming") app.awaitingModel = true;
+    if (ASKED.has(event.status)) app.awaitingModel = true;
     if (event.status === "idle" || event.status === "loading") app.awaitingModel = false;
     void refreshModels(settled);
   }

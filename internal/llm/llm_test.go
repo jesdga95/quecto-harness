@@ -1,14 +1,19 @@
 package llm
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fixtureServer answers the three read-only endpoints from the captures and
@@ -565,6 +570,66 @@ func TestChatCanceled(t *testing.T) {
 	})
 	if Kind(err) != KindCanceled {
 		t.Fatalf("kind = %q, err = %v", Kind(err), err)
+	}
+}
+
+// A stop during the silent stretch before the first token has only one signal
+// to give the model server, which is the closed socket. This holds the client
+// where a real server holds it, headers sent and nothing written yet, and
+// measures how long the connection outlives the cancel.
+func TestChatCanceledClosesTheConnection(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	gone := make(chan time.Duration, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		r := bufio.NewReader(conn)
+		length := 0
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil || line == "\r\n" {
+				break
+			}
+			if v, ok := strings.CutPrefix(strings.ToLower(line), "content-length:"); ok {
+				length, _ = strconv.Atoi(strings.TrimSpace(v))
+			}
+		}
+		if _, err := io.ReadFull(r, make([]byte, length)); err != nil {
+			return
+		}
+		conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n"))
+		// From here a real server is processing the prompt and writing nothing.
+		start := time.Now()
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		if _, err := r.Read(make([]byte, 1)); err != io.EOF {
+			t.Errorf("read after the cancel = %v, want EOF", err)
+		}
+		gone <- time.Since(start)
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := New("http://"+ln.Addr().String(), "").stream(ctx, sent, "m", nil); Kind(err) != KindCanceled {
+		t.Fatalf("kind = %q, err = %v", Kind(err), err)
+	}
+	select {
+	case held := <-gone:
+		if held > time.Second {
+			t.Errorf("the connection stayed open %v past the cancel", held-100*time.Millisecond)
+		}
+	case <-time.After(11 * time.Second):
+		t.Fatal("the connection never closed")
 	}
 }
 

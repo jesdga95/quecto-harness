@@ -243,11 +243,12 @@
       {/each}
 
       <!-- The stretch between asking the model and its first output draws
-           nothing of its own, so the wait is shown where the reply will land. -->
+           nothing of its own, so the wait is shown where the reply will land.
+           A compaction is the whole of that stretch and names itself. -->
       {#if app.awaitingModel}
         <div class="step" aria-live="polite">
           <span class="spinner"></span>
-          <span class="text-muted">Working</span>
+          <span class="text-muted">{app.status === "compacting" ? "Compacting" : "Working"}</span>
         </div>
       {/if}
 
@@ -261,7 +262,9 @@
               <p class="bubble-text">{app.steer.text}</p>
             {/if}
           </div>
-          <span class="text-[12px] text-muted">Waiting for this turn</span>
+          <span class="text-[12px] text-muted">
+            {app.status === "compacting" ? "Waiting for the compaction" : "Waiting for this turn"}
+          </span>
         </div>
       {/if}
     </div>
