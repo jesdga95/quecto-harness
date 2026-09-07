@@ -81,6 +81,9 @@ type Session struct {
 	state   State
 	cancel  context.CancelFunc
 	turnSeq int
+	// gone is set when the session has been deleted, so a read still in
+	// flight does not write its file again.
+	gone bool
 }
 
 // repoint moves the session to a model and forgets everything the previous
@@ -97,6 +100,23 @@ func (s *Session) repoint(model string) {
 	s.ContextBase = nil
 	s.baseProbed = false
 	s.lastUsageEntry = -1
+}
+
+// forget marks the session deleted, so nothing still running writes it back.
+func (s *Session) forget() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gone = true
+}
+
+// reopen marks the model unread, so that opening a session reads it again.
+// A turn under way is left alone: it has the model it is talking to.
+func (s *Session) reopen() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == StateIdle {
+		s.prepared = false
+	}
 }
 
 func newSession(id, project, model string) *Session {

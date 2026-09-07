@@ -127,6 +127,12 @@ func (e *Engine) setState(s *Session, st State) {
 
 func (e *Engine) save(s *Session) {
 	s.mu.Lock()
+	// A read that lands after the session was deleted must not write the file
+	// back out.
+	if s.gone {
+		s.mu.Unlock()
+		return
+	}
 	doc := s.doc()
 	s.mu.Unlock()
 	if err := e.store.Save(doc); err != nil {
@@ -165,6 +171,25 @@ func (e *Engine) Create(project string) (*Session, error) {
 	e.live[s.ID] = s
 	e.mu.Unlock()
 	e.save(s)
+	e.prepare(s)
+	return s, nil
+}
+
+// Open resolves a session and reads the model it will answer with, which is
+// what opening one in the browser asks for. It reads every time rather than
+// trusting what it read before: a model server can be restarted between two
+// opens, and a router holds nothing after that. A model already up answers in
+// a moment; one that is not is loaded here rather than in the middle of the
+// first turn.
+//
+// Every other way of reaching a session, deleting it included, goes through
+// Get and reads nothing.
+func (e *Engine) Open(id string) (*Session, error) {
+	s, err := e.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	s.reopen()
 	e.prepare(s)
 	return s, nil
 }
@@ -554,47 +579,86 @@ func (e *Engine) SetModel(model string) {
 	}
 	e.mu.Unlock()
 
-	var idle []*Session
+	var moved []*Session
 	for _, s := range live {
-		s.mu.Lock()
-		if s.Model == model {
-			s.mu.Unlock()
-			continue
-		}
-		s.repoint(model)
-		ready := s.state == StateIdle
-		if ready {
-			s.state = StateLoading
-		}
-		s.mu.Unlock()
-		e.save(s)
-		if ready {
-			idle = append(idle, s)
-			e.publish(s.ID, ev("status", map[string]any{"state": string(StateLoading)}))
+		if e.pointTo(s, model) {
+			moved = append(moved, s)
 		}
 	}
 	// The read happens even when no open session is waiting on it. Picking a
 	// model is what asks a router to hold it, and a person who picks one and
 	// then opens a session should find it ready.
+	e.load(model, e.hold(moved...))
+}
+
+// pointTo moves a session onto a model, forgetting everything the last one's
+// tokenizer implied. It reports whether the session had to move.
+func (e *Engine) pointTo(s *Session, model string) bool {
+	s.mu.Lock()
+	changed := s.Model != model
+	if changed {
+		s.repoint(model)
+	}
+	s.mu.Unlock()
+	if changed {
+		e.save(s)
+	}
+	return changed
+}
+
+// point moves a session onto the harness's model and answers with it.
+func (e *Engine) point(s *Session) (string, error) {
+	model := e.cfg.Config().Model
+	if model == "" {
+		return "", ErrNoModel
+	}
+	e.pointTo(s, model)
+	return model, nil
+}
+
+// hold puts every session that can wait for a read into StateLoading, which is
+// what refuses a message meanwhile, and answers with the ones it holds. A
+// session doing anything else has the model its turn is using.
+func (e *Engine) hold(sessions ...*Session) []*Session {
+	held := make([]*Session, 0, len(sessions))
+	for _, s := range sessions {
+		s.mu.Lock()
+		if s.state != StateIdle {
+			s.mu.Unlock()
+			continue
+		}
+		s.state = StateLoading
+		s.mu.Unlock()
+		held = append(held, s)
+		e.publish(s.ID, ev("status", map[string]any{"state": string(StateLoading)}))
+	}
+	return held
+}
+
+// load reads the model in the background and hands the answer to every session
+// held for it. It is the one place a model is read outside a turn: opening a
+// session, creating one and picking one all arrive here.
+func (e *Engine) load(model string, held []*Session) {
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
 		ctx, cancel := context.WithTimeout(e.ctx, loadTimeout)
 		defer cancel()
 		r, err := e.llama().Prepare(ctx, model)
-		for _, s := range idle {
+		for _, s := range held {
 			if err == nil {
 				e.apply(s, model, r)
 			}
 			// A session busy again on its own account is left alone; the turn
 			// it is running prepared the model itself.
-			if s.State() == StateLoading {
-				if err != nil {
-					e.fail(s, err)
-					continue
-				}
-				e.setState(s, StateIdle)
+			if s.State() != StateLoading {
+				continue
 			}
+			if err != nil {
+				e.fail(s, err)
+				continue
+			}
+			e.setState(s, StateIdle)
 		}
 	}()
 }
@@ -622,9 +686,12 @@ func (e *Engine) Delete(id string) error {
 	if err != nil {
 		return err
 	}
-	if s.State() != StateIdle {
+	// A session reading its model is running nothing, and the read has nothing
+	// to lose, so it goes. Anything else is a turn to stop first.
+	if st := s.State(); st != StateIdle && st != StateLoading {
 		return ErrBusy
 	}
+	s.forget()
 	doc, _, _, _ := s.Snapshot()
 	if err := e.store.Delete(id); err != nil {
 		return err
@@ -716,49 +783,31 @@ func cleanTitle(reply string) string {
 	return store.Title(line)
 }
 
-// prepare reads the model in the background, holding the session in
-// StateLoading, which is what refuses a message meanwhile.
+// prepare reads the model a session is about to need, holding it in
+// StateLoading while the read runs.
 func (e *Engine) prepare(s *Session) {
-	s.mu.Lock()
-	if s.state != StateIdle {
-		s.mu.Unlock()
+	held := e.hold(s)
+	model, err := e.point(s)
+	if err != nil {
+		for _, h := range held {
+			e.fail(h, err)
+		}
 		return
 	}
-	s.state = StateLoading
-	s.mu.Unlock()
-	e.publish(s.ID, ev("status", map[string]any{"state": string(StateLoading)}))
-
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
-		ctx, cancel := context.WithTimeout(e.ctx, loadTimeout)
-		defer cancel()
-		if err := e.ensureReady(ctx, s); err != nil {
-			e.fail(s, err)
-			return
-		}
-		e.setState(s, StateIdle)
-	}()
+	e.load(model, held)
 }
 
 // ensureReady points the session at the harness's model and makes sure it has
-// been read. A session that last ran against another model forgets what that
-// tokenizer implied and takes this one.
+// been read, inside the turn about to use it. A session that last ran against
+// another model forgets what that tokenizer implied and takes this one.
 func (e *Engine) ensureReady(ctx context.Context, s *Session) error {
-	model := e.cfg.Config().Model
-	if model == "" {
-		return ErrNoModel
+	model, err := e.point(s)
+	if err != nil {
+		return err
 	}
 	s.mu.Lock()
-	changed := s.Model != model
-	if changed {
-		s.repoint(model)
-	}
 	done := s.prepared
 	s.mu.Unlock()
-	if changed {
-		e.save(s)
-	}
 	if done {
 		return nil
 	}

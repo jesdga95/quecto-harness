@@ -1784,6 +1784,7 @@ func NewEngine(cfg *config.Store, st *store.Sessions, cl *llm.Client,
 	pb *perms.Broker, hub Publisher) *Engine
 
 func (e *Engine) Create(project string) (*Session, error)  // takes the harness's model
+func (e *Engine) Open(id string) (*Session, error)         // Get, and reads the model
 func (e *Engine) Get(id string) (*Session, error)
 func (e *Engine) Send(id, text string) error     // returns once the turn is started
 func (e *Engine) Stop(id string) error
@@ -1798,6 +1799,24 @@ returns. A model being read is not a turn to join, so a message sent while the s
 `StateLoading` returns `ErrLoading`; a message sent while a turn runs is queued and
 picked up when the step under way has finished. `Resend` answers the same two ways, `ErrLoading` while the model is read and
 `ErrBusy` while a turn runs, which the server maps to 409.
+
+`Open` is `Get` followed by the model read, and it is what `GET /api/sessions/{id}` calls.
+It reads every time rather than trusting what it read before: a model server can be
+restarted between two opens and a router holds nothing after that, so what the harness
+knows about a model is a guess as soon as it looks away. The session sits in `StateLoading`
+until the read answers, the same as a session just created. A model already up answers in a
+moment; one that is not is loaded there rather than in the middle of the first turn. Every
+other way of reaching a session uses `Get` and reads nothing.
+
+One model read serves every caller. `pointTo` moves a session onto a model and forgets what
+the last one's tokenizer implied, `hold` puts the sessions that can wait into
+`StateLoading`, and `load` reads the model once in the background and hands the answer to
+each of them. `SetModel`, a session created, a session opened and a turn that found its
+model unread all arrive there.
+
+`DELETE /api/sessions/{id}` accepts a session that is only reading its model: the read has
+nothing to lose, and the session is marked gone so that a read landing afterwards does not
+write the file back out. Anything further along is a turn to stop first, and answers 409.
 
 `Get` resolves in this order, holding the engine lock:
 
@@ -1840,7 +1859,7 @@ const (
 | state | entered when | work done | leaves to |
 |-------|--------------|-----------|-----------|
 | `idle` | the model has been read; any terminal state completes | none | `preflight` on Send, `compacting` on Compact, `loading` on a model change |
-| `loading` | a model was chosen, or a turn found one not read | read the model: its window and its chat template | `idle` when it answers; `failed` when it does not |
+| `loading` | a model was chosen, a session was created or opened, or a turn found one not read | read the model: its window and its chat template | `idle` when it answers; `failed` when it does not |
 | `preflight` | top of each loop iteration | check iteration count, compute fill, compare with `compact_at * n_ctx`, build the request | `limit` when iteration is 50; `compacting` when over threshold; `streaming` otherwise |
 | `compacting` | threshold hit, or Compact pressed | run the compaction request, rewrite the in-context set | `preflight` when it came from the loop; `idle` when it came from the Compact button; `failed` on error |
 | `streaming` | request sent | read the SSE stream, publish `delta`, `reasoning`, `tool_call`, `usage` | `final` when no tool calls; `deciding` when there are; `stopped` on cancel; `failed` on error |

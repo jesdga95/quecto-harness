@@ -777,6 +777,48 @@ func TestSetModelRepointsAndResets(t *testing.T) {
 	}
 }
 
+// A session restored from a file has never had its model read, whatever the
+// file says, so opening it reads it the way creating one does. It takes no
+// message until that has finished.
+func TestOpeningARestoredSessionReadsTheModel(t *testing.T) {
+	h := newHarness(t)
+	s := h.sessionWith(t, "Delta3.8-27B Q5")
+	id := s.ID
+
+	// Forgotten the way a restart forgets it, with the file left behind.
+	h.engine.mu.Lock()
+	delete(h.engine.live, id)
+	h.engine.mu.Unlock()
+	h.replay.mu.Lock()
+	h.replay.Loads = nil
+	h.replay.mu.Unlock()
+
+	opened, err := h.engine.Open(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.engine.Send(id, "hello", nil); err != ErrLoading {
+		t.Errorf("send while the model is read = %v, want ErrLoading", err)
+	}
+	waitIdle(t, opened)
+
+	h.replay.mu.Lock()
+	loads := append([]string(nil), h.replay.Loads...)
+	h.replay.mu.Unlock()
+	if len(loads) != 1 || loads[0] != "Delta3.8-27B Q5" {
+		t.Errorf("loads = %v, want the model read once on open", loads)
+	}
+	// And again on the next open, since a model server restarted between two
+	// of them holds nothing.
+	if _, err := h.engine.Open(id); err != nil {
+		t.Fatal(err)
+	}
+	if got := opened.State(); got != StateLoading {
+		t.Errorf("state = %s, want the model read again on a second open", got)
+	}
+	waitIdle(t, opened)
+}
+
 // Picking a model is what asks a router to hold it, so the read happens even
 // when no session is open to wait on it.
 func TestPickingAModelLoadsItWithNothingOpen(t *testing.T) {

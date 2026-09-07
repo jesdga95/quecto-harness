@@ -294,8 +294,9 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(w, r)
-	if !ok {
+	sess, err := s.engine.Open(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "No session with that id: it may have been deleted")
 		return
 	}
 	doc, state, fill, _ := sess.Snapshot()
