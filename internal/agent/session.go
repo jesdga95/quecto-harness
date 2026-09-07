@@ -84,10 +84,9 @@ type Session struct {
 }
 
 // repoint moves the session to a model and forgets everything the previous
-// model's tokenizer implied. It returns the entry that records the change,
-// which is visible so the transcript shows where it happened and out of
-// context so the model is never told about it. The caller holds the lock.
-func (s *Session) repoint(model string) store.Entry {
+// model's tokenizer implied. The transcript says nothing about it: the chip
+// already shows which model a session is on. The caller holds the lock.
+func (s *Session) repoint(model string) {
 	s.Model = model
 	s.NCtx, s.NCtxSource = 0, ""
 	s.caps = llm.Caps{}
@@ -98,8 +97,6 @@ func (s *Session) repoint(model string) store.Entry {
 	s.ContextBase = nil
 	s.baseProbed = false
 	s.lastUsageEntry = -1
-	return s.appendEntry(store.Entry{Kind: "status", Content: "Model changed to " + model,
-		InContext: false, Visible: true})
 }
 
 func newSession(id, project, model string) *Session {

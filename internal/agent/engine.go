@@ -554,14 +554,13 @@ func (e *Engine) SetModel(model string) {
 			s.mu.Unlock()
 			continue
 		}
-		entry := s.repoint(model)
+		s.repoint(model)
 		ready := s.state == StateIdle
 		if ready {
 			s.state = StateLoading
 		}
 		s.mu.Unlock()
 		e.save(s)
-		e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
 		if ready {
 			idle = append(idle, s)
 			e.publish(s.ID, ev("status", map[string]any{"state": string(StateLoading)}))
@@ -745,16 +744,14 @@ func (e *Engine) ensureReady(ctx context.Context, s *Session) error {
 		return ErrNoModel
 	}
 	s.mu.Lock()
-	var entry store.Entry
 	changed := s.Model != model
 	if changed {
-		entry = s.repoint(model)
+		s.repoint(model)
 	}
 	done := s.prepared
 	s.mu.Unlock()
 	if changed {
 		e.save(s)
-		e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
 	}
 	if done {
 		return nil

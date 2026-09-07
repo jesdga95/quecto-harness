@@ -31,7 +31,7 @@ func sample(id string, updated time.Time) *Session {
 			{Seq: 4, Kind: "compaction", Role: "user", Content: "Summary of earlier work:\nx\n\nContinue.",
 				InContext: true, Visible: true, At: updated, Meta: map[string]any{"before": 104857.0, "after": 3120.0, "n": 1.0}},
 			{Seq: 5, Kind: "error", Content: "turn limit reached", InContext: false, Visible: true, At: updated},
-			{Seq: 6, Kind: "status", Content: "model changed to X", InContext: false, Visible: true, At: updated},
+			{Seq: 6, Kind: "status", Content: "Stopped", InContext: false, Visible: true, At: updated},
 		},
 	}
 }

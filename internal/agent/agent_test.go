@@ -770,12 +770,10 @@ func TestSetModelRepointsAndResets(t *testing.T) {
 	if doc.NCtxSource != "props" || !caps.Known {
 		t.Errorf("the new model was not read: n_ctx from %q caps %+v", doc.NCtxSource, caps)
 	}
-	last := doc.Entries[len(doc.Entries)-1]
-	if last.Kind != "status" || last.Content != "Model changed to Delta3.8-27B Q5" {
-		t.Errorf("entry = %+v", last)
-	}
-	if last.InContext || !last.Visible {
-		t.Errorf("the entry must be visible and out of context: %+v", last)
+	for _, e := range doc.Entries {
+		if e.Kind == "status" && strings.Contains(e.Content, "odel") {
+			t.Errorf("the transcript reported the change: %+v", e)
+		}
 	}
 }
 

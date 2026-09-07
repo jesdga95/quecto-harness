@@ -2003,16 +2003,9 @@ session, reads the model once and hands the answer to all of them, so a session 
 does not wait for its next message. `session.repoint` sets `session.Model`, clears `NCtx`,
 `NCtxSource`, `caps` and `prepared` so the new model is read before it is used, sets
 `session.LastUsage = nil` so the next fill is re-estimated from the entries rather than
-carried over from a different model's tokenizer, and appends
-
-```go
-store.Entry{Kind: "status", Content: "model changed to " + model,
-            InContext: false, Visible: true}
-```
-
-The entry is visible so the transcript shows where the model changed, and out of context so
-the model is never told about it. The measurement of section 8.6 is discarded with the rest,
-since it was taken against the previous tokenizer. The session is then persisted and the
+carried over from a different model's tokenizer. The transcript says nothing about the
+change; the model chip already shows which model the session is on. The measurement of
+section 8.6 is discarded with the rest, since it was taken against the previous tokenizer. The session is then persisted and the
 `Props` probe above runs.
 
 ### 8.6 The context breakdown
@@ -3436,7 +3429,7 @@ Run against `http://192.168.2.205:8080`. Steps 1 to 3 are read-only and load not
     the browser: the same tab keeps working, and `~/.quecto-harness/url` carries the same
     token as before. Delete `~/.quecto-harness/token`, restart, and the tab now gets a 401
     and the `not authorized` page.
-12. Pick another model. Every open transcript gains `Model changed to <id>`, the composer
+12. Pick another model. The chip shows it in every open transcript, the composer
     closes while it loads, the meter denominator changes, and the next turn's usage event
     reports against the new model. Switch project and confirm the picker still reads the
     model you chose. Pick one during a turn and confirm the running turn finishes on the
@@ -3491,8 +3484,8 @@ reflected in the sections above.
 
 8. **One model.** `config.model` is the only model choice there is. `PUT /api/config` points
    every session at it: each one clears `NCtx`, caps and `LastUsage` so nothing measured
-   against the previous tokenizer is carried over, and appends a visible out-of-context
-   `status` entry reading `Model changed to <id>`. A session that was not live takes it at
+   against the previous tokenizer is carried over, and the transcript records nothing.
+   A session that was not live takes it at
    the top of its next turn. A turn already running finishes on the model it started with.
    Sections 8.1, 8.5, 10.4, 12.8.
 

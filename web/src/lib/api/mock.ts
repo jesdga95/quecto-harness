@@ -394,7 +394,6 @@ export class MockApi implements HarnessApi {
     if (this.config.model !== before) {
       for (const [id, t] of this.transcripts) {
         t.session.model = this.config.model;
-        this.emit(id, { type: "status_entry", text: "Model changed to " + this.config.model });
       }
     }
     return { ...this.config };
