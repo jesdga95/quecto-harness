@@ -919,16 +919,15 @@ func (e *Engine) probeContextBase(s *Session) {
 	}()
 }
 
+// fail ends the turn on the stream. The message is not kept: it says what went
+// wrong with one request, which is of no use to a reader of the session later
+// and of none at all to the model.
 func (e *Engine) fail(s *Session, err error) {
 	kind := string(llm.Kind(err))
 	if kind == "" {
 		kind = "internal"
 	}
-	s.mu.Lock()
-	s.appendEntry(store.Entry{Kind: "error", Content: err.Error(), InContext: false, Visible: true})
-	s.mu.Unlock()
 	e.setState(s, StateFailed)
-	e.save(s)
 	e.publish(s.ID, ev("error", map[string]any{"kind": kind, "message": err.Error()}))
 	e.finish(s, StateIdle, "error", 0, nil)
 	e.flushSteer(s)

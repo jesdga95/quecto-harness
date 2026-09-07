@@ -580,13 +580,16 @@ func TestUpstreamErrorEndsTheTurnInFailed(t *testing.T) {
 	h.engine.Send(s.ID, "go", nil)
 	waitIdle(t, s)
 
-	doc, _, _, _ := s.Snapshot()
-	last := doc.Entries[len(doc.Entries)-1]
-	if last.Kind != "error" || !strings.Contains(last.Content, "context shift is disabled") {
-		t.Errorf("last entry = %+v", last)
+	errs := h.rec.ofType("error")
+	if len(errs) == 0 || !strings.Contains(errs[0].Fields["message"].(string), "context shift is disabled") {
+		t.Errorf("error events = %+v", errs)
 	}
-	if len(h.rec.ofType("error")) == 0 {
-		t.Error("no error event was published")
+	// The message belongs to the request that failed, not to the session.
+	doc, _, _, _ := s.Snapshot()
+	for i, e := range doc.Entries {
+		if e.Kind == "error" {
+			t.Errorf("entry %d kept the failure: %+v", i, e)
+		}
 	}
 	states := h.rec.states()
 	if states[len(states)-2] != "failed" {

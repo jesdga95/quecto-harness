@@ -1867,7 +1867,7 @@ const (
 | `executing` | a call was allowed or denied | run the tool or synthesise the denial, append the tool entry | `deciding` for the next call; `preflight` when the calls are exhausted |
 | `final` | assistant replied with no tool calls | append the assistant entry, persist, publish `done` | `idle` |
 | `stopped` | Stop pressed, or shutdown | kill the command, cancel pending decisions, append and publish a stopped marker, persist, send any queued message | `idle` |
-| `failed` | any non-cancel error | append an error entry, persist, publish `error` and `done` | `idle` |
+| `failed` | any non-cancel error | publish `error` and `done`. The message is not stored: it belongs to the request that failed | `idle` |
 | `limit` | 50 iterations without a plain reply | append `turn limit reached`, persist, publish `error` and `done` | `idle` |
 
 Every state change publishes `{"type":"status","state":"<state>"}` on the session's SSE
@@ -2212,7 +2212,7 @@ package store
 // is sent to the model.
 type Entry struct {
 	Seq       int    `json:"seq"`
-	Kind      string `json:"kind"` // user, assistant, tool, compaction, error, status
+	Kind      string `json:"kind"` // user, assistant, tool, compaction, status
 	Role      string `json:"role"` // OpenAI role, empty for non-message kinds
 
 	Content   string `json:"content,omitempty"`
@@ -3135,7 +3135,7 @@ export class AppStore {
 
 ```ts
 // stores/session.svelte.ts
-export type EntryKind = "user" | "assistant" | "tool" | "compaction" | "error" | "status";
+export type EntryKind = "user" | "assistant" | "tool" | "compaction" | "status";
 
 export type Entry = {
   seq: number;

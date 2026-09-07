@@ -485,11 +485,6 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
 
   if (e.kind === "status") {
     items.push({ kind: "status", id: `s${seq}`, text: e.content ?? "" });
-    return;
-  }
-
-  if (e.kind === "error") {
-    items.push({ kind: "error", id: `e${seq}`, message: e.content ?? "" });
   }
 }
 
