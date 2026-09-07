@@ -461,13 +461,18 @@ type Client struct {
 func New(baseURL, token string) *Client
 ```
 
-The probe is `GET /props` with no query parameters, which is a read on any llama.cpp server
-and cannot load a model. A reply carrying `build_info` selects the llama.cpp backend.
-Anything else, a 404 included, selects the OpenAI-compatible one, since a server that does
-not have the endpoint is not a llama.cpp server. Silence and a refused token name no
-protocol, so they are returned as the failure they are and nothing is remembered; a
-successful probe is remembered for the life of the `Client`, and changing `server.url`
-builds a new one.
+`Detect` is the probe. It reads `GET /props` with no query parameters, which is a read on
+any llama.cpp server and cannot load a model, and a reply carrying `build_info` selects the
+llama.cpp backend. Anything else, a 404 included, falls through to the OpenAI-compatible
+backend, whose own detection is the model list. Silence and a refused token name no protocol,
+so they are returned as the failure they are and nothing is remembered.
+
+`Detect` decides again every time it is called rather than answering from what it found
+before, because what answers at an address can change while the harness runs: a box that
+served one protocol at breakfast can serve the other by lunch, and a gateway that was
+starting up answered like neither. The other four calls take the last decision for
+`resolveTTL`, one minute, so a run of requests costs one probe and a swapped server is
+followed within it.
 
 The HTTP client has no `Timeout`, because a chat stream can legitimately run for minutes.
 Deadlines come from the caller's context. Transport settings: `MaxIdleConnsPerHost: 4`,
@@ -2002,7 +2007,8 @@ it last ran against, which is a note rather than a choice: `ensureReady` compare
 `cfg.Model` at the top of every turn and repoints the session when they differ.
 `PUT /api/config` with a new model calls `Engine.SetModel`, which repoints every live
 session, reads the model once and hands the answer to all of them, so a session already open
-does not wait for its next message. `session.repoint` sets `session.Model`, clears `NCtx`,
+does not wait for its next message. The read happens even when nothing is open: picking a
+model is what asks a router to hold it. `session.repoint` sets `session.Model`, clears `NCtx`,
 `NCtxSource`, `caps` and `prepared` so the new model is read before it is used, sets
 `session.LastUsage = nil` so the next fill is re-estimated from the entries rather than
 carried over from a different model's tokenizer. The transcript says nothing about the

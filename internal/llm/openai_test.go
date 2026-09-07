@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -191,5 +192,91 @@ func TestOpenAIStreamFixtureIsAStream(t *testing.T) {
 	sc.Scan()
 	if !strings.HasPrefix(sc.Text(), "data: ") {
 		t.Fatalf("first line = %q, want an SSE frame", sc.Text())
+	}
+}
+
+// A protocol is what answers now, not what answered first. The address is
+// probed again rather than being taken on trust for the life of the client,
+// so a server restarted as something else is followed, and a failure that
+// happened to look like the other protocol is not remembered as one.
+func TestDetectFollowsAServerThatChangesProtocol(t *testing.T) {
+	var mu sync.Mutex
+	stage := "broken"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		at := stage
+		mu.Unlock()
+		switch {
+		case r.URL.Path == "/props" && at == "broken":
+			http.Error(w, "gateway is starting", http.StatusBadGateway)
+		case r.URL.Path == "/props" && at == "openai":
+			http.NotFound(w, r)
+		case r.URL.Path == "/props":
+			writeFixture(t, w, "props-router.json")
+		case r.URL.Path == "/v1/models" && at == "llama":
+			writeFixture(t, w, "v1-models.json")
+		case r.URL.Path == "/v1/models":
+			writeFixture(t, w, "openai-models.json")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	for _, tc := range []struct {
+		at   string
+		want Mode
+	}{{"broken", ModeOpenAI}, {"openai", ModeOpenAI}, {"llama", ModeRouter}, {"openai", ModeOpenAI}} {
+		mu.Lock()
+		stage = tc.at
+		mu.Unlock()
+		info, err := c.Detect(context.Background())
+		if err != nil {
+			t.Fatalf("%s: detect: %v", tc.at, err)
+		}
+		if info.Mode != tc.want {
+			t.Errorf("%s: mode = %q, want %q", tc.at, info.Mode, tc.want)
+		}
+	}
+}
+
+// Detection is one request, not one per call: a turn does not re-probe the
+// address before every read.
+func TestTheProtocolIsRememberedBetweenCalls(t *testing.T) {
+	var mu sync.Mutex
+	probes := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/props":
+			mu.Lock()
+			probes++
+			mu.Unlock()
+			http.NotFound(w, r)
+		case "/v1/models":
+			writeFixture(t, w, "openai-models.json")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	ctx := context.Background()
+	if _, err := c.Detect(ctx); err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := c.Models(ctx); err != nil {
+			t.Fatalf("models: %v", err)
+		}
+		if _, err := c.Prepare(ctx, "Delta3.8-27B"); err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if probes != 1 {
+		t.Errorf("probes = %d, want the one detection", probes)
 	}
 }

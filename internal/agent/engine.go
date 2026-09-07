@@ -573,10 +573,9 @@ func (e *Engine) SetModel(model string) {
 			e.publish(s.ID, ev("status", map[string]any{"state": string(StateLoading)}))
 		}
 	}
-	if len(idle) == 0 {
-		return
-	}
-
+	// The read happens even when no open session is waiting on it. Picking a
+	// model is what asks a router to hold it, and a person who picks one and
+	// then opens a session should find it ready.
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()

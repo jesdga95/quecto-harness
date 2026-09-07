@@ -777,6 +777,24 @@ func TestSetModelRepointsAndResets(t *testing.T) {
 	}
 }
 
+// Picking a model is what asks a router to hold it, so the read happens even
+// when no session is open to wait on it.
+func TestPickingAModelLoadsItWithNothingOpen(t *testing.T) {
+	h := newHarness(t)
+	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = "Delta3.8-27B Q5" }); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.SetModel("Delta3.8-27B Q5")
+	h.engine.Wait(5 * time.Second)
+
+	h.replay.mu.Lock()
+	loads := append([]string(nil), h.replay.Loads...)
+	h.replay.mu.Unlock()
+	if len(loads) != 1 || loads[0] != "Delta3.8-27B Q5" {
+		t.Errorf("loads = %v, want the model that was picked", loads)
+	}
+}
+
 // A session that was not open when the model changed takes it at its next
 // message rather than answering with the model it last ran against.
 func TestSessionTakesTheModelAtItsNextTurn(t *testing.T) {

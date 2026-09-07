@@ -1,6 +1,9 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Backend is one protocol a model server speaks. Everything above this
 // package works in these five calls and never learns which kind of server
@@ -37,54 +40,67 @@ type Info struct {
 	NCtx     int
 }
 
-// resolve returns the backend for this address, probing once and reusing the
-// answer. A probe that failed is not remembered, so a server that comes up
-// later is found on the next call.
-func (c *Client) resolve(ctx context.Context) (Backend, error) {
+// resolveTTL bounds how long the protocol is taken on trust. What answers at
+// an address can change while the harness runs, and one probe is not a fact
+// about that address for ever.
+const resolveTTL = time.Minute
+
+// remember stores the protocol the last detection settled on.
+func (c *Client) remember(b Backend) {
 	c.mu.Lock()
-	b := c.backend
+	c.resolved, c.resolvedAt = b, time.Now()
 	c.mu.Unlock()
-	if b != nil {
+}
+
+// backend is the protocol for a call that is not itself a detection. A run of
+// requests costs one probe; after that the answer is old enough to be worth
+// asking again.
+func (c *Client) backend(ctx context.Context) (Backend, error) {
+	c.mu.Lock()
+	b, at := c.resolved, c.resolvedAt
+	c.mu.Unlock()
+	if b != nil && time.Since(at) < resolveTTL {
 		return b, nil
 	}
-	b, err := c.probe(ctx)
-	if err != nil {
+	if _, err := c.Detect(ctx); err != nil {
 		return nil, err
 	}
 	c.mu.Lock()
-	c.backend = b
-	c.mu.Unlock()
-	return b, nil
+	defer c.mu.Unlock()
+	return c.resolved, nil
 }
 
-// probe reads the llama.cpp properties endpoint, which takes no query
-// parameters and so can never load a model. A server that answers it with a
-// build is llama.cpp; anything else, a 404 included, is treated as an
-// OpenAI-compatible endpoint. Silence and a refused token name no protocol at
-// all, so they come back as the failure they are.
-func (c *Client) probe(ctx context.Context) (Backend, error) {
-	var body propsBody
-	err := c.getJSON(ctx, "detect", "", c.BaseURL+propsPath, &body)
+// Detect asks the address what it is, and asks every time rather than
+// answering from what it found before.
+//
+// The llama.cpp read comes first because it is also that protocol's
+// detection: GET /props with no query parameters is a read on any llama.cpp
+// server and cannot load a model, and a reply carrying a build says which
+// server this is. Anything else that answers a model list is treated as
+// OpenAI-compatible. A refused token and silence name no protocol, so they
+// come back as the failure they are and nothing is remembered.
+func (c *Client) Detect(ctx context.Context) (Info, error) {
+	llama := &llamaBackend{c: c}
+	info, err := llama.Detect(ctx)
+	if err == nil && info.Build != "" {
+		c.remember(llama)
+		return info, nil
+	}
 	switch Kind(err) {
 	case KindAuth, KindUnreachable, KindCanceled:
-		return nil, err
+		return Info{Mode: ModeUnknown}, err
 	}
-	if err == nil && body.BuildInfo != nil {
-		return &llamaBackend{c: c}, nil
-	}
-	return &openAIBackend{c: c}, nil
-}
-
-func (c *Client) Detect(ctx context.Context) (Info, error) {
-	b, err := c.resolve(ctx)
+	openai := &openAIBackend{c: c}
+	info, err = openai.Detect(ctx)
 	if err != nil {
 		return Info{Mode: ModeUnknown}, err
 	}
-	return b.Detect(ctx)
+	c.remember(openai)
+	return info, nil
 }
 
 func (c *Client) Models(ctx context.Context) ([]Model, error) {
-	b, err := c.resolve(ctx)
+	b, err := c.backend(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +108,7 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 }
 
 func (c *Client) Prepare(ctx context.Context, model string) (Ready, error) {
-	b, err := c.resolve(ctx)
+	b, err := c.backend(ctx)
 	if err != nil {
 		return Ready{}, err
 	}
@@ -100,7 +116,7 @@ func (c *Client) Prepare(ctx context.Context, model string) (Ready, error) {
 }
 
 func (c *Client) Props(ctx context.Context, model string) (Props, error) {
-	b, err := c.resolve(ctx)
+	b, err := c.backend(ctx)
 	if err != nil {
 		return Props{}, err
 	}
@@ -108,7 +124,7 @@ func (c *Client) Props(ctx context.Context, model string) (Props, error) {
 }
 
 func (c *Client) Chat(ctx context.Context, req ChatRequest, on func(Event) error) (Result, error) {
-	b, err := c.resolve(ctx)
+	b, err := c.backend(ctx)
 	if err != nil {
 		return Result{}, err
 	}

@@ -34,8 +34,9 @@ type Client struct {
 	Token   string
 	HTTP    *http.Client
 
-	mu      sync.Mutex
-	backend Backend
+	mu         sync.Mutex
+	resolved   Backend
+	resolvedAt time.Time
 }
 
 func New(baseURL, token string) *Client {
