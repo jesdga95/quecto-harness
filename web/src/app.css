@@ -1273,6 +1273,12 @@
     overflow-x: auto;
     padding: 6px 0;
   }
+  /* As wide as the longest line, and never narrower than the panel. The rows
+     inside inherit that width, so tint reaches the end of the scroll. */
+  .diff-body {
+    width: max-content;
+    min-width: 100%;
+  }
   .diff-line {
     display: flex;
     font-family: var(--font-mono);
