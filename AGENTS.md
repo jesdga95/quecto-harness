@@ -68,9 +68,15 @@ itself.
 
 Naming a model in a query parameter with autoload on loads it on the remote machine, so
 a passive read becomes a write. Every model-scoped request goes through the one helper in
-`internal/llama`, which takes the choice as an argument so that each caller states which
+`internal/llm`, which takes the choice as an argument so that each caller states which
 it is asking for. `Prepare` is the only one that asks to load, and it runs when a person
 picks a model.
+
+A protocol is a backend in `internal/llm` behind one interface, and nothing above that
+package names one. Fields a server does not define do not leave its own file: llama.cpp's
+`/props`, its reasoning budget and its template arguments belong to the llama.cpp backend,
+and a request built for one server is never sent to another. What a protocol cannot say is
+left unknown rather than filled in with a plausible value.
 
 ## Dependencies
 

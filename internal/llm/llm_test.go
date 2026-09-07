@@ -1,4 +1,4 @@
-package llama
+package llm
 
 import (
 	"context"
@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -43,12 +41,8 @@ func fixtureServer(t *testing.T) *httptest.Server {
 
 func writeFixture(t *testing.T, w http.ResponseWriter, name string) {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("testdata", name))
-	if err != nil {
-		t.Fatalf("read fixture %s: %v", name, err)
-	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	w.Write(readFixture(t, name))
 }
 
 func TestDetectRouter(t *testing.T) {
@@ -155,7 +149,7 @@ func TestPropsReadsPreserveReasoning(t *testing.T) {
 	}
 }
 
-func TestBuildBodyPreserveReasoning(t *testing.T) {
+func TestLlamaBodyPreserveReasoning(t *testing.T) {
 	able := Caps{Known: true, PreserveReasoning: true}
 	cases := []struct {
 		name     string
@@ -177,7 +171,7 @@ func TestBuildBodyPreserveReasoning(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, err := buildBody(tc.req)
+			raw, err := buildLlamaBody(tc.req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -204,7 +198,7 @@ func TestBuildBodyPreserveReasoning(t *testing.T) {
 }
 
 func TestReasoningContentRidesTheAssistantMessage(t *testing.T) {
-	raw, err := buildBody(ChatRequest{Model: "m", Messages: []Message{
+	raw, err := buildLlamaBody(ChatRequest{Model: "m", Messages: []Message{
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi", ReasoningContent: "they said hello"},
 		{Role: "assistant", Content: "no thinking here"},
@@ -230,23 +224,23 @@ func TestReasoningContentRidesTheAssistantMessage(t *testing.T) {
 }
 
 func TestModelURLStatesAutoload(t *testing.T) {
-	c := New("http://example/", "")
-	u := c.modelURL("/props", "Beta 30B Q5", false, nil)
+	const base = "http://example"
+	u := modelURL(base, "/props", "Beta 30B Q5", false)
 	if !strings.Contains(u, "autoload=false") {
 		t.Fatalf("modelURL = %q, a read must say autoload=false", u)
 	}
 	if !strings.Contains(u, "model=Beta+30B+Q5") {
 		t.Errorf("modelURL = %q, model id not escaped", u)
 	}
-	if u := c.modelURL("/props", "Beta 30B Q5", true, nil); !strings.Contains(u, "autoload=true") {
+	if u := modelURL(base, "/props", "Beta 30B Q5", true); !strings.Contains(u, "autoload=true") {
 		t.Errorf("modelURL = %q, a load must say autoload=true", u)
 	}
-	if got := c.modelURL("/props", "", false, nil); got != "http://example/props" {
+	if got := modelURL(base, "/props", "", false); got != "http://example/props" {
 		t.Errorf("unscoped modelURL = %q", got)
 	}
 }
 
-func TestBuildBodyEffort(t *testing.T) {
+func TestLlamaBodyEffort(t *testing.T) {
 	known := Caps{Known: true, ReasoningEffort: true}
 	unknown := Caps{}
 	cases := []struct {
@@ -269,7 +263,7 @@ func TestBuildBodyEffort(t *testing.T) {
 	for _, tc := range cases {
 		name := fmt.Sprintf("%s/known=%v", tc.effort, tc.caps.Known && tc.caps.ReasoningEffort)
 		t.Run(name, func(t *testing.T) {
-			raw, err := buildBody(ChatRequest{Model: "m", Effort: tc.effort, Caps: tc.caps})
+			raw, err := buildLlamaBody(ChatRequest{Model: "m", Effort: tc.effort, Caps: tc.caps})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -327,12 +321,16 @@ func sseServer(t *testing.T, frames []string) *httptest.Server {
 	}))
 }
 
+// sent is a rendered request. Which backend rendered it changes nothing
+// downstream, so the decoding tests post it straight at the shared reader.
+var sent = []byte(`{"model":"m","stream":true}`)
+
 func chatFrames(t *testing.T, frames []string) (Result, []Event, error) {
 	t.Helper()
 	srv := sseServer(t, frames)
 	defer srv.Close()
 	var events []Event
-	res, err := New(srv.URL, "").Chat(context.Background(), ChatRequest{Model: "m"}, func(e Event) error {
+	res, err := New(srv.URL, "").stream(context.Background(), sent, "m", func(e Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -548,7 +546,7 @@ func TestChatNonStreamingReply(t *testing.T) {
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"whole"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`)
 	}))
 	defer srv.Close()
-	res, err := New(srv.URL, "").Chat(context.Background(), ChatRequest{Model: "m"}, nil)
+	res, err := New(srv.URL, "").stream(context.Background(), sent, "m", nil)
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
@@ -561,7 +559,7 @@ func TestChatCanceled(t *testing.T) {
 	srv := sseServer(t, []string{`data: {"choices":[{"delta":{"content":"a"}}]}`})
 	defer srv.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	_, err := New(srv.URL, "").Chat(ctx, ChatRequest{Model: "m"}, func(e Event) error {
+	_, err := New(srv.URL, "").stream(ctx, sent, "m", func(e Event) error {
 		cancel()
 		return nil
 	})
@@ -578,7 +576,7 @@ func TestChatCallbackErrorAborts(t *testing.T) {
 	})
 	defer srv.Close()
 	sentinel := errors.New("stop reading")
-	_, err := New(srv.URL, "").Chat(context.Background(), ChatRequest{Model: "m"}, func(e Event) error {
+	_, err := New(srv.URL, "").stream(context.Background(), sent, "m", func(e Event) error {
 		return sentinel
 	})
 	if !errors.Is(err, sentinel) {

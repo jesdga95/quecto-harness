@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"quecto-harness/internal/config"
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 	"quecto-harness/internal/store"
 )
 
@@ -229,8 +229,8 @@ func TestRewindRestoresContextAndPlan(t *testing.T) {
 	s := newSession(store.NewID(), "/p", "Alpha-12B")
 	todos := func(id, plan string) store.Entry {
 		return store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
-			ToolCalls: []llama.ToolCall{{ID: id, Type: "function",
-				Function: llama.FunctionCall{Name: "write_todos", Arguments: plan}}}}
+			ToolCalls: []llm.ToolCall{{ID: id, Type: "function",
+				Function: llm.FunctionCall{Name: "write_todos", Arguments: plan}}}}
 	}
 
 	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "one", InContext: true, Visible: true})
@@ -250,7 +250,7 @@ func TestRewindRestoresContextAndPlan(t *testing.T) {
 	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: "call_2",
 		ToolName: "write_todos", Content: "0 of 1 done", InContext: true, Visible: true})
 	s.Todos = []store.Todo{{Text: "Add the handler", Status: "todo"}}
-	s.LastUsage = &llama.Usage{PromptTokens: 900, CompletionTokens: 100}
+	s.LastUsage = &llm.Usage{PromptTokens: 900, CompletionTokens: 100}
 	s.LastToolTokens = 15
 	s.lastUsageEntry = len(s.Entries) - 1
 
@@ -288,8 +288,8 @@ func TestRewindClearsAPlanNothingSurvivingSet(t *testing.T) {
 	s := newSession(store.NewID(), "/p", "Alpha-12B")
 	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "one", InContext: true, Visible: true})
 	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
-		ToolCalls: []llama.ToolCall{{ID: "call_1", Type: "function",
-			Function: llama.FunctionCall{Name: "write_todos", Arguments: `{"todos":[{"text":"Read","status":"todo"}]}`}}}})
+		ToolCalls: []llm.ToolCall{{ID: "call_1", Type: "function",
+			Function: llm.FunctionCall{Name: "write_todos", Arguments: `{"todos":[{"text":"Read","status":"todo"}]}`}}}})
 	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: "call_1",
 		ToolName: "write_todos", Content: "0 of 1 done", InContext: true, Visible: true})
 	s.Todos = []store.Todo{{Text: "Read", Status: "todo"}}

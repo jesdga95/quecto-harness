@@ -11,6 +11,9 @@ Ordered by size. Take from the top.
 
 ## Done
 
+- Any OpenAI-compatible server, not only llama.cpp. The first request settles
+  which of the two is behind the address, and a server with no `/props` is no
+  longer read as a broken one.
 - Steering: a message typed while the turn runs waits for it as a queue of
   one, joined a line each if you type again. It is picked up once the
   step under way has finished, so no work is thrown away, and a stop delivers
@@ -46,7 +49,7 @@ Ordered by size. Take from the top.
   with their path.
 - A plan the model keeps with write_todos, shown as a panel above the composer
   and as a step in the transcript.
-- Go backend: config, llama client with SSE parsing, three tools, permission
+- Go backend: config, model client with SSE parsing, three tools, permission
   broker, agent loop, session store, HTTP server, launchd and systemd units.
 - Svelte UI embedded in the binary. One 9.3 MB file, no runtime, no network.
 - Real HTTP and SSE wiring. The mock still runs under `VITE_MOCK=1 npm run dev`.

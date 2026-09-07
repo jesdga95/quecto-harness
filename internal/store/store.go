@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"quecto-harness/internal/config"
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 )
 
 var ErrNotFound = errors.New("No session with that id")
@@ -33,11 +33,11 @@ type Entry struct {
 	Content   string `json:"content,omitempty"`
 	Reasoning string `json:"reasoning,omitempty"`
 
-	ToolCalls  []llama.ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	ToolName   string           `json:"tool_name,omitempty"`
-	ExitCode   *int             `json:"exit_code,omitempty"`
-	Truncated  bool             `json:"truncated,omitempty"`
+	ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	ToolName   string         `json:"tool_name,omitempty"`
+	ExitCode   *int           `json:"exit_code,omitempty"`
+	Truncated  bool           `json:"truncated,omitempty"`
 
 	Permission  *PermissionRecord `json:"permission,omitempty"`
 	Attachments []Attachment      `json:"attachments,omitempty"`
@@ -90,13 +90,13 @@ type Session struct {
 	Model   string `json:"model"`
 	Title   string `json:"title"`
 	// Named is set when the user typed the title. Nothing overwrites it.
-	Named       bool         `json:"named"`
-	Created     time.Time    `json:"created"`
-	Updated     time.Time    `json:"updated"`
-	NCtx        int          `json:"n_ctx"`
-	NCtxSource  string       `json:"n_ctx_source"`
-	Compactions int          `json:"compactions"`
-	LastUsage   *llama.Usage `json:"last_usage,omitempty"`
+	Named       bool       `json:"named"`
+	Created     time.Time  `json:"created"`
+	Updated     time.Time  `json:"updated"`
+	NCtx        int        `json:"n_ctx"`
+	NCtxSource  string     `json:"n_ctx_source"`
+	Compactions int        `json:"compactions"`
+	LastUsage   *llm.Usage `json:"last_usage,omitempty"`
 	// LastToolTokens is the tool schema cost inside LastUsage. It is zero when
 	// the request that produced LastUsage was sent without tools.
 	LastToolTokens int `json:"last_tool_tokens,omitempty"`

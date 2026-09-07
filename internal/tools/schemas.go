@@ -3,7 +3,7 @@ package tools
 import (
 	"encoding/json"
 
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 	"quecto-harness/internal/prompts"
 )
 
@@ -12,15 +12,15 @@ import (
 var schemas = buildSchemas()
 
 // Schemas returns the tool definitions in the order the model sees them.
-func Schemas() []llama.Tool {
-	out := make([]llama.Tool, len(schemas))
+func Schemas() []llm.Tool {
+	out := make([]llm.Tool, len(schemas))
 	copy(out, schemas)
 	return out
 }
 
-func buildSchemas() []llama.Tool {
-	return []llama.Tool{
-		{Type: "function", Function: llama.FunctionSpec{
+func buildSchemas() []llm.Tool {
+	return []llm.Tool{
+		{Type: "function", Function: llm.FunctionSpec{
 			Name:        "read_file",
 			Description: prompts.ToolReadFile(),
 			Parameters: mustSchema(map[string]any{
@@ -34,7 +34,7 @@ func buildSchemas() []llama.Tool {
 				"additionalProperties": false,
 			}),
 		}},
-		{Type: "function", Function: llama.FunctionSpec{
+		{Type: "function", Function: llm.FunctionSpec{
 			Name:        "find",
 			Description: prompts.ToolFind(),
 			Parameters: mustSchema(map[string]any{
@@ -48,7 +48,7 @@ func buildSchemas() []llama.Tool {
 				"additionalProperties": false,
 			}),
 		}},
-		{Type: "function", Function: llama.FunctionSpec{
+		{Type: "function", Function: llm.FunctionSpec{
 			Name:        "write_file",
 			Description: prompts.ToolWriteFile(),
 			Parameters: mustSchema(map[string]any{
@@ -61,7 +61,7 @@ func buildSchemas() []llama.Tool {
 				"additionalProperties": false,
 			}),
 		}},
-		{Type: "function", Function: llama.FunctionSpec{
+		{Type: "function", Function: llm.FunctionSpec{
 			Name:        "replace_in_file",
 			Description: prompts.ToolReplaceInFile(),
 			Parameters: mustSchema(map[string]any{
@@ -75,7 +75,7 @@ func buildSchemas() []llama.Tool {
 				"additionalProperties": false,
 			}),
 		}},
-		{Type: "function", Function: llama.FunctionSpec{
+		{Type: "function", Function: llm.FunctionSpec{
 			Name:        "write_todos",
 			Description: prompts.ToolWriteTodos(),
 			Parameters: mustSchema(map[string]any{
@@ -99,7 +99,7 @@ func buildSchemas() []llama.Tool {
 				"additionalProperties": false,
 			}),
 		}},
-		{Type: "function", Function: llama.FunctionSpec{
+		{Type: "function", Function: llm.FunctionSpec{
 			Name:        "run_shell",
 			Description: prompts.ToolRunShell(),
 			Parameters: mustSchema(map[string]any{

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 )
 
 func sample(id string, updated time.Time) *Session {
@@ -18,11 +18,11 @@ func sample(id string, updated time.Time) *Session {
 		ID: id, Project: "/proj", Model: "Alpha-12B", Title: "list the files here",
 		Created: updated.Add(-time.Minute), Updated: updated,
 		NCtx: 131072, NCtxSource: "props", Compactions: 1,
-		LastUsage: &llama.Usage{PromptTokens: 4193, CompletionTokens: 118, TotalTokens: 4311, CachedTokens: 3968},
+		LastUsage: &llm.Usage{PromptTokens: 4193, CompletionTokens: 118, TotalTokens: 4311, CachedTokens: 3968},
 		Entries: []Entry{
 			{Seq: 1, Kind: "user", Role: "user", Content: "list the files here", InContext: false, Visible: true, At: updated},
 			{Seq: 2, Kind: "assistant", Role: "assistant", Reasoning: "run_shell with ls",
-				ToolCalls: []llama.ToolCall{{ID: "call_0", Type: "function", Function: llama.FunctionCall{Name: "run_shell", Arguments: `{"command":"ls"}`}}},
+				ToolCalls: []llm.ToolCall{{ID: "call_0", Type: "function", Function: llm.FunctionCall{Name: "run_shell", Arguments: `{"command":"ls"}`}}},
 				InContext: false, Visible: true, At: updated},
 			{Seq: 3, Kind: "tool", Role: "tool", ToolCallID: "call_0", ToolName: "run_shell",
 				Content: "AGENTS.md\n\nexit code: 0", ExitCode: &code,

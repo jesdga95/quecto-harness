@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 )
 
 // File mirrors config.json. A nil field is absent and takes the default,
@@ -55,16 +55,16 @@ type Config struct {
 	Projects     []string
 }
 
-// Effort is defined in internal/llama, which is what turns it into request
+// Effort is defined in internal/llm, which is what turns it into request
 // fields. The alias keeps callers of this package to one import.
-type Effort = llama.Effort
+type Effort = llm.Effort
 
 const (
-	EffortAuto   = llama.EffortAuto
-	EffortOff    = llama.EffortOff
-	EffortLow    = llama.EffortLow
-	EffortMedium = llama.EffortMedium
-	EffortHigh   = llama.EffortHigh
+	EffortAuto   = llm.EffortAuto
+	EffortOff    = llm.EffortOff
+	EffortLow    = llm.EffortLow
+	EffortMedium = llm.EffortMedium
+	EffortHigh   = llm.EffortHigh
 )
 
 // EffortNames lists what the effort field accepts, for the note a rejected
@@ -158,7 +158,7 @@ func (f File) Resolve(d Config) (Config, []string) {
 		c.Model = *f.Model
 	}
 	if f.Effort != nil {
-		if llama.ValidEffort(*f.Effort) {
+		if llm.ValidEffort(*f.Effort) {
 			c.Effort = Effort(*f.Effort)
 		} else {
 			note("effort " + strconv.Quote(*f.Effort) + " is not " + EffortNames + ", using medium")

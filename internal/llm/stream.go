@@ -1,4 +1,4 @@
-package llama
+package llm
 
 import (
 	"bufio"
@@ -64,33 +64,27 @@ type partial struct {
 	args strings.Builder
 }
 
-// Chat streams one completion. on is called synchronously from the read loop,
-// in stream order; returning an error from it aborts the request.
-func (c *Client) Chat(ctx context.Context, req ChatRequest, on func(Event) error) (Result, error) {
-	body, err := buildBody(req)
+// stream sends one rendered request and decodes the reply. on is called
+// synchronously from the read loop, in stream order; returning an error from
+// it aborts the request.
+func (c *Client) stream(ctx context.Context, body []byte, model string, on func(Event) error) (Result, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+chatPath, bytes.NewReader(body))
 	if err != nil {
-		return Result{}, &Error{Kind: KindBadRequest, Op: "chat", err: err,
-			Message: "Build the request: " + err.Error()}
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return Result{}, classify("chat", c.BaseURL, req.Model, 0, "", err)
+		return Result{}, classify("chat", c.BaseURL, model, 0, "", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("Cache-Control", "no-store")
-	if c.Token != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.Token)
-	}
+	c.authorize(httpReq)
 
 	resp, err := c.httpClient().Do(httpReq)
 	if err != nil {
-		return Result{}, classify("chat", c.BaseURL, req.Model, 0, "", err)
+		return Result{}, classify("chat", c.BaseURL, model, 0, "", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		return Result{}, classify("chat", c.BaseURL, req.Model, resp.StatusCode, string(raw), nil)
+		return Result{}, classify("chat", c.BaseURL, model, resp.StatusCode, string(raw), nil)
 	}
 	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return c.readWhole(resp.Body, on)

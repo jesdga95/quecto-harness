@@ -19,7 +19,7 @@ import (
 
 	"quecto-harness/internal/agent"
 	"quecto-harness/internal/config"
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
 	"quecto-harness/internal/store"
 	"quecto-harness/internal/tools"
@@ -176,7 +176,7 @@ func newFixture(t *testing.T) *fixture {
 	}))
 	t.Cleanup(f.upstream.Close)
 
-	client := llama.New(f.upstream.URL, "")
+	client := llm.New(f.upstream.URL, "")
 	hub := NewHub()
 	broker := perms.New(cfg, func(sid string, r perms.Request) { hub.Publish(sid, agent.PermissionEvent(r)) })
 	ctx, cancel := context.WithCancel(context.Background())
@@ -196,7 +196,7 @@ func newFixture(t *testing.T) *fixture {
 
 func serveTestdata(t *testing.T, w http.ResponseWriter, name string) {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "llama", "testdata", name))
+	b, err := os.ReadFile(filepath.Join("..", "llm", "testdata", name))
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", name, err)
 	}
@@ -376,7 +376,7 @@ func TestGetState(t *testing.T) {
 
 func TestGetStateSurvivesADeadModelServer(t *testing.T) {
 	f := newFixture(t)
-	f.srv.SetClient(llama.New("http://127.0.0.1:1", ""))
+	f.srv.SetClient(llm.New("http://127.0.0.1:1", ""))
 	body := decode(t, f.do(t, "GET", "/api/state", nil))
 	if body["mode"] != "unknown" {
 		t.Errorf("mode = %v, want unknown", body["mode"])
@@ -386,6 +386,36 @@ func TestGetStateSurvivesADeadModelServer(t *testing.T) {
 	}
 	if _, ok := body["config"]; !ok {
 		t.Error("the rest of the payload was dropped")
+	}
+}
+
+func TestGetStateWithAnOpenAICompatibleServer(t *testing.T) {
+	f := newFixture(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		serveTestdata(t, w, "openai-models.json")
+	}))
+	defer upstream.Close()
+	f.srv.SetClient(llm.New(upstream.URL, ""))
+
+	body := decode(t, f.do(t, "GET", "/api/state", nil))
+	if body["mode"] != "openai" {
+		t.Errorf("mode = %v, want openai", body["mode"])
+	}
+	if body["detect_error"] != "" || body["models_error"] != "" {
+		t.Errorf("a server with no properties endpoint was reported as broken: %v %v",
+			body["detect_error"], body["models_error"])
+	}
+	models, _ := body["models"].([]any)
+	if len(models) != 1 {
+		t.Fatalf("models = %d, want the one the list names", len(models))
+	}
+	first, _ := models[0].(map[string]any)
+	if first["id"] != "Delta3.8-27B" || first["ctx_hint"] != 240000.0 || first["ctx_source"] != "models" {
+		t.Errorf("first model = %v", first)
 	}
 }
 
@@ -420,7 +450,7 @@ func TestGetModelPropsUnloadedIs409(t *testing.T) {
 		fmt.Fprint(w, `{"error":{"message":"model is not loaded"}}`)
 	}))
 	defer upstream.Close()
-	f.srv.SetClient(llama.New(upstream.URL, ""))
+	f.srv.SetClient(llm.New(upstream.URL, ""))
 	w := f.do(t, "GET", "/api/models/props?id=Beta%2030B%20Q5", nil)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", w.Code)
@@ -1161,9 +1191,9 @@ func TestConfigRepointsEngine(t *testing.T) {
 	if after == before {
 		t.Fatal("the engine kept the old client, so a turn would still use the old address")
 	}
-	cl, ok := after.(*llama.Client)
+	cl, ok := after.(*llm.Client)
 	if !ok {
-		t.Fatalf("engine backend = %T, want a llama client", after)
+		t.Fatalf("engine backend = %T, want a model client", after)
 	}
 	if cl.BaseURL != "http://192.0.2.9:9999" {
 		t.Errorf("engine BaseURL = %q, want the address just saved", cl.BaseURL)

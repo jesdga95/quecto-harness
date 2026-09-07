@@ -67,13 +67,18 @@ export interface Config {
   projects: string[];
 }
 
+/** What the harness is talking to: a llama.cpp router, one llama.cpp server,
+    an OpenAI-compatible endpoint, or nothing that answered yet. */
+export type ServerMode = "router" | "single" | "openai" | "unknown";
+
 export interface State {
-  mode: "router" | "single";
+  mode: ServerMode;
   /** Empty when the model server answered. */
   detectError?: string;
   /** Error taxonomy: "unreachable" means nothing answered at all. */
   detectKind?: string;
-  /** From GET /v1/models, which is what proves this is a llama.cpp server. */
+  /** From GET /v1/models, which is what proves there is a model behind the
+      address. */
   modelsError?: string;
   modelsKind?: string;
   config: Config;

@@ -1,11 +1,12 @@
 # Quecto Harness
 
-A local coding agent that talks to a llama.cpp server. One Go binary with the web
-UI compiled in. The transcript, the tools and the state stay on your machine.
+A local coding agent that talks to a model server you host. One Go binary with the
+web UI compiled in. The transcript, the tools and the state stay on your machine.
 
 ## Run
 
-You need a reachable llama.cpp server, either a single `llama-server` or a router.
+You need a reachable model server: a `llama-server`, a llama.cpp router, or anything
+that speaks the OpenAI chat API. The harness works out which on the first request.
 
 ```sh
 make build

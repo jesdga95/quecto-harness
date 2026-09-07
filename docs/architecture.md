@@ -8,7 +8,9 @@ answered in section 14, and those answers are already folded into the sections a
 Captured fixtures used throughout: `docs/fixtures/props-router.json`,
 `docs/fixtures/v1-models.json`, `docs/fixtures/props-model.json`. All three were read from
 the live router at `http://192.168.2.205:8080` (build `b10812-8b4b3558f`). The model-scoped
-capture used `?autoload=false`.
+capture used `?autoload=false`. `docs/fixtures/openai-models.json` was read from a live
+OpenAI-compatible endpoint, which has no `/props` at all. Model names in the fixtures are
+renamed; the shapes are verbatim.
 
 ---
 
@@ -68,13 +70,13 @@ prints `quecto-harness: <what failed>: <what to do>` to stderr and exits 1.
    is therefore stable across restarts, which is what keeps an open browser tab working
    when a service supervisor restarts the process. Deleting the file rotates the token on
    the next start, which is the only way to revoke it.
-7. Construct `llama.New(cfg.Server.URL, cfg.Server.Token)`.
+7. Construct `llm.New(cfg.Server.URL, cfg.Server.Token)`.
 8. `net.Listen("tcp", listen)`. Binding happens before anything is printed, so a port
    conflict fails with `listen 127.0.0.1:7331: address already in use: another process is
    using the port, pass --listen to choose another` and no URL is emitted.
 9. Build the `agent.Engine`, the `perms.Broker`, the `server.Server`, and start the SSE hub
    goroutine.
-10. Kick off `llama.Detect` in a goroutine with a 5 second timeout. Startup does not wait on
+10. Kick off `llm.Detect` in a goroutine with a 5 second timeout. Startup does not wait on
     it. Until it returns, `GET /api/state` reports `"mode": "unknown"` and the model picker
     shows a spinner. A failure is cached as an error string and re-attempted on the next
     `/api/state` that finds the cache older than 15 seconds.
@@ -94,7 +96,7 @@ stderr: `listening on <addr>: the session token is the only access control, bind
 
 On the first SIGINT or SIGTERM:
 
-1. Cancel the root context. Every in-flight `llama.Chat` request, every running shell
+1. Cancel the root context. Every in-flight `llm.Chat` request, every running shell
    command, and every pending permission wait observes it.
 2. `perms.Broker.CancelAll()` releases blocked tool calls with `context.Canceled`, which the
    agent loop turns into a terminal `stopped` state for each active turn.
@@ -149,7 +151,7 @@ cmd/quecto-harness
   |
   +-> internal/config      paths, config.json, allowlist.json, atomic write
   +-> internal/store       session files
-  +-> internal/llama       llama.cpp client and wire types
+  +-> internal/llm         model server clients and wire types
   +-> internal/perms       decision broker
   +-> internal/tools       read_file, write_file, run_shell
   +-> internal/prompts     embedded markdown, render funcs
@@ -162,16 +164,16 @@ cmd/quecto-harness
 Import direction, no cycles:
 
 ```
-llama     -> (stdlib only)
+llm       -> (stdlib only)
 prompts   -> (stdlib only)
 web       -> (stdlib only)
-config    -> llama (Effort type)
-tools     -> config (WriteAtomic), llama (Tool type for schemas)
-store     -> config (WriteAtomic), llama (Message, ToolCall, Usage)
+config    -> llm (Effort type)
+tools     -> config (WriteAtomic), llm (Tool type for schemas)
+store     -> config (WriteAtomic), llm (Message, ToolCall, Usage)
 perms     -> config (allowlist read and append)
-agent     -> config, llama, tools, perms, prompts, store
+agent     -> config, llm, tools, perms, prompts, store
 service   -> config (paths only)
-server    -> config, store, agent, perms, llama, web
+server    -> config, store, agent, perms, llm, web
 cmd       -> everything
 ```
 
@@ -180,13 +182,13 @@ Why each boundary exists:
 - **config** is the only package that reads or writes `~/.quecto-harness/config.json` and
   `allowlist.json`. Anything else takes a resolved value or a `*config.Store`. This keeps
   the "every field optional on read" rule in one file and makes defaults testable without a
-  filesystem. It imports `llama` for one type alias and nothing
-  else, which cannot create a cycle because `llama` imports no internal package.
-- **llama** knows nothing about sessions, tools or permissions. It converts HTTP and SSE
+  filesystem. It imports `llm` for one type alias and nothing
+  else, which cannot create a cycle because `llm` imports no internal package.
+- **llm** knows nothing about sessions, tools or permissions. It converts HTTP and SSE
   into Go values and back. It owns the `Effort` type, because effort only means something
   as a set of request fields and that translation lives here. It is the package with the
-  highest fixture-to-code ratio, and it must stay swappable for a second OpenAI-compatible
-  backend later.
+  highest fixture-to-code ratio. It holds one backend per protocol behind a single
+  interface, so a protocol is a file in this package and nothing above it changes.
 - **tools** has no knowledge of who approved a call. It takes a resolved project root and
   arguments and returns bytes. Its only policy is the path guard, which is a correctness
   property of the tool rather than a permission.
@@ -195,7 +197,7 @@ Why each boundary exists:
 - **agent** is the only package that knows the order of operations in a turn. It is also the
   only package that mutates a session.
 - **store** persists and lists. It does not know what a turn is.
-- **server** translates HTTP to calls on `agent`, `store`, `config`, `perms` and `llama`. It
+- **server** translates HTTP to calls on `agent`, `store`, `config`, `perms` and `llm`. It
   owns the SSE hub because fan-out to browsers is a transport concern.
 - **prompts** is separate so that every string sent to a model is in one directory of
   markdown, and a missing file fails the build.
@@ -275,17 +277,17 @@ type Config struct {
 	Projects         []string
 }
 
-// Effort is defined in internal/llama, which is what turns it into request
+// Effort is defined in internal/llm, which is what turns it into request
 // fields. The alias and the four re-exported constants keep callers of this
 // package to one import.
-type Effort = llama.Effort
+type Effort = llm.Effort
 
 const (
-	EffortAuto   = llama.EffortAuto
-	EffortOff    = llama.EffortOff
-	EffortLow    = llama.EffortLow
-	EffortMedium = llama.EffortMedium
-	EffortHigh   = llama.EffortHigh
+	EffortAuto   = llm.EffortAuto
+	EffortOff    = llm.EffortOff
+	EffortLow    = llm.EffortLow
+	EffortMedium = llm.EffortMedium
+	EffortHigh   = llm.EffortHigh
 )
 
 // Mode is the permission policy. One field rather than the pair of booleans
@@ -426,12 +428,30 @@ existing key, the key gets a new name and the old one is ignored.
 
 ---
 
-## 4. internal/llama
+## 4. internal/llm
 
-### 4.1 Client
+### 4.1 Client and backends
+
+Two protocols are spoken. A llama.cpp server, in router or single-model mode, and an
+OpenAI-compatible endpoint, which has a model list and a chat endpoint and nothing else.
+One interface covers both, and nothing above this package names a protocol:
 
 ```go
-// Client talks to one llama.cpp server, in router mode or single-model mode.
+type Backend interface {
+	Detect(ctx context.Context) (Info, error)
+	Models(ctx context.Context) ([]Model, error)
+	Prepare(ctx context.Context, model string) (Ready, error)
+	Props(ctx context.Context, model string) (Props, error)
+	Chat(ctx context.Context, req ChatRequest, on func(Event) error) (Result, error)
+}
+```
+
+`Client` is the address: the HTTP half both backends share, the probe that settles which one
+answers, and a delegation of the five calls to it.
+
+```go
+// Client talks to one model server and works out on its first request which
+// protocol that server speaks.
 type Client struct {
 	BaseURL string       // no trailing slash
 	Token   string       // optional bearer
@@ -440,6 +460,14 @@ type Client struct {
 
 func New(baseURL, token string) *Client
 ```
+
+The probe is `GET /props` with no query parameters, which is a read on any llama.cpp server
+and cannot load a model. A reply carrying `build_info` selects the llama.cpp backend.
+Anything else, a 404 included, selects the OpenAI-compatible one, since a server that does
+not have the endpoint is not a llama.cpp server. Silence and a refused token name no
+protocol, so they are returned as the failure they are and nothing is remembered; a
+successful probe is remembered for the life of the `Client`, and changing `server.url`
+builds a new one.
 
 The HTTP client has no `Timeout`, because a chat stream can legitimately run for minutes.
 Deadlines come from the caller's context. Transport settings: `MaxIdleConnsPerHost: 4`,
@@ -459,15 +487,16 @@ const (
 	ModeUnknown Mode = "unknown"
 	ModeRouter  Mode = "router"
 	ModeSingle  Mode = "single"
+	ModeOpenAI  Mode = "openai"
 )
 
-// Info is what one GET /props tells us about the server as a whole.
+// Info is what one probe tells us about the server as a whole.
 type Info struct {
 	Mode     Mode
-	Build    string // build_info, e.g. "b10812-8b4b3558f"
+	Build    string // llama.cpp only; build_info, e.g. "b10812-8b4b3558f"
 	Autoload bool   // router only; models_autoload
-	Model    string // single mode only; model_alias
-	NCtx     int    // single mode only; 0 when the server did not say
+	Model    string // the one model this server holds, when it holds one
+	NCtx     int    // that model's window; 0 when the server did not say
 }
 
 func (c *Client) Detect(ctx context.Context) (Info, error)
@@ -485,6 +514,9 @@ Rule: `role == "router"` selects `ModeRouter`. Anything else, including an absen
 selects `ModeSingle`. `model_alias` is present in both shapes (the router reports
 `"llama-server"`), so it is not a discriminator and is only read in single mode.
 `default_generation_settings.n_ctx` is `0` on a router and is only read in single mode.
+
+The OpenAI-compatible backend has no such endpoint. It reads `GET /v1/models`, reports
+`ModeOpenAI`, and names `Model` and `NCtx` when the list holds exactly one model.
 
 ### 4.3 Models
 
@@ -513,9 +545,10 @@ type Model struct {
 func (c *Client) Models(ctx context.Context) ([]Model, error)
 ```
 
-`GET /v1/models`. No query parameters, so no model is loaded by this call.
+`GET /v1/models`. No query parameters, so no model is loaded by this call. Both backends
+read this route; what they read out of an entry differs.
 
-`CtxHint` resolution, in order:
+`CtxHint` resolution on a llama.cpp server, in order:
 
 1. `meta.n_ctx` when present and greater than zero. Only a loaded instance carries `meta`.
    In the capture, `Gemma4-12B` is `loaded` and reports `meta.n_ctx: 131072`, which equals
@@ -534,6 +567,11 @@ is not read; the status word alone is shown.
 A model whose status is not one of the five known words is passed through verbatim in
 `Status` and rendered as a grey dot with the raw word as its label.
 
+An OpenAI-compatible list says nothing about loading, so every model it names is reported
+`loaded`: it can answer, which is all the picker is asking. `CtxHint` comes from
+`max_model_len`, or `context_length` when that is what the server calls it, with source
+`"models"`. The capture reports `max_model_len: 240000`.
+
 ### 4.4 Props
 
 ```go
@@ -548,7 +586,7 @@ type Caps struct {
 	PreserveReasoning bool
 }
 
-// Props is GET /props for one model.
+// Props is what one model reports about itself.
 type Props struct {
 	Model      string // model_alias
 	NCtx       int    // default_generation_settings.n_ctx, per slot
@@ -568,7 +606,7 @@ helper that every model-scoped GET goes through:
 ```go
 // modelURL builds a model-scoped GET. autoload=false is not optional: a
 // model-scoped GET without it loads the model on a router.
-func (c *Client) modelURL(path, model string, extra url.Values) string
+func modelURL(base, path, model string, autoload bool) string
 ```
 
 The capture for `Gemma4-12B` gives `default_generation_settings.n_ctx: 131072`,
@@ -594,6 +632,12 @@ capability key does not break decoding. `Caps.Known` is set when the map is non-
 A 4xx on `Props` means the model is not loaded (the router refuses a model-scoped read for
 an unloaded instance when autoload is off). The caller keeps the `CtxHint` and leaves
 `Caps.Known` false. This is not surfaced as an error to the user.
+
+An OpenAI-compatible server publishes no capabilities and no slot count, so its `Props` is
+the model list entry: `Model` and `NCtx`, with `Caps.Known` false. A model the list does not
+name is `KindNotFound`, since there is nothing to load it. `Prepare` on that backend is the
+same read, so a session starts with the published window and a template it must not assume
+anything about.
 
 ### 4.5 Chat: the request
 
@@ -642,8 +686,8 @@ const (
 	EffortHigh   Effort = "high"
 )
 
-// ChatRequest is the harness-level request. Wire fields are derived from it by
-// buildBody, so the effort mapping lives in one place.
+// ChatRequest is the harness-level request. Each backend renders it into its
+// own wire body, so a caller never names a protocol field.
 type ChatRequest struct {
 	Model     string
 	Messages  []Message
@@ -654,7 +698,10 @@ type ChatRequest struct {
 }
 ```
 
-`buildBody(ChatRequest) ([]byte, error)` emits, in this field order:
+`baseBody(ChatRequest)` builds the part both protocols take: `model`, `messages`, `tools`,
+`max_tokens`, `tool_choice`, `stream` and `stream_options`. Each backend adds its own
+thinking fields on top. `buildLlamaBody(ChatRequest) ([]byte, error)` emits, in this field
+order:
 
 ```json
 {
@@ -701,7 +748,7 @@ The example is a medium-effort turn against `Gemma4-12B`, whose template reports
 Rules for the thinking fields, derived from the settled effort table:
 
 ```go
-func applyEffort(body map[string]any, e Effort, caps Caps) {
+func applyEffort(body, kwargs map[string]any, e Effort, caps Caps) {
 	switch {
 	case e == EffortAuto:
 		// Nothing is set. Omitting the field and setting it to a level the
@@ -731,6 +778,13 @@ The body is built as a `map[string]any` rather than a struct because the field s
 conditional and Go struct tags cannot express "omit unless the caps say so" without a
 pointer for every field. Determinism for tests comes from `json.Marshal` on a map, which
 sorts keys.
+
+`buildOpenAIBody` sends only fields the OpenAI API defines. `reasoning_format`,
+`reasoning_budget` and `chat_template_kwargs` are llama.cpp's and are left out; thinking
+travels as `reasoning_effort`, with `"none"` for off and nothing at all for auto. There are
+no capabilities to consult, so the level goes out as chosen and a server that does not take
+the field, or does not take that level, refuses the request and says why. Thought text still
+arrives in `reasoning_content` or `reasoning`, both of which the parser already reads.
 
 ### 4.6 Chat: the call
 
@@ -970,7 +1024,7 @@ At the end of the stream, `order` is walked and each `partial` becomes a `ToolCa
 `Dropped`. An entry whose id is empty gets `fmt.Sprintf("call_%d", idx)`, because the tool
 result message needs a `tool_call_id` and some builds omit it.
 
-`Arguments` is not parsed by `llama`. Validation against the schema happens in `agent` when
+`Arguments` is not parsed by `llm`. Validation against the schema happens in `agent` when
 the call is dispatched, so a malformed argument object becomes a tool error message the
 model can react to rather than a client error.
 
@@ -1025,7 +1079,7 @@ type Error struct {
 func (e *Error) Error() string { ... } // "chat: model Gemma4-12B is loading, retry in a moment"
 func (e *Error) Unwrap() error { return e.err }
 
-func Kind(err error) ErrKind // errors.As, returns "" for a non-llama error
+func Kind(err error) ErrKind // errors.As, returns "" for any other error
 ```
 
 Classification:
@@ -1193,7 +1247,7 @@ func (r *Runner) WriteFile(ctx context.Context, args json.RawMessage) (Result, e
 func (r *Runner) RunShell(ctx context.Context, args json.RawMessage) (Result, error)
 
 // Schemas returns the three tool definitions in the order the model sees them.
-func Schemas() []llama.Tool
+func Schemas() []llm.Tool
 ```
 
 `NewRunner` fails if `root` is not an existing directory after `filepath.EvalSymlinks`.
@@ -1685,7 +1739,7 @@ type Session struct {
 	// Accounting.
 	NCtx           int    // resolved context size, 0 when unknown
 	NCtxSource     string // "props", "meta", "args", ""
-	LastUsage      *llama.Usage
+	LastUsage      *llm.Usage
 	LastToolTokens int                 // schema cost inside LastUsage, 0 when none were sent
 	ContextBase    *store.ContextBase  // measured system and schema cost, nil until measured
 	Compactions    int
@@ -1709,7 +1763,7 @@ type Turn struct {
 type Engine struct {
 	cfg    *config.Store
 	store  *store.Sessions
-	client *llama.Client
+	client *llm.Client
 	perms  *perms.Broker
 	hub    Publisher // implemented by server's SSE hub
 
@@ -1721,7 +1775,7 @@ type Publisher interface {
 	Publish(sessionID string, ev Event)
 }
 
-func NewEngine(cfg *config.Store, st *store.Sessions, cl *llama.Client,
+func NewEngine(cfg *config.Store, st *store.Sessions, cl *llm.Client,
 	pb *perms.Broker, hub Publisher) *Engine
 
 func (e *Engine) Create(project string) (*Session, error)  // takes the harness's model
@@ -1815,7 +1869,7 @@ run(turn):
           if err := compact(ctx); err != nil { fail(err); return }
       }
       state = streaming
-      req = llama.ChatRequest{
+      req = llm.ChatRequest{
           Model:    model,
           Messages: session.contextMessages(),
           Tools:    tools.Schemas(),
@@ -1863,7 +1917,7 @@ request valid.
 ### 8.4 Cancellation
 
 `Stop` does three things under the session lock: calls `session.cancel()`, calls
-`perms.CancelSession(id)`, and publishes `status: stopped`. The running `llama.Chat` sees a
+`perms.CancelSession(id)`, and publishes `status: stopped`. The running `llm.Chat` sees a
 closed body and returns `KindCanceled`. A running shell command sees its context cancelled
 and its process group killed. A blocked `Ask` returns `context.Canceled`.
 
@@ -1916,7 +1970,7 @@ with autoload on. Behind the interface:
   `autoload=false`. Anything else means the same request with autoload on, which loads the
   model and then answers for it.
 
-It returns `llama.Ready{NCtx, Source, Caps}`, and the engine writes all three onto the
+It returns `llm.Ready{NCtx, Source, Caps}`, and the engine writes all three onto the
 session. A backend that keeps everything loaded implements `Prepare` as a read and no
 caller can tell the difference.
 
@@ -1968,10 +2022,10 @@ question, and the model server answers it with one number for the whole prompt. 
 parts that never change within a session are measured instead:
 
 ```go
-count := func(schemas []llama.Tool) int {
-	res, _ := client.Chat(ctx, llama.ChatRequest{
-		Model: model, Messages: []llama.Message{system}, Tools: schemas,
-		Effort: llama.EffortOff, Caps: caps, MaxTokens: 1}, nil)
+count := func(schemas []llm.Tool) int {
+	res, _ := client.Chat(ctx, llm.ChatRequest{
+		Model: model, Messages: []llm.Message{system}, Tools: schemas,
+		Effort: llm.EffortOff, Caps: caps, MaxTokens: 1}, nil)
 	return res.Usage.PromptTokens
 }
 bare, armed := count(nil), count(tools.Schemas())
@@ -2024,7 +2078,7 @@ Against `Qwen3.8-27B Q5` the measurement is 154 tokens of system prompt and 1026
 | high | `reasoning_effort: "high"` | `reasoning_budget: -1` |
 
 `reasoning_format: "deepseek"` on every request in every row. The budget constants are Go
-constants in `internal/llama`, not configuration.
+constants in `internal/llm`, not configuration.
 
 A model is read before the first message can be sent, so the column is chosen from what its
 template actually reports rather than from a default. For `Gemma4-12B` as captured that is
@@ -2140,7 +2194,7 @@ type Entry struct {
 	Content   string `json:"content,omitempty"`
 	Reasoning string `json:"reasoning,omitempty"`
 
-	ToolCalls  []llama.ToolCall `json:"tool_calls,omitempty"`
+	ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string           `json:"tool_call_id,omitempty"`
 	ToolName   string           `json:"tool_name,omitempty"`
 	ExitCode   *int             `json:"exit_code,omitempty"`
@@ -2321,16 +2375,16 @@ type Server struct {
 	store  *store.Sessions
 	engine *agent.Engine
 	perms  *perms.Broker
-	client *llama.Client
+	client *llm.Client
 	hub    *Hub
 	token  string
 	ui     http.Handler
 
 	mu        sync.Mutex
 	modelsAt  time.Time
-	modelsVal []llama.Model
+	modelsVal []llm.Model
 	infoAt    time.Time
-	infoVal   llama.Info
+	infoVal   llm.Info
 	infoErr   error
 }
 
@@ -3248,7 +3302,7 @@ Each session row in the sidebar carries a remove control that calls
 | package | tests |
 |---------|-------|
 | `config` | defaults resolution; every clamp in the table of 3.3 with its note; absent file creates defaults; unknown keys ignored; `Config.File()` round trip; `WriteAtomic` leaves no temp file on a write error and never truncates on failure; allowlist prefix match table including `git status` versus `git statusfoo` and `rm` versus `rmdir`; concurrent `Update` under `-race` |
-| `llama` | `Detect` against the router fixture and against a synthesised single-model body; `Models` `CtxHint` from `meta` and from `args` for every entry in the fixture; `Props` decoding including `chat_template_caps`; `modelURL` always carries `autoload=false`; `buildBody` golden JSON for each of the four effort levels crossed with caps known and unknown; the SSE state machine table; tool-call accumulation, including a stream whose fragments never carry an id; malformed chunk skipping; EOF with a finish reason, EOF without one (`KindUpstream`, partial content preserved) and EOF with nothing decoded (`KindMalformed`); error taxonomy for each status |
+| `llm` | The probe: a server answering `/props` with a build is llama.cpp, one that 404s it is OpenAI-compatible, a 401 is neither and stays an error; `Detect` against the router fixture and against a synthesised single-model body; `Models` `CtxHint` from `meta` and from `args` for every entry in the fixture; `Props` decoding including `chat_template_caps`; `modelURL` always carries `autoload=false`; `buildLlamaBody` golden JSON for each of the four effort levels crossed with caps known and unknown; the OpenAI body carrying `reasoning_effort` and none of llama.cpp's fields, and its model list read for `max_model_len`; the SSE state machine table; tool-call accumulation, including a stream whose fragments never carry an id; malformed chunk skipping; EOF with a finish reason, EOF without one (`KindUpstream`, partial content preserved) and EOF with nothing decoded (`KindMalformed`); error taxonomy for each status |
 | `prompts` | every embedded file is non-empty; `System` renders with both fields substituted and leaves no `{{`; the tool descriptions match the schema descriptions by name |
 | `tools` | path guard table (section 13.3); `read_file` numbering, offset, limit, byte cap, empty file, directory, binary; `write_file` creates parents, preserves mode, atomic replace leaves the old content on a failed write; `run_shell` exit code, merged streams, timeout kill, process group kill of a forked child, truncation head and tail, `Truncate` boundary cases |
 | `perms` | `Evaluate` matrix over tool times auto times allowlist times operators, with a case per entry of the operator list and a case proving `${` does not prompt; `Ask` and `Resolve` happy path; `Resolve` on an unknown id; cancel while blocked; double resolve; `always` writes the allowlist before returning; denial content string |
@@ -3259,7 +3313,7 @@ Each session row in the sidebar carries a remove control that calls
 
 ### 13.2 Fixtures
 
-`internal/llama/testdata/` receives copies of the three captures:
+`internal/llm/testdata/` receives copies of the three captures:
 
 - `props-router.json` from `GET /props`. Drives the `ModeRouter` test and the assertion that
   `default_generation_settings.n_ctx == 0` does not become a context size.

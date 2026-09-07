@@ -1,4 +1,4 @@
-package llama
+package llm
 
 import (
 	"context"
@@ -41,7 +41,7 @@ func (e *Error) Error() string { return e.Message }
 
 func (e *Error) Unwrap() error { return e.err }
 
-// Kind reports the kind of a llama error, or the empty string for any other
+// Kind reports the kind of a model server error, or the empty string for any other
 // error.
 func Kind(err error) ErrKind {
 	var e *Error

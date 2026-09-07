@@ -14,6 +14,7 @@ import type {
   PermissionDecision,
   Project,
   Sent,
+  ServerMode,
   Session,
   State,
   Steer,
@@ -246,8 +247,9 @@ const STATUSES: ModelStatus[] = [
 const EFFORTS: Effort[] = ["auto", "off", "low", "medium", "high"];
 const PERM_MODES: PermMode[] = ["ask", "allowlist", "full"];
 
-/** The harness reports where a context number came from; two sources are real. */
-const MEASURED_CTX = new Set(["props", "meta"]);
+/** The harness reports where a context number came from. These are the ones
+    the server stated; anything else was worked out from its launch arguments. */
+const MEASURED_CTX = new Set(["props", "meta", "models"]);
 
 // The server's turn states are finer than the six the interface draws, so
 // several collapse onto one. Anything terminal reads as idle.
@@ -782,13 +784,25 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
 
 // The harness client. Sessions and sequence numbers are remembered between
 // calls so a stream can reopen where it stopped without asking the caller.
+/** The server names what it found; anything else it might say is unknown. */
+function toMode(mode: string | undefined): ServerMode {
+  switch (mode) {
+    case "router":
+    case "single":
+    case "openai":
+      return mode;
+    default:
+      return "unknown";
+  }
+}
+
 class HttpApi implements HarnessApi {
   async getState(): Promise<State> {
     const wire = await call<WireState>("/state");
     serverUrl = wire.server_url ?? "";
     projectPaths = wire.projects ?? [];
     return {
-      mode: wire.mode === "single" ? "single" : "router",
+      mode: toMode(wire.mode),
       detectError: wire.detect_error || wire.models_error || "",
       detectKind: wire.detect_kind ?? "",
       modelsError: wire.models_error ?? "",

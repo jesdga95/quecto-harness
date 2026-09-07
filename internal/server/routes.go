@@ -12,7 +12,7 @@ import (
 
 	"quecto-harness/internal/agent"
 	"quecto-harness/internal/config"
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
 	"quecto-harness/internal/store"
 )
@@ -53,7 +53,7 @@ func toConfigJSON(c config.Config) configJSON {
 	}
 }
 
-func toModelJSON(models []llama.Model) []modelJSON {
+func toModelJSON(models []llm.Model) []modelJSON {
 	out := make([]modelJSON, 0, len(models))
 	for _, m := range models {
 		mod := m.Modalities
@@ -68,7 +68,7 @@ func toModelJSON(models []llama.Model) []modelJSON {
 
 // info returns the cached detect result, retrying a failure once the cache is
 // older than the TTL so a model server that came up is noticed.
-func (s *Server) info(ctx context.Context) (llama.Info, error) {
+func (s *Server) info(ctx context.Context) (llm.Info, error) {
 	s.mu.Lock()
 	if time.Since(s.infoAt) < cacheTTL {
 		v, err := s.infoVal, s.infoErr
@@ -77,17 +77,17 @@ func (s *Server) info(ctx context.Context) (llama.Info, error) {
 	}
 	s.mu.Unlock()
 
-	if s.llamaClient().BaseURL == "" {
+	if s.modelClient().BaseURL == "" {
 		err := errors.New("No model server is set: add its address in setup")
 		s.mu.Lock()
-		s.infoVal, s.infoErr, s.infoAt = llama.Info{}, err, time.Now()
+		s.infoVal, s.infoErr, s.infoAt = llm.Info{}, err, time.Now()
 		s.mu.Unlock()
-		return llama.Info{}, err
+		return llm.Info{}, err
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	v, err := s.llamaClient().Detect(callCtx)
+	v, err := s.modelClient().Detect(callCtx)
 
 	s.mu.Lock()
 	s.infoVal, s.infoErr, s.infoAt = v, err, time.Now()
@@ -95,7 +95,7 @@ func (s *Server) info(ctx context.Context) (llama.Info, error) {
 	return v, err
 }
 
-func (s *Server) models(ctx context.Context, refresh bool) ([]llama.Model, error) {
+func (s *Server) models(ctx context.Context, refresh bool) ([]llm.Model, error) {
 	s.mu.Lock()
 	if !refresh && time.Since(s.modelsAt) < cacheTTL {
 		v, err := s.modelsVal, s.modelsErr
@@ -106,7 +106,7 @@ func (s *Server) models(ctx context.Context, refresh bool) ([]llama.Model, error
 
 	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	v, err := s.llamaClient().Models(callCtx)
+	v, err := s.modelClient().Models(callCtx)
 
 	s.mu.Lock()
 	s.modelsVal, s.modelsErr, s.modelsAt = v, err, time.Now()
@@ -127,10 +127,10 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 
 	mode := info.Mode
 	if mode == "" {
-		mode = llama.ModeUnknown
+		mode = llm.ModeUnknown
 	}
 	if infoErr != nil {
-		mode = llama.ModeUnknown
+		mode = llm.ModeUnknown
 	}
 	notes := s.cfg.Notes()
 	if notes == nil {
@@ -148,13 +148,13 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		"detect_error": errText(infoErr),
 		// The kind separates a server that refused from one that never
 		// answered, which is the difference setup cares about.
-		"detect_kind":  string(llama.Kind(infoErr)),
+		"detect_kind":  string(llm.Kind(infoErr)),
 		"config":       toConfigJSON(cfg),
 		"config_notes": notes,
 		"projects":     projects,
 		"models":       toModelJSON(models),
 		"models_error": errText(modelsErr),
-		"models_kind":  string(llama.Kind(modelsErr)),
+		"models_kind":  string(llm.Kind(modelsErr)),
 		"os":           runtime.GOOS,
 		"version":      s.version,
 	})
@@ -177,9 +177,9 @@ func (s *Server) getModelProps(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	props, err := s.llamaClient().Props(ctx, id)
+	props, err := s.modelClient().Props(ctx, id)
 	if err != nil {
-		var le *llama.Error
+		var le *llm.Error
 		if errors.As(err, &le) && le.Status >= 400 && le.Status < 500 {
 			writeError(w, http.StatusConflict, "Model \""+id+"\" is not loaded: it loads on the first message")
 			return
@@ -563,7 +563,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	if body.Effort != nil && !llama.ValidEffort(*body.Effort) {
+	if body.Effort != nil && !llm.ValidEffort(*body.Effort) {
 		writeError(w, http.StatusBadRequest, "Effort \""+*body.Effort+"\" is not "+config.EffortNames)
 		return
 	}
@@ -621,7 +621,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cfg.ServerURL != before.ServerURL || cfg.ServerToken != before.ServerToken {
-		client := llama.New(cfg.ServerURL, cfg.ServerToken)
+		client := llm.New(cfg.ServerURL, cfg.ServerToken)
 		s.SetClient(client)
 		s.engine.SetClient(client)
 		go s.Detect(context.Background())

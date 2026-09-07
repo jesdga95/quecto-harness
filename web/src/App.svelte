@@ -6,14 +6,14 @@
   import Settings from "./lib/components/Settings.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import Toasts from "./lib/components/Toasts.svelte";
-  import { app, init } from "./lib/state/app.svelte";
+  import { app, init, serverReady } from "./lib/state/app.svelte";
 
   let settings = $state(false);
   let skipped = $state(false);
 
-  // Setup shows until a model server answers, which also covers a wrong
+  // Setup shows until a model server can run a turn, which also covers a wrong
   // address later rather than only the first run.
-  const setup = $derived(!skipped && (app.detectError !== "" || app.models.length === 0));
+  const setup = $derived(!skipped && !serverReady());
 
   void init();
 </script>

@@ -1,4 +1,4 @@
-package llama
+package llm
 
 // deref reads a pointer field that may be absent. Absent is the zero value,
 // which callers must not confuse with a value the server actually sent.

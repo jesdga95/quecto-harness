@@ -1,5 +1,5 @@
-// Command quecto-harness serves a local coding agent that talks to a
-// llama.cpp server. It is one binary with the web UI compiled in.
+// Command quecto-harness serves a local coding agent that talks to a model
+// server you host. It is one binary with the web UI compiled in.
 package main
 
 import (
@@ -22,7 +22,7 @@ import (
 
 	"quecto-harness/internal/agent"
 	"quecto-harness/internal/config"
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
 	"quecto-harness/internal/server"
 	"quecto-harness/internal/service"
@@ -83,7 +83,7 @@ func parseFlags(name string, argv []string) (flags, error) {
 	return f, nil
 }
 
-const usage = `quecto-harness: A local coding agent that talks to a llama.cpp server.
+const usage = `quecto-harness: A local coding agent that talks to a model server you host.
 
 Usage:
   quecto-harness [flags]                  Serve
@@ -159,7 +159,7 @@ func serve(argv []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	client := llama.New(cfg.Config().ServerURL, cfg.Config().ServerToken)
+	client := llm.New(cfg.Config().ServerURL, cfg.Config().ServerToken)
 	hub := server.NewHub()
 	broker := perms.New(cfg, func(sessionID string, r perms.Request) {
 		hub.Publish(sessionID, agent.PermissionEvent(r))

@@ -44,7 +44,7 @@
           <input
             id="ob-url"
             class="num flex-1 border-0 bg-transparent p-0 text-[15px] outline-none"
-            placeholder="Your llama.cpp server address"
+            placeholder="Your model server address"
             bind:value={url}
             onkeydown={(e) => e.key === "Enter" && connect()}
             spellcheck="false"

@@ -37,7 +37,7 @@
     <div class="grid max-h-[62vh] grid-cols-2 gap-4 overflow-y-auto px-5 py-4">
       <label class="col-span-2 flex flex-col gap-1.5">
         <span class="label">Server url</span>
-        <input class="input" bind:value={url} placeholder="Your llama.cpp server address" />
+        <input class="input" bind:value={url} placeholder="Your model server address" />
       </label>
       <label class="flex flex-col gap-1.5">
         <span class="label">Token</span>

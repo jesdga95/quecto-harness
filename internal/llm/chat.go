@@ -1,4 +1,4 @@
-package llama
+package llm
 
 import (
 	"encoding/base64"
@@ -111,12 +111,8 @@ func ValidEffort(s string) bool {
 	return false
 }
 
-// budget is the fallback for a template that cannot take a named effort
-// level. High is -1, which llama.cpp reads as unbounded.
-var budget = map[Effort]int{EffortLow: 2048, EffortMedium: 8192, EffortHigh: -1}
-
-// ChatRequest is the harness-level request. Wire fields are derived from it
-// by buildBody, so the effort mapping lives in one place.
+// ChatRequest is the harness-level request. Each backend renders it into its
+// own wire body, so a caller never names a protocol field.
 type ChatRequest struct {
 	Model    string
 	Messages []Message
@@ -146,44 +142,17 @@ type Timings struct {
 	CacheN             int
 }
 
-// applyEffort writes the thinking fields. Omitting the field and setting it
-// to a level the template did not ask for are different requests. A template
-// that knows none of the three names refuses the request rather than guessing,
-// which is the model server's answer to give.
-func applyEffort(body, kwargs map[string]any, e Effort, caps Caps) {
-	switch {
-	case e == EffortAuto:
-	case e == EffortOff:
-		body["reasoning_budget"] = 0
-		kwargs["enable_thinking"] = false
-	case caps.Known && caps.ReasoningEffort:
-		body["reasoning_effort"] = string(e)
-	default:
-		if b, ok := budget[e]; ok {
-			body["reasoning_budget"] = b
-		}
-	}
-}
-
-// applyPreserve names the kwarg that keeps earlier thinking in the prompt. It
-// is sent only where the capability says the template acts on it, which is the
-// only case where the value changes anything.
-func applyPreserve(kwargs map[string]any, preserve bool, caps Caps) {
-	if caps.Known && caps.PreserveReasoning {
-		kwargs["preserve_reasoning"] = preserve
-	}
-}
-
-// buildBody renders the wire request. It is a map because the field set is
-// conditional, and a map also marshals with sorted keys for the tests.
-func buildBody(req ChatRequest) ([]byte, error) {
+// baseBody is the request every server takes: the fields the OpenAI chat API
+// defines and nothing else. Each backend adds what its own protocol wants. It
+// is a map because the field set is conditional, and a map also marshals with
+// sorted keys for the tests.
+func baseBody(req ChatRequest) map[string]any {
 	body := map[string]any{
-		"model":            req.Model,
-		"messages":         req.Messages,
-		"tool_choice":      "auto",
-		"stream":           true,
-		"stream_options":   map[string]any{"include_usage": true},
-		"reasoning_format": "deepseek",
+		"model":          req.Model,
+		"messages":       req.Messages,
+		"tool_choice":    "auto",
+		"stream":         true,
+		"stream_options": map[string]any{"include_usage": true},
 	}
 	if len(req.Tools) > 0 {
 		body["tools"] = req.Tools
@@ -191,11 +160,12 @@ func buildBody(req ChatRequest) ([]byte, error) {
 	if req.MaxTokens > 0 {
 		body["max_tokens"] = req.MaxTokens
 	}
-	kwargs := map[string]any{}
-	applyEffort(body, kwargs, req.Effort, req.Caps)
-	applyPreserve(kwargs, req.PreserveReasoning, req.Caps)
-	if len(kwargs) > 0 {
-		body["chat_template_kwargs"] = kwargs
-	}
-	return json.Marshal(body)
+	return body
+}
+
+// buildError reports a request that could not be rendered, which is a bug
+// here rather than anything the server did.
+func buildError(err error) *Error {
+	return &Error{Kind: KindBadRequest, Op: "chat", err: err,
+		Message: "Build the request: " + err.Error()}
 }

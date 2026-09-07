@@ -131,7 +131,7 @@ const MOCK_SUMMARY = [
 const LONG_OUTPUT = [
   "internal/agent/loop.go:41: undefined: compactIfNeeded",
   "internal/agent/loop.go:88: cannot use req (variable of type *chat.Request) as chat.Request",
-  "internal/llama/client.go:12: imported and not used: \"time\"",
+  "internal/llm/client.go:12: imported and not used: \"time\"",
   "internal/server/sse.go:64: missing return",
   "internal/tools/shell.go:30: declared and not used: cancel",
 ].join("\n");
@@ -164,7 +164,7 @@ const SCRIPT: ScriptedTurn[] = [
       "The project is a Go module.\n\n" +
       "## Layout\n" +
       "- `cmd` holds the entry point\n" +
-      "- `internal` holds the agent loop, the llama client and the tools\n" +
+      "- `internal` holds the agent loop, the model client and the tools\n" +
       "- `web` holds this interface\n\n" +
       "Tell me which part to change and I will read it before touching anything.",
     denied:
@@ -186,7 +186,7 @@ const SCRIPT: ScriptedTurn[] = [
       "The build is broken in four places, all under `internal`.\n\n" +
       "## What failed\n" +
       "- `internal/agent/loop.go` calls compactIfNeeded, which does not exist\n" +
-      "- `internal/llama/client.go` imports time and never uses it\n" +
+      "- `internal/llm/client.go` imports time and never uses it\n" +
       "- `internal/server/sse.go` has a path with no return\n\n" +
       "The first one explains the rest. Say the word and I will fix them in order.",
     denied:
@@ -199,14 +199,14 @@ const SCRIPT: ScriptedTurn[] = [
       "after the change. Run the package tests, not the whole tree.",
     preface: "Running the tests for the package I touched.\n\n",
     tool: "run_shell",
-    args: { command: "go test ./internal/llama", timeout_s: 120 },
-    command: "go test ./internal/llama",
-    output: ["ok  \tquecto-harness/internal/llama\t0.412s"].join("\n"),
+    args: { command: "go test ./internal/llm", timeout_s: 120 },
+    command: "go test ./internal/llm",
+    output: ["ok  \tquecto-harness/internal/llm\t0.412s"].join("\n"),
     exit: 0,
     truncated: false,
     reply:
       "Tests pass for the parser.\n\n" +
-      "```\nok  quecto-harness/internal/llama  0.412s\n```\n\n" +
+      "```\nok  quecto-harness/internal/llm  0.412s\n```\n\n" +
       "Nothing else in the tree touches it.",
     denied: "Not run. The change is unverified until those tests go through.",
   },

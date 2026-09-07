@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 	"quecto-harness/internal/prompts"
 	"quecto-harness/internal/store"
 )
@@ -51,7 +51,7 @@ type Session struct {
 
 	NCtx       int
 	NCtxSource string
-	LastUsage  *llama.Usage
+	LastUsage  *llm.Usage
 	// LastToolTokens is the tool schema cost inside LastUsage. A turn that
 	// spent its call budget sends no tools, and the breakdown says so rather
 	// than charging for schemas the prompt did not carry.
@@ -66,7 +66,7 @@ type Session struct {
 	// against is sent as an ordinary one instead.
 	steer *Steer
 
-	caps           llama.Caps
+	caps           llm.Caps
 	lastUsageEntry int
 	// lastSentTools reports whether the request behind LastUsage carried the
 	// tool schemas. A turn that spent its call budget sends none.
@@ -90,7 +90,7 @@ type Session struct {
 func (s *Session) repoint(model string) store.Entry {
 	s.Model = model
 	s.NCtx, s.NCtxSource = 0, ""
-	s.caps = llama.Caps{}
+	s.caps = llm.Caps{}
 	s.prepared = false
 	s.LastUsage = nil
 	s.LastToolTokens = 0
@@ -152,7 +152,7 @@ func (s *Session) State() State {
 }
 
 // Snapshot copies what a handler needs without holding the lock afterwards.
-func (s *Session) Snapshot() (*store.Session, State, int, llama.Caps) {
+func (s *Session) Snapshot() (*store.Session, State, int, llm.Caps) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.doc(), s.state, s.computeFill(), s.caps
@@ -358,8 +358,8 @@ func (s *Session) imageRefs() []string {
 // contextMessages is the system prompt followed by every in-context entry,
 // with the invariants the wire format requires repaired. images maps a file
 // id to the part built from it.
-func (s *Session) contextMessages(osName string, images map[string]llama.Part) []llama.Message {
-	msgs := []llama.Message{{
+func (s *Session) contextMessages(osName string, images map[string]llm.Part) []llm.Message {
+	msgs := []llm.Message{{
 		Role:    "system",
 		Content: prompts.System(prompts.SystemVars{Project: s.Project, OS: osName}),
 	}}
@@ -372,9 +372,9 @@ func (s *Session) contextMessages(osName string, images map[string]llama.Part) [
 		case "user":
 			msgs = append(msgs, userMessage(e, images))
 		case "compaction":
-			msgs = append(msgs, llama.Message{Role: "user", Content: prompts.Compaction(e.Content)})
+			msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(e.Content)})
 		case "assistant":
-			msgs = append(msgs, llama.Message{Role: "assistant", Content: e.Content,
+			msgs = append(msgs, llm.Message{Role: "assistant", Content: e.Content,
 				ReasoningContent: e.Reasoning, ToolCalls: e.ToolCalls})
 			msgs = append(msgs, repairToolResults(s.Entries, i, e.ToolCalls)...)
 		case "tool":
@@ -388,10 +388,10 @@ func (s *Session) contextMessages(osName string, images map[string]llama.Part) [
 // userMessage is the message as typed, with each attached text file under it
 // and each image beside it. A message with an image is an array of parts,
 // which is the only shape that carries one.
-func userMessage(e store.Entry, images map[string]llama.Part) llama.Message {
+func userMessage(e store.Entry, images map[string]llm.Part) llm.Message {
 	var b strings.Builder
 	b.WriteString(e.Content)
-	var parts []llama.Part
+	var parts []llm.Part
 	for _, a := range e.Attachments {
 		if a.Kind == "image" {
 			if part, ok := images[a.File]; ok {
@@ -405,14 +405,14 @@ func userMessage(e store.Entry, images map[string]llama.Part) llama.Message {
 		b.WriteString(prompts.Attachment(a.Path, a.Content))
 	}
 	if len(parts) == 0 {
-		return llama.Message{Role: "user", Content: b.String()}
+		return llm.Message{Role: "user", Content: b.String()}
 	}
-	return llama.Message{Role: "user", Parts: append([]llama.Part{llama.TextPart(b.String())}, parts...)}
+	return llm.Message{Role: "user", Parts: append([]llm.Part{llm.TextPart(b.String())}, parts...)}
 }
 
 // repairToolResults returns one tool message per call, synthesising the ones
 // a crash left unanswered so the history stays valid.
-func repairToolResults(entries []store.Entry, at int, calls []llama.ToolCall) []llama.Message {
+func repairToolResults(entries []store.Entry, at int, calls []llm.ToolCall) []llm.Message {
 	answered := map[string]store.Entry{}
 	for j := at + 1; j < len(entries); j++ {
 		if entries[j].Kind == "assistant" {
@@ -422,13 +422,13 @@ func repairToolResults(entries []store.Entry, at int, calls []llama.ToolCall) []
 			answered[entries[j].ToolCallID] = entries[j]
 		}
 	}
-	out := make([]llama.Message, 0, len(calls))
+	out := make([]llm.Message, 0, len(calls))
 	for _, c := range calls {
 		if e, ok := answered[c.ID]; ok {
-			out = append(out, llama.Message{Role: "tool", ToolCallID: c.ID, Name: e.ToolName, Content: e.Content})
+			out = append(out, llm.Message{Role: "tool", ToolCallID: c.ID, Name: e.ToolName, Content: e.Content})
 			continue
 		}
-		out = append(out, llama.Message{Role: "tool", ToolCallID: c.ID, Name: c.Function.Name,
+		out = append(out, llm.Message{Role: "tool", ToolCallID: c.ID, Name: c.Function.Name,
 			Content: "not run: the session was interrupted"})
 	}
 	return out

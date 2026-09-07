@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"quecto-harness/internal/config"
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
 	"quecto-harness/internal/store"
 	"quecto-harness/internal/tools"
@@ -96,7 +96,7 @@ func newHarness(t *testing.T, fixtures ...string) *harness {
 	rec := &recorder{}
 	broker := perms.New(cfg, func(sid string, r perms.Request) { rec.Publish(sid, PermissionEvent(r)) })
 	ctx, cancel := context.WithCancel(context.Background())
-	engine := NewEngine(ctx, cfg, st, blobs, llama.New(srv.URL, ""), broker, rec)
+	engine := NewEngine(ctx, cfg, st, blobs, llm.New(srv.URL, ""), broker, rec)
 	// The temporary home goes away when the test ends, so nothing the engine
 	// started may still be writing sessions into it.
 	t.Cleanup(func() {
@@ -644,7 +644,7 @@ func TestComputeFillBeforeAndAfterUsage(t *testing.T) {
 	}
 
 	s.mu.Lock()
-	s.LastUsage = &llama.Usage{PromptTokens: 1000, CompletionTokens: 24}
+	s.LastUsage = &llm.Usage{PromptTokens: 1000, CompletionTokens: 24}
 	s.lastUsageEntry = len(s.Entries) - 1
 	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", Content: strings.Repeat("y", 800), InContext: true, Visible: true})
 	withUsage := s.computeFill()
@@ -750,7 +750,7 @@ func TestSetModelRepointsAndResets(t *testing.T) {
 	s := h.session(t)
 	s.mu.Lock()
 	s.NCtx, s.NCtxSource = 131072, "props"
-	s.LastUsage = &llama.Usage{PromptTokens: 100}
+	s.LastUsage = &llm.Usage{PromptTokens: 100}
 	s.mu.Unlock()
 
 	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = "Delta3.8-27B Q5" }); err != nil {
@@ -862,8 +862,8 @@ func TestUnansweredToolCallIsRepaired(t *testing.T) {
 	s.mu.Lock()
 	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "go", InContext: true, Visible: true})
 	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
-		ToolCalls: []llama.ToolCall{{ID: "call_x", Type: "function",
-			Function: llama.FunctionCall{Name: "run_shell", Arguments: `{"command":"ls"}`}}}})
+		ToolCalls: []llm.ToolCall{{ID: "call_x", Type: "function",
+			Function: llm.FunctionCall{Name: "run_shell", Arguments: `{"command":"ls"}`}}}})
 	msgs := s.contextMessages("darwin", nil)
 	s.mu.Unlock()
 

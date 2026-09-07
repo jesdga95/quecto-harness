@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"quecto-harness/internal/config"
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
 	"quecto-harness/internal/prompts"
 	"quecto-harness/internal/store"
@@ -72,12 +72,12 @@ func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files
 
 // messages builds the prompt for a session. The image bytes are read between
 // the two locks, so nothing does file IO while the session is held.
-func (e *Engine) messages(s *Session) []llama.Message {
+func (e *Engine) messages(s *Session) []llm.Message {
 	s.mu.Lock()
 	refs := s.imageRefs()
 	s.mu.Unlock()
 
-	images := map[string]llama.Part{}
+	images := map[string]llm.Part{}
 	for _, id := range refs {
 		raw, err := e.files.Read(id)
 		if err != nil {
@@ -85,7 +85,7 @@ func (e *Engine) messages(s *Session) []llama.Message {
 			// the message still says an image was attached.
 			continue
 		}
-		images[id] = llama.ImagePart(mimeOf(raw), raw)
+		images[id] = llm.ImagePart(mimeOf(raw), raw)
 	}
 
 	s.mu.Lock()
@@ -664,7 +664,7 @@ func (e *Engine) Wait(d time.Duration) {
 // tokens either way.
 //
 // A failure is not an error: the session keeps the title cut from the message.
-func (e *Engine) titleSession(ctx context.Context, s *Session, model string, caps llama.Caps) {
+func (e *Engine) titleSession(ctx context.Context, s *Session, model string, caps llm.Caps) {
 	s.mu.Lock()
 	first, text := s.firstTurn(), s.firstUserMessage()
 	s.mu.Unlock()
@@ -673,10 +673,10 @@ func (e *Engine) titleSession(ctx context.Context, s *Session, model string, cap
 	}
 	tctx, cancel := context.WithTimeout(ctx, titleTimeout)
 	defer cancel()
-	res, err := e.llama().Chat(tctx, llama.ChatRequest{
+	res, err := e.llama().Chat(tctx, llm.ChatRequest{
 		Model:     model,
-		Messages:  []llama.Message{{Role: "user", Content: prompts.Title(text)}},
-		Effort:    llama.EffortOff,
+		Messages:  []llm.Message{{Role: "user", Content: prompts.Title(text)}},
+		Effort:    llm.EffortOff,
 		Caps:      caps,
 		MaxTokens: titleTokens,
 	}, nil)
@@ -770,7 +770,7 @@ func (e *Engine) ensureReady(ctx context.Context, s *Session) error {
 
 // apply writes what a model answered onto a session, unless it has moved to
 // another model since the read began.
-func (e *Engine) apply(s *Session, model string, r llama.Ready) {
+func (e *Engine) apply(s *Session, model string, r llm.Ready) {
 	s.mu.Lock()
 	if s.Model != model {
 		s.mu.Unlock()
@@ -787,7 +787,7 @@ func (e *Engine) apply(s *Session, model string, r llama.Ready) {
 }
 
 // turnModel is the model and the capabilities a whole turn is shaped by.
-func (e *Engine) turnModel(s *Session) (string, llama.Caps) {
+func (e *Engine) turnModel(s *Session) (string, llm.Caps) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.Model, s.caps
@@ -805,7 +805,7 @@ func (e *Engine) probeContextBase(s *Session) {
 	s.mu.Lock()
 	model, caps := s.Model, s.caps
 	done := s.baseProbed || (s.ContextBase != nil && s.ContextBase.Model == model)
-	system := llama.Message{Role: "system",
+	system := llm.Message{Role: "system",
 		Content: prompts.System(prompts.SystemVars{Project: s.Project, OS: e.os})}
 	s.mu.Unlock()
 	if model == "" || done {
@@ -818,10 +818,10 @@ func (e *Engine) probeContextBase(s *Session) {
 		defer e.wg.Done()
 		ctx, cancel := context.WithTimeout(e.ctx, 60*time.Second)
 		defer cancel()
-		count := func(schemas []llama.Tool) (int, bool) {
-			res, err := e.llama().Chat(ctx, llama.ChatRequest{
-				Model: model, Messages: []llama.Message{system}, Tools: schemas,
-				Effort: llama.EffortOff, Caps: caps, MaxTokens: 1}, nil)
+		count := func(schemas []llm.Tool) (int, bool) {
+			res, err := e.llama().Chat(ctx, llm.ChatRequest{
+				Model: model, Messages: []llm.Message{system}, Tools: schemas,
+				Effort: llm.EffortOff, Caps: caps, MaxTokens: 1}, nil)
 			if err != nil || res.Usage == nil || res.Usage.PromptTokens <= 0 {
 				return 0, false
 			}
@@ -852,7 +852,7 @@ func (e *Engine) probeContextBase(s *Session) {
 }
 
 func (e *Engine) fail(s *Session, err error) {
-	kind := string(llama.Kind(err))
+	kind := string(llm.Kind(err))
 	if kind == "" {
 		kind = "internal"
 	}
@@ -878,7 +878,7 @@ type turnCost struct {
 
 // add folds in one finished request. first is when its stream began to
 // produce, which is zero for a request that produced nothing.
-func (c *turnCost) add(res llama.Result, first time.Time) {
+func (c *turnCost) add(res llm.Result, first time.Time) {
 	c.requests++
 	if res.Usage != nil {
 		c.tokens += res.Usage.CompletionTokens
@@ -906,9 +906,9 @@ func (c *turnCost) fields() map[string]any {
 // carriesOutput reports whether an event is part of the generation. Usage and
 // the finish reason arrive after the last token and would put the start of
 // generation at the end of the stream.
-func carriesOutput(kind llama.EventKind) bool {
+func carriesOutput(kind llm.EventKind) bool {
 	switch kind {
-	case llama.EventContent, llama.EventReasoning, llama.EventToolCall:
+	case llm.EventContent, llm.EventReasoning, llm.EventToolCall:
 		return true
 	}
 	return false
@@ -1003,7 +1003,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		e.setState(s, StateStreaming)
 		msgs := e.messages(s)
 		s.mu.Lock()
-		req := llama.ChatRequest{
+		req := llm.ChatRequest{
 			Model:             model,
 			Messages:          msgs,
 			Effort:            cfg.Effort,
@@ -1019,7 +1019,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		// generation rate is measured against. Chat calls on synchronously
 		// from its read loop, so no lock is needed here.
 		var first time.Time
-		res, err := e.llama().Chat(ctx, req, func(event llama.Event) error {
+		res, err := e.llama().Chat(ctx, req, func(event llm.Event) error {
 			if first.IsZero() && carriesOutput(event.Kind) {
 				first = time.Now()
 			}
@@ -1115,7 +1115,7 @@ func (e *Engine) noteLimit(s *Session, calls int) {
 
 // endWithError separates a cancellation, which is a stop, from a failure.
 func (e *Engine) endWithError(s *Session, err error, iteration int) {
-	if llama.Kind(err) == llama.KindCanceled || errors.Is(err, context.Canceled) {
+	if llm.Kind(err) == llm.KindCanceled || errors.Is(err, context.Canceled) {
 		e.markStopped(s)
 		return
 	}
@@ -1134,7 +1134,7 @@ func (e *Engine) markStopped(s *Session) {
 
 // stopWith records the refused call so the assistant message keeps its pair
 // before the turn ends.
-func (e *Engine) stopWith(s *Session, call llama.ToolCall, record *store.PermissionRecord) {
+func (e *Engine) stopWith(s *Session, call llm.ToolCall, record *store.PermissionRecord) {
 	s.mu.Lock()
 	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: call.ID,
 		ToolName: call.Function.Name, Content: "stopped by user",
@@ -1144,13 +1144,13 @@ func (e *Engine) stopWith(s *Session, call llama.ToolCall, record *store.Permiss
 	e.markStopped(s)
 }
 
-func (e *Engine) forward(s *Session, event llama.Event) {
+func (e *Engine) forward(s *Session, event llm.Event) {
 	switch event.Kind {
-	case llama.EventContent:
+	case llm.EventContent:
 		e.publish(s.ID, ev("delta", map[string]any{"text": event.Text}))
-	case llama.EventReasoning:
+	case llm.EventReasoning:
 		e.publish(s.ID, ev("reasoning", map[string]any{"text": event.Text}))
-	case llama.EventToolCall:
+	case llm.EventToolCall:
 		e.publish(s.ID, ev("tool_call", map[string]any{
 			"index": event.Index, "id": event.ID, "name": event.Name, "arguments": event.Arguments}))
 	}
@@ -1177,7 +1177,7 @@ func (e *Engine) publishUsage(s *Session) {
 
 // decide applies the policy and, when it says prompt, blocks on the browser.
 // The third result reports that the session was stopped while waiting.
-func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, call llama.ToolCall) (perms.Decision, *store.PermissionRecord, bool) {
+func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, call llm.ToolCall) (perms.Decision, *store.PermissionRecord, bool) {
 	tool := call.Function.Name
 	command, path := argSummary(call)
 	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
@@ -1232,7 +1232,7 @@ func (e *Engine) publishDecided(s *Session, r *store.PermissionRecord) {
 // execute runs the tool or writes the denial, and appends the tool entry that
 // pairs with the assistant message.
 func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
-	call llama.ToolCall, d perms.Decision, record *store.PermissionRecord, index int) store.Entry {
+	call llm.ToolCall, d perms.Decision, record *store.PermissionRecord, index int) store.Entry {
 	content := ""
 	var exitCode *int
 	truncated := false
@@ -1332,7 +1332,7 @@ func baselineState(snapshot string) string {
 
 // argSummary pulls the command and the path out of the raw arguments for the
 // permission card, tolerating arguments the model malformed.
-func argSummary(call llama.ToolCall) (command, path string) {
+func argSummary(call llm.ToolCall) (command, path string) {
 	var args struct {
 		Command string `json:"command"`
 		Path    string `json:"path"`
@@ -1345,14 +1345,14 @@ func argSummary(call llama.ToolCall) (command, path string) {
 
 // compact replaces the in-context set with one summary. A failure leaves the
 // history untouched, so a failed compaction never loses context.
-func (e *Engine) compact(ctx context.Context, s *Session, model string, caps llama.Caps) error {
-	msgs := append(e.messages(s), llama.Message{Role: "user", Content: prompts.Compact()})
+func (e *Engine) compact(ctx context.Context, s *Session, model string, caps llm.Caps) error {
+	msgs := append(e.messages(s), llm.Message{Role: "user", Content: prompts.Compact()})
 	s.mu.Lock()
 	before := s.computeFill()
 	s.mu.Unlock()
 
-	res, err := e.llama().Chat(ctx, llama.ChatRequest{
-		Model: model, Messages: msgs, Effort: llama.EffortOff,
+	res, err := e.llama().Chat(ctx, llm.ChatRequest{
+		Model: model, Messages: msgs, Effort: llm.EffortOff,
 		PreserveReasoning: e.cfg.Config().PreserveReasoning, Caps: caps}, nil)
 	if err != nil {
 		return err

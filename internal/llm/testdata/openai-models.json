@@ -1,0 +1,12 @@
+{
+  "data": [
+    {
+      "created": 1788793738,
+      "id": "Delta3.8-27B",
+      "max_model_len": 240000,
+      "object": "model",
+      "owned_by": "ninfer"
+    }
+  ],
+  "object": "list"
+}

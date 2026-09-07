@@ -1,28 +1,41 @@
-// Package llama talks to one llama.cpp server, in router mode or in
-// single-model mode. It converts HTTP and SSE into Go values and knows
-// nothing about sessions, tools or permissions.
-package llama
+// Package llm talks to one model server. Two protocols are spoken: a
+// llama.cpp server, in router or single-model mode, and an OpenAI-compatible
+// endpoint. Which one is behind an address is settled on the first request.
+// The package converts HTTP and SSE into Go values and knows nothing about
+// sessions, tools or permissions.
+package llm
 
 import (
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 // maxErrorBody is how much of a failing response is kept for the message.
 const maxErrorBody = 8 << 10
 
-// Client talks to one llama.cpp server. It has no global timeout because a
-// chat stream can legitimately run for minutes; deadlines come from ctx.
+// Both protocols serve these two routes, and they are the only ones an
+// OpenAI-compatible server is expected to have.
+const (
+	modelsPath = "/v1/models"
+	chatPath   = "/v1/chat/completions"
+)
+
+// Client is the model server at one address: the HTTP half every backend
+// shares, and the backend that address turned out to speak. It has no global
+// timeout because a chat stream can legitimately run for minutes; deadlines
+// come from ctx.
 type Client struct {
 	BaseURL string
 	Token   string
 	HTTP    *http.Client
+
+	mu      sync.Mutex
+	backend Backend
 }
 
 func New(baseURL, token string) *Client {
@@ -49,23 +62,11 @@ func (c *Client) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
-// modelURL builds a model-scoped GET. autoload says whether the server may
-// start the model to answer, so every caller states which it is asking for.
-// Only Prepare passes true; naming a model with autoload on is what turns a
-// read into a load.
-func (c *Client) modelURL(path, model string, autoload bool, extra url.Values) string {
-	q := url.Values{}
-	for k, v := range extra {
-		q[k] = v
+// authorize adds the bearer token, if there is one, to any request.
+func (c *Client) authorize(req *http.Request) {
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
-	if model != "" {
-		q.Set("model", model)
-		q.Set("autoload", strconv.FormatBool(autoload))
-	}
-	if len(q) == 0 {
-		return c.BaseURL + path
-	}
-	return c.BaseURL + path + "?" + q.Encode()
 }
 
 // getJSON performs a GET and decodes the body into v. A non-2xx status or an
@@ -76,9 +77,7 @@ func (c *Client) getJSON(ctx context.Context, op, model, u string, v any) error 
 		return classify(op, c.BaseURL, model, 0, "", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
+	c.authorize(req)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return classify(op, c.BaseURL, model, 0, "", err)
@@ -94,7 +93,7 @@ func (c *Client) getJSON(ctx context.Context, op, model, u string, v any) error 
 	}
 	if err := json.Unmarshal(body, v); err != nil {
 		return &Error{Kind: KindMalformed, Op: op, err: err,
-			Message: "The model server sent a reply that could not be read: check that " + c.BaseURL + " is a llama.cpp server"}
+			Message: "The model server sent a reply that could not be read: check that " + c.BaseURL + " is a model server"}
 	}
 	return nil
 }

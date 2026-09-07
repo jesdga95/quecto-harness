@@ -15,7 +15,7 @@ import (
 
 	"quecto-harness/internal/agent"
 	"quecto-harness/internal/config"
-	"quecto-harness/internal/llama"
+	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
 	"quecto-harness/internal/store"
 	"quecto-harness/internal/web"
@@ -38,7 +38,7 @@ type Server struct {
 	uploads *store.Uploads
 	engine  *agent.Engine
 	perms   *perms.Broker
-	client  *llama.Client
+	client  *llm.Client
 	hub     *Hub
 
 	token   string
@@ -48,15 +48,15 @@ type Server struct {
 
 	mu        sync.Mutex
 	modelsAt  time.Time
-	modelsVal []llama.Model
+	modelsVal []llm.Model
 	modelsErr error
 	infoAt    time.Time
-	infoVal   llama.Info
+	infoVal   llm.Info
 	infoErr   error
 }
 
 func New(cfg *config.Store, st *store.Sessions, files *store.Files, uploads *store.Uploads,
-	engine *agent.Engine, pb *perms.Broker, cl *llama.Client, hub *Hub,
+	engine *agent.Engine, pb *perms.Broker, cl *llm.Client, hub *Hub,
 	token, listen, version string) *Server {
 	return &Server{
 		cfg: cfg, store: st, files: files, uploads: uploads, engine: engine, perms: pb, client: cl, hub: hub,
@@ -65,17 +65,18 @@ func New(cfg *config.Store, st *store.Sessions, files *store.Files, uploads *sto
 }
 
 // SetClient swaps the model client after server.url changed, and clears the
-// caches that were filled from the old one.
-func (s *Server) SetClient(cl *llama.Client) {
+// caches that were filled from the old one. The new client works out on its
+// own which protocol the new address speaks.
+func (s *Server) SetClient(cl *llm.Client) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.client = cl
 	s.modelsAt, s.infoAt = time.Time{}, time.Time{}
 	s.modelsVal, s.modelsErr = nil, nil
-	s.infoVal, s.infoErr = llama.Info{}, nil
+	s.infoVal, s.infoErr = llm.Info{}, nil
 }
 
-func (s *Server) llamaClient() *llama.Client {
+func (s *Server) modelClient() *llm.Client {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.client

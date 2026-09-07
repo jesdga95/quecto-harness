@@ -10,6 +10,7 @@ import type {
   PermMode,
   PermissionDecision,
   Project,
+  ServerMode,
   Session,
   Steer,
   Todo,
@@ -25,7 +26,7 @@ import { confirm } from "./confirm.svelte";
 // call to the harness got through.
 export const app = $state({
   ready: false,
-  mode: "router" as "router" | "single",
+  mode: "router" as ServerMode,
   config: null as Config | null,
   projects: [] as Project[],
   models: [] as Model[],
@@ -49,10 +50,11 @@ export const app = $state({
   sidebar: true,
   error: "",
   connected: true,
-  // Empty once a model server has answered. Drives the setup screen.
+  // Empty once a model server has answered.
   detectError: "",
   detectKind: "",
   modelsError: "",
+  modelsKind: "",
   probing: false,
 });
 
@@ -87,6 +89,8 @@ export async function init(): Promise<void> {
   app.mode = state.mode;
   app.detectError = state.detectError ?? "";
   app.detectKind = state.detectKind ?? "";
+  app.modelsError = state.modelsError ?? "";
+  app.modelsKind = state.modelsKind ?? "";
   app.config = state.config;
   app.projects = state.projects;
   app.models = state.models;
@@ -241,8 +245,8 @@ export async function send(text: string, files: string[] = []): Promise<void> {
     kind: looksLikeImage(path) ? "image" : "text",
     bytes: 0,
   }));
-  // A model still loading has no turn to wait for, and the composer is closed
-  // until it is ready.
+  // A model still loading has no turn for the message to join. The composer
+  // keeps what was typed, so this is the backstop rather than the check.
   if (app.status === "loading") return;
   // A message typed while the turn runs waits for it, and shows as the queue
   // rather than as a message the model has already been given.
@@ -361,6 +365,15 @@ export async function removeAllowed(prefix: string): Promise<void> {
   if (list) app.allowlist = list;
 }
 
+/** Whether the harness could run a turn right now: something answered at the
+    address, it took the key, and it named at least one model. The setup screen
+    and the connect button both read this, so they cannot disagree. */
+export function serverReady(): boolean {
+  const fatal = ["unreachable", "canceled", "auth"];
+  if (fatal.includes(app.detectKind) || fatal.includes(app.modelsKind)) return false;
+  return app.models.length > 0;
+}
+
 /** Points the harness at a model server. Any answer counts except silence and
     a refused key, since neither leaves a harness that can run a turn. */
 export async function connectServer(url: string, token: string): Promise<string> {
@@ -375,12 +388,15 @@ export async function connectServer(url: string, token: string): Promise<string>
     app.detectError = state.detectError ?? "";
     app.detectKind = state.detectKind ?? "";
     app.modelsError = state.modelsError ?? "";
+    app.modelsKind = state.modelsKind ?? "";
     app.models = state.models;
     app.projects = state.projects;
 
+    if (serverReady()) return "";
+
     // Nothing there, and a refused key, both leave a harness that cannot run a
     // turn. Anything else the server says is its own business.
-    const kinds = [app.detectKind, state.modelsKind ?? ""];
+    const kinds = [app.detectKind, app.modelsKind];
     if (kinds.includes("unreachable") || kinds.includes("canceled")) {
       return app.detectError || "Nothing answered at that address";
     }
@@ -391,11 +407,9 @@ export async function connectServer(url: string, token: string): Promise<string>
     }
     // A server that failed said why, and its own words name the cause.
     if (app.modelsError !== "") return app.modelsError;
-    // Any web server answers a GET. Only a model list proves this is llama.cpp.
-    if (app.models.length === 0) {
-      return "That address answered, but it did not return a model list";
-    }
-    return "";
+    // Any web server answers a GET. Only a model list proves there is a model
+    // behind it.
+    return "That address answered, but it did not return a model list";
   } finally {
     app.probing = false;
   }
