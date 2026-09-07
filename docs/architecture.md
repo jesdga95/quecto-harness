@@ -1788,9 +1788,11 @@ func (e *Engine) Delete(id string) error
 func (e *Engine) State(id string) State
 ```
 
-`Send` validates that the session is `StateIdle`, appends the user entry, persists, sets
-`StatePreflight`, starts a goroutine, and returns. A `Send` against a session that is not
-idle returns `ErrBusy`, which the server maps to 409.
+`Send` appends the user entry, persists, sets `StatePreflight`, starts a goroutine, and
+returns. A model being read is not a turn to join, so a message sent while the session is
+`StateLoading` returns `ErrLoading`; a message sent while a turn runs is queued and
+picked up when the step under way has finished. `Resend` answers the same two ways, `ErrLoading` while the model is read and
+`ErrBusy` while a turn runs, which the server maps to 409.
 
 `Get` resolves in this order, holding the engine lock:
 

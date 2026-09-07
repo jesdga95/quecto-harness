@@ -392,7 +392,7 @@ export class MockApi implements HarnessApi {
     this.config = { ...this.config, ...patch };
     // One model: choosing it points every session at it.
     if (this.config.model !== before) {
-      for (const [id, t] of this.transcripts) {
+      for (const t of this.transcripts.values()) {
         t.session.model = this.config.model;
       }
     }

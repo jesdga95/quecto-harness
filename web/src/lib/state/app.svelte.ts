@@ -292,8 +292,9 @@ function lastUserItem(): TranscriptItem | undefined {
   return undefined;
 }
 
-/** A message can be sent again once the harness has stored it and the turn it
-    started has finished. */
+/** A message can be sent again once the harness has stored it, the turn it
+    started has finished, and no model is being read. Editing one and sending
+    it again is the same act, so it reads this too. */
 export function canResend(item: TranscriptItem): boolean {
   if (item.kind !== "user" || item.seq === 0) return false;
   return app.status === "idle" && lastUserItem() === item;

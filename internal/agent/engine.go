@@ -370,6 +370,13 @@ func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 	}
 
 	s.mu.Lock()
+	// A model being read is not a turn to stop, so it is refused as what it
+	// is. Sending a message again is the same act as typing one, and the two
+	// answer alike.
+	if s.state == StateLoading {
+		s.mu.Unlock()
+		return 0, ErrLoading
+	}
 	if s.state != StateIdle {
 		s.mu.Unlock()
 		return 0, ErrBusy

@@ -27,6 +27,9 @@
 
   function commit(item: TranscriptItem): void {
     if (item.kind !== "user") return;
+    // The state can turn while the message is open for editing, and the send
+    // is a click later than the button that offered it.
+    if (!canResend(item)) return;
     const text = draft;
     if (!text.trim() && item.files.length === 0) return;
     editing = "";
@@ -167,7 +170,7 @@
                 <button
                   class="btn btn-primary"
                   onclick={() => commit(item)}
-                  disabled={!draft.trim() && item.files.length === 0}
+                  disabled={!canResend(item) || (!draft.trim() && item.files.length === 0)}
                 >
                   Send
                 </button>

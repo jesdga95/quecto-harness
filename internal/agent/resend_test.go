@@ -208,6 +208,29 @@ func TestResendRefusesWhileTheTurnRuns(t *testing.T) {
 	waitIdle(t, s)
 }
 
+// A model being read is not a turn to stop. Sending a message again while it
+// loads is refused the way typing one is, and the transcript is left alone.
+func TestResendRefusesWhileTheModelLoads(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_title.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "hello", nil)
+	waitIdle(t, s)
+	before, _, _, _ := s.Snapshot()
+
+	// What SetModel does to an idle session while it reads the model.
+	s.mu.Lock()
+	s.state = StateLoading
+	s.mu.Unlock()
+
+	if _, err := h.engine.Resend(s.ID, lastUserSeq(t, s), nil); err != ErrLoading {
+		t.Fatalf("error = %v, want ErrLoading", err)
+	}
+	after, _, _, _ := s.Snapshot()
+	if len(after.Entries) != len(before.Entries) {
+		t.Errorf("entries = %d, want the %d that were there", len(after.Entries), len(before.Entries))
+	}
+}
+
 // A message that is only attachments stays sendable; one edited down to
 // nothing with no files is refused.
 func TestResendRefusesAnEmptyMessage(t *testing.T) {
