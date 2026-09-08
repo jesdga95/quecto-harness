@@ -989,8 +989,11 @@ class HttpApi implements HarnessApi {
           deliver(data);
           return;
         }
-        onEvent({ type: "connection", connected: false });
         failures += 1;
+        // A stream the harness ended, which deleting a session does, is
+        // reopened a moment later. The connection is reported lost once a
+        // retry has failed too, so an ending on its own says nothing.
+        if (failures > 1) onEvent({ type: "connection", connected: false });
         if (failures >= 5) {
           es.close();
           if (!closed) setTimeout(open, 3000);

@@ -145,6 +145,13 @@ function clearSession(): void {
   // Nothing is known about the next session's context until its model has
   // been read, and a zero window draws no chip.
   app.usage = { prompt_tokens: 0, completion_tokens: 0, n_ctx: 0 };
+  // Nothing is watching the harness now, so a warning that it cannot be
+  // reached has nothing left to clear it. A call that fails raises its own.
+  if (!app.connected) {
+    app.connected = true;
+    app.error = "";
+    dismissSticky();
+  }
 }
 
 export async function selectSession(id: string): Promise<void> {
