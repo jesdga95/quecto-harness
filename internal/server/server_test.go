@@ -514,12 +514,10 @@ func TestSessionLifecycle(t *testing.T) {
 	created := decode(t, f.do(t, "POST", "/api/sessions",
 		map[string]string{"project": f.project, "model": "Alpha-12B"}))
 	id, _ := created["id"].(string)
-	// A session is created reading its model, and answers as idle once that
-	// has finished.
-	if id == "" || created["state"] != "loading" {
+	// Creating one reads no model, so it is idle from the start.
+	if id == "" || created["state"] != "idle" {
 		t.Fatalf("created = %v", created)
 	}
-	f.waitIdle(t, id)
 
 	list := decode(t, f.do(t, "GET", "/api/sessions?project="+f.project, nil))
 	if got, _ := list["sessions"].([]any); len(got) != 1 {

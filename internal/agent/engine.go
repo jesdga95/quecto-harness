@@ -141,7 +141,6 @@ func (e *Engine) save(s *Session) {
 	}
 }
 
-// Create starts a session in a project the user has added, bound to a model.
 // SetClient re-points the engine after the server address changes. A turn
 // already running keeps the client it started with.
 func (e *Engine) SetClient(cl Backend) {
@@ -159,6 +158,9 @@ func (e *Engine) llama() Backend {
 	return e.client
 }
 
+// Create starts a session in a project the user has added, bound to a model.
+// The model is not read here. A session is created by the message that starts
+// its first turn, and that turn reads the model before it sends anything.
 func (e *Engine) Create(project string) (*Session, error) {
 	if !e.cfg.HasProject(project) {
 		return nil, ErrNoProject
@@ -172,7 +174,6 @@ func (e *Engine) Create(project string) (*Session, error) {
 	e.live[s.ID] = s
 	e.mu.Unlock()
 	e.save(s)
-	e.prepare(s)
 	return s, nil
 }
 
@@ -653,7 +654,7 @@ func (e *Engine) hold(sessions ...*Session) []*Session {
 
 // load reads the model in the background and hands the answer to every session
 // held for it. It is the one place a model is read outside a turn: opening a
-// session, creating one and picking one all arrive here.
+// session and picking a model both arrive here.
 func (e *Engine) load(model string, held []*Session) {
 	e.wg.Add(1)
 	go func() {

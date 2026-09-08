@@ -64,7 +64,8 @@
   // A compaction holds the session but is not offered a stop: it draws nothing
   // to take back. The send button stays, and what it takes joins the queue.
   const running = $derived(app.status !== "idle" && !loading && app.status !== "compacting");
-  const disabled = $derived(blocked || !app.sessionId);
+  // Sending with no session creates one, so the field only needs a project.
+  const disabled = $derived(blocked || (!app.sessionId && !app.projectPath));
 
   // The dialog takes several files at once, and the harness caps a message at
   // five, so what comes back past the cap is dropped rather than sent.

@@ -121,10 +121,18 @@ func (h *harness) sessionWith(t *testing.T, model string) *Session {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Choosing a model reads it, and a session refuses a message until that
-	// has finished, which is what the composer does.
-	waitIdle(t, s)
 	return s
+}
+
+// open is what the browser does when a session is shown: it reads the model
+// the session will answer with, and the session takes no message until that
+// read lands.
+func (h *harness) open(t *testing.T, s *Session) {
+	t.Helper()
+	if _, err := h.engine.Open(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
 }
 
 // waitForRequests blocks until the replay server has been asked n times, which
@@ -189,8 +197,9 @@ func TestPlainReply(t *testing.T) {
 		t.Error("fill was not computed")
 	}
 	states := h.rec.states()
-	// Choosing the model reads it, which is the loading pair in front.
-	want := []string{"loading", "idle", "preflight", "streaming", "final", "idle"}
+	// A session created by its first message has never read its model, so the
+	// turn reads it, which is the loading in the middle of the preflight.
+	want := []string{"preflight", "loading", "preflight", "streaming", "final", "idle"}
 	if strings.Join(states, ",") != strings.Join(want, ",") {
 		t.Errorf("states = %v, want %v", states, want)
 	}
@@ -948,7 +957,7 @@ func TestOnlyALoadCarriesAutoloadTrue(t *testing.T) {
 	h := newHarness(t)
 	// Alpha-12B is loaded in the model list, so reading it must not offer to
 	// start it. Delta is not, so preparing it is a load.
-	h.sessionWith(t, "Alpha-12B")
+	h.open(t, h.sessionWith(t, "Alpha-12B"))
 
 	h.replay.mu.Lock()
 	queries := append([]string(nil), h.replay.Queries...)
@@ -966,7 +975,7 @@ func TestOnlyALoadCarriesAutoloadTrue(t *testing.T) {
 		t.Errorf("loads = %v, want none for a model already loaded", loads)
 	}
 
-	h.sessionWith(t, "Delta3.8-27B Q5")
+	h.open(t, h.sessionWith(t, "Delta3.8-27B Q5"))
 	h.replay.mu.Lock()
 	loads = append([]string(nil), h.replay.Loads...)
 	h.replay.mu.Unlock()
@@ -985,6 +994,11 @@ func TestMessageIsRefusedWhileTheModelLoads(t *testing.T) {
 	}
 	s, err := h.engine.Create(h.project)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Opening it is what reads the model, and the read is what refuses the
+	// message.
+	if _, err := h.engine.Open(s.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.engine.Send(s.ID, "too early", nil); err != ErrLoading {

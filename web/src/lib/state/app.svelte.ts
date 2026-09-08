@@ -97,6 +97,8 @@ export async function init(): Promise<void> {
   app.models = state.models;
   await loadSessions();
   app.ready = true;
+  // The first project is named so the empty screen has one, and its most
+  // recent conversation is opened if it has one.
   const first = state.projects[0];
   if (first) await selectProject(first.path);
 }
@@ -124,7 +126,25 @@ export async function selectProject(path: string): Promise<void> {
   app.allowlist = (await guard(() => api.listAllowlist(path))) ?? [];
   const first = sessionsOf(path)[0];
   if (first) await selectSession(first.id);
-  else await newSession();
+  else clearSession();
+}
+
+/** Empties the screen, leaving the project. Nothing is open, so what the last
+    session was showing goes with it. */
+function clearSession(): void {
+  unsubscribe?.();
+  unsubscribe = null;
+  app.sessionId = "";
+  app.items = [];
+  app.todos = [];
+  app.steer = null;
+  app.status = "idle";
+  app.awaitingModel = false;
+  app.changes = { files: [], added: 0, removed: 0 };
+  app.changesOpen = false;
+  // Nothing is known about the next session's context until its model has
+  // been read, and a zero window draws no chip.
+  app.usage = { prompt_tokens: 0, completion_tokens: 0, n_ctx: 0 };
 }
 
 export async function selectSession(id: string): Promise<void> {
@@ -147,17 +167,23 @@ export async function selectSession(id: string): Promise<void> {
   void loadChanges();
 }
 
-export async function newSession(): Promise<void> {
-  if (!app.projectPath || !app.config) return;
-  const empty = sessionsOf(app.projectPath).find((s) => s.title === "New session");
-  if (empty) {
-    await selectSession(empty.id);
-    return;
-  }
+/** Clears the screen for a new conversation. The harness is told about it when
+    the first message is sent, so nothing is written and no row appears in the
+    sidebar until there is something in it. */
+export function newSession(): void {
+  clearSession();
+}
+
+/** Creates the session the empty screen has been standing in for. It is not
+    opened: opening reads the model, and the turn this message starts reads it
+    anyway. False when the harness refused it, which leaves the screen empty. */
+async function createSession(): Promise<boolean> {
+  if (!app.projectPath || !app.config) return false;
   const session = await guard(() => api.createSession(app.projectPath));
-  if (!session) return;
-  await loadSessions();
-  await selectSession(session.id);
+  if (!session) return false;
+  app.sessionId = session.id;
+  unsubscribe = api.events(session.id, onEvent);
+  return true;
 }
 
 /** Asks the host for a folder and adds it. Does nothing if the dialog is dismissed. */
@@ -183,11 +209,7 @@ export async function removeProject(path: string): Promise<void> {
   if (!projects) return;
   app.projects = projects;
   if (app.projectPath === path) {
-    unsubscribe?.();
-    app.sessionId = "";
-    app.items = [];
-    app.todos = [];
-    app.changes = { files: [], added: 0, removed: 0 };
+    clearSession();
     const next = projects[0];
     if (next) await selectProject(next.path);
     else app.projectPath = "";
@@ -203,18 +225,11 @@ export async function renameSession(id: string, title: string): Promise<void> {
 export async function deleteSession(id: string): Promise<void> {
   if ((await guard(() => api.deleteSession(id))) === null) return;
   const wasActive = app.sessionId === id;
-  if (wasActive) {
-    unsubscribe?.();
-    app.sessionId = "";
-    app.items = [];
-    app.todos = [];
-    app.changes = { files: [], added: 0, removed: 0 };
-  }
+  if (wasActive) clearSession();
   await loadSessions();
   if (wasActive) {
     const next = sessionsOf(app.projectPath)[0];
     if (next) await selectSession(next.id);
-    else await newSession();
   }
 }
 
@@ -242,7 +257,10 @@ export async function pasteFile(name: string, blob: Blob): Promise<string> {
 
 export async function send(text: string, files: string[] = []): Promise<void> {
   const message = text.trim();
-  if (!app.sessionId || (!message && files.length === 0)) return;
+  if (!message && files.length === 0) return;
+  // The empty screen holds a project and no session, so the first message is
+  // what creates one.
+  if (!app.sessionId && !(await createSession())) return;
   const attached: Attached[] = files.map((path) => ({
     path,
     kind: looksLikeImage(path) ? "image" : "text",
@@ -267,6 +285,9 @@ export async function send(text: string, files: string[] = []): Promise<void> {
   const sent = await guard(() => api.sendMessage(app.sessionId, message, files));
   if (sent === null) {
     app.items = app.items.filter((i) => i.id !== item?.id);
+    // A refused first message leaves the session it created behind, and the
+    // list is where it shows.
+    await loadSessions();
     return;
   }
   // A turn that started between the check and the call takes the message as a
