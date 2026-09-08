@@ -527,13 +527,12 @@ func TestSessionLifecycle(t *testing.T) {
 		t.Error("listing without a project did not return the session")
 	}
 
-	// Opening a session reads the model it answers with, so it comes back
-	// loading and settles once the read lands.
+	// Opening a session sends nothing to the model server, so it comes back
+	// ready to take a message.
 	snap := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
-	if snap["state"] != "loading" || snap["n_ctx"] == 0.0 {
+	if snap["state"] != "idle" || snap["n_ctx"] == 0.0 {
 		t.Errorf("snapshot = %v", snap)
 	}
-	f.waitIdle(t, id)
 	if _, ok := snap["last_seq"]; !ok {
 		t.Error("snapshot has no last_seq")
 	}
@@ -1063,10 +1062,7 @@ func TestResendRoute(t *testing.T) {
 
 	// The transcript every tab holds ends in entries the rewrite discards, so
 	// the stream carries the resync that sends them back for a fresh one.
-	// Reading the session reads its model, which has to land before it takes
-	// a message again.
 	mark, _ := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))["last_seq"].(float64)
-	f.waitIdle(t, id)
 
 	w = f.do(t, "POST", "/api/sessions/"+id+"/resend", map[string]any{"seq": seq, "text": "ho"})
 	if w.Code != http.StatusAccepted {

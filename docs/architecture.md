@@ -1784,7 +1784,7 @@ func NewEngine(cfg *config.Store, st *store.Sessions, cl *llm.Client,
 	pb *perms.Broker, hub Publisher) *Engine
 
 func (e *Engine) Create(project string) (*Session, error)  // takes the harness's model
-func (e *Engine) Open(id string) (*Session, error)         // Get, and reads the model
+func (e *Engine) Open(id string) (*Session, error)         // Get, and marks the model unread
 func (e *Engine) Get(id string) (*Session, error)
 func (e *Engine) Send(id, text string) error     // returns once the turn is started
 func (e *Engine) Stop(id string) error
@@ -1795,28 +1795,23 @@ func (e *Engine) State(id string) State
 ```
 
 `Send` appends the user entry, persists, sets `StatePreflight`, starts a goroutine, and
-returns. A model being read is not a turn to join, so a message sent while the session is
-`StateLoading` returns `ErrLoading`; a message sent while a turn runs is queued and
-picked up when the step under way has finished. `Resend` answers the same two ways, `ErrLoading` while the model is read and
-`ErrBusy` while a turn runs, which the server maps to 409.
+returns. A message sent while a turn runs is queued and picked up when the step under way
+has finished, the model read at the top of that turn included. `Resend` answers `ErrBusy`
+for anything that is not idle, which the server maps to 409.
 
-`Open` is `Get` followed by the model read, and it is what `GET /api/sessions/{id}` calls.
-It reads every time rather than trusting what it read before: a model server can be
-restarted between two opens and a router holds nothing after that, so what the harness
-knows about a model is a guess as soon as it looks away. The session sits in `StateLoading`
-until the read answers, the same as a session just created. A model already up answers in a
-moment; one that is not is loaded there rather than in the middle of the first turn. Every
-other way of reaching a session uses `Get` and reads nothing.
+`Open` is `Get` followed by `session.reopen`, which marks the model unread, and it is what
+`GET /api/sessions/{id}` calls. Nothing is sent: a model server can be restarted between two
+opens and a router holds nothing after that, so what the harness read before is a guess as
+soon as it looks away, and the turn the next message starts reads it again. Every other way
+of reaching a session uses `Get` and marks nothing.
 
-One model read serves every caller. `pointTo` moves a session onto a model and forgets what
-the last one's tokenizer implied, `hold` puts the sessions that can wait into
-`StateLoading`, and `load` reads the model once in the background and hands the answer to
-each of them. `SetModel`, a session created, a session opened and a turn that found its
-model unread all arrive there.
+`pointTo` moves a session onto a model and forgets what the last one's tokenizer implied.
+`SetModel` runs it over every live session and stops there; `ensureReady` runs it at the top
+of a turn and reads the model when the session has not read it.
 
-`DELETE /api/sessions/{id}` accepts a session that is only reading its model: the read has
-nothing to lose, and the session is marked gone so that a read landing afterwards does not
-write the file back out. Anything further along is a turn to stop first, and answers 409.
+`DELETE /api/sessions/{id}` needs an idle session, since anything else is a turn to stop
+first, and answers 409. The session is marked gone as it goes, so a turn that started
+between the check and the delete does not write its file back out.
 
 `Get` resolves in this order, holding the engine lock:
 
@@ -1858,8 +1853,8 @@ const (
 
 | state | entered when | work done | leaves to |
 |-------|--------------|-----------|-----------|
-| `idle` | the model has been read; any terminal state completes | none | `preflight` on Send, `compacting` on Compact, `loading` on a model change |
-| `loading` | a model was chosen, a session was created or opened, or a turn found one not read | read the model: its window and its chat template | `idle` when it answers; `failed` when it does not |
+| `idle` | any terminal state completes | none | `preflight` on Send, `compacting` on Compact |
+| `loading` | a turn found its model unread | read the model: its window and its chat template | `preflight` when it answers; `failed` when it does not |
 | `preflight` | top of each loop iteration | check iteration count, compute fill, compare with `compact_at * n_ctx`, build the request | `limit` when iteration is 50; `compacting` when over threshold; `streaming` otherwise |
 | `compacting` | threshold hit, or Compact pressed | run the compaction request, rewrite the in-context set | `preflight` when it came from the loop; `idle` when it came from the Compact button; `failed` on error. Stop is refused here |
 | `streaming` | request sent | read the SSE stream, publish `delta`, `reasoning`, `tool_call`, `usage` | `final` when no tool calls; `deciding` when there are; `stopped` on cancel; `failed` on error |
@@ -1985,7 +1980,7 @@ has counted yet, and the threshold check at the top of the next iteration has to
 **Preparation.** Nothing about a model can be read until it is loaded, because the chat
 template is inside the model file, and a model-scoped read carrying `autoload=false` answers
 `400 model is not loaded`. So the window and the template arrive together or not at all, and
-they arrive when a person picks a model rather than when a turn needs them.
+they arrive when a turn needs them.
 
 `Backend.Prepare(ctx, model)` is that step. It is the only request allowed to name a model
 with autoload on. Behind the interface:
@@ -2000,11 +1995,11 @@ It returns `llm.Ready{NCtx, Source, Caps}`, and the engine writes all three onto
 session. A backend that keeps everything loaded implements `Prepare` as a read and no
 caller can tell the difference.
 
-`Create` and `SetModel` run it in a goroutine with the session in `loading`, which is what
-refuses a message: a message typed then has no turn to join, so it is refused rather than
-queued. A read whose model changed under it discards its result. `run` calls `ensureReady`
-at the top of a turn, which covers a session read from disk, a failed read, and a model the
-router has unloaded since.
+`run` calls `ensureReady` at the top of every turn and that is the only place it is called
+from, so a model is loaded by a message rather than by a choice made in a menu. The session
+sits in `loading` while the read runs, bounded by `loadTimeout` because the work is a file
+being read into memory on another machine. A read whose model changed under it discards its
+result. A message typed meanwhile joins the queue of the turn doing the reading.
 
 Caps decide whether the effort mapping uses the effort column or the budget column and
 whether `preserve_reasoning` is sent. Those, the settings and the model itself are all
@@ -2025,10 +2020,10 @@ the title cut from the message.
 it last ran against, which is a note rather than a choice: `ensureReady` compares it with
 `cfg.Model` at the top of every turn and repoints the session when they differ.
 `PUT /api/config` with a new model calls `Engine.SetModel`, which repoints every live
-session, reads the model once and hands the answer to all of them, so a session already open
-does not wait for its next message. The read happens even when nothing is open: picking a
-model is what asks a router to hold it. `session.repoint` sets `session.Model`, clears `NCtx`,
-`NCtxSource`, `caps` and `prepared` so the new model is read before it is used, sets
+session and sends nothing. Naming a model with autoload on costs minutes of another
+machine's memory, so a person reading down the model list loads none of them and the first
+message that needs one is what asks for it. `session.repoint` sets `session.Model`, clears
+`NCtx`, `NCtxSource`, `caps` and `prepared` so the new model is read before it is used, sets
 `session.LastUsage = nil` so the next fill is re-estimated from the entries rather than
 carried over from a different model's tokenizer. The transcript says nothing about the
 change; the model chip already shows which model the session is on. The measurement of
@@ -2100,9 +2095,10 @@ Against `Qwen3.8-27B Q5` the measurement is 154 tokens of system prompt and 1026
 `reasoning_format: "deepseek"` on every request in every row. The budget constants are Go
 constants in `internal/llm`, not configuration.
 
-A model is read before the first message can be sent, so the column is chosen from what its
-template actually reports rather than from a default. For `Gemma4-12B` as captured that is
-the budget column, because it reports `supports_reasoning_effort: false`.
+The model is read at the top of the turn, before the first request is built, so the column
+is chosen from what its template actually reports rather than from a default. For
+`Gemma4-12B` as captured that is the budget column, because it reports
+`supports_reasoning_effort: false`.
 
 ### 8.8 Compaction
 
@@ -3295,14 +3291,20 @@ without waiting for a server event, so the composer unblocks immediately.
 
 The picker lists every model from `/api/state`. Each row: a status dot (grey `unloaded`,
 amber `loading` with a pulse, green `loaded`, grey `sleeping`, amber `downloading`), the id,
-and the context to the right, shown as `131k` from `ctx_hint`. A row whose status is not
-`loaded` is dimmed and carries the note `Loads when you pick it`.
+and the context to the right, shown as `131k` from `ctx_hint`.
 
 Selecting a model calls `PUT /api/config` and nothing else. The picker draws `config.model`,
 which is the harness's one choice: it does not change when a project or a session is opened,
-and every session answers with it. The harness reads the model on the way, loading it when
-the router does not have it, and the sessions it points sit in `loading` with the composer
-closed until it answers.
+and every session answers with it. Nothing is loaded by the choice. The first message that
+needs the model loads it inside its turn, where the transcript shows the wait and the chip's
+dot goes amber until the read lands.
+
+The wait row is the only thing on the page while a model loads, so it carries a clock. It
+appears under the message that started the turn, reads `Working on it`, counts from the
+moment the wait began, and shows the seconds from two on, which keeps the number off a turn
+that answers at once. Nothing in the row names the step: a load, a first token and a title
+are all the harness waiting on the model. A compaction is the exception, since it rewrites
+the conversation.
 
 The meter reads `42k / 131k` with a filled bar, green below 60 percent, amber to 80, red
 above. When `n_ctx_source` is `assumed` it reads `42k / ~32k`, with the tilde as the only
@@ -3337,7 +3339,7 @@ Each session row in the sidebar carries a remove control that calls
 | `prompts` | every embedded file is non-empty; `System` renders with both fields substituted and leaves no `{{`; the tool descriptions match the schema descriptions by name |
 | `tools` | path guard table (section 13.3); `read_file` numbering, offset, limit, byte cap, empty file, directory, binary; `write_file` creates parents, preserves mode, atomic replace leaves the old content on a failed write; `run_shell` exit code, merged streams, timeout kill, process group kill of a forked child, truncation head and tail, `Truncate` boundary cases |
 | `perms` | `Evaluate` matrix over tool times auto times allowlist times operators, with a case per entry of the operator list and a case proving `${` does not prompt; `Ask` and `Resolve` happy path; `Resolve` on an unknown id; cancel while blocked; double resolve; `always` writes the allowlist before returning; denial content string |
-| `agent` | the state machine transitions; the loop against the replay server for a plain reply, a single tool call, two tool calls, a denial, a stop mid-command, 50 iterations; `Get` on a live id, on an id only on disk, and on an unknown id; `computeFill` before and after a usage report; the `assumed` fallback arms auto compaction; effort mapping into the recorded request body; `SetModel` repoints every live session, resetting `NCtx`, caps, `LastUsage` and the context measurement and appending the visible out-of-context status entry, a session that was not live takes the model at its next turn, and the turn asks the model it started with; preparation reads a loaded model with `autoload=false` and loads an unloaded one, the first request of a session is already shaped by what came back, a message sent while it runs is refused rather than queued, and the caps a turn was started with shape every request in it; the naming request carries the opening message alone, runs before the reply, and happens once per session; the context measurement sends the system message twice, once with the schemas and once without, and runs once per model per session; the breakdown subtracts the measured parts from a real usage report; compaction rewrites `in_context` and leaves `visible` alone; the unanswered-tool-call repair |
+| `agent` | the state machine transitions; the loop against the replay server for a plain reply, a single tool call, two tool calls, a denial, a stop mid-command, 50 iterations; `Get` on a live id, on an id only on disk, and on an unknown id; `computeFill` before and after a usage report; the `assumed` fallback arms auto compaction; effort mapping into the recorded request body; `SetModel` repoints every live session, resetting `NCtx`, caps, `LastUsage` and the context measurement, and asks the model server nothing; opening a session asks it nothing either; a session that was not live takes the model at its next turn, and the turn asks the model it started with; preparation inside the turn reads a loaded model with `autoload=false` and loads an unloaded one, the first request of a session is already shaped by what came back, a message sent while it runs joins the queue, and the caps a turn was started with shape every request in it; the naming request carries the opening message alone, runs before the reply, and happens once per session; the context measurement sends the system message twice, once with the schemas and once without, and runs once per model per session; the breakdown subtracts the measured parts from a real usage report; compaction rewrites `in_context` and leaves `visible` alone; the unanswered-tool-call repair |
 | `store` | round trip of a session with every entry kind; index built at `Open`; a corrupt file is skipped and named; `List` ordering; concurrent `Save` of two sessions under `-race` |
 | `server` | auth: token to cookie, bearer, 401 without either, constant-time compare, a token file present at start is reused rather than replaced, a missing one is created 0600; origin rejection; every route's happy path and its documented error status, including `PUT /api/sessions/{id}` (200 idle, 409 busy, 400 unknown model), `DELETE /api/sessions/{id}` (204, 409 busy, 404 unknown, hub channel dropped), `GET /api/allowlist` (empty array for an unknown project) and `DELETE /api/allowlist` (200 with the unchanged list for a prefix that is absent); `tool_call` and `tool_output` payloads carry `index`; the folder browser rules including hidden exclusion and a non-absolute path; SSE replay from `Last-Event-ID`, from `?from=`, and the `resync` path when the ring has rolled; a slow subscriber gets `resync` and is not disconnected; embed fallback page when `Built()` is false |
 | `service` | `UnitText` golden output for both platforms, asserted on whichever platform the test runs on; XML escaping of a home directory containing `&`; a binary under `/tmp` is refused; the install command sequence recorded by a stub `launchctl` placed first on `PATH`, asserted in order so that `enable` precedes `bootstrap`; `Report` parses a recorded `launchctl print` and a recorded `systemctl is-active` output |
@@ -3467,11 +3469,12 @@ Run against `http://192.168.2.205:8080`. Steps 1 to 3 are read-only and load not
     the browser: the same tab keeps working, and `~/.quecto-harness/url` carries the same
     token as before. Delete `~/.quecto-harness/token`, restart, and the tab now gets a 401
     and the `not authorized` page.
-12. Pick another model. The chip shows it in every open transcript, the composer
-    closes while it loads, the meter denominator changes, and the next turn's usage event
-    reports against the new model. Switch project and confirm the picker still reads the
-    model you chose. Pick one during a turn and confirm the running turn finishes on the
-    model it started with.
+12. Pick another model. The chip shows it in every open transcript and nothing is sent:
+    `/props` is not asked for it until you send a message, and that turn shows
+    `Working on it` for as long as the router takes to load it. The meter denominator
+    changes and the turn's usage event reports against the new model. Switch project and confirm the picker
+    still reads the model you chose. Pick one during a turn and confirm the running turn
+    finishes on the model it started with.
 13. Remove an "allow always" rule from the settings panel, then send the same command again
     with auto on. The permission card comes back.
 14. Delete a session from the sidebar. The file is gone from

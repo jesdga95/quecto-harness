@@ -529,7 +529,12 @@ export class MockApi implements HarnessApi {
     this.turnIndex.set(session, index + 1);
 
     try {
-      this.load(t.session.model);
+      // A model the mock does not hold is loaded by the first turn that needs
+      // it, and nothing else in the turn happens until it answers.
+      if (this.load(t.session.model)) {
+        this.emit(session, { type: "status", status: "loading" });
+        await this.sleep(900, turn);
+      }
       this.emit(session, { type: "status", status: "thinking" });
       // The plan the real harness keeps with write_todos, one step further on
       // each turn so the panel has something to show.
@@ -740,9 +745,13 @@ export class MockApi implements HarnessApi {
     return list.some((p) => command.startsWith(p));
   }
 
-  private load(id: string): void {
+  /** Reports whether the model had to be loaded, which is the wait a turn
+      opens with. */
+  private load(id: string): boolean {
     const model = this.models.find((m) => m.id === id);
-    if (model && model.status === "unloaded") model.status = "loading";
+    if (!model || model.status !== "unloaded") return false;
+    model.status = "loading";
+    return true;
   }
 
   private settle(id: string, t: Transcript): void {

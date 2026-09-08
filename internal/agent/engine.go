@@ -36,7 +36,6 @@ const maxAttachments = 5
 
 var (
 	ErrBusy       = errors.New("The session is busy: stop the current turn first")
-	ErrLoading    = errors.New("The model is still loading: wait for it to finish")
 	ErrNotFound   = errors.New("No session with that id")
 	ErrEmptyText  = errors.New("The message is empty: type something or attach a file")
 	ErrNotLast    = errors.New("That is not the last message: only the last one can be sent again")
@@ -177,22 +176,18 @@ func (e *Engine) Create(project string) (*Session, error) {
 	return s, nil
 }
 
-// Open resolves a session and reads the model it will answer with, which is
-// what opening one in the browser asks for. It reads every time rather than
-// trusting what it read before: a model server can be restarted between two
-// opens, and a router holds nothing after that. A model already up answers in
-// a moment; one that is not is loaded here rather than in the middle of the
-// first turn.
+// Open resolves a session and marks its model unread, which is what opening
+// one in the browser asks for. Nothing is sent: a model server restarted
+// between two opens may hold nothing, so what the harness read before is a
+// guess, and the turn the next message starts reads it again.
 //
-// Every other way of reaching a session, deleting it included, goes through
-// Get and reads nothing.
+// Every other way of reaching a session goes through Get and marks nothing.
 func (e *Engine) Open(id string) (*Session, error) {
 	s, err := e.Get(id)
 	if err != nil {
 		return nil, err
 	}
 	s.reopen()
-	e.prepare(s)
 	return s, nil
 }
 
@@ -272,12 +267,6 @@ func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 // caller's check and this one queues the message rather than refusing it.
 func (e *Engine) deliver(s *Session, text string, attachments []store.Attachment) (Sent, error) {
 	s.mu.Lock()
-	// A message typed while a model loads has no turn to join, so it is
-	// refused where it was typed rather than queued against nothing.
-	if s.state == StateLoading {
-		s.mu.Unlock()
-		return Sent{}, ErrLoading
-	}
 	if s.state != StateIdle {
 		if err := s.queue(text, attachments); err != nil {
 			s.mu.Unlock()
@@ -397,13 +386,6 @@ func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 	}
 
 	s.mu.Lock()
-	// A model being read is not a turn to stop, so it is refused as what it
-	// is. Sending a message again is the same act as typing one, and the two
-	// answer alike.
-	if s.state == StateLoading {
-		s.mu.Unlock()
-		return 0, ErrLoading
-	}
 	if s.state != StateIdle {
 		s.mu.Unlock()
 		return 0, ErrBusy
@@ -587,7 +569,11 @@ func (e *Engine) Compact(id string) error {
 }
 
 // SetModel points the harness at a model. There is one model and every session
-// uses it, so this reads it once and hands the answer to all of them.
+// uses it, so this moves all of them onto it.
+//
+// Nothing is sent to the model server. Making a model ready can cost minutes
+// of another machine's memory, so it waits for a message that needs the model
+// rather than following a choice made in a menu.
 func (e *Engine) SetModel(model string) {
 	e.mu.Lock()
 	live := make([]*Session, 0, len(e.live))
@@ -596,21 +582,14 @@ func (e *Engine) SetModel(model string) {
 	}
 	e.mu.Unlock()
 
-	var moved []*Session
 	for _, s := range live {
-		if e.pointTo(s, model) {
-			moved = append(moved, s)
-		}
+		e.pointTo(s, model)
 	}
-	// The read happens even when no open session is waiting on it. Picking a
-	// model is what asks a router to hold it, and a person who picks one and
-	// then opens a session should find it ready.
-	e.load(model, e.hold(moved...))
 }
 
 // pointTo moves a session onto a model, forgetting everything the last one's
-// tokenizer implied. It reports whether the session had to move.
-func (e *Engine) pointTo(s *Session, model string) bool {
+// tokenizer implied.
+func (e *Engine) pointTo(s *Session, model string) {
 	s.mu.Lock()
 	changed := s.Model != model
 	if changed {
@@ -620,7 +599,6 @@ func (e *Engine) pointTo(s *Session, model string) bool {
 	if changed {
 		e.save(s)
 	}
-	return changed
 }
 
 // point moves a session onto the harness's model and answers with it.
@@ -631,53 +609,6 @@ func (e *Engine) point(s *Session) (string, error) {
 	}
 	e.pointTo(s, model)
 	return model, nil
-}
-
-// hold puts every session that can wait for a read into StateLoading, which is
-// what refuses a message meanwhile, and answers with the ones it holds. A
-// session doing anything else has the model its turn is using.
-func (e *Engine) hold(sessions ...*Session) []*Session {
-	held := make([]*Session, 0, len(sessions))
-	for _, s := range sessions {
-		s.mu.Lock()
-		if s.state != StateIdle {
-			s.mu.Unlock()
-			continue
-		}
-		s.state = StateLoading
-		s.mu.Unlock()
-		held = append(held, s)
-		e.publish(s.ID, ev("status", map[string]any{"state": string(StateLoading)}))
-	}
-	return held
-}
-
-// load reads the model in the background and hands the answer to every session
-// held for it. It is the one place a model is read outside a turn: opening a
-// session and picking a model both arrive here.
-func (e *Engine) load(model string, held []*Session) {
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
-		ctx, cancel := context.WithTimeout(e.ctx, loadTimeout)
-		defer cancel()
-		r, err := e.llama().Prepare(ctx, model)
-		for _, s := range held {
-			if err == nil {
-				e.apply(s, model, r)
-			}
-			// A session busy again on its own account is left alone; the turn
-			// it is running prepared the model itself.
-			if s.State() != StateLoading {
-				continue
-			}
-			if err != nil {
-				e.fail(s, err)
-				continue
-			}
-			e.setState(s, StateIdle)
-		}
-	}()
 }
 
 // Rename sets the session title. An empty title hands it back to the harness,
@@ -703,9 +634,10 @@ func (e *Engine) Delete(id string) error {
 	if err != nil {
 		return err
 	}
-	// A session reading its model is running nothing, and the read has nothing
-	// to lose, so it goes. Anything else is a turn to stop first.
-	if st := s.State(); st != StateIdle && st != StateLoading {
+	// A turn is stopped first. The session is marked gone as it goes, so one
+	// that starts between this check and the delete does not write the file
+	// back out.
+	if s.State() != StateIdle {
 		return ErrBusy
 	}
 	s.forget()
@@ -800,22 +732,9 @@ func cleanTitle(reply string) string {
 	return store.Title(line)
 }
 
-// prepare reads the model a session is about to need, holding it in
-// StateLoading while the read runs.
-func (e *Engine) prepare(s *Session) {
-	held := e.hold(s)
-	model, err := e.point(s)
-	if err != nil {
-		for _, h := range held {
-			e.fail(h, err)
-		}
-		return
-	}
-	e.load(model, held)
-}
-
 // ensureReady points the session at the harness's model and makes sure it has
-// been read, inside the turn about to use it. A session that last ran against
+// been read, inside the turn about to use it. It is the only place a model is
+// read, so a message is what makes one ready. A session that last ran against
 // another model forgets what that tokenizer implied and takes this one.
 func (e *Engine) ensureReady(ctx context.Context, s *Session) error {
 	model, err := e.point(s)
@@ -829,6 +748,10 @@ func (e *Engine) ensureReady(ctx context.Context, s *Session) error {
 		return nil
 	}
 	e.setState(s, StateLoading)
+	// loadTimeout applies to the read alone. The turn around it has no
+	// deadline of its own.
+	ctx, cancel := context.WithTimeout(ctx, loadTimeout)
+	defer cancel()
 	r, err := e.llama().Prepare(ctx, model)
 	if err != nil {
 		return err

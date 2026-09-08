@@ -15,6 +15,30 @@
   let scroller = $state<HTMLDivElement | null>(null);
   let atBottom = $state(true);
 
+  // A compaction rewrites the conversation, which is worth naming. Every other
+  // wait is the harness waiting on the model, and the reader has no use for
+  // which step it is on.
+  const waiting = $derived(app.status === "compacting" ? "Compacting" : "Working on it");
+
+  // Seconds spent on the current wait. A wait can run for minutes and draws
+  // nothing while it does, and a spinner on its own reads as a page that has
+  // stopped.
+  let waited = $state(0);
+  $effect(() => {
+    if (!app.awaitingModel) {
+      waited = 0;
+      return;
+    }
+    const started = Date.now();
+    const tick = setInterval(() => {
+      waited = Math.floor((Date.now() - started) / 1000);
+    }, 1000);
+    return () => clearInterval(tick);
+  });
+  const clock = $derived(
+    waited < 60 ? `${waited}s` : `${Math.floor(waited / 60)}m ${waited % 60}s`,
+  );
+
   // The message being rewritten, by id, and the words as they stand.
   let editing = $state("");
   let draft = $state("");
@@ -243,12 +267,17 @@
       {/each}
 
       <!-- The stretch between asking the model and its first output draws
-           nothing of its own, so the wait is shown where the reply will land.
-           A compaction is the whole of that stretch and names itself. -->
+           nothing of its own, so the wait is shown where the reply will land,
+           with the seconds it has taken. -->
       {#if app.awaitingModel}
         <div class="step" aria-live="polite">
           <span class="spinner"></span>
-          <span class="text-muted">{app.status === "compacting" ? "Compacting" : "Working"}</span>
+          <span class="text-muted">{waiting}</span>
+          <!-- The clock is aria-hidden: a reader does not need it announced
+               every second. -->
+          {#if waited >= 2}
+            <span class="num text-[12px] text-muted" aria-hidden="true">{clock}</span>
+          {/if}
         </div>
       {/if}
 

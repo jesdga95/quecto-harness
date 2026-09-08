@@ -124,17 +124,6 @@ func (h *harness) sessionWith(t *testing.T, model string) *Session {
 	return s
 }
 
-// open is what the browser does when a session is shown: it reads the model
-// the session will answer with, and the session takes no message until that
-// read lands.
-func (h *harness) open(t *testing.T, s *Session) {
-	t.Helper()
-	if _, err := h.engine.Open(s.ID); err != nil {
-		t.Fatal(err)
-	}
-	waitIdle(t, s)
-}
-
 // waitForRequests blocks until the replay server has been asked n times, which
 // is how a test waits for the title request that follows a first turn.
 func waitForRequests(t *testing.T, h *harness, n int) {
@@ -839,7 +828,8 @@ func TestCompactRefusedWhileBusy(t *testing.T) {
 }
 
 // Choosing a model points every session at it and forgets what the previous
-// model's tokenizer implied.
+// model's tokenizer implied. Nothing is sent to the model server: a choice
+// made in a menu loads nothing, whether a session is open or not.
 func TestSetModelRepointsAndResets(t *testing.T) {
 	h := newHarness(t)
 	s := h.session(t)
@@ -852,18 +842,27 @@ func TestSetModelRepointsAndResets(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.engine.SetModel("Delta3.8-27B Q5")
-	waitIdle(t, s)
+	h.engine.Wait(5 * time.Second)
 
-	doc, _, _, caps := s.Snapshot()
+	doc, state, _, caps := s.Snapshot()
 	if doc.Model != "Delta3.8-27B Q5" {
 		t.Errorf("session model = %q", doc.Model)
+	}
+	if state != StateIdle {
+		t.Errorf("state = %s, want a session a choice left ready", state)
 	}
 	if doc.LastUsage != nil {
 		t.Error("last usage was carried across models")
 	}
-	// The new model was read, so its window and its template stand.
-	if doc.NCtxSource != "props" || !caps.Known {
-		t.Errorf("the new model was not read: n_ctx from %q caps %+v", doc.NCtxSource, caps)
+	// Nothing is known about the new model until a turn reads it.
+	if doc.NCtxSource != "" || caps.Known {
+		t.Errorf("the new model was read: n_ctx from %q caps %+v", doc.NCtxSource, caps)
+	}
+	h.replay.mu.Lock()
+	queries := append([]string(nil), h.replay.Queries...)
+	h.replay.mu.Unlock()
+	if len(queries) != 0 {
+		t.Errorf("the choice asked the model server: %v", queries)
 	}
 	for _, e := range doc.Entries {
 		if e.Kind == "status" && strings.Contains(e.Content, "odel") {
@@ -872,11 +871,11 @@ func TestSetModelRepointsAndResets(t *testing.T) {
 	}
 }
 
-// A session restored from a file has never had its model read, whatever the
-// file says, so opening it reads it the way creating one does. It takes no
-// message until that has finished.
-func TestOpeningARestoredSessionReadsTheModel(t *testing.T) {
-	h := newHarness(t)
+// Opening a session sends nothing. It marks the model unread, so the session
+// takes a message at once and the turn that message starts is what loads the
+// model.
+func TestOpeningASessionReadsNothing(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
 	s := h.sessionWith(t, "Delta3.8-27B Q5")
 	id := s.ID
 
@@ -884,16 +883,23 @@ func TestOpeningARestoredSessionReadsTheModel(t *testing.T) {
 	h.engine.mu.Lock()
 	delete(h.engine.live, id)
 	h.engine.mu.Unlock()
-	h.replay.mu.Lock()
-	h.replay.Loads = nil
-	h.replay.mu.Unlock()
 
 	opened, err := h.engine.Open(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.engine.Send(id, "hello", nil); err != ErrLoading {
-		t.Errorf("send while the model is read = %v, want ErrLoading", err)
+	if got := opened.State(); got != StateIdle {
+		t.Errorf("state = %s, want a session that takes a message", got)
+	}
+	h.replay.mu.Lock()
+	queries := append([]string(nil), h.replay.Queries...)
+	h.replay.mu.Unlock()
+	if len(queries) != 0 {
+		t.Errorf("opening asked the model server: %v", queries)
+	}
+
+	if _, err := h.engine.Send(id, "hello", nil); err != nil {
+		t.Fatalf("send after an open = %v", err)
 	}
 	waitIdle(t, opened)
 
@@ -901,34 +907,7 @@ func TestOpeningARestoredSessionReadsTheModel(t *testing.T) {
 	loads := append([]string(nil), h.replay.Loads...)
 	h.replay.mu.Unlock()
 	if len(loads) != 1 || loads[0] != "Delta3.8-27B Q5" {
-		t.Errorf("loads = %v, want the model read once on open", loads)
-	}
-	// And again on the next open, since a model server restarted between two
-	// of them holds nothing.
-	if _, err := h.engine.Open(id); err != nil {
-		t.Fatal(err)
-	}
-	if got := opened.State(); got != StateLoading {
-		t.Errorf("state = %s, want the model read again on a second open", got)
-	}
-	waitIdle(t, opened)
-}
-
-// Picking a model is what asks a router to hold it, so the read happens even
-// when no session is open to wait on it.
-func TestPickingAModelLoadsItWithNothingOpen(t *testing.T) {
-	h := newHarness(t)
-	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = "Delta3.8-27B Q5" }); err != nil {
-		t.Fatal(err)
-	}
-	h.engine.SetModel("Delta3.8-27B Q5")
-	h.engine.Wait(5 * time.Second)
-
-	h.replay.mu.Lock()
-	loads := append([]string(nil), h.replay.Loads...)
-	h.replay.mu.Unlock()
-	if len(loads) != 1 || loads[0] != "Delta3.8-27B Q5" {
-		t.Errorf("loads = %v, want the model that was picked", loads)
+		t.Errorf("loads = %v, want the model loaded once by the message", loads)
 	}
 }
 
@@ -954,10 +933,12 @@ func TestSessionTakesTheModelAtItsNextTurn(t *testing.T) {
 }
 
 func TestOnlyALoadCarriesAutoloadTrue(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
 	// Alpha-12B is loaded in the model list, so reading it must not offer to
 	// start it. Delta is not, so preparing it is a load.
-	h.open(t, h.sessionWith(t, "Alpha-12B"))
+	loaded := h.sessionWith(t, "Alpha-12B")
+	h.engine.Send(loaded.ID, "hello", nil)
+	waitIdle(t, loaded)
 
 	h.replay.mu.Lock()
 	queries := append([]string(nil), h.replay.Queries...)
@@ -975,7 +956,10 @@ func TestOnlyALoadCarriesAutoloadTrue(t *testing.T) {
 		t.Errorf("loads = %v, want none for a model already loaded", loads)
 	}
 
-	h.open(t, h.sessionWith(t, "Delta3.8-27B Q5"))
+	unloaded := h.sessionWith(t, "Delta3.8-27B Q5")
+	h.engine.Send(unloaded.ID, "hello", nil)
+	waitIdle(t, unloaded)
+
 	h.replay.mu.Lock()
 	loads = append([]string(nil), h.replay.Loads...)
 	h.replay.mu.Unlock()
@@ -984,34 +968,36 @@ func TestOnlyALoadCarriesAutoloadTrue(t *testing.T) {
 	}
 }
 
-// A message typed while the model loads has no turn to join, so it is refused
-// rather than queued against nothing.
-func TestMessageIsRefusedWhileTheModelLoads(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt")
+// The model is read inside the turn the first message starts, so a message
+// typed while it loads joins that turn's queue.
+func TestMessageTypedWhileTheModelLoadsIsQueued(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
 	h.replay.Props = 300 * time.Millisecond
-	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = "Delta3.8-27B Q5" }); err != nil {
+	s := h.sessionWith(t, "Delta3.8-27B Q5")
+
+	if _, err := h.engine.Send(s.ID, "first", nil); err != nil {
 		t.Fatal(err)
 	}
-	s, err := h.engine.Create(h.project)
+	waitState(t, s, StateLoading)
+	sent, err := h.engine.Send(s.ID, "second", nil)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Send while the model loads = %v", err)
 	}
-	// Opening it is what reads the model, and the read is what refuses the
-	// message.
-	if _, err := h.engine.Open(s.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.engine.Send(s.ID, "too early", nil); err != ErrLoading {
-		t.Errorf("Send while loading = %v, want ErrLoading", err)
-	}
-	h.replay.mu.Lock()
-	h.replay.Props = 0
-	h.replay.mu.Unlock()
-	waitIdle(t, s)
-	if _, err := h.engine.Send(s.ID, "now", nil); err != nil {
-		t.Fatalf("Send once ready = %v", err)
+	if !sent.Queued {
+		t.Error("the message did not join the turn that was loading the model")
 	}
 	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	var texts []string
+	for _, e := range doc.Entries {
+		if e.Kind == "user" {
+			texts = append(texts, e.Content)
+		}
+	}
+	if strings.Join(texts, ",") != "first,second" {
+		t.Errorf("user entries = %v, want both messages in order", texts)
+	}
 }
 
 func TestUnansweredToolCallIsRepaired(t *testing.T) {

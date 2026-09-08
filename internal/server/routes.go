@@ -628,7 +628,8 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		go s.Detect(context.Background())
 	}
 	// The model is the harness's, not a session's, so choosing one repoints
-	// every session and reads it once.
+	// every session. Nothing is read here: the next message that needs the
+	// model is what loads it.
 	if cfg.Model != before.Model {
 		s.engine.SetModel(cfg.Model)
 	}

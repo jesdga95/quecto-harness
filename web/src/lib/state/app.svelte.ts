@@ -158,10 +158,10 @@ export async function selectSession(id: string): Promise<void> {
   app.todos = t.todos;
   app.steer = t.steer;
   // A session opened while its turn runs is running, and the snapshot is the
-  // only thing that says so. A compaction draws nothing until it lands, so the
-  // wait it is in is taken from the status.
+  // only thing that says so. A model being read and a compaction both draw
+  // nothing until they land, so the wait is taken from the status.
   app.status = t.status;
-  app.awaitingModel = t.status === "compacting";
+  app.awaitingModel = WAITING.has(t.status);
   app.changes = { files: [], added: 0, removed: 0 };
   unsubscribe = api.events(id, onEvent);
   void loadChanges();
@@ -175,8 +175,8 @@ export function newSession(): void {
 }
 
 /** Creates the session the empty screen has been standing in for. It is not
-    opened: opening reads the model, and the turn this message starts reads it
-    anyway. False when the harness refused it, which leaves the screen empty. */
+    opened, since nothing is drawn from a session this screen already holds.
+    False when the harness refused it, which leaves the screen empty. */
 async function createSession(): Promise<boolean> {
   if (!app.projectPath || !app.config) return false;
   const session = await guard(() => api.createSession(app.projectPath));
@@ -266,9 +266,6 @@ export async function send(text: string, files: string[] = []): Promise<void> {
     kind: looksLikeImage(path) ? "image" : "text",
     bytes: 0,
   }));
-  // A model still loading has no turn for the message to join. The composer
-  // keeps what was typed, so this is the backstop rather than the check.
-  if (app.status === "loading") return;
   // A message typed while the turn runs waits for it, and shows as the queue
   // rather than as a message the model has already been given.
   if (app.status !== "idle") {
@@ -446,10 +443,9 @@ export async function saveConfig(patch: Partial<Config>): Promise<void> {
   app.config = config;
 }
 
-/** A turn talks to the session's model, not to the configuration, so an open
-    session is repointed as well as the default for the next one. */
-/** There is one model. Choosing it points every session at it, and the harness
-    reads it before anything is sent. */
+/** There is one model. Choosing it points every session at it. Nothing is sent
+    to the model server: the model is made ready by the next message that needs
+    it, not by the choice. */
 export async function setModel(id: string): Promise<void> {
   const previous = app.config?.model ?? "";
   if (app.config) app.config.model = id;
@@ -532,7 +528,10 @@ export function toggleChanges(): void {
 }
 
 // Statuses that mean a request is out and nothing has come back for it.
-const ASKED = new Set<TurnStatus>(["thinking", "streaming", "compacting"]);
+const ASKED = new Set<TurnStatus>(["loading", "thinking", "streaming", "compacting"]);
+
+// The waits a session can be found in, which draw nothing of their own.
+const WAITING = new Set<TurnStatus>(["loading", "compacting"]);
 
 function onEvent(event: HarnessEvent): void {
   if (event.type === "resync") {
@@ -541,7 +540,7 @@ function onEvent(event: HarnessEvent): void {
     app.todos = event.transcript.todos;
     app.steer = event.transcript.steer;
     app.status = event.transcript.status;
-    app.awaitingModel = event.transcript.status === "compacting";
+    app.awaitingModel = WAITING.has(event.transcript.status);
     return;
   }
 
@@ -627,7 +626,7 @@ function onEvent(event: HarnessEvent): void {
     const settled = app.status === "loading" && event.status !== "loading";
     app.status = event.status;
     if (ASKED.has(event.status)) app.awaitingModel = true;
-    if (event.status === "idle" || event.status === "loading") app.awaitingModel = false;
+    if (event.status === "idle") app.awaitingModel = false;
     void refreshModels(settled);
   }
 }

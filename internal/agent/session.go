@@ -81,8 +81,8 @@ type Session struct {
 	state   State
 	cancel  context.CancelFunc
 	turnSeq int
-	// gone is set when the session has been deleted, so a read still in
-	// flight does not write its file again.
+	// gone is set when the session has been deleted, so nothing still in
+	// flight writes its file again.
 	gone bool
 }
 
@@ -109,8 +109,8 @@ func (s *Session) forget() {
 	s.gone = true
 }
 
-// reopen marks the model unread, so that opening a session reads it again.
-// A turn under way is left alone: it has the model it is talking to.
+// reopen marks the model unread, so that the next turn reads it again. A turn
+// under way is left alone: it has the model it is talking to.
 func (s *Session) reopen() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

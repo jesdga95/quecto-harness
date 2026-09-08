@@ -69,8 +69,9 @@ itself.
 Naming a model in a query parameter with autoload on loads it on the remote machine, so
 a passive read becomes a write. Every model-scoped request goes through the one helper in
 `internal/llm`, which takes the choice as an argument so that each caller states which
-it is asking for. `Prepare` is the only one that asks to load, and it runs when a person
-picks a model.
+it is asking for. `Prepare` is the only one that asks to load, and it runs inside the turn
+a message starts. Nothing else in the harness loads a model: picking one from the list and
+opening a session both send nothing.
 
 A protocol is a backend in `internal/llm` behind one interface, and nothing above that
 package names one. Fields a server does not define do not leave its own file: llama.cpp's

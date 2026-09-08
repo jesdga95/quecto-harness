@@ -57,13 +57,9 @@
     grow();
   });
   const blocked = $derived(pendingPermission() !== undefined);
-  // Loading is the model being read, not a turn: there is nothing to stop and
-  // nothing for a message to join. The field stays open, since a message can be
-  // written while it loads; only sending waits.
-  const loading = $derived(app.status === "loading");
   // A compaction holds the session but is not offered a stop: it draws nothing
   // to take back. The send button stays, and what it takes joins the queue.
-  const running = $derived(app.status !== "idle" && !loading && app.status !== "compacting");
+  const running = $derived(app.status !== "idle" && app.status !== "compacting");
   // Sending with no session creates one, so the field only needs a project.
   const disabled = $derived(blocked || (!app.sessionId && !app.projectPath));
 
@@ -110,9 +106,7 @@
   }
 
   function submit() {
-    // Sending waits for the model, so the field keeps what was typed rather
-    // than clearing it into a message that is refused.
-    if (disabled || loading || (!text.trim() && files.length === 0)) return;
+    if (disabled || (!text.trim() && files.length === 0)) return;
     const value = text;
     const attached = files;
     text = "";
@@ -183,7 +177,7 @@
             class="round round-brand"
             aria-label="Send"
             onclick={submit}
-            disabled={disabled || loading || (!text.trim() && files.length === 0)}
+            disabled={disabled || (!text.trim() && files.length === 0)}
           >
             <ArrowUp />
           </button>
