@@ -90,10 +90,12 @@ func (b *Broker) Evaluate(project, tool, command string, mode config.Mode) Actio
 	}
 	auto := mode == config.ModeAllowlist
 	switch tool {
-	case "read_file", "find", "write_todos":
+	case "read_file", "find", "write_todos", "ask_question":
 		// find reads inside the project and nothing else, on the same guard
 		// read_file uses. write_todos changes the session's own plan and
 		// touches nothing on the machine, so there is nothing to decide.
+		// ask_question puts its own card to the user, and a card in front of
+		// it would ask twice.
 		return ActionAllow
 	case "write_file", "replace_in_file":
 		if auto {

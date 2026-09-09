@@ -106,6 +106,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/stop", s.postStop)
 	mux.HandleFunc("POST /api/sessions/{id}/compact", s.postCompact)
 	mux.HandleFunc("POST /api/permissions/{id}", s.postPermission)
+	mux.HandleFunc("POST /api/questions/{id}", s.postQuestion)
 	mux.HandleFunc("PUT /api/config", s.putConfig)
 	mux.HandleFunc("GET /api/events", s.getEvents)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {

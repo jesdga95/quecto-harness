@@ -52,6 +52,7 @@ type Engine struct {
 	clientMu sync.RWMutex
 	client   Backend
 	perms    *perms.Broker
+	asks     *asker
 	hub      Publisher
 
 	ctx context.Context
@@ -65,7 +66,7 @@ type Engine struct {
 func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files *store.Files,
 	cl Backend, pb *perms.Broker, hub Publisher) *Engine {
 	return &Engine{
-		cfg: cfg, store: st, files: files, client: cl, perms: pb, hub: hub,
+		cfg: cfg, store: st, files: files, client: cl, perms: pb, asks: newAsker(), hub: hub,
 		ctx: ctx, os: runtime.GOOS, live: map[string]*Session{},
 	}
 }
@@ -531,6 +532,7 @@ func (e *Engine) Stop(id string) (State, error) {
 	}
 	cancel()
 	e.perms.CancelSession(id)
+	e.asks.cancelSession(id)
 	return StateStopped, nil
 }
 
@@ -1256,8 +1258,10 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 			res, err = runner.RunShell(ctx, args)
 		case "write_todos":
 			res, err = e.writeTodos(s, args)
+		case "ask_question":
+			res, err = e.askQuestion(ctx, s, call)
 		default:
-			err = fmt.Errorf("no tool named %s: use read_file, find, write_file, replace_in_file, run_shell or write_todos", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read_file, find, write_file, replace_in_file, run_shell, write_todos or ask_question", call.Function.Name)
 		}
 		if err != nil {
 			content = err.Error()

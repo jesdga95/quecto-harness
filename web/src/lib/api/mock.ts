@@ -1,4 +1,5 @@
 import type {
+  Answer,
   Attached,
   Changes,
   Config,
@@ -18,6 +19,7 @@ import type {
   Usage,
 } from "./types";
 import { applyEvent, nextId, outcomeLabel, pushUser } from "../transcript";
+import { answerText, type Asked } from "../question";
 
 // What a measurement of the fixed parts comes back with. The harness measures
 // them after the first turn, so a session with no turn behind it has no split.
@@ -113,6 +115,9 @@ interface ScriptedTurn {
   truncated: boolean;
   reply: string;
   denied: string;
+  /** A choice put to the user before the tool runs, on the turns that have
+      one, so the card is on screen with no harness behind it. */
+  question?: Asked;
 }
 
 const MOCK_TODOS: Todo[] = [
@@ -196,8 +201,16 @@ const SCRIPT: ScriptedTurn[] = [
   {
     reasoning:
       "The tests are the only thing that says whether the parser still works " +
-      "after the change. Run the package tests, not the whole tree.",
-    preface: "Running the tests for the package I touched.\n\n",
+      "after the change. How much to run is the user's call, so ask.",
+    preface: "One thing before I run them.\n\n",
+    question: {
+      question: "How much of the suite should I run?",
+      options: [
+        { label: "The package I touched", description: "Seconds, and covers the change" },
+        { label: "The whole tree", description: "A minute, and catches what the change reached" },
+      ],
+      multi: false,
+    },
     tool: "run_shell",
     args: { command: "go test ./internal/llm", timeout_s: 120 },
     command: "go test ./internal/llm",
@@ -255,6 +268,9 @@ export class MockApi implements HarnessApi {
   private lastSeq = new Map<string, number>();
   private pending:
     | { id: string; session: string; settle: (d: PermissionDecision) => void }
+    | null = null;
+  private openQuestion:
+    | { id: string; session: string; settle: (a: Answer) => void }
     | null = null;
   // The work in flight. A compaction holds the session the way a turn does, so
   // a message typed against it waits, but a stop does not reach it.
@@ -422,12 +438,21 @@ export class MockApi implements HarnessApi {
     this.resolvePending(decision);
   }
 
+  async answer(questionId: string, chosen: Answer): Promise<void> {
+    await this.tick();
+    if (!this.openQuestion || this.openQuestion.id !== questionId) return;
+    this.settleQuestion(chosen);
+  }
+
   async stop(session: string): Promise<void> {
     await this.tick();
     const run = this.running;
     // A compaction is not stoppable, the way the harness refuses it.
     if (run && run.session === session && !run.compacting) run.cancelled = true;
     if (this.pending) this.resolvePending({ decision: "deny", reason: "stopped" });
+    // The turn is unwound by the cancel the settle carries, the way a stop
+    // under a permission card is.
+    if (this.openQuestion) this.settleQuestion({ options: [], text: "" });
   }
 
   async compact(session: string): Promise<void> {
@@ -557,6 +582,33 @@ export class MockApi implements HarnessApi {
 
       this.emit(session, { type: "status", status: "streaming" });
       await this.stream(session, t, script.preface, turn);
+
+      if (script.question) {
+        const askCall = nextId("t");
+        const askId = nextId("ask");
+        this.send(session, t, {
+          type: "tool_call",
+          id: askCall,
+          name: "ask_question",
+          args: {
+            question: script.question.question,
+            options: script.question.options,
+            multi_select: script.question.multi,
+          },
+        });
+        this.emit(session, { type: "status", status: "waiting" });
+        this.send(session, t, { type: "question", id: askCall, ask: askId });
+        const chosen = await this.askQuestion(askId, session, turn);
+        this.emit(session, { type: "status", status: "running" });
+        this.send(session, t, {
+          type: "tool_output",
+          id: askCall,
+          output: answerText(script.question.options, chosen.options, chosen.text),
+          exit_code: null,
+          truncated: false,
+        });
+        await this.sleep(260, turn);
+      }
 
       const callId = nextId("t");
       this.send(session, t, {
@@ -730,6 +782,27 @@ export class MockApi implements HarnessApi {
     });
   }
 
+  private askQuestion(id: string, session: string, turn: { cancelled: boolean }): Promise<Answer> {
+    return new Promise((resolve, reject) => {
+      if (turn.cancelled) {
+        reject(new Cancelled());
+        return;
+      }
+      this.openQuestion = {
+        id,
+        session,
+        settle: (a) => (turn.cancelled ? reject(new Cancelled()) : resolve(a)),
+      };
+    });
+  }
+
+  private settleQuestion(chosen: Answer): void {
+    const open = this.openQuestion;
+    if (!open) return;
+    this.openQuestion = null;
+    open.settle(chosen);
+  }
+
   private sleep(ms: number, turn: { cancelled: boolean }): Promise<void> {
     return new Promise((resolve, reject) => {
       setTimeout(() => (turn.cancelled ? reject(new Cancelled()) : resolve()), ms);
@@ -842,8 +915,9 @@ function title(text: string): string {
   return clean.length > 38 ? clean.slice(0, 38) + "..." : clean || "New session";
 }
 
-// History for the seeded session: a thought, a tool call, a compaction and an
-// error, so every row style is on screen before anything is clicked.
+// History for the seeded session: a thought, a tool call, an answered
+// question, a compaction and an error, so every row style is on screen before
+// anything is clicked.
 function seededEvents(): HarnessEvent[] {
   const call = nextId("t");
   return [
@@ -913,6 +987,25 @@ function seededEvents(): HarnessEvent[] {
       type: "tool_output",
       id: `${call}_edit`,
       output: "edited internal/server/hub.go at line 43 (-3 +9)",
+      exit_code: null,
+      truncated: false,
+    },
+    {
+      type: "tool_call",
+      id: `${call}_ask`,
+      name: "ask_question",
+      args: {
+        question: "Which tab should keep the channel when the last one closes?",
+        options: [
+          { label: "Close it", description: "The next tab opens a fresh one" },
+          { label: "Keep it", description: "Events buffer until a tab comes back" },
+        ],
+      },
+    },
+    {
+      type: "tool_output",
+      id: `${call}_ask`,
+      output: "Close it",
       exit_code: null,
       truncated: false,
     },

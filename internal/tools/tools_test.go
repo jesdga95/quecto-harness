@@ -370,7 +370,7 @@ func TestLooksBinary(t *testing.T) {
 
 func TestSchemasMatchTheDescriptions(t *testing.T) {
 	s := Schemas()
-	names := []string{"read_file", "find", "write_file", "replace_in_file", "write_todos", "run_shell"}
+	names := []string{"read_file", "find", "write_file", "replace_in_file", "write_todos", "ask_question", "run_shell"}
 	if len(s) != len(names) {
 		t.Fatalf("got %d schemas, want %d", len(s), len(names))
 	}

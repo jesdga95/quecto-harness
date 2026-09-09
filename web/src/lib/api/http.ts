@@ -1,4 +1,5 @@
 import type {
+  Answer,
   Attached,
   Breakdown,
   Changes,
@@ -152,6 +153,7 @@ interface WireSnapshot {
   entries?: WireEntry[];
   todos?: { text?: string; status?: string }[] | null;
   pending?: WirePermission[];
+  question?: { id?: string; call_id?: string } | null;
   state?: string;
   steer?: WireSteer | null;
   last_seq?: number;
@@ -178,6 +180,7 @@ interface WireEvent {
   truncated?: boolean;
   decision?: string;
   reason?: string;
+  ask?: string;
   content?: string;
   attachments?: WireAttachment[];
   prompt_tokens?: number;
@@ -592,6 +595,16 @@ function toTranscript(snap: WireSnapshot): Transcript {
     }
   }
 
+  // The question is already on the row its call drew, since the call is still
+  // running. What the page is missing is the id its answer is posted to.
+  const asked = snap.question;
+  if (asked?.id) {
+    const row = [...items]
+      .reverse()
+      .find((i) => i.kind === "tool" && i.name === "ask_question" && i.running);
+    if (row?.kind === "tool") row.askId = asked.id;
+  }
+
   uniqueIds(items);
 
   const id = snap.id ?? "";
@@ -647,6 +660,7 @@ const EVENT_NAMES = [
   "tool_output",
   "permission",
   "permission_done",
+  "question",
   "usage",
   "status_entry",
   "title",
@@ -722,6 +736,9 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           outcome: outcomeOf({ decision: ev.decision, prefix: ev.prefix, reason: ev.reason }),
         },
       ];
+
+    case "question":
+      return [{ type: "question", id: ev.id ?? "", ask: ev.ask ?? "" }];
 
     case "usage": {
       const prompt = ev.prompt_tokens ?? 0;
@@ -908,6 +925,10 @@ class HttpApi implements HarnessApi {
 
   async decide(permissionId: string, decision: PermissionDecision): Promise<void> {
     await call(`/permissions/${encodeURIComponent(permissionId)}`, "POST", decision);
+  }
+
+  async answer(questionId: string, answer: Answer): Promise<void> {
+    await call(`/questions/${encodeURIComponent(questionId)}`, "POST", answer);
   }
 
   async updateConfig(patch: Partial<Config>): Promise<Config> {

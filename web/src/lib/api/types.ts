@@ -101,6 +101,13 @@ export type PermissionDecision =
   | { decision: "always"; prefix: string }
   | { decision: "deny"; reason: string };
 
+/** What the user chose on a question card. options are indexes into the
+    question's own list; text is an answer typed instead of chosen. */
+export interface Answer {
+  options: number[];
+  text: string;
+}
+
 export type HarnessEvent =
   | { type: "delta"; text: string }
   | { type: "reasoning"; text: string }
@@ -123,6 +130,9 @@ export type HarnessEvent =
     }
   /** The card was answered, or a stop answered it, and every tab closes it. */
   | { type: "permission_done"; id: string; outcome: string }
+  /** A tool call is waiting on an answer. The row the call drew is the card,
+      so this carries the id to answer rather than the question again. */
+  | { type: "question"; id: string; ask: string }
   | {
       type: "usage";
       prompt_tokens: number;
@@ -166,6 +176,9 @@ export type TranscriptItem =
       exitCode: number | null;
       truncated: boolean;
       running: boolean;
+      /** Set on an ask_question call that is still waiting, and is the id its
+          answer is posted to. */
+      askId?: string;
     }
   | {
       kind: "permission";
@@ -317,6 +330,7 @@ export interface HarnessApi {
   stop(id: string): Promise<void>;
   compact(id: string): Promise<void>;
   decide(permissionId: string, decision: PermissionDecision): Promise<void>;
+  answer(questionId: string, answer: Answer): Promise<void>;
   updateConfig(patch: Partial<Config>): Promise<Config>;
   listAllowlist(project: string): Promise<string[]>;
   removeAllowed(project: string, prefix: string): Promise<string[]>;

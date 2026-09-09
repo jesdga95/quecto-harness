@@ -7,6 +7,7 @@ import type {
   Effort,
   HarnessEvent,
   Model,
+  Answer,
   PermMode,
   PermissionDecision,
   Project,
@@ -389,6 +390,15 @@ export async function decide(
   }
 }
 
+/** The answer is written onto the row before it is sent, so the card closes on
+    the click rather than waiting for the turn to publish the result. */
+export async function answer(item: TranscriptItem, chosen: Answer): Promise<void> {
+  if (item.kind !== "tool" || !item.askId) return;
+  const id = item.askId;
+  item.askId = undefined;
+  if ((await guard(() => api.answer(id, chosen))) === null) item.askId = id;
+}
+
 export async function removeAllowed(prefix: string): Promise<void> {
   const list = await guard(() => api.removeAllowed(app.projectPath, prefix));
   if (list) app.allowlist = list;
@@ -696,6 +706,14 @@ async function refreshModels(settled = false): Promise<void> {
 /** The card blocks the composer until it is answered. */
 export function pendingPermission(): TranscriptItem | undefined {
   return app.items.find((i) => i.kind === "permission" && i.outcome === null);
+}
+
+/** A question blocks it the same way, on its own card. The id is what makes
+    the card answerable, so a row without one blocks nothing. */
+export function pendingQuestion(): TranscriptItem | undefined {
+  return app.items.find(
+    (i) => i.kind === "tool" && i.name === "ask_question" && i.running && i.askId !== undefined,
+  );
 }
 
 /** Turns and steps, for the line under the composer. */

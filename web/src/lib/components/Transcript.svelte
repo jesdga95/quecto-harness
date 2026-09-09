@@ -7,6 +7,7 @@
   import CopyButton from "./CopyButton.svelte";
   import PermissionCard from "./PermissionCard.svelte";
   import Prose from "./Prose.svelte";
+  import QuestionCard from "./QuestionCard.svelte";
   import StepRow from "./StepRow.svelte";
   import type { Attached, TranscriptItem } from "../api";
   import { app, canResend, resend } from "../state/app.svelte";
@@ -260,6 +261,10 @@
         {:else if item.kind === "permission" && item.outcome === null}
           <div class="my-2">
             <PermissionCard {item} />
+          </div>
+        {:else if item.kind === "tool" && item.name === "ask_question" && item.running && item.askId}
+          <div class="my-2">
+            <QuestionCard {item} />
           </div>
         {:else}
           <StepRow {item} />

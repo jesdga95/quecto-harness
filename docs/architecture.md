@@ -2642,7 +2642,9 @@ Response is the created `Summary` plus `"state": "idle"`.
 `breakdown` is absent until the parts have been measured, which is section 8.6.
 
 `pending` carries any unanswered `perms.Request` for this session, so a page reload restores
-the blocked composer. `last_seq` is the SSE sequence number at the moment the snapshot was
+the blocked composer. `question` is present only while a turn waits on `ask_question`, and
+carries the id its answer is posted to plus the id of the call that asked; the question
+itself is already on that call's row, so it is not repeated here. `last_seq` is the SSE sequence number at the moment the snapshot was
 taken; the client opens its event source with `Last-Event-ID: <last_seq>` so nothing is
 missed between the fetch and the subscribe.
 
@@ -2695,6 +2697,22 @@ the file is gone.
 200 `{"ok": true}`. 404 `{"error":"that decision is no longer pending: the turn moved on"}`
 when the id is unknown, which is what a second click produces. 400 when the prefix does not
 match the command being decided.
+
+#### POST /api/questions/{id}
+
+```json
+{"options": [1], "text": ""}
+```
+
+```json
+{"options": [], "text": "neither, drop the cache"}
+```
+
+Answers the question a turn is blocked on. `options` are indexes into the options the call
+offered; `text` is an answer nobody offered. 200 `{"ok": true}`. 404 when the id is unknown,
+which is what a second click produces. 400 for an index that is not on the question, for
+more than one index on a question that is not `multi_select`, and for an answer that is
+neither an index nor any text.
 
 #### PUT /api/config
 

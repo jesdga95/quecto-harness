@@ -13,6 +13,7 @@ func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 		"tool_replace_in_file.md": ToolReplaceInFile,
 		"tool_run_shell.md":       ToolRunShell,
 		"tool_write_todos.md":     ToolWriteTodos,
+		"tool_ask_question.md":    ToolAskQuestion,
 		"compact.md":              Compact,
 		"title.md":                func() string { return Title("name this") },
 	} {
@@ -59,5 +60,9 @@ func TestToolDescriptionsNameTheirArguments(t *testing.T) {
 	}
 	if !strings.Contains(ToolReplaceInFile(), "old_string") || !strings.Contains(ToolReplaceInFile(), "new_string") {
 		t.Errorf("replace_in_file description omits its arguments: %q", ToolReplaceInFile())
+	}
+	if !strings.Contains(ToolAskQuestion(), "question") || !strings.Contains(ToolAskQuestion(), "options") ||
+		!strings.Contains(ToolAskQuestion(), "multi_select") {
+		t.Errorf("ask_question description omits its arguments: %q", ToolAskQuestion())
 	}
 }

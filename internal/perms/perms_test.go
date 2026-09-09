@@ -46,6 +46,8 @@ func TestEvaluateMatrix(t *testing.T) {
 		{"run_shell", "go test ./...", config.ModeAsk, ActionPrompt},
 		{"run_shell", "go test ./...", config.ModeAllowlist, ActionAllow},
 		{"run_shell", "go build", config.ModeAllowlist, ActionPrompt},
+		{"write_todos", "", config.ModeAsk, ActionAllow},
+		{"ask_question", "", config.ModeAsk, ActionAllow},
 		{"unknown_tool", "", config.ModeAllowlist, ActionPrompt},
 		// Full answers before anything else is looked at: an unlisted prefix,
 		// a shell operator and a tool that does not exist all run.

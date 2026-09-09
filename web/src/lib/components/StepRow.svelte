@@ -6,6 +6,7 @@
   import ListChecks from "phosphor-svelte/lib/ListChecks";
   import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
+  import Question from "phosphor-svelte/lib/Question";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
   import Terminal from "phosphor-svelte/lib/Terminal";
   import FileBlock from "./FileBlock.svelte";
@@ -13,6 +14,7 @@
   import TodoList from "./TodoList.svelte";
   import type { Todo, TranscriptItem } from "../api";
   import { describeCommand, firstSentence, k } from "../format";
+  import { asked } from "../question";
 
   let { item }: { item: TranscriptItem } = $props();
   let open = $state(false);
@@ -42,6 +44,7 @@
     if (item.name === "write_file") return "Write";
     if (item.name === "replace_in_file") return "Edit";
     if (item.name === "write_todos") return "Plan";
+    if (item.name === "ask_question") return "Question";
     return "Shell";
   });
 
@@ -55,6 +58,7 @@
       return `${done} of ${todos.length} done`;
     }
     if (item.name === "find") return query;
+    if (item.name === "ask_question") return question.question;
     return path || describeCommand(command);
   });
 
@@ -72,6 +76,18 @@
       }))
       .filter((t) => t.text !== "");
   });
+
+  // The question is in the call's own arguments and the answer is the result,
+  // so the row draws the choice as it was put and what came back.
+  const question = $derived(
+    item.kind === "tool" && item.name === "ask_question"
+      ? asked(item.args)
+      : { question: "", options: [], multi: false },
+  );
+
+  // The result is the labels that were chosen, or words nobody offered, so a
+  // row is marked on an exact match and a typed answer marks nothing.
+  const chosen = $derived(new Set(item.kind === "tool" ? item.output.split(", ") : []));
 
   const isPath = $derived(item.kind === "tool" && item.name !== "find" && path !== "");
   // A compaction with no summary is a divider and nothing more.
@@ -94,6 +110,8 @@
       <PencilSimple />
     {:else if item.kind === "tool" && item.name === "write_todos"}
       <ListChecks />
+    {:else if item.kind === "tool" && item.name === "ask_question"}
+      <Question />
     {:else}
       <Terminal />
     {/if}
@@ -126,6 +144,17 @@
         <pre class="mono-block">{item.command}</pre>
       {:else if item.kind === "tool" && item.name === "write_todos"}
         <TodoList {todos} />
+      {:else if item.kind === "tool" && item.name === "ask_question"}
+        <ul class="flex flex-col gap-1">
+          {#each question.options as option (option.label)}
+            <li class="todo" class:is-doing={chosen.has(option.label)}>
+              <span>{option.label}</span>
+            </li>
+          {/each}
+        </ul>
+        {#if item.output}
+          <p class="text-[13px] text-ink-2">Answered {item.output}</p>
+        {/if}
       {:else if item.kind === "tool" && item.name === "run_shell"}
         <TerminalCard
           {command}

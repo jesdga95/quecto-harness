@@ -774,6 +774,105 @@ func TestPermissionRoute(t *testing.T) {
 	}
 }
 
+// TestQuestionRoute drives a question through a turn and answers it over the
+// route, since the id to answer is minted inside the turn.
+func TestQuestionRoute(t *testing.T) {
+	f := newFixture(t)
+	id := f.newSession(t)
+
+	args := `{"question":"Where should the cache live?","options":[{"label":"In memory"},{"label":"On disk"}]}`
+	f.nextFrames(
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"ask_question","arguments":`+strconv.Quote(args)+`}}]}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	)
+	f.setFrames(
+		`data: {"choices":[{"delta":{"content":"on disk then"},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	)
+	if w := f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "add a cache"}); w.Code != http.StatusAccepted {
+		t.Fatalf("message = %d: %s", w.Code, w.Body.String())
+	}
+
+	var ask string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if q := f.engine.PendingQuestion(id); q != nil {
+			ask = q.ID
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if ask == "" {
+		t.Fatal("no question was asked")
+	}
+
+	// A page loaded while the turn is blocked needs the id to answer, and the
+	// question itself is already on the row the call drew.
+	snap := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
+	question, _ := snap["question"].(map[string]any)
+	if question["id"] != ask || question["call_id"] != "call_1" {
+		t.Errorf("snapshot question = %v", snap["question"])
+	}
+
+	w := f.do(t, "POST", "/api/questions/"+ask, map[string]any{"options": []int{7}})
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "no option with that number") {
+		t.Errorf("out of range = %d %s", w.Code, w.Body.String())
+	}
+	w = f.do(t, "POST", "/api/questions/"+ask, map[string]any{"options": []int{0, 1}})
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "takes one answer") {
+		t.Errorf("two answers to one question = %d %s", w.Code, w.Body.String())
+	}
+	w = f.do(t, "POST", "/api/questions/"+ask, map[string]any{"options": []int{}, "text": "  "})
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "answer is empty") {
+		t.Errorf("empty answer = %d %s", w.Code, w.Body.String())
+	}
+	w = f.do(t, "POST", "/api/questions/ask_nothing", map[string]any{"options": []int{0}})
+	if w.Code != 404 {
+		t.Errorf("unknown id = %d, want 404", w.Code)
+	}
+
+	// The card is the row the call drew, so the stream carries the id to
+	// answer and the browser attaches it to that row.
+	var carried map[string]any
+	// The whole replay is read, so the count comes from the hub rather than
+	// from a guess at how many events a blocked turn has published.
+	for _, e := range f.readStream(t, "/api/events?session="+id+"&from=0", int(f.hub.Seq(id))) {
+		if e["type"] == "question" {
+			carried = e
+		}
+	}
+	if carried == nil || carried["ask"] != ask || carried["id"] != "call_1" {
+		t.Errorf("question event = %v", carried)
+	}
+
+	w = f.do(t, "POST", "/api/questions/"+ask, map[string]any{"options": []int{1}})
+	if w.Code != 200 {
+		t.Fatalf("answer = %d %s", w.Code, w.Body.String())
+	}
+	w = f.do(t, "POST", "/api/questions/"+ask, map[string]any{"options": []int{0}})
+	if w.Code != 404 {
+		t.Errorf("second click = %d, want 404", w.Code)
+	}
+	f.waitIdle(t, id)
+
+	snap = decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
+	if _, still := snap["question"]; still {
+		t.Error("the answered question is still on the snapshot")
+	}
+	entries, _ := snap["entries"].([]any)
+	found := false
+	for _, raw := range entries {
+		e, _ := raw.(map[string]any)
+		if e["tool_name"] == "ask_question" && e["content"] == "On disk" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the answer is not the tool result: %v", entries)
+	}
+}
+
 // TestChangesRoute drives a write through a turn and reads the panel's route,
 // which is the whole path from the tool keeping a copy to the browser getting
 // a diff.

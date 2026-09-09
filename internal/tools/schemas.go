@@ -100,6 +100,34 @@ func buildSchemas() []llm.Tool {
 			}),
 		}},
 		{Type: "function", Function: llm.FunctionSpec{
+			Name:        "ask_question",
+			Description: prompts.ToolAskQuestion(),
+			Parameters: mustSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"question": map[string]any{"type": "string", "description": "What is being asked, in one sentence."},
+					"options": map[string]any{
+						"type":        "array",
+						"description": "The answers to choose from, two to four of them.",
+						"minItems":    2,
+						"maxItems":    4,
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"label":       map[string]any{"type": "string", "description": "The answer, in a few words."},
+								"description": map[string]any{"type": "string", "description": "What choosing it means. Optional."},
+							},
+							"required":             []string{"label"},
+							"additionalProperties": false,
+						},
+					},
+					"multi_select": map[string]any{"type": "boolean", "description": "Allow more than one option to be chosen. Default false."},
+				},
+				"required":             []string{"question", "options"},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llm.FunctionSpec{
 			Name:        "run_shell",
 			Description: prompts.ToolRunShell(),
 			Parameters: mustSchema(map[string]any{

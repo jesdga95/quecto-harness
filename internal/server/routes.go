@@ -351,6 +351,11 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		"pending": pending, "entries": entries, "todos": todos,
 		"last_seq": s.hub.Seq(doc.ID),
 	}
+	// A question is answered on the row its own call already drew, so what a
+	// reloaded page is missing is the id to answer, not the question.
+	if q := s.engine.PendingQuestion(doc.ID); q != nil {
+		body["question"] = q
+	}
 	if parts := sess.Breakdown(); parts != nil {
 		body["breakdown"] = parts
 	}
@@ -564,6 +569,44 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 		body.Prefix = prefix
 	}
 	if err := s.perms.Resolve(id, perms.Decision{Kind: kind, Prefix: body.Prefix, Reason: body.Reason}); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// postQuestion answers the question a turn is blocked on. The answer is
+// checked against the options that were offered, since the model reads it as
+// the choice the user made.
+func (s *Server) postQuestion(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Options []int  `json:"options"`
+		Text    string `json:"text"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	q, open := s.engine.OpenQuestion(id)
+	if !open {
+		writeError(w, http.StatusNotFound, agent.ErrNoSuchQuestion.Error())
+		return
+	}
+	for _, i := range body.Options {
+		if i < 0 || i >= len(q.Options) {
+			writeError(w, http.StatusBadRequest, agent.ErrNoSuchOption.Error())
+			return
+		}
+	}
+	if !q.Multi && len(body.Options) > 1 {
+		writeError(w, http.StatusBadRequest, agent.ErrNotMultiSelect.Error())
+		return
+	}
+	if len(body.Options) == 0 && strings.TrimSpace(body.Text) == "" {
+		writeError(w, http.StatusBadRequest, agent.ErrNoAnswer.Error())
+		return
+	}
+	if err := s.engine.Answer(id, agent.Answer{Options: body.Options, Text: body.Text}); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}

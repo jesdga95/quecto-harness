@@ -125,6 +125,18 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
       }
       break;
     }
+    case "question": {
+      // The call's own row is the card, so the answer needs the id it is
+      // posted to and nothing else. A renamed collision keeps the original id
+      // as its prefix, and the row being filled is the most recent one.
+      const item = [...items]
+        .reverse()
+        .find(
+          (i) => i.kind === "tool" && (i.id === event.id || i.id.startsWith(`${event.id}#`)),
+        );
+      if (item && item.kind === "tool") item.askId = event.ask;
+      break;
+    }
     case "permission": {
       items.push({
         kind: "permission",

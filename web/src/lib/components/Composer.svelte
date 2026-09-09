@@ -10,6 +10,7 @@
     app,
     pasteFile,
     pendingPermission,
+    pendingQuestion,
     pickAttachments,
     send,
     stop,
@@ -56,7 +57,10 @@
     text;
     grow();
   });
-  const blocked = $derived(pendingPermission() !== undefined);
+  // Both cards take their answer on the card itself, so the field waits for
+  // whichever one is open.
+  const asking = $derived(pendingQuestion() !== undefined);
+  const blocked = $derived(asking || pendingPermission() !== undefined);
   // A compaction holds the session but is not offered a stop: it draws nothing
   // to take back. The send button stays, and what it takes joins the queue.
   const running = $derived(app.status !== "idle" && app.status !== "compacting");
@@ -147,7 +151,11 @@
       bind:this={field}
       class="textarea"
       rows="1"
-      placeholder={blocked ? "Answer the permission card first" : placeholder}
+      placeholder={asking
+        ? "Answer the question first"
+        : blocked
+          ? "Answer the permission card first"
+          : placeholder}
       bind:value={text}
       {onkeydown}
       {onpaste}

@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md tool_read_file.md tool_find.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md compact.md compaction.md title.md attachment.md image.md
+//go:embed system.md tool_read_file.md tool_find.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md tool_ask_question.md compact.md compaction.md title.md attachment.md image.md
 var files embed.FS
 
 var (
@@ -77,6 +77,7 @@ func ToolWriteFile() string     { return mustRead("tool_write_file.md") }
 func ToolReplaceInFile() string { return mustRead("tool_replace_in_file.md") }
 func ToolRunShell() string      { return mustRead("tool_run_shell.md") }
 func ToolWriteTodos() string    { return mustRead("tool_write_todos.md") }
+func ToolAskQuestion() string   { return mustRead("tool_ask_question.md") }
 func Compact() string           { return mustRead("compact.md") }
 
 // Title asks for a name for the task the opening message describes. It carries
