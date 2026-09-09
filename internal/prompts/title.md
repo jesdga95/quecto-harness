@@ -1,6 +1,6 @@
 Give this task a title.
-
-Six words at most, on one line, no quotation marks and no full stop. Name the
-task, not the answer. Reply with the title and nothing else.
+Six words or fewer, one line, no quotation marks, no full stop.
+Name the task, not the answer.
+Reply with only the title.
 
 {{.Text}}

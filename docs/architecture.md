@@ -832,7 +832,7 @@ order:
   "tools": [
     {"type": "function", "function": {
       "name": "read_file",
-      "description": "Read a text file in the project. Returns numbered lines. Use offset and limit for large files.",
+      "description": "Read a text file in the project; returns numbered lines. Use offset and limit for large files.",
       "parameters": {"type": "object", "properties": {
         "path":   {"type": "string",  "description": "Path relative to the project root."},
         "offset": {"type": "integer", "description": "First line to return, 1-based."},
@@ -1282,10 +1282,11 @@ trimmed. Only `system.md` is a template.
 
 ```
 You are a coding agent working in {{.Project}} on {{.OS}}.
-Tools: read_file, find, write_file, replace_in_file, run_shell, write_todos,
+Tools: read_file, find, write_file, replace_in_file, run_shell,
+write_todos,
 ask_question.
 ...
-When the task is done, stop and summarize in two sentences.
+When done, stop and summarize in two sentences.
 {{if .Instructions}}
 
 {{.Instructions}}
@@ -1306,7 +1307,8 @@ instructions have to survive as two braces.
 ### 5.4 tool_read_file.md
 
 ```
-Read a text file in the project. Returns numbered lines. Use offset and limit for large files.
+Read a text file in the project; returns numbered lines.
+Use offset and limit for large files.
 ```
 
 Argument descriptions, which live in the Go schema and not in the markdown:
@@ -1318,7 +1320,7 @@ Argument descriptions, which live in the Go schema and not in the markdown:
 ### 5.5 tool_write_file.md
 
 ```
-Write content to a file, creating or replacing it. Parent folders are created.
+Write content to a file, creating or replacing it; parent folders are created.
 ```
 
 - `path`: `Path relative to the project root.`
@@ -1327,7 +1329,8 @@ Write content to a file, creating or replacing it. Parent folders are created.
 ### 5.6 tool_run_shell.md
 
 ```
-Run a shell command in the project root. Returns output and exit code. Each call is a new shell; nothing persists between calls.
+Run a shell command in the project root; returns output and exit code.
+Each call is a fresh shell; nothing persists between calls.
 ```
 
 - `command`: `The command line to run.`
@@ -1336,8 +1339,8 @@ Run a shell command in the project root. Returns output and exit code. Each call
 ### 5.7 compact.md
 
 ```
-Summarize this conversation for yourself to continue the work.
-Keep: the task, decisions, files changed with paths, current state, open problems, next step.
+Summarize this conversation to continue.
+Keep the task, decisions, files changed (with paths), current state, open problems, and next step.
 Drop chatter and tool output already acted on.
 Plain text, under 400 words.
 ```

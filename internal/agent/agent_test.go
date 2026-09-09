@@ -1327,7 +1327,7 @@ func TestTitleBeforeFirstReply(t *testing.T) {
 	}
 	only, _ := msgs[0].(map[string]any)
 	content, _ := only["content"].(string)
-	if only["role"] != "user" || !strings.Contains(content, "Six words at most") {
+	if only["role"] != "user" || !strings.Contains(content, "Six words or fewer") {
 		t.Errorf("message = %v", only)
 	}
 	if !strings.Contains(content, "what is in this project") {
