@@ -11,6 +11,7 @@
     name: "",
     url: "",
     key: "",
+    protocol: "llamacpp",
     model: "",
     effort: "medium",
     preserve_reasoning: true,

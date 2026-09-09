@@ -127,3 +127,27 @@ export function probeMessage(probe: {
   if (probe.detectError !== "") return probe.detectError;
   return "That address answered with no model list. Type the model id.";
 }
+
+export function protocolLabel(protocol: string): string {
+  switch (protocol) {
+    case "chat":
+      return "Chat";
+    case "responses":
+      return "Responses";
+    default:
+      return "llama.cpp";
+  }
+}
+
+/** What choosing one protocol over another means, since an address will often
+    answer more than one and nothing can ask it which to use. */
+export function protocolHint(protocol: string): string {
+  switch (protocol) {
+    case "chat":
+      return "The chat completions endpoint every OpenAI-compatible server has.";
+    case "responses":
+      return "OpenAI's newer endpoint. Its recent models take tools and thinking together only here.";
+    default:
+      return "A llama.cpp server, which is also the only one that takes top k and repeat penalty.";
+  }
+}

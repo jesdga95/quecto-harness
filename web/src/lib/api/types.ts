@@ -8,6 +8,10 @@ export type ModelStatus =
   | "sleeping"
   | "downloading";
 export type Effort = "auto" | "off" | "low" | "medium" | "high";
+
+/** The wire protocol an address speaks. It is named rather than found: two of
+    the three answer the same model list at the same address. */
+export type Protocol = "llamacpp" | "chat" | "responses";
 export type TurnStatus =
   | "idle"
   | "loading"
@@ -48,13 +52,15 @@ export interface Agent {
   url: string;
   /** Empty is no key. */
   key: string;
+  /** What the address speaks. Nothing probes for it. */
+  protocol: Protocol;
   model: string;
   effort: Effort;
   /** Keeps thinking from earlier turns in the prompt. */
   preserve_reasoning: boolean;
   /** Sampling. Null is sent as no field at all, so the model server's own
       value stands. top_k and repeat_penalty reach a llama.cpp server alone,
-      since the OpenAI API defines neither. */
+      since neither OpenAI protocol defines them. */
   temperature: number | null;
   top_p: number | null;
   top_k: number | null;
@@ -102,7 +108,7 @@ export interface Config {
 
 /** What the harness is talking to: a llama.cpp router, one llama.cpp server,
     an OpenAI-compatible endpoint, or nothing that answered yet. */
-export type ServerMode = "router" | "single" | "openai" | "unknown";
+export type ServerMode = "router" | "single" | "openai" | "responses" | "unknown";
 
 export interface State {
   mode: ServerMode;
@@ -340,7 +346,10 @@ export interface HarnessApi {
   selectAgent(id: string): Promise<Agent[]>;
   /** Reads one address, saved or not, and reports what it said either way. An
       agent id fills in the key the browser was never given. */
-  probeAgent(at: { agent?: string; url: string; key?: string | null }, refresh?: boolean): Promise<Probe>;
+  probeAgent(
+    at: { agent?: string; url: string; key?: string | null; protocol?: Protocol },
+    refresh?: boolean,
+  ): Promise<Probe>;
   /** Opens the host's folder dialog. Resolves to null when it is dismissed. */
   pickDirectory(): Promise<string | null>;
   /** Opens the host's file dialog, which takes several files at once. Empty

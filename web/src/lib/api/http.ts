@@ -18,6 +18,7 @@ import type {
   Probe,
   Project,
   Sent,
+  Protocol,
   ServerMode,
   Session,
   State,
@@ -73,6 +74,7 @@ interface WireAgent {
   name?: string;
   url?: string;
   key?: string;
+  protocol?: string;
   model?: string;
   effort?: string;
   preserve_reasoning?: boolean;
@@ -283,6 +285,7 @@ const STATUSES: ModelStatus[] = [
   "downloading",
 ];
 const EFFORTS: Effort[] = ["auto", "off", "low", "medium", "high"];
+const PROTOCOLS: Protocol[] = ["llamacpp", "chat", "responses"];
 const PERM_MODES: PermMode[] = ["ask", "allowlist", "full"];
 
 /** The harness reports where a context number came from. These are the ones
@@ -330,6 +333,7 @@ function toAgent(a: WireAgent): Agent {
     name: a.name || "Agent",
     url: a.url ?? "",
     key: a.key ?? "",
+    protocol: toProtocol(a.protocol),
     model: a.model ?? "",
     effort: toEffort(a.effort),
     preserve_reasoning: a.preserve_reasoning ?? true,
@@ -356,6 +360,12 @@ function toProbe(p: WireProbe): Probe {
 
 function toEffort(value: string | undefined): Effort {
   return EFFORTS.find((e) => e === value) ?? "medium";
+}
+
+// An unreadable protocol reads as llama.cpp, which is the one the harness
+// was built for and the one whose probe fails loudly against anything else.
+function toProtocol(value: string | undefined): Protocol {
+  return PROTOCOLS.find((p) => p === value) ?? "llamacpp";
 }
 
 // An unreadable policy reads as ask.
@@ -1020,7 +1030,7 @@ class HttpApi implements HarnessApi {
   }
 
   async probeAgent(
-    at: { agent?: string; url: string; key?: string | null },
+    at: { agent?: string; url: string; key?: string | null; protocol?: Protocol },
     refresh?: boolean,
   ): Promise<Probe> {
     const wire = await call<WireProbe>(

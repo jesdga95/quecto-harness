@@ -1621,3 +1621,73 @@ func TestFileRouteServesAnAttachment(t *testing.T) {
 		t.Errorf("an id that was never minted returned %d", w.Code)
 	}
 }
+
+// The protocol is the agent's, so it has to survive the wire and the file, and
+// a value nothing speaks has to be refused rather than stored.
+func TestAgentProtocolIsCarriedAndChecked(t *testing.T) {
+	f := newFixture(t)
+	id := f.addAgent(t, map[string]any{
+		"name": "Cloud", "url": "https://api.openai.com",
+		"protocol": "responses", "model": "gpt-5.6-luna",
+	})
+
+	body := decode(t, f.do(t, "GET", "/api/agents", nil))
+	agents, _ := body["agents"].([]any)
+	var got map[string]any
+	for _, a := range agents {
+		m, _ := a.(map[string]any)
+		if m["id"] == id {
+			got = m
+		}
+	}
+	if got == nil || got["protocol"] != "responses" {
+		t.Fatalf("agent = %v, want protocol responses", got)
+	}
+
+	if w := f.do(t, "PUT", "/api/agents/"+id, map[string]any{"protocol": "grpc"}); w.Code != http.StatusBadRequest {
+		t.Errorf("an unspoken protocol = %d, want 400", w.Code)
+	}
+
+	// The fixture's own agent never named one, so it is the harness's default.
+	cfg := f.cfg.Config()
+	first, ok := cfg.AgentByID(f.agent)
+	if !ok || first.Protocol != config.ProtocolLlama {
+		t.Errorf("default protocol = %q, want llamacpp", first.Protocol)
+	}
+	saved, ok := cfg.AgentByID(id)
+	if !ok || saved.Protocol != config.ProtocolResponses {
+		t.Errorf("stored protocol = %q, want responses", saved.Protocol)
+	}
+}
+
+// One address answering both protocols is read as whichever the agent names,
+// which is the whole reason the choice exists.
+func TestProbeReadsTheAddressAsTheProtocolNamed(t *testing.T) {
+	f := newFixture(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/props":
+			serveTestdata(t, w, "props-router.json")
+		case "/v1/models":
+			serveTestdata(t, w, "openai-models.json")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	for _, tc := range []struct{ protocol, mode string }{
+		{"llamacpp", "router"},
+		{"chat", "openai"},
+		{"responses", "responses"},
+	} {
+		body := decode(t, f.do(t, "POST", "/api/agents/probe?refresh=1",
+			map[string]any{"url": upstream.URL, "protocol": tc.protocol}))
+		if body["mode"] != tc.mode {
+			t.Errorf("protocol %q read the address as %v, want %v", tc.protocol, body["mode"], tc.mode)
+		}
+		if body["detect_error"] != "" {
+			t.Errorf("protocol %q: %v", tc.protocol, body["detect_error"])
+		}
+	}
+}

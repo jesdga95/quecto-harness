@@ -12,6 +12,7 @@ import type {
   PermMode,
   PermissionDecision,
   Probe,
+  Protocol,
   Project,
   ServerMode,
   Session,
@@ -474,7 +475,7 @@ export async function setActiveAgent(id: string): Promise<void> {
 }
 
 export function probeAgent(
-  at: { agent?: string; url: string; key?: string | null },
+  at: { agent?: string; url: string; key?: string | null; protocol?: Protocol },
   refresh?: boolean,
 ): Promise<Probe | null> {
   return guard(() => api.probeAgent(at, refresh));

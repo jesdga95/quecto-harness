@@ -1,7 +1,7 @@
 <script lang="ts">
   import SamplingSlider from "./SamplingSlider.svelte";
   import AgentModelField from "./AgentModelField.svelte";
-  import type { Agent, AgentPatch, Effort, Probe } from "../api";
+  import type { Agent, AgentPatch, Effort, Probe, Protocol } from "../api";
   import {
     REPEAT_PENALTY_STEPS,
     TEMPERATURE_STEPS,
@@ -9,9 +9,10 @@
     TOP_P_STEPS,
     probeAgent,
   } from "../state/app.svelte";
-  import { effortHint, effortLabel, k } from "../format";
+  import { effortHint, effortLabel, k, protocolHint, protocolLabel } from "../format";
 
   const EFFORTS: Effort[] = ["auto", "off", "low", "medium", "high"];
+  const PROTOCOLS: Protocol[] = ["llamacpp", "chat", "responses"];
 
   let {
     agent,
@@ -54,20 +55,23 @@
     seed = agent.seed === null ? "" : String(agent.seed);
     probe = null;
     probedAt = "";
-    void look(agent.url, agent.key, false);
+    void look(agent.url, agent.key, agent.protocol, false);
   });
 
   // The address is read with the key beside it, so an agent that has not been
   // stored yet is still read with the key the reader typed for it. A reading
   // is a call to the address, so it is taken when the panel is pointed at an
   // agent and when either field is left, never while one is being typed into.
-  async function look(addr: string, token: string, refresh: boolean) {
+  async function look(addr: string, token: string, how: Protocol, refresh: boolean) {
     if (addr === "") return;
-    const asked = addr + " " + token;
+    const asked = addr + " " + token + " " + how;
     if (!refresh && asked === probedAt) return;
     probedAt = asked;
     checking = true;
-    const got = await probeAgent({ agent: agent.id, url: addr, key: token }, refresh);
+    const got = await probeAgent(
+      { agent: agent.id, url: addr, key: token, protocol: how },
+      refresh,
+    );
     checking = false;
     if (asked === probedAt) probe = got;
   }
@@ -86,6 +90,15 @@
     // so the field has something to go back to when it is left.
     const next = text.trim();
     if (next !== "" && next !== agent.name) onchange({ name: next });
+  }
+
+  // A protocol is picked rather than typed, so the address is read again as
+  // soon as it moves: what a llama.cpp address answers is not what the same
+  // address answers as an OpenAI one.
+  function pickProtocol(protocol: Protocol) {
+    if (protocol === agent.protocol) return;
+    onchange({ protocol });
+    void look(url.trim(), key, protocol, false);
   }
 
   function restoreName() {
@@ -153,7 +166,7 @@
       placeholder="http://127.0.0.1:8080"
       bind:value={url}
       oninput={(e) => commitUrl(e.currentTarget.value)}
-      onblur={() => void look(url.trim(), key, false)}
+      onblur={() => void look(url.trim(), key, agent.protocol, false)}
       onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
       spellcheck="false"
       autocapitalize="off"
@@ -167,9 +180,23 @@
       placeholder="Leave empty if the address takes none"
       bind:value={key}
       oninput={(e) => commitKey(e.currentTarget.value)}
-      onblur={() => void look(url.trim(), key, false)}
+      onblur={() => void look(url.trim(), key, agent.protocol, false)}
       onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
     />
+
+    <span class="label mt-4 mb-1.5 block">Protocol</span>
+    <div class="seg w-fit" role="group" aria-label="Protocol">
+      {#each PROTOCOLS as level (level)}
+        <button
+          class:is-active={agent.protocol === level}
+          aria-pressed={agent.protocol === level}
+          onclick={() => pickProtocol(level)}
+        >
+          {protocolLabel(level)}
+        </button>
+      {/each}
+    </div>
+    <p class="mt-1.5 text-[12px] text-muted">{protocolHint(agent.protocol)}</p>
 
     <span class="label mt-4 mb-1.5 block">Model</span>
     <AgentModelField
@@ -180,7 +207,7 @@
       hasKey={agent.key !== ""}
       hasAddress={agent.url !== ""}
       onpick={(model) => onchange({ model })}
-      onrefresh={() => void look(url.trim(), key, true)}
+      onrefresh={() => void look(url.trim(), key, agent.protocol, true)}
     />
   </div>
 {:else}
@@ -204,7 +231,7 @@
           placeholder="http://127.0.0.1:8080"
           bind:value={url}
           oninput={(e) => commitUrl(e.currentTarget.value)}
-          onblur={() => void look(url.trim(), key, false)}
+          onblur={() => void look(url.trim(), key, agent.protocol, false)}
           onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
           spellcheck="false"
           autocapitalize="off"
@@ -218,10 +245,25 @@
           placeholder="Leave empty if the address takes none"
           bind:value={key}
           oninput={(e) => commitKey(e.currentTarget.value)}
-          onblur={() => void look(url.trim(), key, false)}
+          onblur={() => void look(url.trim(), key, agent.protocol, false)}
           onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
         />
       </label>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <span class="label">Protocol</span>
+      <div class="seg self-start" role="group" aria-label="Protocol">
+        {#each PROTOCOLS as level (level)}
+          <button
+            class:is-active={agent.protocol === level}
+            aria-pressed={agent.protocol === level}
+            onclick={() => pickProtocol(level)}
+          >
+            {protocolLabel(level)}
+          </button>
+        {/each}
+      </div>
+      <p class="text-[12px] text-muted">{protocolHint(agent.protocol)}</p>
     </div>
     <div class="flex flex-col gap-1.5">
       <span class="label">Model</span>
@@ -233,7 +275,7 @@
         hasKey={agent.key !== ""}
         hasAddress={agent.url !== ""}
         onpick={(model) => onchange({ model })}
-        onrefresh={() => void look(url.trim(), key, true)}
+        onrefresh={() => void look(url.trim(), key, agent.protocol, true)}
       />
     </div>
   </div>

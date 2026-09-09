@@ -502,9 +502,10 @@ existing key, the key gets a new name and the old one is ignored.
 
 ### 4.1 Client and backends
 
-Two protocols are spoken. A llama.cpp server, in router or single-model mode, and an
-OpenAI-compatible endpoint, which has a model list and a chat endpoint and nothing else.
-One interface covers both, and nothing above this package names a protocol:
+Three protocols are spoken. A llama.cpp server, in router or single-model mode; an
+OpenAI-compatible chat endpoint, which has a model list and a chat endpoint and nothing
+else; and OpenAI's responses endpoint. One interface covers all three, and nothing above
+this package names a protocol:
 
 ```go
 type Backend interface {
@@ -516,49 +517,62 @@ type Backend interface {
 }
 ```
 
-`Client` is the address: the HTTP half both backends share, the probe that settles which one
-answers, and a delegation of the five calls to it.
+**The protocol is told, not found.** The chat and responses endpoints live at the same
+address, answer the same `GET /v1/models`, and differ only in what they do with a turn, so
+no probe can tell them apart. Rather than detect two of three and ask about the third, the
+agent names one and the client is built around it:
 
 ```go
-// Client talks to one model server and works out on its first request which
-// protocol that server speaks.
+type Protocol string
+
+const (
+	ProtocolLlama     Protocol = "llamacpp"
+	ProtocolChat      Protocol = "chat"
+	ProtocolResponses Protocol = "responses"
+)
+```
+
+`Client` is the address: the HTTP half every backend shares, the protocol it was given, and
+a delegation of the five calls to it.
+
+```go
+// Client talks to one model server, speaking the protocol it was built with.
 type Client struct {
-	BaseURL string       // no trailing slash
-	Token   string       // optional bearer
-	HTTP    *http.Client // defaults to a client with no global timeout
+	BaseURL  string       // no trailing slash
+	Token    string       // optional bearer
+	Protocol Protocol     // set once, because the pool keys on it
+	HTTP     *http.Client // defaults to a client with no global timeout
 }
 
-func New(baseURL, token string) *Client
+func New(baseURL, token string, protocol Protocol) *Client
 
-// Pool hands out one client per address and key. Two agents at one address
-// share the client and the protocol it settled on.
+// Pool hands out one client per address, key and protocol.
 type Pool struct { ... }
 
 func NewPool() *Pool
-func Key(baseURL, token string) string
-func (p *Pool) Get(baseURL, token string) *Client
+func Key(baseURL, token string, protocol Protocol) string
+func (p *Pool) Get(baseURL, token string, protocol Protocol) *Client
 func (p *Pool) Retain(live []string)
 ```
 
-Keying a client on the address and the key together is the whole of the invalidation
-rule, which is why there is no invalidation code. A rename, or a change of model, effort,
-sampling or instructions, is the same key and so the same client and no fresh probe. A
-changed address or key is a different client, which is correct: nothing about what
-answered before carries over. `Retain` runs after a write that touched the agent list and
-drops the clients no agent points at, closing the connections they held.
+Keying a client on those three together is the whole of the invalidation rule, which is why
+there is no invalidation code. A rename, or a change of model, effort, sampling or
+instructions, is the same key and so the same client. A changed address, key or protocol is
+a different client, which is correct: nothing about what answered before carries over.
+Protocol has to be in the key because a client is one backend, and two agents at one
+address speaking differently must not share it. `Retain` runs after a write that touched the
+agent list and drops the clients no agent points at, closing the connections they held.
 
-`Detect` is the probe. It reads `GET /props` with no query parameters, which is a read on
-any llama.cpp server and cannot load a model, and a reply carrying `build_info` selects the
-llama.cpp backend. Anything else, a 404 included, falls through to the OpenAI-compatible
-backend, whose own detection is the model list. Silence and a refused token name no protocol,
-so they are returned as the failure they are and nothing is remembered.
+`Client.backend()` is a switch on the protocol. It builds a value that holds nothing, so
+there is no memo to go stale, no lifetime to bound and no lock to take. `Detect` no longer
+settles anything; it reports what the server says about itself, which for llama.cpp is a
+build and an autoload setting and for the other two is only whether the model list answered.
 
-`Detect` decides again every time it is called rather than answering from what it found
-before, because what answers at an address can change while the harness runs: a box that
-served one protocol at breakfast can serve the other by lunch, and a gateway that was
-starting up answered like neither. The other four calls take the last decision for
-`resolveTTL`, one minute, so a run of requests costs one probe and a swapped server is
-followed within it.
+This replaced a cascade that read `GET /props` first and fell through to the model list,
+remembering the answer for a minute. It was correct for two protocols and could not be
+extended to a third that is indistinguishable from the second. Being told also removes the
+failure it had: a gateway still starting answered like neither, and a llama.cpp server that
+was briefly unwell was spoken to as an OpenAI one for the next minute.
 
 The HTTP client has no `Timeout`, because a chat stream can legitimately run for minutes.
 Deadlines come from the caller's context. Transport settings: `MaxIdleConnsPerHost: 4`,
@@ -2610,7 +2624,8 @@ All request and response bodies are `application/json` unless stated. Errors are
   "build": "b10812-8b4b3558f",
   "agents": [
     {"id": "agt_2f7qk3m9x4pd8s1v", "name": "Local llama.cpp",
-     "url": "http://192.168.2.205:8080", "key": "", "model": "Gemma4-12B",
+     "url": "http://192.168.2.205:8080", "key": "", "protocol": "llamacpp",
+     "model": "Gemma4-12B",
      "effort": "medium", "preserve_reasoning": true,
      "temperature": 0.35, "top_p": null, "top_k": null, "repeat_penalty": null,
      "max_tokens": null, "seed": null, "instructions": ""}
@@ -3350,6 +3365,8 @@ export type Agent = {
   url: string;
   /** Empty is no key. */
   key: string;
+  /** What the address speaks. Nothing probes for it. */
+  protocol: "llamacpp" | "chat" | "responses";
   model: string;
   effort: "auto" | "off" | "low" | "medium" | "high";
   preserve_reasoning: boolean;
@@ -3571,6 +3588,12 @@ Fields commit into that draft as they are typed, so Save is lit by a change alre
 The address and the key are the exception only in what they do on the way out: a reading of
 the address costs a call to it, so one is taken when the panel is pointed at an agent and
 when either field is left, never per keystroke.
+
+The connection card carries the protocol, because an address alone does not say how to
+speak to it: `api.openai.com` answers the same model list on both OpenAI endpoints, and the
+newer models take tools and thinking together only on the responses one. It sits between
+the key and the model, since it decides what the model list means, and a line under it says
+what each choice is for. Changing it reads the address again.
 
 The right pane is one card per group of fields: connection, thinking, sampling and extra
 instructions. Group names and the agent's name in the header are the page's own type scale,
@@ -3885,22 +3908,28 @@ reflected in the sections above.
     history unusable for a resend. A session that writes several large files produces a
     large file. Section 9.5.
 
-13. **Single-model detection.** Confirmed: `role == "router"` selects router mode and the
+13. **The protocol is named, not detected.** An address speaking the chat endpoint and one
+   speaking the responses endpoint are the same address answering the same model list, so
+   nothing can tell them apart and the agent says which. The cost is a field a reader has to
+   set; the alternative was a probe that is right two times in three by construction.
+   Sections 3.2, 4.1, 12.8.
+
+14. **Single-model detection.** Confirmed: `role == "router"` selects router mode and the
     absence of `role` selects single mode. `model_alias` is not a discriminator, since the
     router returns it too. Section 4.2.
 
-14. **Allowlist entries for a removed project.** They stay on disk, so re-adding the project
+15. **Allowlist entries for a removed project.** They stay on disk, so re-adding the project
     restores its rules. Two routes make them reachable: `GET /api/allowlist?project=` and
     `DELETE /api/allowlist`. The settings panel lists the current project's rules with a
     remove control, which is the only caller of `config.Store.RemoveAllow`. Sections 10.4,
     12.4, 12.9.
 
-15. **Deleting a session.** `DELETE /api/sessions/{id}` returns 204 on success, 409 when the
+16. **Deleting a session.** `DELETE /api/sessions/{id}` returns 204 on success, 409 when the
     session is busy, and 404 when the id is unknown. It removes the file, the live engine
     entry and the hub channel. The sidebar exposes it behind a confirmation, since there is
     no undo. Sections 8.1, 10.4, 12.9.
 
-16. **Reasoning dropped from the history.** Noted, no action. Reasoning is stored and shown
+17. **Reasoning dropped from the history.** Noted, no action. Reasoning is stored and shown
     but never replayed to the model, so a template reporting
     `supports_preserve_reasoning: true` will not receive the trace it is built for. Section
     8.7.
