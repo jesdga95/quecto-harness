@@ -67,6 +67,10 @@ export interface Agent {
   repeat_penalty: number | null;
   /** Caps one reply. Null leaves the length to the model server. */
   max_tokens: number | null;
+  /** The window the context meter and automatic compaction measure against.
+      Null takes what the model server reports, and a server that reports
+      nothing leaves the window unknown, which is no limit. */
+  max_context: number | null;
   /** Makes a reply repeatable. Null is a new one each turn. */
   seed: number | null;
   /** How many agents this one may have working for it at once. Nothing

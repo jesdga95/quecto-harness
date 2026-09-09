@@ -114,7 +114,9 @@ const ADDRESSES: Record<string, Model[]> = {
   "http://192.168.2.205:8080": MODELS,
   "http://10.0.0.14:1234": MODELS.slice(3, 5),
   "https://api.example.com/v1": [
-    { id: "gpt-oss-120b", status: "loaded", vision: false, ctx: 131072, ctxIsHint: false },
+    // A hosted endpoint that lists its models and says nothing about what
+    // they hold.
+    { id: "gpt-oss-120b", status: "loaded", vision: false, ctx: 0, ctxIsHint: false },
   ],
 };
 
@@ -123,20 +125,21 @@ const AGENTS: Agent[] = [
     id: "agt_local", name: "Local llama.cpp", url: "http://192.168.2.205:8080",
     key: "", protocol: "llamacpp", model: "Gemma4-12B", effort: "medium", preserve_reasoning: true,
     temperature: null, top_p: null, top_k: null, repeat_penalty: null,
-    max_tokens: null, seed: null, concurrency: 1, instructions: "",
+    max_tokens: null, max_context: null, seed: null, concurrency: 1, instructions: "",
   },
   {
     id: "agt_studio", name: "Studio box", url: "http://10.0.0.14:1234",
     key: "sk-studio", protocol: "responses", model: "Qwen3.8-27B Q5", effort: "high",
     preserve_reasoning: false,
     temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.1,
-    max_tokens: 8192, seed: null, concurrency: 4, instructions: "Answer in British English.",
+    max_tokens: 8192, max_context: 200000, seed: null, concurrency: 4,
+    instructions: "Answer in British English.",
   },
   {
     id: "agt_cloud", name: "Cloud endpoint", url: "https://api.example.com/v1",
     key: "", protocol: "chat", model: "gpt-oss-120b", effort: "medium", preserve_reasoning: true,
     temperature: null, top_p: null, top_k: null, repeat_penalty: null,
-    max_tokens: null, seed: null, concurrency: 1, instructions: "",
+    max_tokens: null, max_context: null, seed: null, concurrency: 1, instructions: "",
   },
 ];
 
@@ -380,7 +383,7 @@ export class MockApi implements HarnessApi {
       id: nextId("agt"), url: "", key: "", model: "",
       protocol: "llamacpp", effort: "medium", preserve_reasoning: true,
       temperature: null, top_p: null,
-      top_k: null, repeat_penalty: null, max_tokens: null, seed: null,
+      top_k: null, repeat_penalty: null, max_tokens: null, max_context: null, seed: null,
       concurrency: 1, instructions: "", ...patch, name,
     };
     this.agents.push(agent);
@@ -969,8 +972,12 @@ export class MockApi implements HarnessApi {
     t.usage.n_ctx = this.ctxOf(id);
   }
 
+  // The window a session is measured against: the answering agent's override,
+  // else what the model reports, else nothing, which is no limit.
   private ctxOf(id: string): number {
-    return this.models.find((m) => m.id === id)?.ctx ?? 131072;
+    const agent = this.agents.find((a) => a.id === this.config.agent);
+    if (agent?.max_context) return agent.max_context;
+    return this.models.find((m) => m.id === id)?.ctx ?? 0;
   }
 
   /** One project with history, one empty, so both states are visible on load. */

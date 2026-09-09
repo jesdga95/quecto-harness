@@ -578,9 +578,9 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 
 	// Opening a session sends nothing to the model server, so it comes back
-	// ready to take a message.
+	// ready to take a message and with no window read for it yet.
 	snap := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
-	if snap["state"] != "idle" || snap["n_ctx"] == 0.0 {
+	if snap["state"] != "idle" || snap["n_ctx"] != 0.0 {
 		t.Errorf("snapshot = %v", snap)
 	}
 	if _, ok := snap["last_seq"]; !ok {
@@ -779,10 +779,25 @@ func TestPutAgentSetsAndClearsSampling(t *testing.T) {
 	}
 }
 
+// A window nothing reported is unknown, and the agent's override fills it in
+// for the session that answers with that agent.
+func TestSnapshotWindowComesFromTheAgent(t *testing.T) {
+	f := newFixture(t)
+	id := f.newSession(t)
+	if res := f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"max_context": 200000}); res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
+	}
+	snap := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
+	if snap["n_ctx"] != 200000.0 || snap["n_ctx_source"] != "agent" {
+		t.Errorf("n_ctx = %v from %v, want the override", snap["n_ctx"], snap["n_ctx_source"])
+	}
+}
+
 func TestPutAgentRejectsValuesOutOfRange(t *testing.T) {
 	f := newFixture(t)
 	for _, body := range []map[string]any{
 		{"temperature": 2.5}, {"top_p": 1.5}, {"effort": "extreme"}, {"url": "ftp://x"},
+		{"max_context": 64}, {"max_context": 20_000_000},
 	} {
 		if res := f.do(t, "PUT", "/api/agents/"+f.agent, body); res.Code != http.StatusBadRequest {
 			t.Errorf("%v = %d, want 400", body, res.Code)

@@ -10,6 +10,11 @@
 
   const session = $derived(activeSession());
   const showChanges = $derived(app.changesOpen && app.changes.files.length > 0);
+  // The chip draws once there is something to draw: a window to measure
+  // against, or tokens counted where no window is known.
+  const measured = $derived(
+    app.usage.n_ctx > 0 || app.usage.prompt_tokens + app.usage.completion_tokens > 0,
+  );
 </script>
 
 <div class="flex min-h-0 flex-1">
@@ -21,7 +26,7 @@
       </div>
       <div class="ml-auto flex shrink-0 items-center gap-2">
         <ChangesChip />
-        {#if app.usage.n_ctx > 0}
+        {#if measured}
           <ContextChip />
         {/if}
       </div>

@@ -43,6 +43,7 @@
   let key = $state("");
   let instructions = $state("");
   let maxTokens = $state("");
+  let maxContext = $state("");
   let seed = $state("");
   let concurrency = $state("");
 
@@ -63,6 +64,7 @@
     key = agent.key;
     instructions = agent.instructions;
     maxTokens = agent.max_tokens === null ? "" : String(agent.max_tokens);
+    maxContext = agent.max_context === null ? "" : String(agent.max_context);
     seed = agent.seed === null ? "" : String(agent.seed);
     concurrency = String(agent.concurrency);
     probe = null;
@@ -89,9 +91,9 @@
   }
 
   const models = $derived(probe?.models ?? []);
-  // The window the chosen model reported, so a cap is set against a number
-  // rather than in the dark.
-  const window = $derived(models.find((m) => m.id === agent.model)?.ctx ?? 0);
+  // What the model server said the chosen model holds, which is what the
+  // context field takes when the agent names no window of its own.
+  const reported = $derived(models.find((m) => m.id === agent.model)?.ctx ?? 0);
 
   // Every field commits as it is typed, so Save is lit by a change already
   // made rather than waiting for the field to be left. Each takes the text
@@ -140,6 +142,10 @@
     commitCount(text, agent.max_tokens, (max_tokens) => onchange({ max_tokens }));
   }
 
+  function commitMaxContext(text: string) {
+    commitCount(text, agent.max_context, (max_context) => onchange({ max_context }));
+  }
+
   function commitSeed(text: string) {
     commitCount(text, agent.seed, (v) => onchange({ seed: v }));
   }
@@ -167,6 +173,7 @@
     commitKey(key);
     commitInstructions(instructions);
     commitMaxTokens(maxTokens);
+    commitMaxContext(maxContext);
     commitSeed(seed);
     commitConcurrency(concurrency);
     restoreConcurrency();
@@ -373,25 +380,40 @@
         onpick={(repeat_penalty) => onchange({ repeat_penalty })}
       />
     </div>
-    <div class="field-card !flex-row !items-center !gap-3 !py-3">
-      <span class="shrink-0 text-[13px]">Max output tokens</span>
-      <input
-        class="input num w-[96px] shrink-0 !px-2.5 !py-1.5"
-        placeholder="Auto"
-        bind:value={maxTokens}
-        oninput={(e) => commitMaxTokens(e.currentTarget.value)}
-      />
-      {#if window > 0}
-        <span class="shrink-0 text-[12px] text-muted">of {k(window)} context</span>
-      {/if}
-      <span class="flex-1"></span>
-      <span class="shrink-0 text-[13px]">Seed</span>
-      <input
-        class="input num w-[96px] shrink-0 !px-2.5 !py-1.5"
-        placeholder="Random"
-        bind:value={seed}
-        oninput={(e) => commitSeed(e.currentTarget.value)}
-      />
+    <div class="field-card">
+      <div class="grid grid-cols-3 gap-3">
+        <label class="flex flex-col gap-1.5">
+          <span class="text-[13px]">Max output tokens</span>
+          <input
+            class="input num"
+            placeholder="Auto"
+            bind:value={maxTokens}
+            oninput={(e) => commitMaxTokens(e.currentTarget.value)}
+          />
+        </label>
+        <label class="flex flex-col gap-1.5">
+          <span class="text-[13px]">Max context</span>
+          <input
+            class="input num"
+            placeholder={reported > 0 ? k(reported) : "No limit"}
+            bind:value={maxContext}
+            oninput={(e) => commitMaxContext(e.currentTarget.value)}
+          />
+        </label>
+        <label class="flex flex-col gap-1.5">
+          <span class="text-[13px]">Seed</span>
+          <input
+            class="input num"
+            placeholder="Random"
+            bind:value={seed}
+            oninput={(e) => commitSeed(e.currentTarget.value)}
+          />
+        </label>
+      </div>
+      <p class="-mt-1 text-[12px] text-muted">
+        Max context is what the meter and automatic compaction measure against. Empty takes what
+        the model server reports, and a server that reports nothing has no limit.
+      </p>
     </div>
   </div>
 

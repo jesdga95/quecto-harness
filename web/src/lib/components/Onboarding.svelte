@@ -20,6 +20,7 @@
     top_k: null,
     repeat_penalty: null,
     max_tokens: null,
+    max_context: null,
     seed: null,
     concurrency: 1,
     instructions: "",

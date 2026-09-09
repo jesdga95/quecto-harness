@@ -705,15 +705,17 @@ func TestComputeFillBeforeAndAfterUsage(t *testing.T) {
 	}
 }
 
-func TestAssumedContextArmsCompaction(t *testing.T) {
-	h := newHarness(t, "stream_summary.txt", "stream_plain.txt")
+func TestUnknownWindowNeverCompacts(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
 	s := h.session(t)
+	// A model server that reported no window, with the read already done so
+	// the turn does not take one from the fixture.
 	s.mu.Lock()
-	s.NCtx, s.NCtxSource = 0, ""
-	nctx, source := s.effectiveNCtx()
+	s.NCtx, s.NCtxSource, s.prepared = 0, "", true
+	nctx, source := s.window(h.agent)
 	s.mu.Unlock()
-	if nctx != assumedNCtx || source != "assumed" {
-		t.Fatalf("effectiveNCtx = %d/%s", nctx, source)
+	if nctx != 0 || source != "" {
+		t.Fatalf("window = %d/%s, want unknown", nctx, source)
 	}
 
 	h.cfg.Update(func(c *config.Config) { c.CompactAt = 0.05 })
@@ -723,8 +725,31 @@ func TestAssumedContextArmsCompaction(t *testing.T) {
 	h.engine.Send(s.ID, "carry on", nil)
 	waitIdle(t, s)
 
-	if len(h.rec.ofType("compacted")) != 1 {
-		t.Errorf("compaction did not fire against the assumed size")
+	if n := len(h.rec.ofType("compacted")); n != 0 {
+		t.Errorf("compactions = %d, want none against a window nothing named", n)
+	}
+}
+
+func TestContextOverrideArmsCompaction(t *testing.T) {
+	h := newHarness(t, "stream_summary.txt", "stream_plain.txt")
+	s := h.session(t)
+	// The agent names a window smaller than the one the model reports, so a
+	// fill that fits the report does not fit the override.
+	window := 8192
+	h.setAgent(t, func(a *config.Agent) { a.MaxContext = &window })
+	s.mu.Lock()
+	nctx, source := s.window(h.agent)
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: strings.Repeat("x", 40000), InContext: true, Visible: true})
+	s.mu.Unlock()
+	if nctx != 8192 || source != "agent" {
+		t.Fatalf("window = %d/%s, want the override", nctx, source)
+	}
+
+	h.engine.Send(s.ID, "carry on", nil)
+	waitIdle(t, s)
+
+	if n := len(h.rec.ofType("compacted")); n != 1 {
+		t.Errorf("compactions = %d, want one against the override", n)
 	}
 }
 

@@ -96,7 +96,9 @@
           {#if model.vision}
             <ImageIcon size={14} class="shrink-0 text-muted" />
           {/if}
-          <span class="num shrink-0 text-[12px] text-muted">{k(model.ctx)}</span>
+          {#if model.ctx > 0}
+            <span class="num shrink-0 text-[12px] text-muted">{k(model.ctx)}</span>
+          {/if}
         {/snippet}
       </PickerRow>
     {:else}

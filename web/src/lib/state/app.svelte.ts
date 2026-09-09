@@ -47,7 +47,7 @@ export const app = $state({
   todos: [] as Todo[],
   changes: { files: [], added: 0, removed: 0 } as Changes,
   changesOpen: false,
-  usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: 131072 } as Usage,
+  usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: 0 } as Usage,
   status: "idle" as TurnStatus,
   // The model has been asked and nothing has come back yet. True from the
   // moment a turn starts, again after each tool result while the model reads

@@ -31,10 +31,6 @@ const (
 	StateFailed     State = "failed"
 )
 
-// assumedNCtx is the last resort when nothing reported a context size.
-// Automatic compaction stays armed against it and the meter marks it a guess.
-const assumedNCtx = 32768
-
 // Session is one conversation with one model in one project. It is the
 // in-memory authority; store holds the same data on disk.
 type Session struct {
@@ -500,12 +496,11 @@ func (s *Session) estimateChars(from int) int {
 	return total
 }
 
-// effectiveNCtx never reports zero, so the meter always has a denominator.
-func (s *Session) effectiveNCtx() (int, string) {
-	if s.NCtx > 0 {
-		return s.NCtx, s.NCtxSource
-	}
-	return assumedNCtx, "assumed"
+// window is the size this session's context is measured against: the agent's
+// override, else what the model server reported. Zero is a window nothing
+// named, which is no limit. The caller holds the lock.
+func (s *Session) window(a config.Agent) (int, string) {
+	return a.Window(s.NCtx, s.NCtxSource)
 }
 
 // Breakdown splits the context into the three parts a reader can act on. It

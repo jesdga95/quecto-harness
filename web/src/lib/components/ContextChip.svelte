@@ -7,7 +7,10 @@
   let open = $state(false);
 
   const fill = $derived(app.usage.prompt_tokens + app.usage.completion_tokens);
-  const ratio = $derived(app.usage.n_ctx > 0 ? fill / app.usage.n_ctx : 0);
+  // A window nothing reported and nothing overrode is no limit, so the chip
+  // counts the tokens rather than a share of a window.
+  const limited = $derived(app.usage.n_ctx > 0);
+  const ratio = $derived(limited ? fill / app.usage.n_ctx : 0);
   const percent = $derived(pct(fill, app.usage.n_ctx));
   const tone = $derived(level(ratio));
   const stats = $derived(turnStats());
@@ -16,8 +19,10 @@
   // The parts are measured against the whole window, so each segment is its
   // own share of it and the tail of the bar is what is still free. They arrive
   // once the first turn has been measured, so the bar is plain until then.
+  // With no window they are measured against the fill, so the bar reads as
+  // the composition of the prompt with nothing left free.
   const parts = $derived(app.usage.breakdown);
-  const share = (n: number) => pct(n, app.usage.n_ctx);
+  const share = (n: number) => pct(n, limited ? app.usage.n_ctx : fill);
 
   // Circumference of the r=7 track, so the dash offset is a percentage of it.
   const circumference = 2 * Math.PI * 7;
@@ -45,7 +50,7 @@
         stroke-dasharray="{dash} {circumference}"
       />
     </svg>
-    <span class="num text-[12px]">{percent}%</span>
+    <span class="num text-[12px]">{limited ? `${percent}%` : k(fill)}</span>
   </button>
 
   {#if open}
@@ -53,7 +58,9 @@
       <div class="px-2.5 py-2">
         <div class="flex items-baseline justify-between">
           <span class="text-[13px] font-medium">Context</span>
-          <span class="num text-[12px] text-muted">{k(fill)} / {k(app.usage.n_ctx)}</span>
+          <span class="num text-[12px] text-muted">
+            {#if limited}{k(fill)} / {k(app.usage.n_ctx)}{:else}{k(fill)} · No limit{/if}
+          </span>
         </div>
 
         {#if parts}
@@ -85,7 +92,7 @@
               </div>
             </dl>
           </div>
-        {:else}
+        {:else if limited}
           <div class="ctxtrack mt-2" class:is-warn={tone === "warn"} class:is-crit={tone === "crit"}>
             <span style="width:{percent}%"></span>
           </div>

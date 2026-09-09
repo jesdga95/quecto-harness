@@ -83,6 +83,7 @@ interface WireAgent {
   top_k?: number | null;
   repeat_penalty?: number | null;
   max_tokens?: number | null;
+  max_context?: number | null;
   seed?: number | null;
   concurrency?: number;
   instructions?: string;
@@ -343,6 +344,7 @@ function toAgent(a: WireAgent): Agent {
     top_k: a.top_k ?? null,
     repeat_penalty: a.repeat_penalty ?? null,
     max_tokens: a.max_tokens ?? null,
+    max_context: a.max_context ?? null,
     seed: a.seed ?? null,
     concurrency: a.concurrency ?? 1,
     instructions: a.instructions ?? "",

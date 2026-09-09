@@ -71,6 +71,7 @@ func TestResolveClamps(t *testing.T) {
 		{"temperature", oneAgent(FileAgent{Temperature: ptr(2.5)}), func(c Config) bool { return c.Agents[0].Temperature == nil }, "temperature"},
 		{"top_p", oneAgent(FileAgent{TopP: ptr(-0.1)}), func(c Config) bool { return c.Agents[0].TopP == nil }, "top_p"},
 		{"concurrency", oneAgent(FileAgent{Concurrency: ptr(0)}), func(c Config) bool { return c.Agents[0].Concurrency == DefaultConcurrency }, "concurrency"},
+		{"max_context", oneAgent(FileAgent{MaxContext: ptr(64)}), func(c Config) bool { return c.Agents[0].MaxContext == nil }, "max_context"},
 		{"selection", File{Agent: ptr("agt_gone")}, func(c Config) bool { return c.AgentID == "" }, "agt_gone"},
 		{"project", File{Projects: []string{"relative/path"}}, func(c Config) bool { return len(c.Projects) == 0 }, "project"},
 	}
@@ -139,6 +140,22 @@ func TestSamplingRoundTrip(t *testing.T) {
 	back, notes := oneAgent(FileAgent{}).Resolve(d)
 	if len(notes) != 0 || back.Agents[0].Temperature != nil || back.Agents[0].TopP != nil {
 		t.Errorf("read back as %v, %v with notes %v", back.Agents[0].Temperature, back.Agents[0].TopP, notes)
+	}
+}
+
+// The window a session is measured against comes from one of three places,
+// and the override is the one that wins.
+func TestAgentWindow(t *testing.T) {
+	var a Agent
+	if n, src := a.Window(131072, "props"); n != 131072 || src != "props" {
+		t.Errorf("window = %d/%s, want what the server reported", n, src)
+	}
+	if n, src := a.Window(0, ""); n != 0 || src != "" {
+		t.Errorf("window = %d/%s, want unknown", n, src)
+	}
+	a.MaxContext = ptr(200000)
+	if n, src := a.Window(131072, "props"); n != 200000 || src != "agent" {
+		t.Errorf("window = %d/%s, want the override", n, src)
 	}
 }
 

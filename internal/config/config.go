@@ -46,6 +46,7 @@ type FileAgent struct {
 	TopK              *int     `json:"top_k,omitempty"`
 	RepeatPenalty     *float64 `json:"repeat_penalty,omitempty"`
 	MaxTokens         *int     `json:"max_tokens,omitempty"`
+	MaxContext        *int     `json:"max_context,omitempty"`
 	Seed              *int     `json:"seed,omitempty"`
 	Concurrency       *int     `json:"concurrency,omitempty"`
 	Instructions      *string  `json:"instructions,omitempty"`
@@ -94,6 +95,10 @@ type Agent struct {
 	// MaxTokens caps one reply. Seed makes a reply repeatable.
 	MaxTokens *int
 	Seed      *int
+	// MaxContext is the window the harness measures a session against. Nil
+	// takes what the model server reports, and a server that reports nothing
+	// leaves the window unknown, which is no limit.
+	MaxContext *int
 	// Concurrency is how many agents this one may have working for it at once.
 	// Nothing delegates yet, so it is recorded and read by nothing: it is here
 	// so the number exists on the record before anything spawns against it.
@@ -118,6 +123,20 @@ func (c Config) AgentByID(id string) (Agent, bool) {
 	return Agent{}, false
 }
 
+// Window is the size a session's context is measured against, given what the
+// model server reported for it. The agent's override wins, and a window no
+// one named is zero, which is unknown: nothing compacts against it and the
+// meter has no denominator.
+func (a Agent) Window(reported int, source string) (int, string) {
+	if a.MaxContext != nil && *a.MaxContext > 0 {
+		return *a.MaxContext, "agent"
+	}
+	if reported > 0 {
+		return reported, source
+	}
+	return 0, ""
+}
+
 // DefaultAgent is what a new agent starts as, before anything it was created
 // with is folded in.
 func DefaultAgent() Agent {
@@ -140,6 +159,7 @@ func cloneAgents(in []Agent) []Agent {
 		a.Temperature, a.TopP = clonef(a.Temperature), clonef(a.TopP)
 		a.RepeatPenalty = clonef(a.RepeatPenalty)
 		a.TopK, a.MaxTokens, a.Seed = clonei(a.TopK), clonei(a.MaxTokens), clonei(a.Seed)
+		a.MaxContext = clonei(a.MaxContext)
 		out[i] = a
 	}
 	return out
@@ -162,6 +182,14 @@ const (
 const (
 	DefaultConcurrency = 1
 	MaxConcurrency     = 16
+)
+
+// What a context override is accepted within. The floor is above the cost of
+// a system prompt, since a window under that would compact a session that has
+// said nothing yet.
+const (
+	ContextFloor   = 1024
+	ContextCeiling = 10_000_000
 )
 
 // ProtocolNames lists what the protocol field accepts, for the note a
@@ -350,6 +378,7 @@ func (c Config) File() File {
 			TopK:              clonei(a.TopK),
 			RepeatPenalty:     clonef(a.RepeatPenalty),
 			MaxTokens:         clonei(a.MaxTokens),
+			MaxContext:        clonei(a.MaxContext),
 			Seed:              clonei(a.Seed),
 			Concurrency:       &concurrency,
 			Instructions:      &instructions,
@@ -463,6 +492,13 @@ func resolveAgents(in []FileAgent, note func(string)) []Agent {
 				a.MaxTokens = clonei(f.MaxTokens)
 			} else {
 				note("agent " + strconv.Quote(a.Name) + " max_tokens " + strconv.Itoa(*f.MaxTokens) + " is outside 1 to 1000000, leaving it to the model server")
+			}
+		}
+		if f.MaxContext != nil {
+			if *f.MaxContext >= ContextFloor && *f.MaxContext <= ContextCeiling {
+				a.MaxContext = clonei(f.MaxContext)
+			} else {
+				note("agent " + strconv.Quote(a.Name) + " max_context " + strconv.Itoa(*f.MaxContext) + " is outside " + strconv.Itoa(ContextFloor) + " to " + strconv.Itoa(ContextCeiling) + ", taking what the model server reports")
 			}
 		}
 		if f.Seed != nil {

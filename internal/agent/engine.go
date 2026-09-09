@@ -1016,9 +1016,11 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 
 		s.mu.Lock()
 		fill := s.computeFill()
-		nctx, _ := s.effectiveNCtx()
+		nctx, _ := s.window(a)
 		s.mu.Unlock()
-		if float64(fill) >= cfg.CompactAt*float64(nctx) {
+		// A window nothing reported and nothing overrode is no limit, so a
+		// session against one compacts when the reader asks and not before.
+		if nctx > 0 && float64(fill) >= cfg.CompactAt*float64(nctx) {
 			e.setState(s, StateCompacting)
 			if err := e.compact(ctx, s, back, a, caps); err != nil {
 				e.endWithError(s, err, iteration)
@@ -1207,12 +1209,17 @@ func (e *Engine) publishUsage(s *Session) {
 	s.mu.Lock()
 	u := s.LastUsage
 	fill := s.computeFill()
-	nctx, _ := s.effectiveNCtx()
+	reported, source := s.NCtx, s.NCtxSource
+	agentID := s.AgentID
 	parts := s.breakdown()
 	s.mu.Unlock()
 	if u == nil {
 		return
 	}
+	// The window comes from the agent as it stands now, so an override typed
+	// into the dialog moves the meter on the next turn without a reload.
+	agent, _ := e.cfg.Config().AgentByID(agentID)
+	nctx, _ := agent.Window(reported, source)
 	payload := map[string]any{
 		"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens,
 		"cached_tokens": u.CachedTokens, "fill": fill, "n_ctx": nctx}
