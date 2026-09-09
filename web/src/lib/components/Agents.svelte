@@ -1,5 +1,6 @@
 <script lang="ts">
   import Plus from "phosphor-svelte/lib/Plus";
+  import Robot from "phosphor-svelte/lib/Robot";
   import X from "phosphor-svelte/lib/X";
   import type { Agent, AgentPatch } from "../api";
   import {
@@ -162,11 +163,7 @@
             class:is-active={agent.id === stored?.id}
             onclick={() => select(agent.id)}
           >
-            {#if agent.id === active}
-              <span class="rail-dot is-live"></span>
-            {:else}
-              <span class="rail-dot"></span>
-            {/if}
+            <Robot size={15} class="shrink-0" />
             <span class="min-w-0 flex-1 truncate">{agent.name}</span>
           </button>
         {/each}

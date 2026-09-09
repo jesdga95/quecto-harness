@@ -3558,11 +3558,10 @@ takes the console's palette rather than the page's, for the same reason the cons
 the list reads as a place rather than as another panel.
 
 Choosing a row selects it for editing and nothing else, so the dialog can be opened, read
-and closed without the harness switching underneath. The row that answers carries a lit dot
-and every other a flat one, which is honest about an address nobody has asked. Nothing in
-the dialog makes an agent answer: that is the composer chip, which is where the reader is
-when the question comes up, and it keeps every control in the dialog acting on the record
-in front of it.
+and closed without the harness switching underneath. Every row is an icon and a name.
+Nothing in the dialog makes an agent answer: that is the composer chip, which is where the
+reader is when the question comes up, and it leaves every control in the dialog acting on
+the record in front of it.
 
 Nothing reaches the harness until Save. The dialog holds a draft of the selected agent, Save
 is dead until the draft differs from what is stored, and moving to another row or closing
@@ -3592,6 +3591,14 @@ often answer for a model it never named. The list is read when a row is opened, 
 at a time, through `POST /api/agents/probe` carrying the address and the key typed beside
 it, and one line under the field says which of the states the address is in.
 
+The field is its own search. Typing filters the list and sets the model, since for a free
+text field the two are the same act; the caret opens the list unfiltered, so the model
+already chosen is not the only row an address of thousands can show. Sixty rows are drawn
+and the rest are counted, because a hosted endpoint lists more models than anyone reads
+past. The rows are the id, a mark for vision and the window, with no grouping by loaded and
+unloaded: which models a router happens to be holding is not how anyone picks one, and it
+is stale the moment a turn runs.
+
 `AgentPanel` is the same component in the dialog and on the setup screen, in a compact form
 there that leaves out what means nothing before an agent exists. The setup screen shows
 while `agents` is empty and for no other reason: an address that stops answering is a
@@ -3601,9 +3608,10 @@ reason to switch agents, which is inside the app.
 the reader chose and model ids run long; the id is the second line of every row in its
 popover, which ends in `Manage agents`. The icon takes the amber while a model is being
 read and the red when the agent cannot answer, which is the whole of the state the chip
-carries; the sentence itself is at the top of the popover, where the switch is. There is no
-status dot on the chip or on its rows: a dot per row would report on addresses nobody has
-asked. Nothing is loaded by the choice. The first message that needs the model loads it
+carries; the sentence itself is at the top of the popover, where the switch is. No row
+anywhere carries a status dot: the harness only ever asks the address that is answering, so
+a dot per row would be reporting on addresses nobody has asked. Nothing is loaded by the
+choice. The first message that needs the model loads it
 inside its turn, where the transcript shows the wait.
 
 The wait row is the only thing on the page while a model loads, so it carries a clock. It
