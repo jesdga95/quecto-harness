@@ -65,6 +65,11 @@ func (b *responsesBackend) Chat(ctx context.Context, req ChatRequest, on func(Ev
 // is its "none". Auto sends no reasoning object, which for a model that
 // reasons by default is not the same as off.
 //
+// A summary is asked for whenever thinking is. This endpoint never returns the
+// thinking itself: the reasoning items it sends back are opaque, and a summary
+// is the only readable form of it there is. Some accounts and models produce
+// none even when asked, and the turn is no worse for it.
+//
 // The turn is never stored: store is false and every item is sent again each
 // time, so the harness holds the conversation and the endpoint holds nothing.
 func buildResponsesBody(req ChatRequest) ([]byte, error) {
@@ -98,7 +103,7 @@ func buildResponsesBody(req ChatRequest) ([]byte, error) {
 	case EffortOff:
 		body["reasoning"] = map[string]any{"effort": "none"}
 	default:
-		body["reasoning"] = map[string]any{"effort": string(req.Effort)}
+		body["reasoning"] = map[string]any{"effort": string(req.Effort), "summary": "auto"}
 	}
 	return json.Marshal(body)
 }

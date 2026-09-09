@@ -189,16 +189,18 @@ func TestResponsesInputIsFlattened(t *testing.T) {
 }
 
 // Auto sends no reasoning object at all, which for a model that reasons by
-// default is not the same as asking it not to.
+// default is not the same as asking it not to. Asking for thinking also asks
+// for the summary of it, which is the only readable form this endpoint has.
 func TestResponsesEffort(t *testing.T) {
 	for _, tc := range []struct {
-		effort Effort
-		want   any
+		effort  Effort
+		want    any
+		summary bool
 	}{
-		{EffortAuto, nil},
-		{EffortOff, "none"},
-		{EffortLow, "low"},
-		{EffortHigh, "high"},
+		{EffortAuto, nil, false},
+		{EffortOff, "none", false},
+		{EffortLow, "low", true},
+		{EffortHigh, "high", true},
 	} {
 		got := body(t, ChatRequest{Model: "m", Effort: tc.effort})
 		r, ok := got["reasoning"].(map[string]any)
@@ -210,6 +212,9 @@ func TestResponsesEffort(t *testing.T) {
 		}
 		if !ok || r["effort"] != tc.want {
 			t.Errorf("effort %q sent %v, want effort %v", tc.effort, got["reasoning"], tc.want)
+		}
+		if _, asked := r["summary"]; asked != tc.summary {
+			t.Errorf("effort %q summary asked = %v, want %v", tc.effort, asked, tc.summary)
 		}
 	}
 }

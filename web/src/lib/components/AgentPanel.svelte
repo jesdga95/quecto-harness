@@ -1,4 +1,5 @@
 <script lang="ts">
+  import OptionPicker from "./OptionPicker.svelte";
   import SamplingSlider from "./SamplingSlider.svelte";
   import AgentModelField from "./AgentModelField.svelte";
   import type { Agent, AgentPatch, Effort, Probe, Protocol } from "../api";
@@ -11,8 +12,16 @@
   } from "../state/app.svelte";
   import { effortHint, effortLabel, k, protocolHint, protocolLabel } from "../format";
 
-  const EFFORTS: Effort[] = ["auto", "off", "low", "medium", "high"];
-  const PROTOCOLS: Protocol[] = ["llamacpp", "chat", "responses"];
+  const EFFORTS = (["auto", "off", "low", "medium", "high"] as Effort[]).map((value) => ({
+    value,
+    label: effortLabel(value),
+    hint: effortHint(value),
+  }));
+  const PROTOCOLS = (["llamacpp", "chat", "responses"] as Protocol[]).map((value) => ({
+    value,
+    label: protocolLabel(value),
+    hint: protocolHint(value),
+  }));
 
   let {
     agent,
@@ -185,18 +194,12 @@
     />
 
     <span class="label mt-4 mb-1.5 block">Protocol</span>
-    <div class="seg w-fit" role="group" aria-label="Protocol">
-      {#each PROTOCOLS as level (level)}
-        <button
-          class:is-active={agent.protocol === level}
-          aria-pressed={agent.protocol === level}
-          onclick={() => pickProtocol(level)}
-        >
-          {protocolLabel(level)}
-        </button>
-      {/each}
-    </div>
-    <p class="mt-1.5 text-[12px] text-muted">{protocolHint(agent.protocol)}</p>
+    <OptionPicker
+      value={agent.protocol}
+      options={PROTOCOLS}
+      onpick={pickProtocol}
+      label="Protocol"
+    />
 
     <span class="label mt-4 mb-1.5 block">Model</span>
     <AgentModelField
@@ -252,18 +255,12 @@
     </div>
     <div class="flex flex-col gap-1.5">
       <span class="label">Protocol</span>
-      <div class="seg self-start" role="group" aria-label="Protocol">
-        {#each PROTOCOLS as level (level)}
-          <button
-            class:is-active={agent.protocol === level}
-            aria-pressed={agent.protocol === level}
-            onclick={() => pickProtocol(level)}
-          >
-            {protocolLabel(level)}
-          </button>
-        {/each}
-      </div>
-      <p class="text-[12px] text-muted">{protocolHint(agent.protocol)}</p>
+      <OptionPicker
+        value={agent.protocol}
+        options={PROTOCOLS}
+        onpick={pickProtocol}
+        label="Protocol"
+      />
     </div>
     <div class="flex flex-col gap-1.5">
       <span class="label">Model</span>
@@ -281,21 +278,15 @@
   </div>
 
   <div class="field-card">
-    <div class="flex items-start justify-between gap-4">
-      <div class="flex min-w-0 flex-col gap-0.5">
-        <h4 class="field-head">Thinking</h4>
-        <span class="text-[12px] text-muted">{effortHint(agent.effort)}</span>
-      </div>
-      <div class="seg shrink-0" role="group" aria-label="Effort">
-        {#each EFFORTS as level (level)}
-          <button
-            class:is-active={agent.effort === level}
-            aria-pressed={agent.effort === level}
-            onclick={() => onchange({ effort: level })}
-          >
-            {effortLabel(level)}
-          </button>
-        {/each}
+    <div class="flex items-center justify-between gap-4">
+      <h4 class="field-head">Thinking</h4>
+      <div class="w-[168px] shrink-0">
+        <OptionPicker
+          value={agent.effort}
+          options={EFFORTS}
+          onpick={(effort) => onchange({ effort })}
+          label="Effort"
+        />
       </div>
     </div>
     <label class="flex cursor-pointer items-center justify-between gap-6 border-t border-hair pt-3">

@@ -91,7 +91,7 @@
   </button>
 
   {#if open}
-    <Popover onclose={close} fill>
+    <Popover onclose={close} fill float>
       <div class="max-h-[248px] overflow-y-auto">
         {#each rows as model (model.id)}
           <button class="popover-item" onclick={() => pick(model.id)}>

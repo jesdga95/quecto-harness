@@ -3592,14 +3592,24 @@ when either field is left, never per keystroke.
 The connection card carries the protocol, because an address alone does not say how to
 speak to it: `api.openai.com` answers the same model list on both OpenAI endpoints, and the
 newer models take tools and thinking together only on the responses one. It sits between
-the key and the model, since it decides what the model list means, and a line under it says
-what each choice is for. Changing it reads the address again.
+the key and the model, since it decides what the model list means. Changing it reads the
+address again.
+
+The responses endpoint never returns the thinking itself. Its reasoning items are opaque,
+and a summary is the only readable form there is, so a turn that asks for thinking asks for
+the summary of it too. Some accounts and models produce none even so, and the turn is no
+worse for it.
 
 The right pane is one card per group of fields: connection, thinking, sampling and extra
 instructions. Group names and the agent's name in the header are the page's own type scale,
-not a heavier one, so the dialog reads as part of the app rather than as a form. Effort is a
-segmented control rather than a menu, because the pane scrolls and a scroll container clips
-a popover that runs past its edge.
+not a heavier one, so the dialog reads as part of the app rather than as a form.
+
+Effort, protocol and the model all open the same kind of list: a field shaped like the
+inputs beside it, and rows carrying the sentence that says what choosing each one means. A
+sentence per row beats one under the field, since the reader sees every answer while
+choosing rather than one at a time afterwards. Those lists set `float` on `Popover`, which
+places itself against the viewport and follows the anchor as anything scrolls: the pane
+they sit in scrolls, and a scroll container clips a popover positioned inside it.
 
 The name is a labelled field at the top of the connection card and the header only shows it.
 An in-place title reads as a heading, and a heading is not somewhere people look for a field.
