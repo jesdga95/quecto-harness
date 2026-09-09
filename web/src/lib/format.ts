@@ -104,3 +104,26 @@ export function describeCommand(command: string): string {
   if (/^git status/.test(command)) return "Check the working tree";
   return command;
 }
+
+/** What to say about an address that was asked what it holds. Empty when it
+    answered with a model list, which is the only answer that is not news. */
+export function probeMessage(probe: {
+  models: { length: number };
+  detectKind: string;
+  detectError: string;
+  modelsKind: string;
+  modelsError: string;
+}, hasKey: boolean): string {
+  const kinds = [probe.detectKind, probe.modelsKind];
+  if (kinds.includes("unreachable") || kinds.includes("canceled")) {
+    return "Nothing answered at that address.";
+  }
+  if (kinds.includes("auth")) {
+    return hasKey ? "That server refused the API key." : "That server needs an API key.";
+  }
+  if (probe.models.length > 0) return "";
+  // A server that failed said why, and its own words name the cause.
+  if (probe.modelsError !== "") return probe.modelsError;
+  if (probe.detectError !== "") return probe.detectError;
+  return "That address answered with no model list. Type the model id.";
+}

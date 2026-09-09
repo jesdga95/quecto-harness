@@ -1,9 +1,8 @@
 <script lang="ts">
   import AddMenu from "./AddMenu.svelte";
   import ArrowUp from "phosphor-svelte/lib/ArrowUp";
-  import EffortChip from "./EffortChip.svelte";
   import Square from "phosphor-svelte/lib/Square";
-  import ModelChip from "./ModelChip.svelte";
+  import AgentChip from "./AgentChip.svelte";
   import PermissionChip from "./PermissionChip.svelte";
   import X from "phosphor-svelte/lib/X";
   import {
@@ -165,10 +164,9 @@
     <div class="mt-2 flex items-center gap-2">
       <AddMenu up onattach={attach} canAttach={!disabled && files.length < maxFiles} />
       <PermissionChip />
-      <EffortChip up />
 
       <div class="ml-auto flex items-center gap-2">
-        <ModelChip />
+        <AgentChip />
         <!-- Stop keeps its place while a turn runs, and a message typed
              against that turn is sent from the button beside it. -->
         {#if running && (text.trim() || files.length > 0)}

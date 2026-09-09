@@ -1,5 +1,6 @@
 <script lang="ts">
   import { answer, dialog } from "../state/confirm.svelte";
+  import { pushOverlay } from "../overlay";
 
   let confirmButton = $state<HTMLButtonElement | null>(null);
 
@@ -7,14 +8,12 @@
   $effect(() => {
     if (dialog.current) confirmButton?.focus();
   });
-</script>
 
-<svelte:window
-  onkeydown={(e) => {
+  $effect(() => {
     if (!dialog.current) return;
-    if (e.key === "Escape") answer(false);
-  }}
-/>
+    return pushOverlay(() => answer(false));
+  });
+</script>
 
 {#if dialog.current}
   <div

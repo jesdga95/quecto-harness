@@ -1,21 +1,50 @@
 <script lang="ts">
   import Logo from "./Logo.svelte";
-  import { app, connectServer } from "../state/app.svelte";
+  import AgentPanel from "./AgentPanel.svelte";
+  import type { Agent, AgentPatch } from "../api";
+  import { addAgent, app } from "../state/app.svelte";
 
-  let { ondone }: { ondone: () => void } = $props();
-
-  let url = $state(app.config?.server.url ?? "");
-  let token = $state(app.config?.server.token ?? "");
+  // The draft the panel edits before anything is stored. It is the same panel
+  // the dialog uses, so the two forms cannot drift.
+  let draft = $state<Agent>({
+    id: "",
+    name: "",
+    url: "",
+    key_set: false,
+    model: "",
+    effort: "medium",
+    preserve_reasoning: true,
+    temperature: null,
+    top_p: null,
+    instructions: "",
+  });
+  let key = $state("");
+  let panel = $state<ReturnType<typeof AgentPanel> | null>(null);
   let problem = $state("");
+  let saving = $state(false);
 
-  // Probe, and go in when something answered. A server that refuses the key
-  // still answered, so the key is the user's to get right, not a gate here.
-  async function connect() {
-    if (!url.trim() || app.probing) return;
+  function edit(patch: AgentPatch) {
+    if (patch.key !== undefined) {
+      key = patch.key ?? "";
+      draft = { ...draft, key_set: key !== "" };
+      return;
+    }
+    draft = { ...draft, ...patch };
+  }
+
+  async function create() {
+    panel?.flush();
+    if (draft.name.trim() === "" || saving) return;
+    saving = true;
     problem = "";
-    const err = await connectServer(url.trim(), token.trim());
-    problem = err;
-    if (err === "") ondone();
+    const made = await addAgent({
+      name: draft.name.trim(),
+      url: draft.url.trim(),
+      key,
+      model: draft.model.trim(),
+    });
+    saving = false;
+    if (!made) problem = app.error || "The harness did not accept that agent";
   }
 </script>
 
@@ -29,56 +58,32 @@
       A small agent that reads, writes and runs commands in one project, using a model you
       host.
     </p>
-    <p class="onboard-foot">Only talks to the server you point it at.</p>
+    <p class="onboard-foot">Only talks to the servers you point it at.</p>
   </aside>
 
   <main class="onboard-form">
     <div class="w-full max-w-[460px]">
       <h2 class="text-[27px] leading-tight font-medium tracking-[-0.015em]">
-        Connect your server
+        Create your first agent
       </h2>
 
-      <div class="mt-9">
-        <label class="label mb-2.5 block" for="ob-url">Address</label>
-        <div class="field-lg">
-          <input
-            id="ob-url"
-            class="num flex-1 border-0 bg-transparent p-0 text-[15px] outline-none"
-            placeholder="Your model server address"
-            bind:value={url}
-            onkeydown={(e) => e.key === "Enter" && connect()}
-            spellcheck="false"
-            autocapitalize="off"
-          />
-        </div>
-        {#if problem}
-          <p class="mt-2.5 text-[13px] text-crit">{problem}</p>
-        {/if}
+      <div class="mt-9 space-y-5">
+        <AgentPanel bind:this={panel} agent={draft} onchange={edit} compact />
       </div>
 
-      <div class="mt-7">
-        <label class="label mb-2.5 block" for="ob-token">API key</label>
-        <div class="field-lg">
-          <input
-            id="ob-token"
-            class="flex-1 border-0 bg-transparent p-0 text-[15px] outline-none"
-            type="password"
-            placeholder="Optional"
-            bind:value={token}
-            onkeydown={(e) => e.key === "Enter" && connect()}
-          />
-        </div>
-      </div>
+      {#if problem}
+        <p class="mt-2.5 text-[13px] text-crit">{problem}</p>
+      {/if}
 
       <div class="mt-9">
-        <button class="btn-lg" onclick={connect} disabled={app.probing || !url.trim()}>
-          {app.probing ? "Checking" : "Connect"}
+        <button class="btn-lg" onclick={create} disabled={saving || draft.name.trim() === ""}>
+          {saving ? "Saving" : "Create agent"}
         </button>
       </div>
 
       <p class="mt-8 text-[12px] text-muted">
-        Saved to <span class="num">~/.quecto-harness/config.json</span>, changeable in
-        settings.
+        Saved to <span class="num">~/.quecto-harness/config.json</span>, changeable in the
+        agents dialog.
       </p>
     </div>
   </main>

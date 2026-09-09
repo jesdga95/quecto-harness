@@ -4,17 +4,22 @@
   import Check from "phosphor-svelte/lib/Check";
   import Popover from "./Popover.svelte";
   import type { Effort } from "../api";
-  import { app, setEffort } from "../state/app.svelte";
   import { effortHint, effortLabel } from "../format";
 
-  let { up = false }: { up?: boolean } = $props();
+  let {
+    value,
+    onpick,
+    up = false,
+  }: {
+    value: Effort;
+    onpick: (value: Effort) => void;
+    up?: boolean;
+  } = $props();
   let open = $state(false);
   const levels: Effort[] = ["auto", "off", "low", "medium", "high"];
 
-  const chosen = $derived(app.config?.effort ?? "medium");
-
   function pick(level: Effort) {
-    setEffort(level);
+    onpick(level);
     open = false;
   }
 </script>
@@ -22,7 +27,7 @@
 <div class="relative">
   <button class="chip" aria-haspopup="menu" aria-expanded={open} onclick={() => (open = !open)}>
     <Brain />
-    Effort: {effortLabel(chosen)}
+    Effort: {effortLabel(value)}
     <CaretDown />
   </button>
 
@@ -34,7 +39,7 @@
             <span class="block">{effortLabel(level)}</span>
             <span class="block text-[12px] text-muted">{effortHint(level)}</span>
           </span>
-          {#if chosen === level}
+          {#if value === level}
             <Check size={14} class="text-accent" />
           {/if}
         </button>

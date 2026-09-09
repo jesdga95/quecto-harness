@@ -1,15 +1,17 @@
 import { ApiError, api } from "../api";
 import { dismissSticky, toast } from "./toast.svelte";
 import type {
+  Agent,
+  AgentPatch,
   Attached,
   Changes,
   Config,
-  Effort,
   HarnessEvent,
   Model,
   Answer,
   PermMode,
   PermissionDecision,
+  Probe,
   Project,
   ServerMode,
   Session,
@@ -29,6 +31,10 @@ export const app = $state({
   ready: false,
   mode: "router" as ServerMode,
   config: null as Config | null,
+  agents: [] as Agent[],
+  // Whether the agents dialog is open. It is reached from the composer, four
+  // components down, so the flag lives here rather than being threaded.
+  agentsOpen: false,
   projects: [] as Project[],
   models: [] as Model[],
   sessions: {} as Record<string, Session[]>,
@@ -57,7 +63,6 @@ export const app = $state({
   detectKind: "",
   modelsError: "",
   modelsKind: "",
-  probing: false,
 });
 
 let unsubscribe: (() => void) | null = null;
@@ -85,22 +90,30 @@ function fail(err: unknown): void {
   app.status = "idle";
 }
 
-export async function init(): Promise<void> {
+/** Reads the harness and copies what it said over the local copy. Three things
+    need it: starting up, saving an agent, and choosing one. */
+export async function refreshState(): Promise<boolean> {
   const state = await guard(() => api.getState());
-  if (!state) return;
+  if (!state) return false;
   app.mode = state.mode;
   app.detectError = state.detectError ?? "";
   app.detectKind = state.detectKind ?? "";
   app.modelsError = state.modelsError ?? "";
   app.modelsKind = state.modelsKind ?? "";
   app.config = state.config;
+  app.agents = state.agents;
   app.projects = state.projects;
   app.models = state.models;
+  return true;
+}
+
+export async function init(): Promise<void> {
+  if (!(await refreshState())) return;
   await loadSessions();
   app.ready = true;
   // The first project is named so the empty screen has one, and its most
   // recent conversation is opened if it has one.
-  const first = state.projects[0];
+  const first = app.projects[0];
   if (first) await selectProject(first.path);
 }
 
@@ -404,88 +417,81 @@ export async function removeAllowed(prefix: string): Promise<void> {
   if (list) app.allowlist = list;
 }
 
-/** Whether the harness could run a turn right now: something answered at the
-    address, it took the key, and it named at least one model. The setup screen
-    and the connect button both read this, so they cannot disagree. */
-export function serverReady(): boolean {
+/** Whether the harness could run a turn right now: an agent answers, something
+    answered at its address, and it named at least one model. */
+export function agentReady(): boolean {
+  if (!activeAgent()) return false;
   const fatal = ["unreachable", "canceled", "auth"];
   if (fatal.includes(app.detectKind) || fatal.includes(app.modelsKind)) return false;
   return app.models.length > 0;
 }
 
-/** Points the harness at a model server. Any answer counts except silence and
-    a refused key, since neither leaves a harness that can run a turn. */
-export async function connectServer(url: string, token: string): Promise<string> {
-  app.probing = true;
-  try {
-    const config = await guard(() => api.updateConfig({ server: { url, token } }));
-    if (!config) return app.error || "The harness did not accept that address";
-    app.config = config;
-    const state = await guard(() => api.getState());
-    if (!state) return app.error || "The harness did not answer";
-    app.mode = state.mode;
-    app.detectError = state.detectError ?? "";
-    app.detectKind = state.detectKind ?? "";
-    app.modelsError = state.modelsError ?? "";
-    app.modelsKind = state.modelsKind ?? "";
-    app.models = state.models;
-    app.projects = state.projects;
+export function activeAgent(): Agent | undefined {
+  return app.agents.find((a) => a.id === app.config?.agent);
+}
 
-    if (serverReady()) return "";
+export function agentById(id: string): Agent | undefined {
+  return app.agents.find((a) => a.id === id);
+}
 
-    // Nothing there, and a refused key, both leave a harness that cannot run a
-    // turn. Anything else the server says is its own business.
-    const kinds = [app.detectKind, app.modelsKind];
-    if (kinds.includes("unreachable") || kinds.includes("canceled")) {
-      return app.detectError || "Nothing answered at that address";
-    }
-    if (kinds.includes("auth")) {
-      return token.trim() === ""
-        ? "That server needs an API key"
-        : "That server refused the API key";
-    }
-    // A server that failed said why, and its own words name the cause.
-    if (app.modelsError !== "") return app.modelsError;
-    // Any web server answers a GET. Only a model list proves there is a model
-    // behind it.
-    return "That address answered, but it did not return a model list";
-  } finally {
-    app.probing = false;
+/** Saves one field of an agent. The local copy moves first so the field does
+    not lag the typing, and goes back if the harness refused it. */
+export async function saveAgent(id: string, patch: AgentPatch): Promise<Agent | null> {
+  const at = app.agents.findIndex((a) => a.id === id);
+  const before = app.agents[at];
+  if (at >= 0 && before) app.agents[at] = { ...before, ...stripKey(patch) };
+  const saved = await guard(() => api.updateAgent(id, patch));
+  if (!saved) {
+    if (at >= 0 && before) app.agents[at] = before;
+    return null;
   }
+  if (at >= 0) app.agents[at] = saved;
+  return saved;
+}
+
+/** The key is never held here, so a patch carrying one leaves the local copy
+    alone except for whether there is one. */
+function stripKey(patch: AgentPatch): Partial<Agent> {
+  const { key, ...rest } = patch;
+  if (key === undefined) return rest;
+  return { ...rest, key_set: key !== null && key !== "" };
+}
+
+export async function addAgent(patch: AgentPatch): Promise<Agent | null> {
+  const created = await guard(() => api.createAgent(patch));
+  if (!created) return null;
+  await refreshState();
+  return created;
+}
+
+export async function removeAgent(id: string): Promise<void> {
+  const agents = await guard(() => api.deleteAgent(id));
+  if (!agents) return;
+  await refreshState();
+}
+
+/** Chooses the agent every session answers with. Nothing is loaded by the
+    choice: the next message that needs the model is what loads it. */
+export async function setActiveAgent(id: string): Promise<void> {
+  if (app.config?.agent === id) return;
+  // The split was measured against the previous model, so it goes with it
+  // rather than being shown beside a total the new model reported.
+  app.usage.breakdown = undefined;
+  if ((await guard(() => api.selectAgent(id))) === null) return;
+  await refreshState();
+}
+
+export function probeAgent(
+  at: { agent?: string; url: string; key?: string | null },
+  refresh?: boolean,
+): Promise<Probe | null> {
+  return guard(() => api.probeAgent(at, refresh));
 }
 
 export async function saveConfig(patch: Partial<Config>): Promise<void> {
   const config = await guard(() => api.updateConfig(patch));
   if (!config) return;
   app.config = config;
-}
-
-/** There is one model. Choosing it points every session at it. Nothing is sent
-    to the model server: the model is made ready by the next message that needs
-    it, not by the choice. */
-export async function setModel(id: string): Promise<void> {
-  const previous = app.config?.model ?? "";
-  if (app.config) app.config.model = id;
-  // The split was measured against the previous model, so it goes with it
-  // rather than being shown beside a total the new model reported.
-  app.usage.breakdown = undefined;
-  if ((await guard(() => api.updateConfig({ model: id }))) === null) {
-    if (app.config) app.config.model = previous;
-  }
-}
-
-export function setEffort(effort: Effort): void {
-  if (app.config) app.config.effort = effort;
-  void guard(() => api.updateConfig({ effort }));
-}
-
-export function setPreserveReasoning(on: boolean): void {
-  if (app.config) app.config.preserve_reasoning = on;
-  void guard(() => api.updateConfig({ preserve_reasoning: on }));
-}
-
-export function preserveReasoning(): boolean {
-  return app.config?.preserve_reasoning ?? true;
 }
 
 /** The steps a sampling slider moves through. Null is the first of them: the
@@ -509,24 +515,6 @@ export function samplingIndex(steps: (number | null)[], value: number | null): n
     }
   }
   return best;
-}
-
-export function temperature(): number | null {
-  return app.config?.temperature ?? null;
-}
-
-export function setTemperature(value: number | null): void {
-  if (app.config) app.config.temperature = value;
-  void guard(() => api.updateConfig({ temperature: value }));
-}
-
-export function topP(): number | null {
-  return app.config?.top_p ?? null;
-}
-
-export function setTopP(value: number | null): void {
-  if (app.config) app.config.top_p = value;
-  void guard(() => api.updateConfig({ top_p: value }));
 }
 
 /** What the tool call limit rotates through. Zero is no limit. */

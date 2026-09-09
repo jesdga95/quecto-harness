@@ -40,9 +40,39 @@ export interface Session {
   created: string;
 }
 
-export interface ServerConfig {
+/** A named connection: where a model runs, what key opens it, which model, and
+    how that model is asked. One agent answers for the whole harness. */
+export interface Agent {
+  id: string;
+  name: string;
   url: string;
-  token: string;
+  /** The key never comes back, only whether one is stored. */
+  key_set: boolean;
+  model: string;
+  effort: Effort;
+  /** Keeps thinking from earlier turns in the prompt. */
+  preserve_reasoning: boolean;
+  /** Sampling, as the chat API names it. Null is sent as no field at all, so
+      the model server's own value stands. */
+  temperature: number | null;
+  top_p: number | null;
+  /** Added to the end of the built-in system prompt. */
+  instructions: string;
+}
+
+/** What a write may carry. A field left out keeps the value it has. Key is the
+    exception: absent leaves the stored key alone and null clears it. */
+export type AgentPatch = Partial<Omit<Agent, "id" | "key_set">> & { key?: string | null };
+
+/** What one address answered when it was asked what it holds. A failure is
+    reported here rather than thrown, so a form can draw it. */
+export interface Probe {
+  mode: ServerMode;
+  models: Model[];
+  detectError: string;
+  detectKind: string;
+  modelsError: string;
+  modelsKind: string;
 }
 
 /** The permission policy. ask shows a card for everything, allowlist runs
@@ -52,15 +82,8 @@ export type PermMode = "ask" | "allowlist" | "full";
 
 export interface Config {
   listen: string;
-  server: ServerConfig;
-  model: string;
-  effort: Effort;
-  /** Keeps thinking from earlier turns in the prompt. */
-  preserve_reasoning: boolean;
-  /** Sampling, as the chat API names it. Null is sent as no field at all, so
-      the model server's own value stands. */
-  temperature: number | null;
-  top_p: number | null;
+  /** The id of the agent answering. Empty when none is chosen. */
+  agent: string;
   permissions: PermMode;
   compact_at: number;
   /** Tool calls one turn may make. Zero is no limit. */
@@ -86,7 +109,9 @@ export interface State {
   modelsError?: string;
   modelsKind?: string;
   config: Config;
+  agents: Agent[];
   projects: Project[];
+  /** What the active agent's address holds. */
   models: Model[];
 }
 
@@ -300,7 +325,16 @@ export type EventHandler = (event: HarnessEvent) => void;
 
 export interface HarnessApi {
   getState(): Promise<State>;
+  /** What the active agent's address holds. */
   listModels(refresh?: boolean): Promise<Model[]>;
+  listAgents(): Promise<Agent[]>;
+  createAgent(patch: AgentPatch): Promise<Agent>;
+  updateAgent(id: string, patch: AgentPatch): Promise<Agent>;
+  deleteAgent(id: string): Promise<Agent[]>;
+  selectAgent(id: string): Promise<Agent[]>;
+  /** Reads one address, saved or not, and reports what it said either way. An
+      agent id fills in the key the browser was never given. */
+  probeAgent(at: { agent?: string; url: string; key?: string | null }, refresh?: boolean): Promise<Probe>;
   /** Opens the host's folder dialog. Resolves to null when it is dismissed. */
   pickDirectory(): Promise<string | null>;
   /** Opens the host's file dialog, which takes several files at once. Empty

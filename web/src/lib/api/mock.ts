@@ -1,4 +1,6 @@
 import type {
+  Agent,
+  AgentPatch,
   Answer,
   Attached,
   Changes,
@@ -9,6 +11,7 @@ import type {
   HarnessEvent,
   Model,
   PermissionDecision,
+  Probe,
   Project,
   Sent,
   Session,
@@ -102,6 +105,34 @@ const MODELS: Model[] = [
   { id: "Qwen3.8-27B Q5", status: "unloaded", vision: true, ctx: 131072, ctxIsHint: true },
   { id: "Qwen3.8-27B Q8", status: "unloaded", vision: true, ctx: 131072, ctxIsHint: true },
   { id: "Qwen3.8-Flash-Next IQ4", status: "unloaded", vision: false, ctx: 65536, ctxIsHint: true },
+];
+
+// What each fake address holds. Keyed by the address rather than by the agent,
+// so typing an address nothing is behind shows the unreachable state at once.
+const ADDRESSES: Record<string, Model[]> = {
+  "http://192.168.2.205:8080": MODELS,
+  "http://10.0.0.14:1234": MODELS.slice(3, 5),
+  "https://api.example.com/v1": [
+    { id: "gpt-oss-120b", status: "loaded", vision: false, ctx: 131072, ctxIsHint: false },
+  ],
+};
+
+const AGENTS: Agent[] = [
+  {
+    id: "agt_local", name: "Local llama.cpp", url: "http://192.168.2.205:8080",
+    key_set: false, model: "Gemma4-12B", effort: "medium", preserve_reasoning: true,
+    temperature: null, top_p: null, instructions: "",
+  },
+  {
+    id: "agt_studio", name: "Studio box", url: "http://10.0.0.14:1234",
+    key_set: true, model: "Qwen3.8-27B Q5", effort: "high", preserve_reasoning: false,
+    temperature: 0.7, top_p: 0.9, instructions: "Answer in British English.",
+  },
+  {
+    id: "agt_cloud", name: "Cloud endpoint", url: "https://api.example.com/v1",
+    key_set: false, model: "gpt-oss-120b", effort: "medium", preserve_reasoning: true,
+    temperature: null, top_p: null, instructions: "",
+  },
 ];
 
 interface ScriptedTurn {
@@ -239,12 +270,7 @@ function baseName(path: string): string {
 export class MockApi implements HarnessApi {
   private config: Config = {
     listen: "127.0.0.1:7331",
-    server: { url: "http://192.168.2.205:8080", token: "" },
-    model: "Gemma4-12B",
-    effort: "medium",
-    preserve_reasoning: true,
-    temperature: null,
-    top_p: null,
+    agent: "agt_local",
     permissions: "ask",
     compact_at: 0.8,
     max_tool_calls: 50,
@@ -257,6 +283,10 @@ export class MockApi implements HarnessApi {
     ],
   };
 
+  private agents: Agent[] = AGENTS.map((a) => ({ ...a }));
+  // The keys the browser is never shown. A key on the cloud endpoint is what
+  // makes it answer, so setting one is demonstrable end to end.
+  private keys = new Map<string, string>([["agt_studio", "sk-studio"]]);
   private models: Model[] = MODELS.map((m) => ({ ...m }));
   private sessions: Session[] = [];
   private transcripts = new Map<string, Transcript>();
@@ -287,17 +317,142 @@ export class MockApi implements HarnessApi {
 
   async getState(): Promise<State> {
     await this.tick();
+    const probe = this.probe(this.active());
+    this.models = probe.models;
     return {
-      mode: "router",
+      mode: probe.mode,
+      detectError: probe.detectError,
+      detectKind: probe.detectKind,
+      modelsError: probe.modelsError,
+      modelsKind: probe.modelsKind,
       config: { ...this.config },
+      agents: this.agents.map((a) => ({ ...a })),
       projects: this.config.projects.map((p) => ({ path: p, name: baseName(p) })),
-      models: this.models.map((m) => ({ ...m })),
+      models: probe.models.map((m) => ({ ...m })),
     };
   }
 
   async listModels(_refresh?: boolean): Promise<Model[]> {
     await this.tick();
+    this.models = this.probe(this.active()).models;
     return this.models.map((m) => ({ ...m }));
+  }
+
+  // agents
+
+  /** The agent answering, or an empty one when there is none. */
+  private active(): Agent | undefined {
+    return this.agents.find((a) => a.id === this.config.agent);
+  }
+
+  /** What one address holds. An address nothing is behind is unreachable, and
+      the cloud endpoint wants a key before it will say anything. */
+  private probe(at: { id?: string; url: string } | undefined): Probe {
+    const empty = { models: [], detectError: "", detectKind: "", modelsError: "", modelsKind: "" };
+    if (!at) {
+      return { ...empty, mode: "unknown", detectError: "No agent is selected: create one in the agents dialog" };
+    }
+    const held = ADDRESSES[at.url];
+    if (!held) {
+      return { ...empty, mode: "unknown", detectError: "Nothing answered at that address", detectKind: "unreachable" };
+    }
+    if (at.url.startsWith("https://") && !this.keys.get(at.id ?? "")) {
+      return { ...empty, mode: "openai", modelsError: "The key was rejected", modelsKind: "auth" };
+    }
+    return { ...empty, mode: at.url.startsWith("https://") ? "openai" : "router", models: held.map((m) => ({ ...m })) };
+  }
+
+  async listAgents(): Promise<Agent[]> {
+    await this.tick();
+    return this.agents.map((a) => ({ ...a }));
+  }
+
+  async createAgent(patch: AgentPatch): Promise<Agent> {
+    await this.tick(160);
+    const name = (patch.name ?? "").trim();
+    if (name === "") throw new Error("Name the agent: an agent needs a name");
+    if (this.agents.some((a) => a.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error(`An agent named "${name}" already exists: choose another name`);
+    }
+    const agent: Agent = {
+      id: nextId("agt"), name, url: "", key_set: false, model: "",
+      effort: "medium", preserve_reasoning: true, temperature: null, top_p: null,
+      instructions: "", ...this.fold(patch),
+    };
+    this.agents.push(agent);
+    this.setKey(agent.id, patch.key);
+    if (this.config.agent === "") this.config.agent = agent.id;
+    return { ...agent };
+  }
+
+  async updateAgent(id: string, patch: AgentPatch): Promise<Agent> {
+    await this.tick(160);
+    const at = this.agents.findIndex((a) => a.id === id);
+    const current = this.agents[at];
+    if (!current) throw new Error("No agent with that id: it may have been deleted");
+    const name = (patch.name ?? current.name).trim();
+    if (name === "") throw new Error("Name the agent: an agent needs a name");
+    if (this.agents.some((a) => a.id !== id && a.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error(`An agent named "${name}" already exists: choose another name`);
+    }
+    this.setKey(id, patch.key);
+    const next: Agent = { ...current, ...this.fold(patch), name, key_set: this.keys.get(id) !== undefined };
+    this.agents[at] = next;
+    if (id === this.config.agent) this.repoint(next.model);
+    return { ...next };
+  }
+
+  async deleteAgent(id: string): Promise<Agent[]> {
+    await this.tick(160);
+    this.agents = this.agents.filter((a) => a.id !== id);
+    this.keys.delete(id);
+    if (this.config.agent === id) {
+      this.config.agent = this.agents[0]?.id ?? "";
+      this.repoint(this.active()?.model ?? "");
+    }
+    return this.agents.map((a) => ({ ...a }));
+  }
+
+  async selectAgent(id: string): Promise<Agent[]> {
+    await this.tick(160);
+    if (!this.agents.some((a) => a.id === id)) {
+      throw new Error("No agent with that id: it may have been deleted");
+    }
+    this.config.agent = id;
+    this.repoint(this.active()?.model ?? "");
+    return this.agents.map((a) => ({ ...a }));
+  }
+
+  async probeAgent(
+    at: { agent?: string; url: string; key?: string | null },
+    _refresh?: boolean,
+  ): Promise<Probe> {
+    await this.tick(400);
+    const stored = this.agents.find((a) => a.id === at.agent);
+    // A probe of an address that is not saved still needs a key to go with it,
+    // which is either the one typed or the one already stored.
+    const id = at.key === undefined ? (stored?.id ?? "") : "probe";
+    if (at.key !== undefined && at.key !== null && at.key !== "") this.keys.set("probe", at.key);
+    else if (at.key !== undefined) this.keys.delete("probe");
+    return this.probe({ id, url: at.url });
+  }
+
+  /** Everything a patch carries except the key, which is never held on the
+      record the browser sees. */
+  private fold(patch: AgentPatch): Partial<Agent> {
+    const { key: _key, ...rest } = patch;
+    return rest;
+  }
+
+  private setKey(id: string, key: string | null | undefined): void {
+    if (key === undefined) return;
+    if (key === null || key === "") this.keys.delete(id);
+    else this.keys.set(id, key);
+  }
+
+  /** One agent answers, so its model is every session's model. */
+  private repoint(model: string): void {
+    for (const t of this.transcripts.values()) t.session.model = model;
   }
 
   async pickDirectory(): Promise<string | null> {
@@ -387,7 +542,7 @@ export class MockApi implements HarnessApi {
 
   async createSession(project: string): Promise<Session> {
     await this.tick();
-    const model = this.config.model;
+    const model = this.active()?.model ?? "";
     const session: Session = {
       id: nextId("s"),
       project,
@@ -409,14 +564,7 @@ export class MockApi implements HarnessApi {
 
   async updateConfig(patch: Partial<Config>): Promise<Config> {
     await this.tick(160);
-    const before = this.config.model;
     this.config = { ...this.config, ...patch };
-    // One model: choosing it points every session at it.
-    if (this.config.model !== before) {
-      for (const t of this.transcripts.values()) {
-        t.session.model = this.config.model;
-      }
-    }
     return { ...this.config };
   }
 
@@ -573,7 +721,7 @@ export class MockApi implements HarnessApi {
       await this.sleep(420, turn);
       this.settle(t.session.model, t);
 
-      if (this.config.effort !== "off") {
+      if ((this.active()?.effort ?? "medium") !== "off") {
         for (const chunk of chunks(script.reasoning, 5)) {
           this.send(session, t, { type: "reasoning", text: chunk });
           await this.sleep(120, turn);

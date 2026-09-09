@@ -4,22 +4,23 @@
   import SessionView from "./lib/components/SessionView.svelte";
   import ConfirmDialog from "./lib/components/ConfirmDialog.svelte";
   import Settings from "./lib/components/Settings.svelte";
+  import Agents from "./lib/components/Agents.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import Toasts from "./lib/components/Toasts.svelte";
-  import { app, init, serverReady } from "./lib/state/app.svelte";
+  import { app, init } from "./lib/state/app.svelte";
 
   let settings = $state(false);
-  let skipped = $state(false);
 
-  // Setup shows until a model server can run a turn, which also covers a wrong
-  // address later rather than only the first run.
-  const setup = $derived(!skipped && !serverReady());
+  // Setup shows until there is an agent to answer with. An address that stops
+  // answering later is not this screen's business: the fix is to switch agents
+  // or edit one, and both are inside the app.
+  const setup = $derived(app.agents.length === 0);
 
   void init();
 </script>
 
 {#if app.ready && setup}
-  <Onboarding ondone={() => (skipped = true)} />
+  <Onboarding />
 {:else if app.ready}
   <div class="flex h-screen min-w-[900px] bg-page text-ink">
     <Sidebar onsettings={() => (settings = true)} />
@@ -34,6 +35,9 @@
 
   {#if settings}
     <Settings onclose={() => (settings = false)} />
+  {/if}
+  {#if app.agentsOpen}
+    <Agents onclose={() => (app.agentsOpen = false)} />
   {/if}
 {:else}
   <div class="grid h-screen place-items-center text-[13px] text-muted">

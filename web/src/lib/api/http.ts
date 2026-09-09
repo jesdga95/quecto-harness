@@ -1,4 +1,6 @@
 import type {
+  Agent,
+  AgentPatch,
   Answer,
   Attached,
   Breakdown,
@@ -13,6 +15,7 @@ import type {
   ModelStatus,
   PermMode,
   PermissionDecision,
+  Probe,
   Project,
   Sent,
   ServerMode,
@@ -55,11 +58,7 @@ interface WireModel {
 }
 
 interface WireConfig {
-  model?: string;
-  effort?: string;
-  preserve_reasoning?: boolean;
-  temperature?: number | null;
-  top_p?: number | null;
+  agent?: string;
   permissions?: string;
   compact_at?: number;
   max_tool_calls?: number;
@@ -69,9 +68,39 @@ interface WireConfig {
   listen?: string;
 }
 
+interface WireAgent {
+  id?: string;
+  name?: string;
+  url?: string;
+  key_set?: boolean;
+  model?: string;
+  effort?: string;
+  preserve_reasoning?: boolean;
+  temperature?: number | null;
+  top_p?: number | null;
+  instructions?: string;
+}
+
+/** What every agent write answers with: the list as it now stands, which one
+    answers, and the record that was written. */
+interface WireAgents {
+  agents?: WireAgent[];
+  agent?: string;
+  saved?: WireAgent;
+}
+
+interface WireProbe {
+  mode?: string;
+  models?: WireModel[];
+  detect_error?: string;
+  detect_kind?: string;
+  models_error?: string;
+  models_kind?: string;
+}
+
 interface WireState {
   mode?: string;
-  server_url?: string;
+  agents?: WireAgent[];
   config?: WireConfig;
   projects?: string[];
   models?: WireModel[];
@@ -288,6 +317,32 @@ function toModel(m: WireModel): Model {
     vision: (m.modalities ?? []).includes("image"),
     ctx: m.ctx_hint ?? 0,
     ctxIsHint: !MEASURED_CTX.has(m.ctx_source ?? ""),
+  };
+}
+
+function toAgent(a: WireAgent): Agent {
+  return {
+    id: a.id ?? "",
+    name: a.name || "Agent",
+    url: a.url ?? "",
+    key_set: a.key_set === true,
+    model: a.model ?? "",
+    effort: toEffort(a.effort),
+    preserve_reasoning: a.preserve_reasoning ?? true,
+    temperature: a.temperature ?? null,
+    top_p: a.top_p ?? null,
+    instructions: a.instructions ?? "",
+  };
+}
+
+function toProbe(p: WireProbe): Probe {
+  return {
+    mode: toMode(p.mode),
+    models: (p.models ?? []).map(toModel),
+    detectError: p.detect_error ?? "",
+    detectKind: p.detect_kind ?? "",
+    modelsError: p.models_error ?? "",
+    modelsKind: p.models_kind ?? "",
   };
 }
 
@@ -520,7 +575,6 @@ function titleOf(entries: WireEntry[]): string {
 
 // state carried between calls
 
-let serverUrl = "";
 let projectPaths: string[] = [];
 const summaries = new Map<string, Session>();
 const seqs = new Map<string, number>();
@@ -528,12 +582,7 @@ const seqs = new Map<string, number>();
 function toConfig(c: WireConfig): Config {
   return {
     listen: c.listen ?? "",
-    server: { url: serverUrl, token: "" },
-    model: c.model ?? "",
-    effort: toEffort(c.effort),
-    preserve_reasoning: c.preserve_reasoning ?? true,
-    temperature: c.temperature ?? null,
-    top_p: c.top_p ?? null,
+    agent: c.agent ?? "",
     permissions: toPermMode(c.permissions),
     compact_at: c.compact_at ?? 0.8,
     max_tool_calls: c.max_tool_calls ?? 50,
@@ -815,7 +864,6 @@ function toMode(mode: string | undefined): ServerMode {
 class HttpApi implements HarnessApi {
   async getState(): Promise<State> {
     const wire = await call<WireState>("/state");
-    serverUrl = wire.server_url ?? "";
     projectPaths = wire.projects ?? [];
     return {
       mode: toMode(wire.mode),
@@ -824,6 +872,7 @@ class HttpApi implements HarnessApi {
       modelsError: wire.models_error ?? "",
       modelsKind: wire.models_kind ?? "",
       config: toConfig(wire.config ?? {}),
+      agents: (wire.agents ?? []).map(toAgent),
       projects: toProjects(projectPaths),
       models: (wire.models ?? []).map(toModel),
     };
@@ -934,8 +983,44 @@ class HttpApi implements HarnessApi {
   async updateConfig(patch: Partial<Config>): Promise<Config> {
     const { projects: _drop, ...body } = patch;
     const wire = await call<WireConfig>("/config", "PUT", body);
-    if (patch.server?.url) serverUrl = patch.server.url;
     return toConfig(wire);
+  }
+
+  async listAgents(): Promise<Agent[]> {
+    const wire = await call<WireAgents>("/agents");
+    return (wire.agents ?? []).map(toAgent);
+  }
+
+  async createAgent(patch: AgentPatch): Promise<Agent> {
+    const wire = await call<WireAgents>("/agents", "POST", patch);
+    return toAgent(wire.saved ?? {});
+  }
+
+  async updateAgent(id: string, patch: AgentPatch): Promise<Agent> {
+    const wire = await call<WireAgents>(`/agents/${encodeURIComponent(id)}`, "PUT", patch);
+    return toAgent(wire.saved ?? {});
+  }
+
+  async deleteAgent(id: string): Promise<Agent[]> {
+    const wire = await call<WireAgents>(`/agents/${encodeURIComponent(id)}`, "DELETE");
+    return (wire.agents ?? []).map(toAgent);
+  }
+
+  async selectAgent(id: string): Promise<Agent[]> {
+    const wire = await call<WireAgents>(`/agents/${encodeURIComponent(id)}/select`, "POST", {});
+    return (wire.agents ?? []).map(toAgent);
+  }
+
+  async probeAgent(
+    at: { agent?: string; url: string; key?: string | null },
+    refresh?: boolean,
+  ): Promise<Probe> {
+    const wire = await call<WireProbe>(
+      refresh ? "/agents/probe?refresh=1" : "/agents/probe",
+      "POST",
+      at,
+    );
+    return toProbe(wire);
   }
 
   async listAllowlist(project: string): Promise<string[]> {
