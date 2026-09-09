@@ -62,7 +62,7 @@ prints `quecto-harness: <what failed>: <what to do>` to stderr and exits 1.
    both files on disk. A file that exists but does not parse is an error and stops startup,
    with the parse position in the message.
 5. `store.Open(paths.Sessions)` scans the sessions directory for `*.json` and builds an
-   index of `(id, project, model, created, updated, title, messages)` without reading each
+   index of `(id, project, agent, model, created, updated, title, messages)` without reading each
    file in full. See section 9.4.
 6. Load or mint the token. `~/.quecto-harness/token` is read when it exists and its contents
    are non-empty after trimming; otherwise 32 bytes from `crypto/rand` are encoded with
@@ -70,14 +70,15 @@ prints `quecto-harness: <what failed>: <what to do>` to stderr and exits 1.
    is therefore stable across restarts, which is what keeps an open browser tab working
    when a service supervisor restarts the process. Deleting the file rotates the token on
    the next start, which is the only way to revoke it.
-7. Construct `llm.New(cfg.Server.URL, cfg.Server.Token)`.
+7. Construct `llm.NewPool()`. Clients are made per agent, on the first request to one.
 8. `net.Listen("tcp", listen)`. Binding happens before anything is printed, so a port
    conflict fails with `listen 127.0.0.1:7331: address already in use: another process is
    using the port, pass --listen to choose another` and no URL is emitted.
 9. Build the `agent.Engine`, the `perms.Broker`, the `server.Server`, and start the SSE hub
    goroutine.
-10. Kick off `llm.Detect` in a goroutine with a 5 second timeout. Startup does not wait on
-    it. Until it returns, `GET /api/state` reports `"mode": "unknown"` and the model picker
+10. Kick off the probe of the active agent in a goroutine with a 5 second timeout, or
+    nothing at all when no agent is selected. Startup does not wait on
+    it. Until it returns, `GET /api/state` reports `"mode": "unknown"` and the agent chip
     shows a spinner. A failure is cached as an error string and re-attempted on the next
     `/api/state` that finds the cache older than 15 seconds.
 11. Write the URL file: `~/.quecto-harness/url`, mode 0600, content
@@ -245,65 +246,102 @@ value that has already been defaulted and validated.
 ```go
 // File mirrors config.json. A nil field is absent and takes the default.
 type File struct {
-	Listen           *string  `json:"listen,omitempty"`
-	Server           *Server  `json:"server,omitempty"`
-	Model            *string  `json:"model,omitempty"`
-	Effort           *string  `json:"effort,omitempty"`
-	Permissions      *string  `json:"permissions,omitempty"`
-	CompactAt        *float64 `json:"compact_at,omitempty"`
-	Shell            *string  `json:"shell,omitempty"`
-	CommandTimeoutS  *int     `json:"command_timeout_s,omitempty"`
-	OutputLimitBytes *int     `json:"output_limit_bytes,omitempty"`
-	Projects         []string `json:"projects,omitempty"`
+	Listen *string `json:"listen,omitempty"`
+	// Agents and Projects have no omitempty: a saved file names every field, so
+	// a reader never has to know which default was in force.
+	Agents           []FileAgent `json:"agents"`
+	Agent            *string     `json:"agent,omitempty"`
+	Permissions      *string     `json:"permissions,omitempty"`
+	CompactAt        *float64    `json:"compact_at,omitempty"`
+	Shell            *string     `json:"shell,omitempty"`
+	CommandTimeoutS  *int        `json:"command_timeout_s,omitempty"`
+	OutputLimitBytes *int        `json:"output_limit_bytes,omitempty"`
+	MaxToolCalls     *int        `json:"max_tool_calls,omitempty"`
+	Projects         []string    `json:"projects"`
 }
 
-type Server struct {
-	URL   *string `json:"url,omitempty"`
-	Token *string `json:"token,omitempty"`
+// FileAgent mirrors one entry of the agents array.
+type FileAgent struct {
+	ID                *string  `json:"id,omitempty"`
+	Name              *string  `json:"name,omitempty"`
+	URL               *string  `json:"url,omitempty"`
+	Key               *string  `json:"key,omitempty"`
+	Model             *string  `json:"model,omitempty"`
+	Effort            *string  `json:"effort,omitempty"`
+	PreserveReasoning *bool    `json:"preserve_reasoning,omitempty"`
+	Temperature       *float64 `json:"temperature,omitempty"`
+	TopP              *float64 `json:"top_p,omitempty"`
+	Instructions      *string  `json:"instructions,omitempty"`
 }
 
 // Config is the resolved configuration. Every field is usable as it stands.
 type Config struct {
-	Listen           string
-	ServerURL        string
-	ServerToken      string
-	Model            string
-	Effort           Effort
+	Listen string
+	Agents []Agent
+	// AgentID names the active agent. Empty when none is chosen, which is the
+	// state the setup screen answers.
+	AgentID          string
 	Mode             Mode
 	CompactAt        float64
 	Shell            string
 	CommandTimeout   time.Duration
 	OutputLimitBytes int
+	MaxToolCalls     int
 	Projects         []string
 }
 
-// Effort is defined in internal/llm, which is what turns it into request
-// fields. The alias and the four re-exported constants keep callers of this
-// package to one import.
-type Effort = llm.Effort
+// Agent is one model server the harness can answer with: where it is, what key
+// opens it, which model, and how that model is asked. One is active at a time
+// and every session uses it.
+type Agent struct {
+	ID                string
+	Name              string
+	URL               string
+	Key               string
+	Model             string
+	Effort            Effort
+	PreserveReasoning bool
+	Temperature       *float64
+	TopP              *float64
+	// Instructions follow the built-in system prompt in the same message.
+	Instructions string
+}
 
-const (
-	EffortAuto   = llm.EffortAuto
-	EffortOff    = llm.EffortOff
-	EffortLow    = llm.EffortLow
-	EffortMedium = llm.EffortMedium
-	EffortHigh   = llm.EffortHigh
-)
-
-// Mode is the permission policy. One field rather than the pair of booleans
-// it reads as in the interface, because a pair has a fourth state that means
-// nothing and every layer would have to agree on what to do with it.
-type Mode string
-
-const (
-	ModeAsk       Mode = "ask"
-	ModeAllowlist Mode = "allowlist"
-	ModeFull      Mode = "full"
-)
-
-// ValidMode reports whether s is one of the three policies.
-func ValidMode(s string) bool
+func (c Config) Agent() (Agent, bool)
+func (c Config) AgentByID(id string) (Agent, bool)
+func NewAgentID() string // "agt_" + 16 base32 characters
 ```
+
+An agent id is minted rather than taken from the name, so a rename moves nothing: not the
+selection, not `Session.Agent`, not a pooled client, not a cached reading. Two agents may
+not share a name, which is refused by the API and tolerated in a hand-edited file, since
+the id is the identity and dropping a working connection over a label is worse.
+
+`config.json`:
+
+```json
+{
+  "listen": "127.0.0.1:7331",
+  "agents": [{
+    "id": "agt_2f7qk3m9x4pd8s1v",
+    "name": "Local llama.cpp",
+    "url": "http://192.168.2.205:8080",
+    "key": "",
+    "model": "Gemma4-12B",
+    "effort": "medium",
+    "preserve_reasoning": true,
+    "temperature": 0.35,
+    "instructions": ""
+  }],
+  "agent": "agt_2f7qk3m9x4pd8s1v",
+  "permissions": "ask", "compact_at": 0.8, "shell": "/bin/sh",
+  "command_timeout_s": 120, "output_limit_bytes": 16384,
+  "max_tool_calls": 50, "projects": []
+}
+```
+
+`top_p` is absent because it is unset. A sampling value left to the server is the one
+thing `Config.File()` does not write, and that rule holds per agent.
 
 ### 3.3 Defaults and validation
 
@@ -311,15 +349,14 @@ func ValidMode(s string) bool
 func Defaults() Config {
 	return Config{
 		Listen:           "127.0.0.1:7331",
-		ServerURL:        "http://127.0.0.1:8080",
-		ServerToken:      "",
-		Model:            "",
-		Effort:           EffortMedium,
+		Agents:           nil,
+		AgentID:          "",
 		Mode:             ModeAsk,
 		CompactAt:        0.8,
 		Shell:            defaultShell(), // $SHELL if absolute and executable, else /bin/sh
 		CommandTimeout:   120 * time.Second,
 		OutputLimitBytes: 16384,
+		MaxToolCalls:     50,
 		Projects:         nil,
 	}
 }
@@ -334,16 +371,36 @@ Clamping rules applied by `Resolve`, each producing one note string:
 | field | accepted | on violation |
 |-------|----------|--------------|
 | `listen` | parses with `net.SplitHostPort`, port 1 to 65535 | default |
-| `server.url` | parses with `url.Parse`, scheme http or https, non-empty host | default |
-| `effort` | one of auto, off, low, medium, high | `medium` |
 | `permissions` | one of ask, allowlist, full | `ask` |
 | `compact_at` | 0.05 to 0.95 | 0.8 |
 | `shell` | absolute path | `/bin/sh` |
 | `command_timeout_s` | 1 to 3600 | 120 |
 | `output_limit_bytes` | 1024 to 4194304 | 16384 |
+| `max_tool_calls` | 0 to 1000 | 50 |
 | `projects` | each entry absolute and `filepath.Clean`ed; duplicates dropped | offending entries dropped |
+| `agent` | names an entry of `agents` | selection cleared |
 
-Notes are printed once at startup as `config.json: <note>` and are also returned by
+And per agent:
+
+| field | accepted | on violation |
+|-------|----------|--------------|
+| `id` | any non-empty string, unique in the list | absent is minted; a repeat drops the entry |
+| `name` | non-empty after trimming | `Agent` |
+| `url` | empty, or `url.Parse` with scheme http or https and a host | cleared, the agent kept |
+| `effort` | one of auto, off, low, medium, high | `medium` |
+| `temperature` | 0 to 2 | left to the model server |
+| `top_p` | 0 to 1 | left to the model server |
+| `instructions` | any text, trimmed | trimming is not a violation |
+| `model` | anything | never validated: it is a remote id and the list is not known at read time |
+
+A blank `url` is not a violation. An agent being filled in is a normal state, and so is
+the empty list a first run leaves.
+
+Minting an id inside `Resolve` makes it impure. It is the only place that sees the whole
+list and can keep ids unique, and it means a hand-written `{"name":"x","url":"..."}`
+becomes a working agent rather than vanishing.
+
+Notes are printed once at startup as `Config.json: <note>` and are also returned by
 `GET /api/state` as `config_notes`, so a bad edit is visible in the UI.
 
 `Config.File()` is the inverse: every field written, no omissions, so a saved file is a
@@ -397,7 +454,20 @@ func (s *Store) RemoveAllow(project, prefix string) error
 
 func (s *Store) AddProject(path string) (Config, error)
 func (s *Store) RemoveProject(path string) (Config, error)
+
+// The four agent methods each need an error Update cannot express. AddAgent
+// mints the id and selects the agent when nothing was selected; RemoveAgent
+// hands the turn to the first agent left, or clears the selection when the
+// list empties.
+func (s *Store) AddAgent(a Agent) (Config, Agent, error)
+func (s *Store) UpdateAgent(id string, fn func(*Agent)) (Config, Agent, error)
+func (s *Store) RemoveAgent(id string) (Config, error)
+func (s *Store) SelectAgent(id string) (Config, error)
+func (s *Store) AgentKeys() []string // llm.Key per agent, for the pool to keep
 ```
+
+`Config()` and `Update` copy the agent list and the values behind its pointers, so a
+config taken before a write does not change with it.
 
 `AddProject` resolves the path with `filepath.Abs` then `filepath.EvalSymlinks`, requires it
 to be an existing directory, requires it to be readable, and rejects a duplicate. It stores
@@ -459,7 +529,23 @@ type Client struct {
 }
 
 func New(baseURL, token string) *Client
+
+// Pool hands out one client per address and key. Two agents at one address
+// share the client and the protocol it settled on.
+type Pool struct { ... }
+
+func NewPool() *Pool
+func Key(baseURL, token string) string
+func (p *Pool) Get(baseURL, token string) *Client
+func (p *Pool) Retain(live []string)
 ```
+
+Keying a client on the address and the key together is the whole of the invalidation
+rule, which is why there is no invalidation code. A rename, or a change of model, effort,
+sampling or instructions, is the same key and so the same client and no fresh probe. A
+changed address or key is a different client, which is correct: nothing about what
+answered before carries over. `Retain` runs after a write that touched the agent list and
+drops the clients no agent points at, closing the connections they held.
 
 `Detect` is the probe. It reads `GET /props` with no query parameters, which is a read on
 any llama.cpp server and cannot load a model, and a reply carrying `build_info` selects the
@@ -1103,8 +1189,8 @@ Classification:
 
 Message text follows the "errors are for the reader" rule:
 
-- `KindUnreachable`: `reach <base URL>: the model server is not answering, check it is running and that server.url is right`
-- `KindAuth`: `authenticate with <base URL>: the server rejected the token, set server.token in settings`
+- `KindUnreachable`: `Reach <base URL>: the model server is not answering, check it is running and that the address is right`
+- `KindAuth`: `Authenticate with <base URL>: the key was rejected, check the API key for this address`
 - `KindNotFound`: `model "<id>" is not on <base URL>: pick another from the model list`
 - `KindModelLoading`: `model "<id>" is loading: send the message again in a moment`
 - `KindBadRequest`: `<server message>` verbatim, prefixed with `the model server refused the request: `
@@ -1150,10 +1236,13 @@ turns a template syntax error into a panic at init, which the package test catch
 ### 5.2 Render functions
 
 ```go
-// SystemVars are the values system.md takes.
+// SystemVars are the values system.md takes. Instructions is the agent's own
+// text, which follows the built-in prompt in the same message. It is inserted
+// as a value and never parsed, so a stray template action in it is text.
 type SystemVars struct {
-	Project string // absolute project root
-	OS      string // runtime.GOOS
+	Project      string // absolute project root
+	OS           string // runtime.GOOS
+	Instructions string // the agent's, empty for most
 }
 
 func System(v SystemVars) string
@@ -1171,12 +1260,26 @@ trimmed. Only `system.md` is a template.
 
 ```
 You are a coding agent working in {{.Project}} on {{.OS}}.
-Tools: read_file, write_file, run_shell. Use them. Do not guess file contents.
-Read a file before you change it. write_file replaces the whole file.
-Run one command per call. Each run_shell starts a new shell in the project root.
-Keep replies short. Say what you did and what failed.
+Tools: read_file, find, write_file, replace_in_file, run_shell, write_todos,
+ask_question.
+...
 When the task is done, stop and summarize in two sentences.
+{{if .Instructions}}
+
+{{.Instructions}}
+{{end}}
 ```
+
+The agent's instructions come last, which is what makes them win where they disagree with
+the guidance above, and there is no line introducing them. Nothing is dropped: the project
+directory, the operating system and the tool names are stated whatever an agent adds, so a
+short instruction cannot cost the model the facts it works from. `System` trims the
+trailing whitespace, so an empty value renders the prompt byte for byte as it was before
+agents existed.
+
+The text is a value and never a template. `System` panics on a render error, so parsing it
+would let a typo in a settings field take the process down, and two braces in someone's
+instructions have to survive as two braces.
 
 ### 5.4 tool_read_file.md
 
@@ -1734,6 +1837,7 @@ type Session struct {
 
 	ID      string
 	Project string
+	AgentID string // the agent this session last ran under
 	Model   string
 	Created time.Time
 	Updated time.Time
@@ -1766,33 +1870,48 @@ type Turn struct {
 
 // Engine owns every live session and dispatches turns.
 type Engine struct {
-	cfg    *config.Store
-	store  *store.Sessions
-	client *llm.Client
-	perms  *perms.Broker
-	hub    Publisher // implemented by server's SSE hub
+	cfg      *config.Store
+	store    *store.Sessions
+	backends Backends
+	perms    *perms.Broker
+	hub      Publisher // implemented by server's SSE hub
 
 	mu   sync.Mutex
 	live map[string]*Session
+}
+
+// Backends is the model server for one agent. The engine holds this rather
+// than a client, so a turn resolves the agent it runs against and two agents
+// can be answering at once.
+type Backends interface {
+	For(a config.Agent) Backend
 }
 
 type Publisher interface {
 	Publish(sessionID string, ev Event)
 }
 
-func NewEngine(cfg *config.Store, st *store.Sessions, cl *llm.Client,
+func NewEngine(cfg *config.Store, st *store.Sessions, backends Backends,
 	pb *perms.Broker, hub Publisher) *Engine
 
-func (e *Engine) Create(project string) (*Session, error)  // takes the harness's model
+func (e *Engine) Create(project string) (*Session, error)  // takes the active agent
 func (e *Engine) Open(id string) (*Session, error)         // Get, and marks the model unread
 func (e *Engine) Get(id string) (*Session, error)
 func (e *Engine) Send(id, text string) error     // returns once the turn is started
 func (e *Engine) Stop(id string) error
 func (e *Engine) Compact(id string) error
-func (e *Engine) SetModel(model string)          // points every session at it
+func (e *Engine) SetAgent()                      // points every session at the active agent
+func (e *Engine) Forget(agentID string)          // drops what was read from one agent
 func (e *Engine) Delete(id string) error
 func (e *Engine) State(id string) State
 ```
+
+`ensureReady` is where the agent is read, once, at the start of a turn. The record and the
+backend it resolves to are then held for the whole turn and passed down to the title
+request, the compaction and the context measurement, so an edit landing between two steps
+cannot change the prompt under the model, and a request built for one address is never
+sent to another. `Forget` is what a moved address or key asks for: what answered before
+may not be what answers next, so the window and the template capabilities are read again.
 
 `Send` appends the user entry, persists, sets `StatePreflight`, starts a goroutine, and
 returns. A message sent while a turn runs is queued and picked up when the step under way
@@ -1805,9 +1924,9 @@ opens and a router holds nothing after that, so what the harness read before is 
 soon as it looks away, and the turn the next message starts reads it again. Every other way
 of reaching a session uses `Get` and marks nothing.
 
-`pointTo` moves a session onto a model and forgets what the last one's tokenizer implied.
-`SetModel` runs it over every live session and stops there; `ensureReady` runs it at the top
-of a turn and reads the model when the session has not read it.
+`pointTo` moves a session onto an agent and a model and forgets what the last one's
+tokenizer implied. `SetAgent` runs it over every live session and stops there; `ensureReady`
+runs it at the top of a turn and reads the model when the session has not read it.
 
 `DELETE /api/sessions/{id}` needs an idle session, since anything else is a turn to stop
 first, and answers 409. The session is marked gone as it goes, so a turn that started
@@ -1826,7 +1945,8 @@ SSE hub publish into a session no request is currently touching. The memory cost
 transcript, and a process holding every session a person opened in one sitting is not a
 size worth managing.
 
-`SetModel` is called by `PUT /api/config` when the model changed. It is described in 8.5.
+`SetAgent` is called by the agent routes whenever the active agent changes or is edited. It
+is described in 8.5.
 
 `Delete` requires `StateIdle`, removes the file through `store.Delete`, removes the live
 entry, and drops the hub channel for the id.
@@ -2016,11 +2136,11 @@ the next message would reprocess the conversation from the start. Made first, it
 against a slot holding nothing worth keeping. A failure is not an error: the session keeps
 the title cut from the message.
 
-**One model.** The model lives in `config.json` and nowhere else. A session records the one
-it last ran against, which is a note rather than a choice: `ensureReady` compares it with
-`cfg.Model` at the top of every turn and repoints the session when they differ.
-`PUT /api/config` with a new model calls `Engine.SetModel`, which repoints every live
-session and sends nothing. Naming a model with autoload on costs minutes of another
+**One agent.** The agent lives in `config.json` and nowhere else. A session records the one
+it last ran under, which is a note rather than a choice: `ensureReady` compares it with the
+active agent at the top of every turn and repoints the session when they differ. Selecting
+or editing an agent calls `Engine.SetAgent`, which repoints every live session and sends
+nothing. Naming a model with autoload on costs minutes of another
 machine's memory, so a person reading down the model list loads none of them and the first
 message that needs one is what asks for it. `session.repoint` sets `session.Model`, clears
 `NCtx`, `NCtxSource`, `caps` and `prepared` so the new model is read before it is used, sets
@@ -2253,6 +2373,7 @@ from `crypto/rand`.
 {
   "id": "sess_k4m9x2q7ta5vb1nc",
   "project": "/Users/jay/Projects/Personal/quecto-harness",
+  "agent": "agt_2f7qk3m9x4pd8s1v",
   "model": "Gemma4-12B",
   "title": "list the files here",
   "created": "2026-09-04T12:26:11.412Z",
@@ -2267,7 +2388,7 @@ from `crypto/rand`.
     "cached_tokens": 3968
   },
   "last_tool_tokens": 1026,
-  "context_base": {"model": "Gemma4-12B", "system": 154, "tools": 1026},
+  "context_base": {"model": "Gemma4-12B", "chars": 412, "system": 154, "tools": 1026},
   "entries": [
     {
       "seq": 1, "kind": "user", "role": "user",
@@ -2316,7 +2437,12 @@ from `crypto/rand`.
 ```
 
 The system prompt is not in the file. It is regenerated from `prompts.System` on every
-request, so a change to the prompt takes effect on an existing session.
+request, so a change to the prompt, or to the active agent's instructions, takes effect on
+an existing session.
+
+`context_base` records what was measured as well as the numbers: the tokenizer that
+counted it and the size of the system message it counted. Both have to still hold, since
+the instructions an agent adds are part of that message.
 
 ### 9.3 API
 
@@ -2335,6 +2461,7 @@ type Sessions struct {
 type Summary struct {
 	ID       string    `json:"id"`
 	Project  string    `json:"project"`
+	Agent    string    `json:"agent"`
 	Model    string    `json:"model"`
 	Title    string    `json:"title"`
 	Created  time.Time `json:"created"`
@@ -2395,17 +2522,25 @@ type Server struct {
 	store  *store.Sessions
 	engine *agent.Engine
 	perms  *perms.Broker
-	client *llm.Client
+	pool   *llm.Pool
 	hub    *Hub
 	token  string
 	ui     http.Handler
 
-	mu        sync.Mutex
-	modelsAt  time.Time
-	modelsVal []llm.Model
+	mu     sync.Mutex
+	probes map[string]*probe
+}
+
+// probe is what one address last said about itself and what it holds. Keyed by
+// address and key, so two agents at one address share a reading and a changed
+// address is a different entry.
+type probe struct {
 	infoAt    time.Time
-	infoVal   llm.Info
+	info      llm.Info
 	infoErr   error
+	modelsAt  time.Time
+	models    []llm.Model
+	modelsErr error
 }
 
 func New(...) *Server
@@ -2473,17 +2608,24 @@ All request and response bodies are `application/json` unless stated. Errors are
 {
   "mode": "router",
   "build": "b10812-8b4b3558f",
-  "server_url": "http://192.168.2.205:8080",
+  "agents": [
+    {"id": "agt_2f7qk3m9x4pd8s1v", "name": "Local llama.cpp",
+     "url": "http://192.168.2.205:8080", "key_set": false, "model": "Gemma4-12B",
+     "effort": "medium", "preserve_reasoning": true,
+     "temperature": 0.35, "top_p": null, "instructions": ""}
+  ],
+  "agent": "agt_2f7qk3m9x4pd8s1v",
   "autoload": true,
   "detect_error": "",
+  "detect_kind": "",
   "config": {
-    "model": "Gemma4-12B",
-    "effort": "medium",
+    "agent": "agt_2f7qk3m9x4pd8s1v",
     "permissions": "ask",
     "compact_at": 0.8,
     "shell": "/bin/sh",
     "command_timeout_s": 120,
     "output_limit_bytes": 16384,
+    "max_tool_calls": 50,
     "listen": "127.0.0.1:7331"
   },
   "config_notes": [],
@@ -2492,27 +2634,99 @@ All request and response bodies are `application/json` unless stated. Errors are
     {"id": "Gemma4-12B", "status": "loaded", "ctx_hint": 131072, "ctx_source": "meta",
      "modalities": ["text", "image", "audio"], "failed": false},
     {"id": "Muse Glimmer 30B Q5", "status": "unloaded", "ctx_hint": 131072,
-     "ctx_source": "args", "modalities": ["text", "image"], "failed": false},
-    {"id": "Qwen3.6-35B-A3B Q5", "status": "unloaded", "ctx_hint": 262144,
      "ctx_source": "args", "modalities": ["text", "image"], "failed": false}
   ],
   "models_error": "",
+  "models_kind": "",
   "os": "darwin",
   "version": "0.1.0"
 }
 ```
 
-`server.token` is never returned; the UI shows a boolean `server_token_set` instead. The
-model list is cached for 15 seconds. `detect_error` and `models_error` carry the message from
-the taxonomy when the last attempt failed, and the rest of the payload is still served, so a
-dead model server does not blank the UI.
+`agentJSON` is the one wire shape for an agent, and it has no `key` field on the struct at
+all, only `key_set`, so no route can leak the key by forgetting a branch.
+
+`mode`, `build`, `autoload`, `detect_*`, `models` and `models_*` describe the **active
+agent alone**. Probing every address on a state read would cost one call each, with a five
+second timeout, to draw one chip. The agents dialog asks about the others itself, one at a
+time, when a row is opened. With no agent selected, `mode` is `unknown`, `models` is empty
+and `detect_error` says so.
+
+The reading is cached for 15 seconds, keyed by address and key, so two agents at one
+address share it and a moved address is a different entry. `detect_error` and
+`models_error` carry the message from the taxonomy when the last attempt failed, and the
+rest of the payload is still served, so a dead model server does not blank the UI.
+
+#### GET /api/agents
+
+```json
+{"agents": [...], "agent": "agt_2f7qk3m9x4pd8s1v"}
+```
+
+#### POST /api/agents
+
+Any subset of the writable fields; only `name` is required, and `url` may be empty for an
+agent still being filled in. 201 with the list, the active id and `saved`, the record as
+stored. The new agent is selected when nothing was selected.
+
+- 400 `Name the agent: an agent needs a name`
+- 409 `An agent named "Local llama.cpp" already exists: choose another name`
+- 400 `Address "ftp://x" is not an http or https URL with a host`
+- 400 `Effort "extreme" is not auto, off, low, medium or high`
+- 400 `Temperature is outside 0 to 2: send null to leave it to the model server`
+- 400 `Top p is outside 0 to 1: send null to leave it to the model server`
+
+#### PUT /api/agents/{id}
+
+Partial: a field the body leaves out keeps the value it has. `key` is the exception that
+needs three states, and uses the same `patch[T]` generic as the sampling fields. **Absent
+leaves the stored key alone**, which is what lets the browser save a form it was never
+given the key for; `null` or `""` clears it; a string sets it. 200 with the same body as
+POST, or 404 `No agent with that id: it may have been deleted`.
+
+A write that moved the address or the key drops the cached reading for the old pair, calls
+`Pool.Retain`, and calls `Engine.Forget`, since the sessions on that agent are holding a
+window it may no longer have.
+
+#### DELETE /api/agents/{id}
+
+200 with the list and the active id. Deleting the active agent hands the turn to the first
+one left; deleting the last leaves nothing selected, which is the state a first run is in
+and what the setup screen answers. No cascade: `Session.Agent` keeps pointing at an id that
+is gone, and the next turn moves that session onto the active agent and forgets what the
+old one implied.
+
+#### POST /api/agents/{id}/select
+
+200 with the list and the active id. A half-configured agent may be selected; what it is
+missing is reported when a message is sent, which is where the model was always reported
+missing.
+
+#### POST /api/agents/probe
+
+Request `{"url": "...", "key": "..."}`, or `{"agent": "agt_x", "url": "..."}` to reuse a
+stored key the browser was never given.
+
+```json
+{"mode": "openai", "build": "", "autoload": false,
+ "detect_error": "", "detect_kind": "", "models": [],
+ "models_error": "", "models_kind": ""}
+```
+
+**200 even when the probe failed**, carrying the message. That is what lets the dialog draw
+a bad address inside the form rather than as a failed request, and it is how the model list
+is filled for an agent that does not exist yet. 400 only when the URL is not http or https.
 
 #### GET /api/models?refresh=1
 
-Same `models` array as above, forcing a fresh `GET /v1/models` when `refresh=1`. 502 with the
-taxonomy message when the call fails.
+The models at the **active** agent's address. It is read on every status event to redraw
+the dots, and always wants the agent that is answering, so it takes no agent of its own;
+everything else goes through the probe. 502 with the taxonomy message when the call fails,
+409 when no agent is selected.
 
 #### GET /api/models/props?id=<model id>
+
+Against the active agent.
 
 ```json
 {
@@ -2616,8 +2830,9 @@ Omitting `project` lists every session.
 
 #### POST /api/sessions
 
-Request `{"project": "/Users/jay/src/x", "model": "Gemma4-12B"}`. `model` may be empty, in
-which case the configured model is used. 400 when the project is not in the projects list.
+Request `{"project": "/Users/jay/src/x"}`. The session takes the active agent and its
+model. 400 when the project is not in the projects list, and 400 with the sentence naming
+what is missing when no agent is selected, or the selected one has no address or no model.
 Response is the created `Summary` plus `"state": "idle"`.
 
 #### GET /api/sessions/{id}
@@ -2626,6 +2841,7 @@ Response is the created `Summary` plus `"state": "idle"`.
 {
   "id": "sess_k4m9x2q7ta5vb1nc",
   "project": "/Users/jay/src/x",
+  "agent": "agt_2f7qk3m9x4pd8s1v",
   "model": "Gemma4-12B",
   "state": "idle",
   "n_ctx": 131072,
@@ -2673,8 +2889,8 @@ to the harness, which takes it from the first message. Response:
 {"id": "sess_k4m9x2q7ta5vb1nc", "title": "Digits of pi"}
 ```
 
-The model is not a session's to change: it is one field in `config.json`, and
-`PUT /api/config` moves every session at once. The `status` entry that records the change
+The agent is not a session's to change: it is one field in `config.json`, and selecting
+another moves every session at once. The `status` entry that records the change
 arrives on each session's event stream, so an open transcript shows it without a refetch.
 
 #### DELETE /api/sessions/{id}
@@ -2719,17 +2935,15 @@ neither an index nor any text.
 Request carries only the fields being changed:
 
 ```json
-{"model": "Qwen3.8-27B Q5", "effort": "high", "permissions": "allowlist",
- "server": {"url": "http://192.168.2.205:8080", "token": ""}}
+{"permissions": "allowlist", "compact_at": 0.7, "max_tool_calls": 25}
 ```
 
-Response is the same shape as `state.config`. Changing `model` points every session at it,
-open ones included, and the harness reads the new model before anything is sent to it.
-Changing `server.url` invalidates the detect and models
-caches and triggers a fresh `Detect`. Changing `listen` is accepted and persisted
-but takes effect on the next start; the response includes
-`"note": "listen changes take effect on restart"`. `compact_at`, `shell`,
-`command_timeout_s` and `output_limit_bytes` are also settable here.
+Response is the same shape as `state.config`. This route holds what belongs to the harness
+rather than to one connection: `permissions`, `compact_at`, `shell`, `command_timeout_s`,
+`output_limit_bytes`, `max_tool_calls` and `listen`. The address, the key, the model, the
+sampling and the thinking are an agent's and go through the agent routes. Changing `listen`
+is accepted and persisted but takes effect on the next start; the response includes
+`"note": "Listen changes take effect on restart"`.
 
 #### GET /api/events?session=<id>
 
@@ -3072,9 +3286,14 @@ web/
     components/FolderPicker.svelte
     components/PermissionCard.svelte
     components/ToolCard.svelte
-    components/ModelPicker.svelte
+    components/AgentChip.svelte
+    components/Agents.svelte        the dialog
+    components/AgentPanel.svelte    the parameters, shared with setup
+    components/AgentModelField.svelte
+    components/Modal.svelte
     components/ContextMeter.svelte
     components/SettingsPanel.svelte
+    lib/overlay.ts        one Escape stack for every overlay
 ```
 
 ### 12.2 Event types
@@ -3120,11 +3339,26 @@ export type ModelRow = {
 
 export type CtxSource = "props" | "meta" | "args" | "assumed" | "";
 
-export type AppConfig = {
+export type Agent = {
+  id: string;
+  name: string;
+  url: string;
+  /** The key never comes back, only whether one is stored. */
+  key_set: boolean;
   model: string;
-  effort: "off" | "low" | "medium" | "high";
+  effort: "auto" | "off" | "low" | "medium" | "high";
+  preserve_reasoning: boolean;
+  temperature: number | null;
+  top_p: number | null;
+  instructions: string;
+};
+
+export type AppConfig = {
+  /** The id of the agent answering. Empty when none is chosen. */
+  agent: string;
   permissions: "ask" | "allowlist" | "full";
   compact_at: number;
+  max_tool_calls: number;
   shell: string;
   command_timeout_s: number;
   output_limit_bytes: number;
@@ -3132,12 +3366,13 @@ export type AppConfig = {
 };
 
 export class AppStore {
-  mode = $state<"router" | "single" | "unknown">("unknown");
+  mode = $state<"router" | "single" | "openai" | "unknown">("unknown");
   build = $state("");
-  serverUrl = $state("");
   detectError = $state("");
   config = $state<AppConfig | null>(null);
   configNotes = $state<string[]>([]);
+  agents = $state<Agent[]>([]);
+  agentsOpen = $state(false);
   projects = $state<string[]>([]);
   models = $state<ModelRow[]>([]);
   modelsError = $state("");
@@ -3305,17 +3540,38 @@ Once the POST returns 200, the card renders its answered state (`allowed once`,
 `allowed always: go test`, `denied: wrong directory`) and `pending` is cleared locally
 without waiting for a server event, so the composer unblocks immediately.
 
-### 12.8 Model picker and context meter
+### 12.8 The agents dialog, the chip and the context meter
 
-The picker lists every model from `/api/state`. Each row: a status dot (grey `unloaded`,
-amber `loading` with a pulse, green `loaded`, grey `sleeping`, amber `downloading`), the id,
-and the context to the right, shown as `131k` from `ctx_hint`.
+`Agents.svelte` is the list on the left and that agent's parameters on the right, 880 by
+600, each pane scrolling on its own. The height is fixed because one that tracked its
+content would jump on every row click.
 
-Selecting a model calls `PUT /api/config` and nothing else. The picker draws `config.model`,
-which is the harness's one choice: it does not change when a project or a session is opened,
-and every session answers with it. Nothing is loaded by the choice. The first message that
-needs the model loads it inside its turn, where the transcript shows the wait and the chip's
-dot goes amber until the read lands.
+Choosing a row selects it for editing and nothing else. Making an agent answer is the
+button in the pane header, which is a pill reading `Active` for the one already answering.
+So the dialog can be opened, read and closed without the harness switching underneath. The
+row that answers carries a live status dot; every other carries a flat grey one, which is
+honest about an address nobody has asked.
+
+Nothing is saved by a button. Pickers commit on the change, text commits on blur and on
+Enter, and switching rows or closing flushes first, so there is never a discard question to
+put to the reader. The key field starts empty whichever agent is showing, since the key
+never comes back: an empty field keeps the stored one, and `Remove key` is what clears it.
+
+The model field takes free text with the address's list beside it, because an endpoint will
+often answer for a model it never named. The list is read when a row is opened, one address
+at a time, through `POST /api/agents/probe`, and one line under the field says which of the
+states the address is in.
+
+`AgentPanel` is the same component in the dialog and on the setup screen, in a compact form
+there that leaves out what means nothing before an agent exists. The setup screen shows
+while `agents` is empty and for no other reason: an address that stops answering is a
+reason to switch agents, which is inside the app.
+
+`AgentChip` on the composer shows the agent's name, since that is what the reader chose and
+model ids run long; the id is the second line of every row in its popover, which ends in
+`Manage agents`. Nothing is loaded by the choice. The first message that needs the model
+loads it inside its turn, where the transcript shows the wait and the chip's dot goes amber
+until the read lands.
 
 The wait row is the only thing on the page while a model loads, so it carries a clock. It
 appears under the message that started the turn, reads `Working on it`, counts from the
@@ -3324,6 +3580,14 @@ that answers at once. Nothing in the row names the step: a load, a first token a
 are all the harness waiting on the model. A compaction is the exception, since it rewrites
 the conversation.
 
+Effort, sampling and preserve reasoning are the agent's and are set in the dialog. The
+composer row is the add menu, the permission chip and the agent chip.
+
+`Modal` is the scrim, the title bar, the focus and the tab wrap. `overlay.ts` is one stack
+and one key listener, so Escape reaches the topmost overlay alone: a menu inside a dialog
+closes itself and leaves the dialog standing, and the tab wrap steps aside while a confirm,
+which mounts outside the dialog's markup, is on top.
+
 The meter reads `42k / 131k` with a filled bar, green below 60 percent, amber to 80, red
 above. When `n_ctx_source` is `assumed` it reads `42k / ~32k`, with the tilde as the only
 signal that the denominator is a guess, and the bar behaves the same way. `n_ctx` is never
@@ -3331,9 +3595,10 @@ zero, so there is no unknown state to render.
 
 ### 12.9 Settings and session removal
 
-`SettingsPanel` edits `effort`, `auto`, `compact_at`, `shell`, `command_timeout_s`,
-`output_limit_bytes` and `server.url` through `PUT /api/config`, and shows `config_notes`
-above the form when the server clamped anything.
+`SettingsPanel` edits `listen`, `compact_at`, `shell` and `command_timeout_s` through
+`PUT /api/config`, and shows `config_notes` above the form when the server clamped
+anything. It names the agent answering and carries a way into the agents dialog, since that
+is where people look for a connection.
 
 It also shows the allowlist for the currently selected project, fetched with
 `GET /api/allowlist?project=`, one row per prefix in mono with a remove control that calls
@@ -3357,7 +3622,7 @@ Each session row in the sidebar carries a remove control that calls
 | `prompts` | every embedded file is non-empty; `System` renders with both fields substituted and leaves no `{{`; the tool descriptions match the schema descriptions by name |
 | `tools` | path guard table (section 13.3); `read_file` numbering, offset, limit, byte cap, empty file, directory, binary; `write_file` creates parents, preserves mode, atomic replace leaves the old content on a failed write; `run_shell` exit code, merged streams, timeout kill, process group kill of a forked child, truncation head and tail, `Truncate` boundary cases |
 | `perms` | `Evaluate` matrix over tool times auto times allowlist times operators, with a case per entry of the operator list and a case proving `${` does not prompt; `Ask` and `Resolve` happy path; `Resolve` on an unknown id; cancel while blocked; double resolve; `always` writes the allowlist before returning; denial content string |
-| `agent` | the state machine transitions; the loop against the replay server for a plain reply, a single tool call, two tool calls, a denial, a stop mid-command, 50 iterations; `Get` on a live id, on an id only on disk, and on an unknown id; `computeFill` before and after a usage report; the `assumed` fallback arms auto compaction; effort mapping into the recorded request body; `SetModel` repoints every live session, resetting `NCtx`, caps, `LastUsage` and the context measurement, and asks the model server nothing; opening a session asks it nothing either; a session that was not live takes the model at its next turn, and the turn asks the model it started with; preparation inside the turn reads a loaded model with `autoload=false` and loads an unloaded one, the first request of a session is already shaped by what came back, a message sent while it runs joins the queue, and the caps a turn was started with shape every request in it; the naming request carries the opening message alone, runs before the reply, and happens once per session; the context measurement sends the system message twice, once with the schemas and once without, and runs once per model per session; the breakdown subtracts the measured parts from a real usage report; compaction rewrites `in_context` and leaves `visible` alone; the unanswered-tool-call repair |
+| `agent` | the state machine transitions; the loop against the replay server for a plain reply, a single tool call, two tool calls, a denial, a stop mid-command, 50 iterations; `Get` on a live id, on an id only on disk, and on an unknown id; `computeFill` before and after a usage report; the `assumed` fallback arms auto compaction; effort mapping into the recorded request body; `SetAgent` repoints every live session, resetting `NCtx`, caps, `LastUsage` and the context measurement, and asks the model server nothing; opening a session asks it nothing either; a session that was not live takes the model at its next turn, and the turn asks the model it started with; preparation inside the turn reads a loaded model with `autoload=false` and loads an unloaded one, the first request of a session is already shaped by what came back, a message sent while it runs joins the queue, and the caps a turn was started with shape every request in it; the naming request carries the opening message alone, runs before the reply, and happens once per session; the context measurement sends the system message twice, once with the schemas and once without, and runs once per model per session; the breakdown subtracts the measured parts from a real usage report; compaction rewrites `in_context` and leaves `visible` alone; the unanswered-tool-call repair |
 | `store` | round trip of a session with every entry kind; index built at `Open`; a corrupt file is skipped and named; `List` ordering; concurrent `Save` of two sessions under `-race` |
 | `server` | auth: token to cookie, bearer, 401 without either, constant-time compare, a token file present at start is reused rather than replaced, a missing one is created 0600; origin rejection; every route's happy path and its documented error status, including `PUT /api/sessions/{id}` (200 idle, 409 busy, 400 unknown model), `DELETE /api/sessions/{id}` (204, 409 busy, 404 unknown, hub channel dropped), `GET /api/allowlist` (empty array for an unknown project) and `DELETE /api/allowlist` (200 with the unchanged list for a prefix that is absent); `tool_call` and `tool_output` payloads carry `index`; the folder browser rules including hidden exclusion and a non-absolute path; SSE replay from `Last-Event-ID`, from `?from=`, and the `resync` path when the ring has rolled; a slow subscriber gets `resync` and is not disconnected; embed fallback page when `Built()` is false |
 | `service` | `UnitText` golden output for both platforms, asserted on whichever platform the test runs on; XML escaping of a home directory containing `&`; a binary under `/tmp` is refused; the install command sequence recorded by a stub `launchctl` placed first on `PATH`, asserted in order so that `enable` precedes `bootstrap`; `Report` parses a recorded `launchctl print` and a recorded `systemctl is-active` output |
@@ -3563,12 +3828,12 @@ reflected in the sections above.
    so a second session sits in `status: streaming` with no deltas until a slot frees. This
    is documented behaviour and nothing is built for it. Section 8.10.
 
-10. **One model.** `config.model` is the only model choice there is. `PUT /api/config` points
-   every session at it: each one clears `NCtx`, caps and `LastUsage` so nothing measured
-   against the previous tokenizer is carried over, and the transcript records nothing.
-   A session that was not live takes it at
-   the top of its next turn. A turn already running finishes on the model it started with.
-   Sections 8.1, 8.5, 10.4, 12.8.
+10. **One agent.** `config.agent` is the only choice of what answers. Selecting or editing
+   one points every session at it: each clears `NCtx`, caps and `LastUsage` so nothing
+   measured against the previous tokenizer is carried over, and the transcript records
+   nothing. A session that was not live takes it at the top of its next turn. A turn already
+   running holds the agent it started with, and the backend that agent resolved to, so it
+   finishes against the address it began on. Sections 3.2, 8.1, 8.5, 10.4, 12.8.
 
 11. **Unknown context size.** The last resort is 32768 with source `"assumed"`. Automatic
    compaction stays armed against it, and the meter renders `42k / ~32k` so the guess is
