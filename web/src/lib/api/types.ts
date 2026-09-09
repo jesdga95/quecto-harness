@@ -42,6 +42,19 @@ export interface Session {
   model: string;
   title: string;
   created: string;
+  /** The session that launched this one, for a subagent run. Empty is a
+      conversation somebody started, which is the only kind the sidebar lists. */
+  parent: string;
+  /** The subagent runs this session launched, which are reachable nowhere
+      else. */
+  children: Child[];
+}
+
+/** One subagent run, as its launcher lists it. */
+export interface Child {
+  id: string;
+  title: string;
+  agent: string;
 }
 
 /** A named connection: where a model runs, what key opens it, which model, and
@@ -171,6 +184,7 @@ export type HarnessEvent =
       tool: string;
       command: string;
       prefix: string;
+      agent: string;
     }
   /** The card was answered, or a stop answered it, and every tab closes it. */
   | { type: "permission_done"; id: string; outcome: string }
@@ -198,7 +212,10 @@ export type HarnessEvent =
   | { type: "queued"; steer: Steer }
   /** The harness appended a user message, which is a queued one being picked
       up by the turn it was typed against. */
-  | { type: "message"; seq: number; text: string; files: Attached[] }
+  | { type: "message"; seq: number; text: string; files: Attached[]; from: string }
+  /** A subagent this session launched moved. The row the run_agent call drew
+      follows it without mirroring its stream. */
+  | { type: "child"; session: string; status: TurnStatus; callId?: string; agent?: string }
   | { type: "error"; message: string }
   | { type: "done"; cost?: TurnCost }
   /** The stream fell too far behind to replay, so it carries a fresh snapshot. */
@@ -208,7 +225,16 @@ export type HarnessEvent =
 export type TranscriptItem =
   /** seq names the entry to the harness, which is how a message is sent
       again. It is 0 until the harness has stored the message. */
-  | { kind: "user"; id: string; seq: number; text: string; files: Attached[]; edited: boolean }
+  | {
+      kind: "user";
+      id: string;
+      seq: number;
+      text: string;
+      files: Attached[];
+      edited: boolean;
+      /** The agent that sent it. Empty is the person. */
+      from: string;
+    }
   | { kind: "assistant"; id: string; text: string; streaming: boolean; cost?: TurnCost }
   | { kind: "reasoning"; id: string; text: string; tokens: number; open: boolean }
   | {
@@ -223,6 +249,9 @@ export type TranscriptItem =
       /** Set on an ask_question call that is still waiting, and is the id its
           answer is posted to. */
       askId?: string;
+      /** Set on a run_agent call: the subagent it started and where that
+          subagent has got to. */
+      child?: { session: string; agent: string; status: TurnStatus };
     }
   | {
       kind: "permission";
@@ -231,6 +260,9 @@ export type TranscriptItem =
       command: string;
       prefix: string;
       outcome: string | null;
+      /** The subagent that asked. Empty is this conversation's own turn, and
+          only that one blocks the composer. */
+      agent: string;
     }
   | { kind: "compaction"; id: string; before: number; after: number; summary: string }
   | { kind: "status"; id: string; text: string }
@@ -249,6 +281,8 @@ export interface Sent {
 export interface Steer {
   text: string;
   files: Attached[];
+  /** The agent that sent it. Empty is the person. */
+  from: string;
 }
 
 /** One file attached to a message, as the transcript shows it. An image is

@@ -124,6 +124,7 @@ interface WireSummary {
   model?: string;
   title?: string;
   created?: string;
+  parent?: string;
 }
 
 interface WireToolCall {
@@ -139,6 +140,7 @@ interface WirePermission {
   path?: string;
   prefix?: string;
   args?: string;
+  agent?: string;
   decision?: string;
   reason?: string;
   content?: string;
@@ -157,6 +159,7 @@ interface WireEntry {
   permission?: WirePermission | null;
   attachments?: { path?: string; kind?: string; bytes?: number; file?: string }[] | null;
   edited?: boolean;
+  from?: string;
   visible?: boolean;
   meta?: Record<string, unknown> | null;
 }
@@ -170,6 +173,7 @@ interface WireAttachment {
 
 interface WireSteer {
   text?: string;
+  from?: string;
   attachments?: WireAttachment[];
 }
 
@@ -192,6 +196,8 @@ interface WireSnapshot {
   pending?: WirePermission[];
   question?: { id?: string; call_id?: string } | null;
   state?: string;
+  parent?: string;
+  children?: { id?: string; title?: string; agent?: string }[] | null;
   steer?: WireSteer | null;
   last_seq?: number;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
@@ -218,6 +224,10 @@ interface WireEvent {
   decision?: string;
   reason?: string;
   ask?: string;
+  from?: string;
+  agent?: string;
+  session?: string;
+  call_id?: string;
   content?: string;
   attachments?: WireAttachment[];
   prompt_tokens?: number;
@@ -388,6 +398,8 @@ function toSession(s: WireSummary): Session {
     model: s.model ?? "",
     title: s.title || "New session",
     created: s.created ?? new Date().toISOString(),
+    parent: s.parent ?? "",
+    children: [],
   };
 }
 
@@ -439,6 +451,18 @@ function outcomeOf(p: WirePermission): string {
   return p.reason ? `Denied: ${p.reason}` : "Denied";
 }
 
+// The subagent a run_agent call started, kept on the entry so a page loaded
+// later still links the row to the transcript it began. Its state arrives on
+// the stream, and idle is what a reload starts from.
+function toChildRef(
+  meta: Record<string, unknown> | null | undefined,
+): { session: string; agent: string; status: TurnStatus } | undefined {
+  const session = meta?.session;
+  if (typeof session !== "string" || session === "") return undefined;
+  const agent = meta?.agent;
+  return { session, agent: typeof agent === "string" ? agent : "", status: "idle" };
+}
+
 function toPermission(p: WirePermission, outcome: string | null, fallback = ""): TranscriptItem {
   return {
     kind: "permission",
@@ -447,6 +471,7 @@ function toPermission(p: WirePermission, outcome: string | null, fallback = ""):
     command: p.command || p.path || p.args || "",
     prefix: p.prefix ?? "",
     outcome,
+    agent: p.agent ?? "",
   };
 }
 
@@ -488,6 +513,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
         text: e.content ?? "",
         files,
         edited: e.edited === true,
+        from: e.from ?? "",
       });
     }
     return;
@@ -538,6 +564,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
       card.exitCode = e.exit_code ?? null;
       card.truncated = e.truncated ?? false;
       card.running = false;
+      card.child = toChildRef(e.meta);
       return;
     }
     items.push({
@@ -549,6 +576,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
       exitCode: e.exit_code ?? null,
       truncated: e.truncated ?? false,
       running: false,
+      child: toChildRef(e.meta),
     });
     return;
   }
@@ -650,7 +678,7 @@ function toAttached(wire: WireAttachment[] | undefined): Attached[] {
 
 function toSteer(wire: WireSteer | null | undefined): Steer | null {
   if (!wire) return null;
-  return { text: wire.text ?? "", files: toAttached(wire.attachments) };
+  return { text: wire.text ?? "", from: wire.from ?? "", files: toAttached(wire.attachments) };
 }
 
 function toTranscript(snap: WireSnapshot): Transcript {
@@ -686,6 +714,12 @@ function toTranscript(snap: WireSnapshot): Transcript {
     model: snap.model ?? known?.model ?? "",
     title: snap.title || known?.title || titleOf(entries),
     created: snap.created ?? known?.created ?? new Date().toISOString(),
+    parent: snap.parent ?? known?.parent ?? "",
+    children: (snap.children ?? []).map((c) => ({
+      id: c.id ?? "",
+      title: c.title ?? "",
+      agent: c.agent ?? "",
+    })),
   };
   summaries.set(id, session);
 
@@ -796,6 +830,18 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           tool: ev.tool ?? "",
           command: ev.command || ev.path || ev.args || "",
           prefix: ev.prefix ?? "",
+          agent: ev.agent ?? "",
+        },
+      ];
+
+    case "child":
+      return [
+        {
+          type: "child",
+          session: ev.session ?? "",
+          status: toStatus(ev.state),
+          callId: ev.call_id,
+          agent: ev.agent,
         },
       ];
 
@@ -846,7 +892,12 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       ];
 
     case "queued":
-      return [{ type: "queued", steer: { text: ev.text ?? "", files: toAttached(ev.attachments) } }];
+      return [
+        {
+          type: "queued",
+          steer: { text: ev.text ?? "", from: ev.from ?? "", files: toAttached(ev.attachments) },
+        },
+      ];
 
     case "message":
       return [
@@ -854,6 +905,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           type: "message",
           seq: ev.seq ?? 0,
           text: ev.text ?? "",
+          from: ev.from ?? "",
           files: toAttached(ev.attachments),
         },
       ];

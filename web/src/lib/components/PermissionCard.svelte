@@ -14,7 +14,12 @@
 <div class="card overflow-hidden">
   <div class="flex items-center gap-2 px-4 pt-3 text-[13px]">
     <ShieldCheck size={15} class="text-accent" />
-    <span class="font-medium">{item.tool} wants to run a command</span>
+    <span class="font-medium">
+      {item.agent ? `${item.agent} wants to run a command` : `${item.tool} wants to run a command`}
+    </span>
+    {#if item.agent}
+      <span class="text-[12px] text-muted">Working for you</span>
+    {/if}
   </div>
 
   <pre class="mono-block mx-4 mt-2.5">{item.command}</pre>

@@ -1731,3 +1731,45 @@ func TestProbeReadsTheAddressAsTheProtocolNamed(t *testing.T) {
 		}
 	}
 }
+
+// A subagent run is not a conversation anybody started, so it is not in the
+// list, and it is reachable by its own id from the launcher that carries it.
+func TestSubagentSessionsAreNotListed(t *testing.T) {
+	f := newFixture(t)
+	parent := decode(t, f.do(t, "POST", "/api/sessions", map[string]string{"project": f.project}))
+	parentID, _ := parent["id"].(string)
+
+	doc, err := f.srv.store.Load(parentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := *doc
+	child.ID = store.NewID()
+	child.Parent = parentID
+	child.Title = "review internal/llm"
+	if err := f.srv.store.Save(&child); err != nil {
+		t.Fatal(err)
+	}
+
+	list := decode(t, f.do(t, "GET", "/api/sessions", nil))
+	rows, _ := list["sessions"].([]any)
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		if row["id"] == child.ID {
+			t.Errorf("the sidebar listed a subagent run: %v", row)
+		}
+	}
+
+	got := decode(t, f.do(t, "GET", "/api/sessions/"+child.ID, nil))
+	if got["parent"] != parentID {
+		t.Errorf("parent = %v, want %v", got["parent"], parentID)
+	}
+	held := decode(t, f.do(t, "GET", "/api/sessions/"+parentID, nil))
+	kids, _ := held["children"].([]any)
+	if len(kids) != 1 {
+		t.Fatalf("children = %v, want the one launched", kids)
+	}
+	if one, _ := kids[0].(map[string]any); one["id"] != child.ID {
+		t.Errorf("children = %v", kids)
+	}
+}

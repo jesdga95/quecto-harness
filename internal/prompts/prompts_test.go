@@ -14,6 +14,8 @@ func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 		"tool_run_shell.md":       ToolRunShell,
 		"tool_write_todos.md":     ToolWriteTodos,
 		"tool_ask_question.md":    ToolAskQuestion,
+		"tool_run_agent.md":       ToolRunAgent,
+		"tool_send_message.md":    ToolSendMessage,
 		"compact.md":              Compact,
 		"title.md":                func() string { return Title("name this") },
 	} {
@@ -97,5 +99,71 @@ func TestSystemDoesNotParseInstructions(t *testing.T) {
 	got := System(SystemVars{Project: "/src/x", OS: "darwin", Instructions: "Work in {{.Project}} and {{if"})
 	if !strings.Contains(got, "{{.Project}} and {{if") {
 		t.Errorf("instructions were not passed through verbatim: %q", got)
+	}
+}
+
+// The prompt names the tools that were sent and no others, or the model
+// reaches for one it does not have.
+func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
+	full := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, CanMessage: true,
+		Agents: []AgentBrief{{Name: "Reviewer", Model: "Beta-30B"}}})
+	for _, name := range []string{"ask_question", "run_agent", "send_message"} {
+		if !strings.Contains(full, name) {
+			t.Errorf("prompt does not name %s: %q", name, full)
+		}
+	}
+
+	child := System(SystemVars{Project: "/src/x", OS: "darwin", CanMessage: true, Launcher: "Planner"})
+	for _, name := range []string{"ask_question", "run_agent"} {
+		if strings.Contains(child, name) {
+			t.Errorf("a subagent's prompt names %s, which it was not sent: %q", name, child)
+		}
+	}
+	if !strings.Contains(child, "send_message") || !strings.Contains(child, "Planner") {
+		t.Errorf("a subagent's prompt does not name its launcher or the tool that reaches it: %q", child)
+	}
+}
+
+func TestSystemListsTheAgentsWithTheirRoles(t *testing.T) {
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, Agents: []AgentBrief{
+		{Name: "Reviewer", Model: "Beta-30B", Role: "Reviews Go and does not write it."},
+		{Name: "Searcher", Model: "Alpha-12B"},
+	}})
+	for _, want := range []string{"Reviewer", "Beta-30B", "Reviews Go and does not write it.", "Searcher", "Alpha-12B"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt omits %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "Searcher, running Alpha-12B:") {
+		t.Errorf("an agent with no role got an empty one: %q", got)
+	}
+	if strings.Contains(got, "{{") {
+		t.Errorf("prompt left a template action: %q", got)
+	}
+}
+
+// A name or a role is a value like the instructions are, so a template action
+// inside one is text.
+func TestSystemDoesNotParseAgentNames(t *testing.T) {
+	got := System(SystemVars{Project: "/src/x", OS: "darwin",
+		Agents:   []AgentBrief{{Name: "{{.Project}}", Model: "m", Role: "{{if"}},
+		Launcher: "{{range}}"})
+	for _, want := range []string{"{{.Project}}", "{{if", "{{range}}"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q was not passed through verbatim: %q", want, got)
+		}
+	}
+}
+
+// A session that hands work to nobody and was launched by nobody reads the
+// prompt the harness sent before either was possible.
+func TestSystemWithoutAgentsIsUnchanged(t *testing.T) {
+	base := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true})
+	if strings.Contains(base, "run_agent") || strings.Contains(base, "send_message") {
+		t.Errorf("prompt names a tool that was not sent: %q", base)
+	}
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, Agents: nil, Launcher: ""})
+	if got != base {
+		t.Errorf("empty agents changed the prompt:\n%q\nwant\n%q", got, base)
 	}
 }

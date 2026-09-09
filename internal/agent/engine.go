@@ -95,7 +95,7 @@ func (e *Engine) active() (config.Agent, error) {
 
 // messages builds the prompt for a session. The image bytes are read between
 // the two locks, so nothing does file IO while the session is held.
-func (e *Engine) messages(s *Session, a config.Agent) []llm.Message {
+func (e *Engine) messages(s *Session, a config.Agent, b brief) []llm.Message {
 	s.mu.Lock()
 	refs := s.imageRefs()
 	s.mu.Unlock()
@@ -113,7 +113,7 @@ func (e *Engine) messages(s *Session, a config.Agent) []llm.Message {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.contextMessages(a, e.os, images)
+	return s.contextMessages(a, e.os, b, images)
 }
 
 // mimeOf reads the type back off the bytes, so the data URI says what the
@@ -146,6 +146,9 @@ func (e *Engine) setState(s *Session, st State) {
 		return
 	}
 	e.publish(s.ID, ev("status", map[string]any{"state": string(st)}))
+	if parent := s.Parent; parent != "" {
+		e.publish(parent, ev("child", map[string]any{"session": s.ID, "state": string(st)}))
+	}
 }
 
 func (e *Engine) save(s *Session) {
@@ -275,9 +278,16 @@ func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 // delivers a message goes through here, so a turn that starts between the
 // caller's check and this one queues the message rather than refusing it.
 func (e *Engine) deliver(s *Session, text string, attachments []store.Attachment) (Sent, error) {
+	return e.deliverFrom(s, "", text, attachments)
+}
+
+// deliverFrom is deliver with a sender. The entry keeps the message as it was
+// written; the sender's name is put in front of it where the prompt is built,
+// since that is the only place it means anything.
+func (e *Engine) deliverFrom(s *Session, from, text string, attachments []store.Attachment) (Sent, error) {
 	s.mu.Lock()
 	if s.state != StateIdle {
-		if err := s.queue(text, attachments); err != nil {
+		if err := s.queue(from, text, attachments); err != nil {
 			s.mu.Unlock()
 			return Sent{}, err
 		}
@@ -290,7 +300,7 @@ func (e *Engine) deliver(s *Session, text string, attachments []store.Attachment
 	ctx, cancel := context.WithCancel(e.ctx)
 	s.cancel = cancel
 	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text,
-		Attachments: attachments, InContext: true, Visible: true})
+		From: from, Attachments: attachments, InContext: true, Visible: true})
 	if s.Title == "" {
 		s.Title = store.Title(text)
 	}
@@ -313,7 +323,7 @@ func (e *Engine) absorbSteer(s *Session) bool {
 	}
 	s.steer = nil
 	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: held.Text,
-		Attachments: held.Attachments, InContext: true, Visible: true})
+		From: held.From, Attachments: held.Attachments, InContext: true, Visible: true})
 	s.mu.Unlock()
 
 	e.save(s)
@@ -326,7 +336,7 @@ func (e *Engine) absorbSteer(s *Session) bool {
 // off the queue is not.
 func (e *Engine) publishMessage(s *Session, entry store.Entry) {
 	e.publish(s.ID, ev("message", map[string]any{"seq": entry.Seq, "text": entry.Content,
-		"attachments": AttachmentFields(entry.Attachments)}))
+		"from": entry.From, "attachments": AttachmentFields(entry.Attachments)}))
 }
 
 // flushSteer sends a message the turn ended without picking up. A stop leaves
@@ -339,13 +349,14 @@ func (e *Engine) flushSteer(s *Session) {
 	if held == nil {
 		return
 	}
-	sent, err := e.deliver(s, held.Text, held.Attachments)
+	sent, err := e.deliverFrom(s, held.From, held.Text, held.Attachments)
 	if err != nil {
 		e.publish(s.ID, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
 		return
 	}
 	if !sent.Queued {
-		e.publishMessage(s, store.Entry{Seq: sent.Seq, Content: held.Text, Attachments: held.Attachments})
+		e.publishMessage(s, store.Entry{Seq: sent.Seq, Content: held.Text, From: held.From,
+			Attachments: held.Attachments})
 	}
 }
 
@@ -354,7 +365,8 @@ func steerFields(held *Steer) map[string]any {
 	if held == nil {
 		return map[string]any{"text": "", "attachments": []map[string]any{}}
 	}
-	return map[string]any{"text": held.Text, "attachments": AttachmentFields(held.Attachments)}
+	return map[string]any{"text": held.Text, "from": held.From,
+		"attachments": AttachmentFields(held.Attachments)}
 }
 
 // AttachmentFields is what a browser needs to draw an attachment. The content
@@ -448,6 +460,9 @@ func (e *Engine) startTurn(ctx context.Context, s *Session, cancel context.Cance
 		defer e.wg.Done()
 		defer cancel()
 		e.run(ctx, s)
+		if s.Parent != "" {
+			e.report(s)
+		}
 	}()
 }
 
@@ -543,6 +558,11 @@ func (e *Engine) Stop(id string) (State, error) {
 	cancel()
 	e.perms.CancelSession(id)
 	e.asks.cancelSession(id)
+	for _, child := range e.liveChildren(id) {
+		if _, err := e.Stop(child.ID); err != nil {
+			e.publish(id, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
+		}
+	}
 	return StateStopped, nil
 }
 
@@ -573,7 +593,7 @@ func (e *Engine) Compact(id string) error {
 	go func() {
 		defer e.wg.Done()
 		defer cancel()
-		if err := e.compact(ctx, s, e.backends.For(a), a, e.turnCaps(s)); err != nil {
+		if err := e.compact(ctx, s, e.backends.For(a), a, e.briefFor(s, e.cfg.Config()), e.turnCaps(s)); err != nil {
 			e.endWithError(s, err, 0)
 			return
 		}
@@ -594,6 +614,9 @@ func (e *Engine) Compact(id string) error {
 func (e *Engine) SetAgent() {
 	a, _ := e.cfg.Config().Agent()
 	for _, s := range e.liveSessions() {
+		if s.Parent != "" {
+			continue
+		}
 		e.pointTo(s, a.ID, a.Model)
 	}
 }
@@ -639,8 +662,20 @@ func (e *Engine) pointTo(s *Session, agentID, model string) {
 	}
 }
 
-// point moves a session onto the agent answering now and answers with it.
+// point moves a session onto the agent answering now and answers with it. A
+// subagent was launched on an agent by name and stays on it, so the chip
+// moving does not repoint work already under way.
 func (e *Engine) point(s *Session) (config.Agent, error) {
+	s.mu.Lock()
+	child, mine := s.Parent != "", s.AgentID
+	s.mu.Unlock()
+	if child {
+		a, ok := e.cfg.Config().AgentByID(mine)
+		if !ok {
+			return config.Agent{}, ErrNoAgent
+		}
+		return a, usable(a)
+	}
 	a, err := e.active()
 	if err != nil {
 		return config.Agent{}, err
@@ -695,6 +730,11 @@ func (e *Engine) Delete(id string) error {
 	e.mu.Lock()
 	delete(e.live, id)
 	e.mu.Unlock()
+	for _, child := range e.store.Children(id) {
+		if err := e.Delete(child.ID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -833,10 +873,10 @@ func (e *Engine) turnCaps(s *Session) llm.Caps {
 //
 // It runs after a turn has streamed rather than beside the preparation, so a
 // session that is ready to type into is not waiting on a measurement.
-func (e *Engine) probeContextBase(s *Session, a config.Agent) {
+func (e *Engine) probeContextBase(s *Session, a config.Agent, b brief) {
 	s.mu.Lock()
 	caps := s.caps
-	system := s.systemMessage(a, e.os)
+	system := s.systemMessage(a, e.os, b)
 	done := s.baseProbed || s.ContextBase.Fits(a.Model, s.sysChars)
 	s.mu.Unlock()
 	if a.Model == "" || done {
@@ -860,7 +900,7 @@ func (e *Engine) probeContextBase(s *Session, a config.Agent) {
 			return res.Usage.PromptTokens, true
 		}
 		bare, okBare := count(nil)
-		armed, okArmed := count(tools.Schemas())
+		armed, okArmed := count(tools.Schemas(b.offer))
 
 		s.mu.Lock()
 		s.baseProbed = true
@@ -992,8 +1032,13 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// cost a reprocess of everything before it. A change made meanwhile is used
 	// by the next turn.
 	caps := e.turnCaps(s)
+	b := e.briefFor(s, cfg)
 	back := e.backends.For(a)
-	e.titleSession(ctx, s, back, a, caps)
+	// A subagent is filed under the task it was given, so nothing is spent
+	// asking the model for a name.
+	if s.Parent == "" {
+		e.titleSession(ctx, s, back, a, caps)
+	}
 	runner, rerr := tools.NewRunner(s.Project, cfg)
 	if rerr != nil {
 		e.fail(s, rerr)
@@ -1022,7 +1067,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		// session against one compacts when the reader asks and not before.
 		if nctx > 0 && float64(fill) >= cfg.CompactAt*float64(nctx) {
 			e.setState(s, StateCompacting)
-			if err := e.compact(ctx, s, back, a, caps); err != nil {
+			if err := e.compact(ctx, s, back, a, b, caps); err != nil {
 				e.endWithError(s, err, iteration)
 				return
 			}
@@ -1037,7 +1082,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		}
 
 		e.setState(s, StateStreaming)
-		msgs := e.messages(s, a)
+		msgs := e.messages(s, a, b)
 		s.mu.Lock()
 		req := llm.ChatRequest{
 			Model:             a.Model,
@@ -1057,7 +1102,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			req.MaxTokens = *a.MaxTokens
 		}
 		if !spent {
-			req.Tools = tools.Schemas()
+			req.Tools = tools.Schemas(b.offer)
 		}
 		s.mu.Unlock()
 
@@ -1101,7 +1146,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			s.lastUsageEntry = len(s.Entries) - 1
 			s.mu.Unlock()
 			e.save(s)
-			e.probeContextBase(s, a)
+			e.probeContextBase(s, a, b)
 			e.publishUsage(s)
 			// A message that landed while the model was answering makes this
 			// the middle of the turn rather than the end of it.
@@ -1112,6 +1157,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			counted := cost.fields()
 			e.noteCost(s, counted)
 			e.finish(s, StateIdle, res.FinishReason, iteration+1, counted)
+			// One that landed between the check above and the session going
+			// idle has no turn to join, so it starts one of its own.
+			e.flushSteer(s)
 			return
 		}
 
@@ -1127,7 +1175,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		for i, call := range res.ToolCalls {
 			calls++
 			e.setState(s, StateDeciding)
-			decision, record, stopped := e.decide(ctx, s, cfg, call)
+			decision, record, stopped := e.decide(ctx, s, cfg, a, call)
 			if stopped {
 				e.stopWith(s, call, record)
 				return
@@ -1231,7 +1279,7 @@ func (e *Engine) publishUsage(s *Session) {
 
 // decide applies the policy and, when it says prompt, blocks on the browser.
 // The third result reports that the session was stopped while waiting.
-func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, call llm.ToolCall) (perms.Decision, *store.PermissionRecord, bool) {
+func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a config.Agent, call llm.ToolCall) (perms.Decision, *store.PermissionRecord, bool) {
 	tool := call.Function.Name
 	command, path := argSummary(call)
 	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
@@ -1254,6 +1302,11 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, call
 		Command: command, Path: path,
 		Prefix: perms.DefaultPrefix(command),
 		Args:   string(call.Function.Arguments),
+	}
+	// A subagent's card belongs in the conversation the person has open, not
+	// in a transcript nobody is reading.
+	if root := e.rootOf(s); root != s.ID {
+		req.Route, req.Agent = root, a.Name
 	}
 	record.ID = req.ID
 	d, err := e.perms.Ask(ctx, req)
@@ -1290,6 +1343,7 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 	content := ""
 	var exitCode *int
 	truncated := false
+	var meta map[string]any
 
 	switch {
 	case d.Kind == perms.DecideDeny:
@@ -1313,20 +1367,24 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 			res, err = e.writeTodos(s, args)
 		case "ask_question":
 			res, err = e.askQuestion(ctx, s, call)
+		case "run_agent":
+			res, err = e.runAgent(s, call)
+		case "send_message":
+			res, err = e.sendMessage(s, call)
 		default:
-			err = fmt.Errorf("no tool named %s: use read_file, find, write_file, replace_in_file, run_shell, write_todos or ask_question", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read_file, find, write_file, replace_in_file, run_shell, write_todos, ask_question, run_agent or send_message", call.Function.Name)
 		}
 		if err != nil {
 			content = err.Error()
 		} else {
-			content, exitCode, truncated = res.Output, res.ExitCode, res.Truncated
+			content, exitCode, truncated, meta = res.Output, res.ExitCode, res.Truncated, res.Meta
 		}
 	}
 
 	s.mu.Lock()
 	entry := s.appendEntry(store.Entry{Kind: "tool", Role: "tool",
 		ToolCallID: call.ID, ToolName: call.Function.Name, Content: content,
-		ExitCode: exitCode, Truncated: truncated, Permission: record,
+		ExitCode: exitCode, Truncated: truncated, Permission: record, Meta: meta,
 		InContext: true, Visible: true})
 	s.mu.Unlock()
 	return entry
@@ -1401,8 +1459,8 @@ func argSummary(call llm.ToolCall) (command, path string) {
 
 // compact replaces the in-context set with one summary. A failure leaves the
 // history untouched, so a failed compaction never loses context.
-func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config.Agent, caps llm.Caps) error {
-	msgs := append(e.messages(s, a), llm.Message{Role: "user", Content: prompts.Compact()})
+func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config.Agent, b brief, caps llm.Caps) error {
+	msgs := append(e.messages(s, a, b), llm.Message{Role: "user", Content: prompts.Compact()})
 	s.mu.Lock()
 	before := s.computeFill()
 	s.mu.Unlock()

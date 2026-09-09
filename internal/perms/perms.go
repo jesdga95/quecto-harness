@@ -37,8 +37,13 @@ var (
 
 // Request is one pending question about one tool call.
 type Request struct {
-	ID        string    `json:"id"`
+	ID string `json:"id"`
+	// SessionID is the session blocked on this and Route is the one drawing
+	// the card, which differ only when a subagent asked. Agent names who
+	// asked, for the label.
 	SessionID string    `json:"session"`
+	Route     string    `json:"route,omitempty"`
+	Agent     string    `json:"agent,omitempty"`
 	Project   string    `json:"project"`
 	Tool      string    `json:"tool"`
 	Command   string    `json:"command,omitempty"`
@@ -46,6 +51,15 @@ type Request struct {
 	Prefix    string    `json:"prefix"`
 	Args      string    `json:"args"`
 	Created   time.Time `json:"created"`
+}
+
+// route is where the card is drawn. A request that names none is drawn in the
+// session it blocks.
+func (r Request) route() string {
+	if r.Route != "" {
+		return r.Route
+	}
+	return r.SessionID
 }
 
 // Decision is the answer. Prefix is used when Kind is always, Reason when it
@@ -68,7 +82,11 @@ type Broker struct {
 	mu      sync.Mutex
 	wait    map[string]chan Decision
 	pending map[string]Request
+	// byS is keyed on the session blocked on a request and byRoute on the one
+	// drawing it, so a card is cancelled by the first and replayed by the
+	// second.
 	byS     map[string][]string
+	byRoute map[string][]string
 }
 
 func New(cfg *config.Store, emit func(string, Request)) *Broker {
@@ -78,6 +96,7 @@ func New(cfg *config.Store, emit func(string, Request)) *Broker {
 		wait:    map[string]chan Decision{},
 		pending: map[string]Request{},
 		byS:     map[string][]string{},
+		byRoute: map[string][]string{},
 	}
 }
 
@@ -90,12 +109,13 @@ func (b *Broker) Evaluate(project, tool, command string, mode config.Mode) Actio
 	}
 	auto := mode == config.ModeAllowlist
 	switch tool {
-	case "read_file", "find", "write_todos", "ask_question":
+	case "read_file", "find", "write_todos", "ask_question", "run_agent", "send_message":
 		// find reads inside the project and nothing else, on the same guard
 		// read_file uses. write_todos changes the session's own plan and
 		// touches nothing on the machine, so there is nothing to decide.
 		// ask_question puts its own card to the user, and a card in front of
-		// it would ask twice.
+		// it would ask twice. run_agent and send_message touch nothing on the
+		// machine; what the agent they reach then does draws its own card.
 		return ActionAllow
 	case "write_file", "replace_in_file":
 		if auto {
@@ -131,10 +151,11 @@ func (b *Broker) Ask(ctx context.Context, r Request) (Decision, error) {
 	b.wait[r.ID] = ch
 	b.pending[r.ID] = r
 	b.byS[r.SessionID] = append(b.byS[r.SessionID], r.ID)
+	b.byRoute[r.route()] = append(b.byRoute[r.route()], r.ID)
 	b.mu.Unlock()
 
 	if b.emit != nil {
-		b.emit(r.SessionID, r)
+		b.emit(r.route(), r)
 	}
 
 	select {
@@ -158,7 +179,7 @@ func (b *Broker) Resolve(id string, d Decision) error {
 	if ok {
 		delete(b.wait, id)
 		delete(b.pending, id)
-		b.dropIDLocked(req.SessionID, id)
+		b.dropIDLocked(req, id)
 	}
 	b.mu.Unlock()
 	if !ok {
@@ -183,13 +204,13 @@ func (b *Broker) Lookup(id string) (Request, bool) {
 	return r, ok
 }
 
-// Pending lists unanswered requests for a session, for replay after a browser
-// reconnect.
+// Pending lists the unanswered requests a session draws, for replay after a
+// browser reconnect. A subagent's card is among its root's.
 func (b *Broker) Pending(sessionID string) []Request {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var out []Request
-	for _, id := range b.byS[sessionID] {
+	for _, id := range b.byRoute[sessionID] {
 		if r, ok := b.pending[id]; ok {
 			out = append(out, r)
 		}
@@ -206,6 +227,7 @@ func (b *Broker) CancelSession(sessionID string) {
 		if ch, ok := b.wait[id]; ok {
 			chans = append(chans, ch)
 			delete(b.wait, id)
+			b.dropRouteLocked(b.pending[id], id)
 			delete(b.pending, id)
 		}
 	}
@@ -224,6 +246,7 @@ func (b *Broker) CancelAll() {
 		delete(b.pending, id)
 	}
 	b.byS = map[string][]string{}
+	b.byRoute = map[string][]string{}
 	b.mu.Unlock()
 	for _, ch := range chans {
 		close(ch)
@@ -233,19 +256,32 @@ func (b *Broker) CancelAll() {
 func (b *Broker) forget(id, sessionID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	req := b.pending[id]
 	delete(b.wait, id)
 	delete(b.pending, id)
-	b.dropIDLocked(sessionID, id)
+	if req.SessionID == "" {
+		req.SessionID = sessionID
+	}
+	b.dropIDLocked(req, id)
 }
 
-func (b *Broker) dropIDLocked(sessionID, id string) {
-	ids := b.byS[sessionID]
+// dropIDLocked takes a request out of both indexes. The caller holds the lock.
+func (b *Broker) dropIDLocked(r Request, id string) {
+	b.byS[r.SessionID] = without(b.byS[r.SessionID], id)
+	b.dropRouteLocked(r, id)
+}
+
+func (b *Broker) dropRouteLocked(r Request, id string) {
+	b.byRoute[r.route()] = without(b.byRoute[r.route()], id)
+}
+
+func without(ids []string, id string) []string {
 	for i, v := range ids {
 		if v == id {
-			b.byS[sessionID] = append(ids[:i:i], ids[i+1:]...)
-			return
+			return append(ids[:i:i], ids[i+1:]...)
 		}
 	}
+	return ids
 }
 
 // operators are the shell metacharacters that let one approved command start

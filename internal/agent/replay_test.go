@@ -18,9 +18,15 @@ import (
 type replay struct {
 	t *testing.T
 
-	mu       sync.Mutex
-	scripts  [][]string
-	next     int
+	mu      sync.Mutex
+	scripts [][]string
+	next    int
+	// byModel queues scripts answered only to a request naming that model, and
+	// held gates them, so a launcher and the agent it launched are scripted
+	// and timed apart from each other.
+	byModel  map[string][][]string
+	nextFor  map[string]int
+	held     map[string]chan struct{}
 	Delay    time.Duration
 	Props    time.Duration
 	Status   int
@@ -33,11 +39,33 @@ type replay struct {
 
 func newReplay(t *testing.T, fixtures ...string) *replay {
 	t.Helper()
-	r := &replay{t: t}
+	r := &replay{t: t, byModel: map[string][][]string{}, nextFor: map[string]int{}, held: map[string]chan struct{}{}}
 	for _, f := range fixtures {
 		r.scripts = append(r.scripts, frames(t, f))
 	}
 	return r
+}
+
+// forModel queues scripts for one model alone. A test with two agents answering
+// at once cannot share the one queue, since the order they arrive in is theirs
+// rather than the test's.
+func (r *replay) forModel(model string, fixtures ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, f := range fixtures {
+		r.byModel[model] = append(r.byModel[model], frames(r.t, f))
+	}
+}
+
+// hold makes every request for one model wait, so a test can look at a turn
+// that has started and not finished. The returned function releases them.
+func (r *replay) hold(model string) func() {
+	gate := make(chan struct{})
+	r.mu.Lock()
+	r.held[model] = gate
+	r.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { close(gate) }) }
 }
 
 func frames(t *testing.T, name string) []string {
@@ -136,10 +164,23 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	model, _ := body["model"].(string)
+	r.mu.Lock()
+	gate := r.held[model]
+	r.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+
 	r.mu.Lock()
 	r.Requests = append(r.Requests, body)
 	script := []string(nil)
-	if r.next < len(r.scripts) {
+	// A model with a queue of its own answers from it, so two agents talking
+	// at once never take each other's script.
+	if queued := r.byModel[model]; r.nextFor[model] < len(queued) {
+		script = queued[r.nextFor[model]]
+		r.nextFor[model]++
+	} else if r.next < len(r.scripts) {
 		script = r.scripts[r.next]
 		r.next++
 	}

@@ -39,6 +39,10 @@ type Session struct {
 	ID      string
 	Project string
 	AgentID string
+	// Parent names the session that launched this one. A session with one is
+	// a subagent run: it stays on its own agent, is offered a different set of
+	// tools, and reports to its launcher when a turn of it ends.
+	Parent  string
 	Model   string
 	Created time.Time
 	Updated time.Time
@@ -136,9 +140,18 @@ func newSession(id, project, agentID, model string) *Session {
 	}
 }
 
+// launcher is the agent that gave a subagent its task, which is the sender of
+// the message the session opens with. The caller holds the lock.
+func (s *Session) launcher() string {
+	if s.Parent == "" || len(s.Entries) == 0 {
+		return ""
+	}
+	return s.Entries[0].From
+}
+
 func fromDoc(d *store.Session) *Session {
 	return &Session{
-		ID: d.ID, Project: d.Project, AgentID: d.Agent, Model: d.Model,
+		ID: d.ID, Project: d.Project, AgentID: d.Agent, Parent: d.Parent, Model: d.Model,
 		Created: d.Created, Updated: d.Updated, Title: d.Title, Named: d.Named,
 		Entries:        append([]store.Entry(nil), d.Entries...),
 		NCtx:           d.NCtx,
@@ -159,7 +172,8 @@ func fromDoc(d *store.Session) *Session {
 // doc renders the on-disk shape. The caller holds the session lock.
 func (s *Session) doc() *store.Session {
 	return &store.Session{
-		ID: s.ID, Project: s.Project, Agent: s.AgentID, Model: s.Model, Title: s.Title, Named: s.Named,
+		ID: s.ID, Project: s.Project, Agent: s.AgentID, Parent: s.Parent,
+		Model: s.Model, Title: s.Title, Named: s.Named,
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, LastUsage: s.LastUsage,
@@ -189,6 +203,10 @@ func (s *Session) Snapshot() (*store.Session, State, int, llm.Caps) {
 type Steer struct {
 	Text        string
 	Attachments []store.Attachment
+	// From is the agent that sent it, empty for the person. Two messages from
+	// different senders join with no sender, since the joined text names each
+	// of them already.
+	From string
 }
 
 // Steer is the message waiting for the running turn, or nil.
@@ -207,11 +225,14 @@ func (s *Session) Steer() *Steer {
 // attachments that would
 // take the joined message over the cap is refused whole, so the queue is
 // never left holding half of what was typed. The caller holds the lock.
-func (s *Session) queue(text string, attachments []store.Attachment) error {
-	next := &Steer{Text: text, Attachments: attachments}
+func (s *Session) queue(from, text string, attachments []store.Attachment) error {
+	next := &Steer{Text: text, Attachments: attachments, From: from}
 	if s.steer != nil {
 		next.Text = joinMessages(s.steer.Text, text)
 		next.Attachments = append(append([]store.Attachment(nil), s.steer.Attachments...), attachments...)
+		if s.steer.From != from {
+			next.From = ""
+		}
 	}
 	if len(next.Attachments) > maxAttachments {
 		return fmt.Errorf("Attach %d files: at most %d fit in one message", len(next.Attachments), maxAttachments)
@@ -383,9 +404,12 @@ func (s *Session) imageRefs() []string {
 // systemMessage is the system prompt as this agent renders it. Everything that
 // sends one goes through here, so a turn, a compaction and the measurement of
 // the fixed context all carry the same text. The caller holds the lock.
-func (s *Session) systemMessage(a config.Agent, osName string) llm.Message {
+func (s *Session) systemMessage(a config.Agent, osName string, b brief) llm.Message {
 	content := prompts.System(prompts.SystemVars{
-		Project: s.Project, OS: osName, Instructions: a.Instructions,
+		Project: s.Project, OS: osName,
+		CanAsk: b.offer.Ask, CanMessage: b.offer.Message,
+		Agents: b.agents, Launcher: b.launcher,
+		Instructions: a.Instructions,
 	})
 	s.sysChars = len(content)
 	return llm.Message{Role: "system", Content: content}
@@ -394,8 +418,8 @@ func (s *Session) systemMessage(a config.Agent, osName string) llm.Message {
 // contextMessages is the system prompt followed by every in-context entry,
 // with the invariants the wire format requires repaired. images maps a file
 // id to the part built from it.
-func (s *Session) contextMessages(a config.Agent, osName string, images map[string]llm.Part) []llm.Message {
-	msgs := []llm.Message{s.systemMessage(a, osName)}
+func (s *Session) contextMessages(a config.Agent, osName string, b brief, images map[string]llm.Part) []llm.Message {
+	msgs := []llm.Message{s.systemMessage(a, osName, b)}
 	for i := 0; i < len(s.Entries); i++ {
 		e := s.Entries[i]
 		if !e.InContext {
@@ -423,7 +447,14 @@ func (s *Session) contextMessages(a config.Agent, osName string, images map[stri
 // which is the only shape that carries one.
 func userMessage(e store.Entry, images map[string]llm.Part) llm.Message {
 	var b strings.Builder
-	b.WriteString(e.Content)
+	// A message from a person and one from another agent arrive on the same
+	// role, so the sender is named in the text or the model cannot tell them
+	// apart.
+	if e.From != "" {
+		b.WriteString(prompts.Message(e.From, e.Content))
+	} else {
+		b.WriteString(e.Content)
+	}
 	var parts []llm.Part
 	for _, a := range e.Attachments {
 		if a.Kind == "image" {

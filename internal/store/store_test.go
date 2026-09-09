@@ -290,3 +290,64 @@ func TestSessionCarriesItsAgentAndBase(t *testing.T) {
 		t.Errorf("summary agent = %+v", list)
 	}
 }
+
+// A subagent run is a session with a launcher. It is not a conversation
+// anybody started, so it is not in the list, and it is reachable only by
+// asking its launcher for it.
+func TestChildSessionsAreListedOnlyUnderTheirLauncher(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	parent := sample("sess_aaaaaaaaaaaaaaaa", now)
+	child := sample("sess_bbbbbbbbbbbbbbbb", now.Add(time.Second))
+	child.Parent = parent.ID
+	child.Entries = append(child.Entries, Entry{Seq: 7, Kind: "user", Role: "user",
+		Content: "review it", From: "Reviewer", InContext: true, Visible: true, At: now})
+	other := sample("sess_cccccccccccccccc", now.Add(2*time.Second))
+	for _, doc := range []*Session{parent, child, other} {
+		if err := s.Save(doc); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []*Sessions{s, reopened} {
+		list := st.List("/proj")
+		if len(list) != 2 {
+			t.Fatalf("list = %d sessions, want the two nobody launched", len(list))
+		}
+		for _, v := range list {
+			if v.ID == child.ID {
+				t.Errorf("the sidebar listed a subagent run: %+v", v)
+			}
+		}
+		kids := st.Children(parent.ID)
+		if len(kids) != 1 || kids[0].ID != child.ID || kids[0].Parent != parent.ID {
+			t.Errorf("children = %+v, want the one child", kids)
+		}
+		if kids := st.Children(other.ID); len(kids) != 0 {
+			t.Errorf("a session that launched nothing has children: %+v", kids)
+		}
+		if kids := st.Children(""); kids != nil {
+			t.Errorf("an empty id matched every top-level session: %+v", kids)
+		}
+	}
+
+	back, err := reopened.Load(child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Parent != parent.ID {
+		t.Errorf("parent = %q, want %q", back.Parent, parent.ID)
+	}
+	last := back.Entries[len(back.Entries)-1]
+	if last.From != "Reviewer" {
+		t.Errorf("from = %q, want the agent that sent it", last.From)
+	}
+}

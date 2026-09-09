@@ -470,7 +470,10 @@ export class MockApi implements HarnessApi {
 
   async listSessions(project: string): Promise<Session[]> {
     await this.tick();
-    return this.sessions.filter((s) => s.project === project).map((s) => ({ ...s }));
+    // A subagent run is reachable from the row that launched it, not the list.
+    return this.sessions
+      .filter((s) => s.project === project && s.parent === "")
+      .map((s) => ({ ...s }));
   }
 
   /** A copy, the way a fetched transcript would be, so the tab owns its items. */
@@ -484,7 +487,7 @@ export class MockApi implements HarnessApi {
       items: t.items.map((i) => ({ ...i })),
       usage: { ...t.usage },
       todos: t.todos.map((todo) => ({ ...todo })),
-      steer: t.steer ? { text: t.steer.text, files: [...t.steer.files] } : null,
+      steer: t.steer ? { text: t.steer.text, from: t.steer.from, files: [...t.steer.files] } : null,
       status: run ? (run.compacting ? "compacting" : "streaming") : "idle",
     };
   }
@@ -535,6 +538,8 @@ export class MockApi implements HarnessApi {
       model,
       title: "New session",
       created: new Date().toISOString(),
+      parent: "",
+      children: [],
     };
     this.sessions.unshift(session);
     this.transcripts.set(session.id, {
@@ -635,8 +640,9 @@ export class MockApi implements HarnessApi {
       t.steer = {
         text: held && held.text ? `${held.text}\n${text}` : text,
         files: [...(held?.files ?? []), ...attached],
+        from: "",
       };
-      const queued = { text: t.steer.text, files: [...t.steer.files] };
+      const queued = { text: t.steer.text, from: "", files: [...t.steer.files] };
       this.emit(session, { type: "queued", steer: queued });
       return { queued: true, seq: 0, files: [], steer: queued };
     }
@@ -762,6 +768,7 @@ export class MockApi implements HarnessApi {
           type: "permission",
           id: permId,
           tool: script.tool,
+          agent: "",
           command: script.command,
           prefix: prefixOf(script.command),
         });
@@ -839,8 +846,8 @@ export class MockApi implements HarnessApi {
     if (!held) return false;
     t.steer = null;
     const seq = this.mintSeq(session);
-    pushUser(t.items, held.text, held.files, seq);
-    this.emit(session, { type: "message", seq, text: held.text, files: held.files });
+    pushUser(t.items, held.text, held.files, seq, false, held.from);
+    this.emit(session, { type: "message", seq, text: held.text, from: held.from, files: held.files });
     if (this.running?.session === session) this.running = null;
     void this.runTurn(session, t);
     return true;
@@ -989,6 +996,8 @@ export class MockApi implements HarnessApi {
       model: "Gemma4-12B",
       title: "Wire the SSE hub",
       created: new Date(Date.now() - 3_600_000).toISOString(),
+      parent: "",
+      children: [],
     };
     const second: Session = {
       id: nextId("s"),
@@ -996,6 +1005,8 @@ export class MockApi implements HarnessApi {
       model: "Gemma4-12B",
       title: "New session",
       created: new Date(Date.now() - 600_000).toISOString(),
+      parent: "",
+      children: [],
     };
     const third: Session = {
       id: nextId("s"),
@@ -1003,14 +1014,52 @@ export class MockApi implements HarnessApi {
       model: "Qwen3.8-27B Q5",
       title: "Dashboard palette",
       created: new Date(Date.now() - 86_400_000).toISOString(),
+      parent: "",
+      children: [],
     };
-    this.sessions.push(first, second, third);
+    // A subagent run, so the launched row, the way back and a message from an
+    // agent are all on screen before anything is clicked.
+    const worker: Session = {
+      id: nextId("s"),
+      project,
+      model: "Qwen3.8-27B Q5",
+      title: "audit internal/server/hub.go for races",
+      created: new Date(Date.now() - 1_800_000).toISOString(),
+      parent: first.id,
+      children: [],
+    };
+    first.children = [{ id: worker.id, title: worker.title, agent: "Studio box" }];
+    this.sessions.push(first, second, third, worker);
     this.turnIndex.set(first.id, 2);
+
+    const workerItems: TranscriptItem[] = [];
+    pushUser(workerItems, "audit internal/server/hub.go for races and say what you found",
+      [], this.mintSeq(worker.id), false, "Local llama.cpp");
+    for (const e of workerEvents()) applyEvent(workerItems, e);
+    this.transcripts.set(worker.id, {
+      session: worker,
+      items: workerItems,
+      usage: split({ prompt_tokens: 8100, completion_tokens: 900, n_ctx: 131072 }),
+      todos: [],
+      steer: null,
+      status: "idle",
+    });
 
     const items: TranscriptItem[] = [];
     pushUser(items, "The SSE hub drops events when two tabs are open. Find out why.",
       [], this.mintSeq(first.id));
     for (const e of seededEvents()) applyEvent(items, e);
+    for (const e of delegationEvents(worker.id)) applyEvent(items, e);
+    pushUser(
+      items,
+      "subs is a plain map read under RLock and written under Lock, but publish " +
+        "ranges it while a handler can delete from it. Two writers on one key is " +
+        "the race, not the read.",
+      [],
+      this.mintSeq(first.id),
+      false,
+      "Studio box",
+    );
     this.transcripts.set(first.id, {
       session: first,
       items,
@@ -1030,6 +1079,47 @@ export class MockApi implements HarnessApi {
       });
     }
   }
+}
+
+// The launcher's side of a delegation: the row that started the agent, and
+// what that agent sent back when it was done.
+function delegationEvents(child: string): HarnessEvent[] {
+  const call = nextId("t");
+  return [
+    {
+      type: "tool_call",
+      id: call,
+      name: "run_agent",
+      args: {
+        agent: "Studio box",
+        task: "audit internal/server/hub.go for races and say what you found",
+      },
+    },
+    { type: "tool_output", id: call, output: `started Studio box (${child})`, exit_code: null, truncated: false },
+    { type: "child", session: child, status: "idle", callId: call, agent: "Studio box" },
+  ];
+}
+
+// The subagent's own transcript, which is what opening the row shows.
+function workerEvents(): HarnessEvent[] {
+  const call = nextId("t");
+  return [
+    { type: "tool_call", id: call, name: "run_shell", args: { command: "go test -race ./internal/server/" } },
+    {
+      type: "tool_output",
+      id: call,
+      output: "WARNING: DATA RACE\nWrite at 0x00c0001a2010 by goroutine 34:\n  hub.go:88 Publish",
+      exit_code: 1,
+      truncated: false,
+    },
+    {
+      type: "delta",
+      text:
+        "subs is a plain map read under RLock and written under Lock, but " +
+        "publish ranges it while a handler can delete from it.",
+    },
+    { type: "done" },
+  ];
 }
 
 /** Rough count for the mock's cost line, four characters to a token. */

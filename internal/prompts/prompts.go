@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md tool_read_file.md tool_find.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md tool_ask_question.md compact.md compaction.md title.md attachment.md image.md
+//go:embed system.md tool_read_file.md tool_find.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md tool_ask_question.md tool_run_agent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md
 var files embed.FS
 
 var (
@@ -18,6 +18,7 @@ var (
 	attachmentTmpl = template.Must(template.New("attachment").Parse(mustRead("attachment.md")))
 	imageTmpl      = template.Must(template.New("image").Parse(mustRead("image.md")))
 	titleTmpl      = template.Must(template.New("title").Parse(mustRead("title.md")))
+	messageTmpl    = template.Must(template.New("message").Parse(mustRead("message.md")))
 )
 
 func mustRead(name string) string {
@@ -28,12 +29,32 @@ func mustRead(name string) string {
 	return strings.TrimRight(string(b), " \t\r\n")
 }
 
+// AgentBrief is one agent as the prompt names it to another: what it is
+// called, what it runs, and what it is for.
+type AgentBrief struct {
+	Name  string
+	Model string
+	// Role is the first line of that agent's instructions, which is the only
+	// field on the record saying what the agent is for.
+	Role string
+}
+
 // SystemVars are the values system.md takes. Instructions is the agent's own
-// text, which follows the built-in prompt in the same message. It is inserted
-// as a value and never parsed, so a stray template action in it is text.
+// text, which follows the built-in prompt in the same message. Every string
+// here is inserted as a value and never parsed, so a template action inside
+// one is text.
 type SystemVars struct {
-	Project      string
-	OS           string
+	Project string
+	OS      string
+	// CanAsk and CanMessage say whether ask_question and send_message are in
+	// this turn's request. The prompt names the tools that were sent, or the
+	// model reaches for one it does not have.
+	CanAsk     bool
+	CanMessage bool
+	// Agents are the ones this session may hand work to. Launcher is the agent
+	// that gave this session its task, empty when a person did.
+	Agents       []AgentBrief
+	Launcher     string
 	Instructions string
 }
 
@@ -53,6 +74,17 @@ func Compaction(summary string) string {
 		panic("prompts: render compaction.md: " + err.Error())
 	}
 	return b.String()
+}
+
+// Message is one agent's message to another, as the model is shown it. A
+// message from a person carries no such line, so this is what says which of
+// the two a turn is answering.
+func Message(from, text string) string {
+	var b strings.Builder
+	if err := messageTmpl.Execute(&b, struct{ From, Text string }{from, text}); err != nil {
+		panic("prompts: render message.md: " + err.Error())
+	}
+	return strings.TrimRight(b.String(), " \t\r\n")
 }
 
 // Attachment is one file the user attached, as the model is shown it.
@@ -81,6 +113,8 @@ func ToolReplaceInFile() string { return mustRead("tool_replace_in_file.md") }
 func ToolRunShell() string      { return mustRead("tool_run_shell.md") }
 func ToolWriteTodos() string    { return mustRead("tool_write_todos.md") }
 func ToolAskQuestion() string   { return mustRead("tool_ask_question.md") }
+func ToolRunAgent() string      { return mustRead("tool_run_agent.md") }
+func ToolSendMessage() string   { return mustRead("tool_send_message.md") }
 func Compact() string           { return mustRead("compact.md") }
 
 // Title asks for a name for the task the opening message describes. It carries

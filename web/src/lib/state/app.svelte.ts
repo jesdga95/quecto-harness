@@ -41,6 +41,9 @@ export const app = $state({
   sessions: {} as Record<string, Session[]>,
   projectPath: "",
   sessionId: "",
+  // The session last fetched, which is the only record of a subagent run: the
+  // sidebar lists conversations somebody started and nothing else.
+  opened: null as Session | null,
   items: [] as TranscriptItem[],
   // A message typed while the turn runs, waiting for it to pick it up.
   steer: null as Steer | null,
@@ -133,7 +136,11 @@ export function sessionsOf(path: string): Session[] {
 }
 
 export function activeSession(): Session | undefined {
-  return sessionsOf(app.projectPath).find((s) => s.id === app.sessionId);
+  const listed = sessionsOf(app.projectPath).find((s) => s.id === app.sessionId);
+  if (listed) return listed;
+  // A subagent run is not in the list, so what was fetched when it was opened
+  // is the only record of it on the page.
+  return app.opened?.id === app.sessionId ? app.opened : undefined;
 }
 
 export async function selectProject(path: string): Promise<void> {
@@ -150,6 +157,7 @@ function clearSession(): void {
   unsubscribe?.();
   unsubscribe = null;
   app.sessionId = "";
+  app.opened = null;
   app.items = [];
   app.todos = [];
   app.steer = null;
@@ -175,6 +183,7 @@ export async function selectSession(id: string): Promise<void> {
   app.sessionId = id;
   const t = await guard(() => api.getSession(id));
   if (!t) return;
+  app.opened = t.session;
   app.items = t.items;
   app.usage = t.usage;
   app.todos = t.todos;
@@ -339,7 +348,8 @@ function lastUserItem(): TranscriptItem | undefined {
     started has finished, and no model is being read. Editing one and sending
     it again is the same act, so it reads this too. */
 export function canResend(item: TranscriptItem): boolean {
-  if (item.kind !== "user" || item.seq === 0) return false;
+  // A message another agent sent is not the reader's to rewrite.
+  if (item.kind !== "user" || item.seq === 0 || item.from !== "") return false;
   return app.status === "idle" && lastUserItem() === item;
 }
 
@@ -610,7 +620,7 @@ function onEvent(event: HarnessEvent): void {
   if (event.type === "message") {
     app.steer = null;
     if (!app.items.some((i) => i.kind === "user" && i.seq === event.seq)) {
-      pushUser(app.items, event.text, event.files, event.seq);
+      pushUser(app.items, event.text, event.files, event.seq, false, event.from);
     }
     return;
   }
@@ -702,9 +712,16 @@ async function refreshModels(settled = false): Promise<void> {
   if (models) app.models = models;
 }
 
-/** The card blocks the composer until it is answered. */
+/** An unanswered card, whoever raised it. */
 export function pendingPermission(): TranscriptItem | undefined {
   return app.items.find((i) => i.kind === "permission" && i.outcome === null);
+}
+
+/** The card that blocks the composer. A subagent's card does not: this
+    conversation may be idle or working on something else, and a background
+    worker must not lock a person out of their own composer. */
+export function blockingPermission(): TranscriptItem | undefined {
+  return app.items.find((i) => i.kind === "permission" && i.outcome === null && i.agent === "");
 }
 
 /** A question blocks it the same way, on its own card. The id is what makes

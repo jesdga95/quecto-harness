@@ -249,3 +249,81 @@ func waitForPending(t *testing.T, b *Broker, session string) string {
 	t.Fatalf("no pending request for %s", session)
 	return ""
 }
+
+// A subagent blocks on its own card and the person answers it in the
+// conversation they have open, so the two ids are not the same one.
+func TestARoutedRequestIsDrawnInOneSessionAndCancelledByAnother(t *testing.T) {
+	// emit runs on the asking goroutine, so where the card was drawn comes back
+	// on a channel rather than through a variable two goroutines touch.
+	drawn := make(chan string, 4)
+	b := New(newStore(t), func(sessionID string, r Request) { drawn <- sessionID })
+
+	done := make(chan Decision, 1)
+	go func() {
+		d, _ := b.Ask(context.Background(), Request{
+			ID: "perm_routed", SessionID: "sess_child", Route: "sess_root", Agent: "Reviewer",
+			Project: "/proj", Tool: "run_shell", Command: "go test ./...",
+		})
+		done <- d
+	}()
+	waitForRouted(t, b, "sess_root")
+
+	select {
+	case in := <-drawn:
+		if in != "sess_root" {
+			t.Errorf("drawn in %q, want the root", in)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the card was never drawn")
+	}
+	if got := b.Pending("sess_child"); len(got) != 0 {
+		t.Errorf("the blocked session was asked to draw its own card: %+v", got)
+	}
+	if got := b.Pending("sess_root"); len(got) != 1 || got[0].Agent != "Reviewer" {
+		t.Errorf("root pending = %+v, want the one card labelled with who asked", got)
+	}
+
+	// Cancelling the session that is blocked releases it, even though the card
+	// is drawn somewhere else.
+	b.CancelSession("sess_child")
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancelling the blocked session did not release it")
+	}
+	if got := b.Pending("sess_root"); len(got) != 0 {
+		t.Errorf("root still draws a cancelled card: %+v", got)
+	}
+}
+
+// An ordinary request names no route, so it is drawn where it blocks and both
+// indexes are cleaned when it is answered.
+func TestAnUnroutedRequestLeavesNothingBehind(t *testing.T) {
+	b := New(newStore(t), func(string, Request) {})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = b.Ask(context.Background(), Request{
+			ID: "perm_plain", SessionID: "sess_one", Project: "/proj", Tool: "run_shell", Command: "ls",
+		})
+	}()
+	waitForRouted(t, b, "sess_one")
+	if err := b.Resolve("perm_plain", Decision{Kind: DecideOnce}); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if got := b.Pending("sess_one"); len(got) != 0 {
+		t.Errorf("pending = %+v after the card was answered", got)
+	}
+}
+
+func waitForRouted(t *testing.T, b *Broker, route string) {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		if len(b.Pending(route)) > 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("no request was drawn in %s", route)
+}

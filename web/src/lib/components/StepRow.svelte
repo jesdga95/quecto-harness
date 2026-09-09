@@ -6,7 +6,9 @@
   import ListChecks from "phosphor-svelte/lib/ListChecks";
   import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
+  import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTilt";
   import Question from "phosphor-svelte/lib/Question";
+  import Robot from "phosphor-svelte/lib/Robot";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
   import Terminal from "phosphor-svelte/lib/Terminal";
   import FileBlock from "./FileBlock.svelte";
@@ -16,8 +18,15 @@
   import { describeCommand, firstSentence, k } from "../format";
   import { asked } from "../question";
 
-  let { item }: { item: TranscriptItem } = $props();
+  let { item, onopen }: { item: TranscriptItem; onopen?: (session: string) => void } = $props();
   let open = $state(false);
+
+  // A run_agent row names the agent it started and follows it, since what that
+  // agent is doing is in a transcript of its own.
+  const child = $derived(item.kind === "tool" ? item.child : undefined);
+  const task = $derived(
+    item.kind === "tool" && typeof item.args.task === "string" ? item.args.task : "",
+  );
 
   const command = $derived(
     item.kind === "tool" && typeof item.args.command === "string" ? item.args.command : "",
@@ -45,6 +54,8 @@
     if (item.name === "replace_in_file") return "Edit";
     if (item.name === "write_todos") return "Plan";
     if (item.name === "ask_question") return "Question";
+    if (item.name === "run_agent") return "Agent";
+    if (item.name === "send_message") return "Message";
     return "Shell";
   });
 
@@ -59,6 +70,13 @@
     }
     if (item.name === "find") return query;
     if (item.name === "ask_question") return question.question;
+    if (item.name === "run_agent") {
+      const to = typeof item.args.agent === "string" ? item.args.agent : "";
+      return to === "" ? task : `${to}: ${task}`;
+    }
+    if (item.name === "send_message") {
+      return typeof item.args.text === "string" ? item.args.text : "";
+    }
     return path || describeCommand(command);
   });
 
@@ -112,6 +130,10 @@
       <ListChecks />
     {:else if item.kind === "tool" && item.name === "ask_question"}
       <Question />
+    {:else if item.kind === "tool" && item.name === "run_agent"}
+      <Robot />
+    {:else if item.kind === "tool" && item.name === "send_message"}
+      <PaperPlaneTilt />
     {:else}
       <Terminal />
     {/if}
@@ -125,6 +147,10 @@
     {/if}
     {#if item.kind === "tool" && item.exitCode !== null && item.exitCode !== 0}
       <span class="text-[12px] text-crit">Exit {item.exitCode}</span>
+    {/if}
+    {#if child && child.status !== "idle"}
+      <span class="text-[12px] text-muted">{child.status}</span>
+      <span class="spinner"></span>
     {/if}
     {#if item.kind === "tool" && item.running}
       <span class="spinner"></span>
@@ -162,6 +188,20 @@
           exitCode={item.exitCode}
           truncated={item.truncated}
         />
+      {:else if item.kind === "tool" && item.name === "run_agent"}
+        {#if task}
+          <p class="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{task}</p>
+        {/if}
+        {#if item.output}
+          <p class="text-[13px] text-ink-2">{item.output}</p>
+        {/if}
+        {#if child && onopen}
+          <div>
+            <button class="btn" onclick={() => onopen(child.session)}>
+              Open {child.agent || "the agent"}
+            </button>
+          </div>
+        {/if}
       {:else if item.kind === "tool" && item.name === "read_file" && item.output}
         <FileBlock {path} output={item.output} />
       {:else if item.kind === "tool"}

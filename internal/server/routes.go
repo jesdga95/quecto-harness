@@ -414,7 +414,10 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		todos = []store.Todo{}
 	}
 	body := map[string]any{
-		"id": doc.ID, "project": doc.Project, "model": doc.Model,
+		"id": doc.ID, "project": doc.Project, "model": doc.Model, "parent": doc.Parent,
+		// A subagent run is reachable only from the transcript that launched
+		// it, so a launcher carries the list of what it launched.
+		"children": s.store.Children(doc.ID),
 		// A tab that refetches still draws the message waiting for the turn.
 		"steer": steerJSON(sess.Steer()),
 		"state": string(state), "n_ctx": nctx, "n_ctx_source": source,
@@ -534,7 +537,8 @@ func steerJSON(held *agent.Steer) map[string]any {
 	if held == nil {
 		return nil
 	}
-	return map[string]any{"text": held.Text, "attachments": agent.AttachmentFields(held.Attachments)}
+	return map[string]any{"text": held.Text, "from": held.From,
+		"attachments": agent.AttachmentFields(held.Attachments)}
 }
 
 // postResend runs the last message again, with the text rewritten when the

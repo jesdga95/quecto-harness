@@ -93,6 +93,27 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
       });
       break;
     }
+    // A subagent this session launched moved. The row that started it follows
+    // along, since what the subagent is doing is a transcript of its own.
+    case "child": {
+      const row = [...items]
+        .reverse()
+        .find(
+          (i) =>
+            i.kind === "tool" &&
+            (i.child?.session === event.session ||
+              i.id === event.callId ||
+              i.id.startsWith(`${event.callId}#`)),
+        );
+      if (row?.kind === "tool") {
+        row.child = {
+          session: event.session,
+          agent: event.agent || row.child?.agent || "",
+          status: event.status,
+        };
+      }
+      break;
+    }
     case "tool_args": {
       // A renamed collision keeps the original id as its prefix, and the card
       // being filled is always the most recent one, so the search runs backwards.
@@ -145,6 +166,7 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
         command: event.command,
         prefix: event.prefix,
         outcome: null,
+        agent: event.agent,
       });
       break;
     }
@@ -200,6 +222,7 @@ export function pushUser(
   files: Attached[] = [],
   seq = 0,
   edited = false,
+  from = "",
 ): void {
-  items.push({ kind: "user", id: nextId("u"), seq, text, files, edited });
+  items.push({ kind: "user", id: nextId("u"), seq, text, files, edited, from });
 }

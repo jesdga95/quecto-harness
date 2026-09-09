@@ -11,10 +11,35 @@ import (
 // re-encoding them.
 var schemas = buildSchemas()
 
-// Schemas returns the tool definitions in the order the model sees them.
-func Schemas() []llm.Tool {
-	out := make([]llm.Tool, len(schemas))
-	copy(out, schemas)
+// Offer says which of the tools a session may not have belong in this turn's
+// request. The rest are sent to every session.
+type Offer struct {
+	Ask     bool
+	Agents  bool
+	Message bool
+}
+
+// Schemas returns the tool definitions in the order the model sees them,
+// without the ones this turn does not offer.
+func Schemas(o Offer) []llm.Tool {
+	out := make([]llm.Tool, 0, len(schemas))
+	for _, t := range schemas {
+		switch t.Function.Name {
+		case "ask_question":
+			if !o.Ask {
+				continue
+			}
+		case "run_agent":
+			if !o.Agents {
+				continue
+			}
+		case "send_message":
+			if !o.Message {
+				continue
+			}
+		}
+		out = append(out, t)
+	}
 	return out
 }
 
@@ -124,6 +149,32 @@ func buildSchemas() []llm.Tool {
 					"multi_select": map[string]any{"type": "boolean", "description": "Allow more than one option to be chosen. Default false."},
 				},
 				"required":             []string{"question", "options"},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llm.FunctionSpec{
+			Name:        "run_agent",
+			Description: prompts.ToolRunAgent(),
+			Parameters: mustSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"agent": map[string]any{"type": "string", "description": "The name of the agent to run the task."},
+					"task":  map[string]any{"type": "string", "description": "The whole brief. That agent sees none of this conversation."},
+				},
+				"required":             []string{"agent", "task"},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llm.FunctionSpec{
+			Name:        "send_message",
+			Description: prompts.ToolSendMessage(),
+			Parameters: mustSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"to":   map[string]any{"type": "string", "description": "The handle run_agent answered with, or parent."},
+					"text": map[string]any{"type": "string", "description": "The message."},
+				},
+				"required":             []string{"to", "text"},
 				"additionalProperties": false,
 			}),
 		}},

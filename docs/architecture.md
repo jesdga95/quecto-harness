@@ -2334,6 +2334,53 @@ That is the documented behaviour, not a defect to work around. The UI shows the 
 spinner and the Stop button, and Stop cancels the queued request the same way it cancels a
 running one. Nothing is built for this.
 
+### 8.11 A subagent turn
+
+`run_agent(agent, task)` creates a session on the named agent in the same project, starts its
+turn and answers with its handle. It does not wait. The launcher carries on, and what the
+subagent found arrives later as a message.
+
+A subagent turn is an ordinary turn. `Session.Parent` is the only switch: a session with one
+resolves `point` against its own `AgentID` rather than the agent answering now, is skipped by
+`SetAgent`, is offered neither `run_agent` nor `ask_question`, is filed under the first 60
+characters of its task rather than costing a naming request, and reports to its launcher when
+a turn of it ends. Its context derives from the engine's rather than from the turn that
+started it, since it outlives that turn.
+
+Messages between the two are steering. `deliverFrom` is `deliver` with a sender: it joins a
+turn that is running and starts one that is not, which is the machinery a typed message
+already uses. Two arriving at once join, and a join across senders keeps neither name. The
+entry holds the message as it was written and `Entry.From` holds the sender; the name is put
+in front of the text where the prompt is built, since a message from a person and one from
+another agent arrive on the same role and the model has nothing else to tell them apart.
+
+Reporting is automatic. Every subagent turn ends by handing its last reply to its launcher,
+truncated through the output limit, so one that never reached for `send_message` still
+answers. A subagent that was stopped or failed says so instead. A launcher that has already
+gone idle is woken into a turn by this, which costs tokens nobody typed for and is the direct
+consequence of the launch not blocking.
+
+The files a subagent wrote are rolled onto its launcher when it ends, blob and all. The
+first-writer-wins rule in `recordBaseline` is the merge: a path the launcher wrote first keeps
+the launcher's older copy, which is the state the work started from. Without the roll-up the
+launcher's change panel is empty after work it asked for.
+
+`Agent.Concurrency` bounds the subagents one agent may have working at once. It counts the
+live ones, and a launch past the limit is a tool error the model can wait on. Stopping a
+conversation stops the agents working for it, and deleting one deletes them: a subagent run is
+reachable only through its launcher, so leaving it behind leaks a file nothing can open. That
+is the one place the harness's usual no-cascade rule does not hold.
+
+Depth is one. A subagent is not offered `run_agent`, which removes a class of runaway for the
+price of a single check.
+
+A subagent's permission card is drawn in the conversation the person has open.
+`perms.Request` carries `SessionID`, the session blocked, and `Route`, the one drawing the
+card; the broker indexes both, so a card is cancelled by the first and replayed by the second.
+`Evaluate` is unchanged, so `full` mode prompts for nothing and the project allowlist covers
+every agent at once: allow always, and the next subagent runs the same command with no second
+card. `run_agent` and `send_message` are allowed outright, since neither touches the machine.
+
 ---
 
 ## 9. internal/store

@@ -43,6 +43,8 @@ type Entry struct {
 	Attachments []Attachment      `json:"attachments,omitempty"`
 	// Edited is set on a user entry whose text was rewritten and sent again.
 	Edited bool `json:"edited,omitempty"`
+	// From names the agent a message came from. Empty is the person.
+	From string `json:"from,omitempty"`
 
 	InContext bool           `json:"in_context"`
 	Visible   bool           `json:"visible"`
@@ -90,8 +92,11 @@ type Session struct {
 	// Agent is the agent this session last ran under. It is the only record of
 	// that after a restart, which is what tells a reloaded session it moved.
 	Agent string `json:"agent"`
-	Model string `json:"model"`
-	Title string `json:"title"`
+	// Parent names the session that launched this one, for a subagent run.
+	// Empty is a conversation somebody started.
+	Parent string `json:"parent,omitempty"`
+	Model  string `json:"model"`
+	Title  string `json:"title"`
 	// Named is set when the user typed the title. Nothing overwrites it.
 	Named       bool       `json:"named"`
 	Created     time.Time  `json:"created"`
@@ -134,6 +139,7 @@ type Summary struct {
 	ID       string    `json:"id"`
 	Project  string    `json:"project"`
 	Agent    string    `json:"agent"`
+	Parent   string    `json:"parent,omitempty"`
 	Model    string    `json:"model"`
 	Title    string    `json:"title"`
 	Created  time.Time `json:"created"`
@@ -198,6 +204,9 @@ func (s *Sessions) List(project string) []Summary {
 	defer s.mu.RUnlock()
 	out := make([]Summary, 0, len(s.index))
 	for _, v := range s.index {
+		if v.Parent != "" {
+			continue
+		}
 		if project == "" || v.Project == project {
 			out = append(out, v)
 		}
@@ -207,6 +216,29 @@ func (s *Sessions) List(project string) []Summary {
 			return out[i].ID < out[j].ID
 		}
 		return out[i].Updated.After(out[j].Updated)
+	})
+	return out
+}
+
+// Children returns the subagent runs one session launched, newest first. List
+// leaves them out, so this is the only way to reach one.
+func (s *Sessions) Children(parent string) []Summary {
+	if parent == "" {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []Summary
+	for _, v := range s.index {
+		if v.Parent == parent {
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Created.Equal(out[j].Created) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Created.After(out[j].Created)
 	})
 	return out
 }
@@ -310,6 +342,7 @@ func summarise(sess *Session, size int64) Summary {
 		ID:       sess.ID,
 		Project:  sess.Project,
 		Agent:    sess.Agent,
+		Parent:   sess.Parent,
 		Model:    sess.Model,
 		Title:    sess.Title,
 		Created:  sess.Created,

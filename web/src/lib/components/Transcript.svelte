@@ -3,6 +3,7 @@
   import ArrowDown from "phosphor-svelte/lib/ArrowDown";
   import ArrowsLeftRight from "phosphor-svelte/lib/ArrowsLeftRight";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
+  import Robot from "phosphor-svelte/lib/Robot";
   import Warning from "phosphor-svelte/lib/Warning";
   import CopyButton from "./CopyButton.svelte";
   import PermissionCard from "./PermissionCard.svelte";
@@ -10,7 +11,7 @@
   import QuestionCard from "./QuestionCard.svelte";
   import StepRow from "./StepRow.svelte";
   import type { Attached, TranscriptItem } from "../api";
-  import { app, canResend, resend } from "../state/app.svelte";
+  import { app, canResend, resend, selectSession } from "../state/app.svelte";
   import { bytes, duration, fileKind, fileName, k } from "../format";
 
   let scroller = $state<HTMLDivElement | null>(null);
@@ -204,6 +205,12 @@
           </div>
         {:else if item.kind === "user"}
           <div class="mt-4 flex flex-col items-end gap-1">
+            {#if item.from}
+              <span class="flex items-center gap-1.5 text-[12px] text-muted">
+                <Robot size={13} />
+                {item.from}
+              </span>
+            {/if}
             <div class="bubble">
               {#if item.files.length > 0}
                 {@render attachments(item.files)}
@@ -217,7 +224,7 @@
               {#if item.edited}
                 <span class="mr-1 text-[12px] text-muted">Edited</span>
               {/if}
-              {#if item.text}
+              {#if item.text && !item.from}
                 <CopyButton text={item.text} label="Copy message" />
               {/if}
               {#if canResend(item)}
@@ -267,7 +274,7 @@
             <QuestionCard {item} />
           </div>
         {:else}
-          <StepRow {item} />
+          <StepRow {item} onopen={(id) => void selectSession(id)} />
         {/if}
       {/each}
 

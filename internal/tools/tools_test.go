@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -369,8 +370,9 @@ func TestLooksBinary(t *testing.T) {
 }
 
 func TestSchemasMatchTheDescriptions(t *testing.T) {
-	s := Schemas()
-	names := []string{"read_file", "find", "write_file", "replace_in_file", "write_todos", "ask_question", "run_shell"}
+	s := Schemas(Offer{Ask: true, Agents: true, Message: true})
+	names := []string{"read_file", "find", "write_file", "replace_in_file", "write_todos",
+		"ask_question", "run_agent", "send_message", "run_shell"}
 	if len(s) != len(names) {
 		t.Fatalf("got %d schemas, want %d", len(s), len(names))
 	}
@@ -852,4 +854,60 @@ func TestFindClipsAndCaps(t *testing.T) {
 	if strings.Contains(out, "bin.dat") {
 		t.Errorf("a binary file was searched:\n%s", out)
 	}
+}
+
+// A turn is sent the tools it offers and no others, so a session that cannot
+// run an agent is never handed the schema for it.
+func TestSchemasFollowTheOffer(t *testing.T) {
+	names := func(o Offer) []string {
+		var out []string
+		for _, s := range Schemas(o) {
+			out = append(out, s.Function.Name)
+		}
+		return out
+	}
+	base := []string{"read_file", "find", "write_file", "replace_in_file", "write_todos", "run_shell"}
+	optional := map[string]Offer{
+		"ask_question": {Ask: true},
+		"run_agent":    {Agents: true},
+		"send_message": {Message: true},
+	}
+
+	none := names(Offer{})
+	if len(none) != len(base) {
+		t.Errorf("an empty offer sent %v, want %v", none, base)
+	}
+	for _, want := range base {
+		if !slices.Contains(none, want) {
+			t.Errorf("an empty offer left out %s, which every session has", want)
+		}
+	}
+	for name, only := range optional {
+		got := names(only)
+		if !slices.Contains(got, name) {
+			t.Errorf("%s was offered and not sent: %v", name, got)
+		}
+		if len(got) != len(base)+1 {
+			t.Errorf("offering %s sent %v", name, got)
+		}
+	}
+
+	all := names(Offer{Ask: true, Agents: true, Message: true})
+	if len(all) != len(base)+len(optional) {
+		t.Errorf("every offer sent %v", all)
+	}
+	// The order the model sees is the order they are declared, whichever are
+	// left out.
+	if !slices.IsSorted([]int{indexOf(all, "read_file"), indexOf(all, "run_shell")}) {
+		t.Errorf("the order moved: %v", all)
+	}
+}
+
+func indexOf(in []string, want string) int {
+	for i, v := range in {
+		if v == want {
+			return i
+		}
+	}
+	return -1
 }

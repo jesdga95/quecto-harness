@@ -37,6 +37,9 @@ type Result struct {
 	ExitCode  *int
 	Truncated bool
 	Bytes     int
+	// Meta is what the transcript needs about the call that the sentence the
+	// model reads does not carry.
+	Meta map[string]any
 }
 
 // NewRunner resolves the root once, which is what makes the path guard work

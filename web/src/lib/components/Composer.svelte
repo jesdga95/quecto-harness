@@ -8,7 +8,7 @@
   import {
     app,
     pasteFile,
-    pendingPermission,
+    blockingPermission,
     pendingQuestion,
     pickAttachments,
     send,
@@ -59,7 +59,7 @@
   // Both cards take their answer on the card itself, so the field waits for
   // whichever one is open.
   const asking = $derived(pendingQuestion() !== undefined);
-  const blocked = $derived(asking || pendingPermission() !== undefined);
+  const blocked = $derived(asking || blockingPermission() !== undefined);
   // A compaction holds the session but is not offered a stop: it draws nothing
   // to take back. The send button stays, and what it takes joins the queue.
   const running = $derived(app.status !== "idle" && app.status !== "compacting");

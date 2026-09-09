@@ -1,11 +1,12 @@
 <script lang="ts">
+  import ArrowUUpLeft from "phosphor-svelte/lib/ArrowUUpLeft";
   import ChangesChip from "./ChangesChip.svelte";
   import ChangesPanel from "./ChangesPanel.svelte";
   import Composer from "./Composer.svelte";
   import ContextChip from "./ContextChip.svelte";
   import PlanPanel from "./PlanPanel.svelte";
   import Transcript from "./Transcript.svelte";
-  import { activeSession, app } from "../state/app.svelte";
+  import { activeSession, app, selectSession } from "../state/app.svelte";
   import { shortPath } from "../format";
 
   const session = $derived(activeSession());
@@ -20,9 +21,22 @@
 <div class="flex min-h-0 flex-1">
   <div class="flex min-w-0 flex-1 flex-col">
     <header class="flex h-[56px] shrink-0 items-center gap-3 px-6">
+      {#if session?.parent}
+        <button
+          class="icon-btn shrink-0"
+          aria-label="Back to the conversation that launched this"
+          onclick={() => void selectSession(session.parent)}
+        >
+          <ArrowUUpLeft size={16} />
+        </button>
+      {/if}
       <div class="flex min-w-0 items-baseline gap-3">
         <h1 class="max-w-[420px] truncate text-[15px] font-medium">{session?.title ?? "Session"}</h1>
-        <span class="truncate text-[12.5px] text-muted">{shortPath(app.projectPath)}</span>
+        {#if session?.parent}
+          <span class="shrink-0 text-[12.5px] text-muted">Working for another agent</span>
+        {:else}
+          <span class="truncate text-[12.5px] text-muted">{shortPath(app.projectPath)}</span>
+        {/if}
       </div>
       <div class="ml-auto flex shrink-0 items-center gap-2">
         <ChangesChip />
