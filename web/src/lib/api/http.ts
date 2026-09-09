@@ -57,6 +57,8 @@ interface WireConfig {
   model?: string;
   effort?: string;
   preserve_reasoning?: boolean;
+  temperature?: number | null;
+  top_p?: number | null;
   permissions?: string;
   compact_at?: number;
   max_tool_calls?: number;
@@ -527,6 +529,8 @@ function toConfig(c: WireConfig): Config {
     model: c.model ?? "",
     effort: toEffort(c.effort),
     preserve_reasoning: c.preserve_reasoning ?? true,
+    temperature: c.temperature ?? null,
+    top_p: c.top_p ?? null,
     permissions: toPermMode(c.permissions),
     compact_at: c.compact_at ?? 0.8,
     max_tool_calls: c.max_tool_calls ?? 50,

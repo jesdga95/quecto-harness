@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -27,25 +28,50 @@ type modelJSON struct {
 	ExitCode   int      `json:"exit_code,omitempty"`
 }
 
+// patch is one field of a config update. A field the body leaves out keeps
+// the value it has; a field sent as null is cleared, which is how a sampling
+// value goes back to the model server's own.
+type patch[T any] struct {
+	Set   bool
+	Value *T
+}
+
+func (p *patch[T]) UnmarshalJSON(b []byte) error {
+	p.Set = true
+	if string(b) == "null" {
+		p.Value = nil
+		return nil
+	}
+	var v T
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	p.Value = &v
+	return nil
+}
+
 type configJSON struct {
-	Model             string  `json:"model"`
-	Effort            string  `json:"effort"`
-	PreserveReasoning bool    `json:"preserve_reasoning"`
-	Permissions       string  `json:"permissions"`
-	CompactAt         float64 `json:"compact_at"`
-	Shell             string  `json:"shell"`
-	CommandTimeoutS   int     `json:"command_timeout_s"`
-	OutputLimitBytes  int     `json:"output_limit_bytes"`
-	MaxToolCalls      int     `json:"max_tool_calls"`
-	Listen            string  `json:"listen"`
-	ServerURL         string  `json:"server_url"`
-	ServerTokenSet    bool    `json:"server_token_set"`
-	Note              string  `json:"note,omitempty"`
+	Model             string   `json:"model"`
+	Effort            string   `json:"effort"`
+	PreserveReasoning bool     `json:"preserve_reasoning"`
+	Temperature       *float64 `json:"temperature"`
+	TopP              *float64 `json:"top_p"`
+	Permissions       string   `json:"permissions"`
+	CompactAt         float64  `json:"compact_at"`
+	Shell             string   `json:"shell"`
+	CommandTimeoutS   int      `json:"command_timeout_s"`
+	OutputLimitBytes  int      `json:"output_limit_bytes"`
+	MaxToolCalls      int      `json:"max_tool_calls"`
+	Listen            string   `json:"listen"`
+	ServerURL         string   `json:"server_url"`
+	ServerTokenSet    bool     `json:"server_token_set"`
+	Note              string   `json:"note,omitempty"`
 }
 
 func toConfigJSON(c config.Config) configJSON {
 	return configJSON{
 		Model: c.Model, Effort: string(c.Effort), PreserveReasoning: c.PreserveReasoning,
+		Temperature: c.Temperature, TopP: c.TopP,
 		Permissions: string(c.Mode), CompactAt: c.CompactAt,
 		Shell: c.Shell, CommandTimeoutS: int(c.CommandTimeout / time.Second),
 		OutputLimitBytes: c.OutputLimitBytes, MaxToolCalls: c.MaxToolCalls, Listen: c.Listen,
@@ -546,16 +572,18 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Model             *string  `json:"model"`
-		Effort            *string  `json:"effort"`
-		PreserveReasoning *bool    `json:"preserve_reasoning"`
-		Permissions       *string  `json:"permissions"`
-		CompactAt         *float64 `json:"compact_at"`
-		Shell             *string  `json:"shell"`
-		CommandTimeoutS   *int     `json:"command_timeout_s"`
-		OutputLimitBytes  *int     `json:"output_limit_bytes"`
-		MaxToolCalls      *int     `json:"max_tool_calls"`
-		Listen            *string  `json:"listen"`
+		Model             *string        `json:"model"`
+		Effort            *string        `json:"effort"`
+		PreserveReasoning *bool          `json:"preserve_reasoning"`
+		Temperature       patch[float64] `json:"temperature"`
+		TopP              patch[float64] `json:"top_p"`
+		Permissions       *string        `json:"permissions"`
+		CompactAt         *float64       `json:"compact_at"`
+		Shell             *string        `json:"shell"`
+		CommandTimeoutS   *int           `json:"command_timeout_s"`
+		OutputLimitBytes  *int           `json:"output_limit_bytes"`
+		MaxToolCalls      *int           `json:"max_tool_calls"`
+		Listen            *string        `json:"listen"`
 		Server            *struct {
 			URL   *string `json:"url"`
 			Token *string `json:"token"`
@@ -572,6 +600,14 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Max tool calls is outside 0 to 1000: 0 is no limit")
 		return
 	}
+	if v := body.Temperature.Value; v != nil && (*v < 0 || *v > 2) {
+		writeError(w, http.StatusBadRequest, "Temperature is outside 0 to 2: send null to leave it to the model server")
+		return
+	}
+	if v := body.TopP.Value; v != nil && (*v < 0 || *v > 1) {
+		writeError(w, http.StatusBadRequest, "Top p is outside 0 to 1: send null to leave it to the model server")
+		return
+	}
 	if body.Permissions != nil && !config.ValidMode(*body.Permissions) {
 		writeError(w, http.StatusBadRequest, "Permissions \""+*body.Permissions+"\" is not ask, allowlist or full")
 		return
@@ -586,6 +622,12 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.PreserveReasoning != nil {
 			c.PreserveReasoning = *body.PreserveReasoning
+		}
+		if body.Temperature.Set {
+			c.Temperature = body.Temperature.Value
+		}
+		if body.TopP.Set {
+			c.TopP = body.TopP.Value
 		}
 		if body.Permissions != nil {
 			c.Mode = config.Mode(*body.Permissions)

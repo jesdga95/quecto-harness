@@ -686,6 +686,55 @@ func TestPutConfigRejectsAnUnknownMode(t *testing.T) {
 	}
 }
 
+// A sampling value is set by a number and cleared by null. A body that leaves
+// the field out changes nothing, which is what every other setting relies on.
+func TestPutConfigSetsAndClearsSampling(t *testing.T) {
+	f := newFixture(t)
+
+	res := f.do(t, "PUT", "/api/config", map[string]any{"temperature": 0.35, "top_p": 0.9})
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
+	}
+	if got := f.cfg.Config().Temperature; got == nil || *got != 0.35 {
+		t.Fatalf("temperature = %v, want 0.35", got)
+	}
+	if got := decode(t, res)["temperature"]; got != 0.35 {
+		t.Errorf("the reply said temperature = %v", got)
+	}
+
+	f.do(t, "PUT", "/api/config", map[string]any{"effort": "low"})
+	if got := f.cfg.Config().Temperature; got == nil || *got != 0.35 {
+		t.Errorf("temperature = %v after a body that left it out", got)
+	}
+
+	res = f.do(t, "PUT", "/api/config", map[string]any{"temperature": nil})
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
+	}
+	if got := f.cfg.Config().Temperature; got != nil {
+		t.Errorf("temperature = %v, want it back with the model server", *got)
+	}
+	if body := decode(t, res); body["temperature"] != nil {
+		t.Errorf("the reply said temperature = %v, want null", body["temperature"])
+	}
+	if got := f.cfg.Config().TopP; got == nil || *got != 0.9 {
+		t.Errorf("top_p = %v, want 0.9 left alone", got)
+	}
+}
+
+func TestPutConfigRejectsSamplingOutOfRange(t *testing.T) {
+	f := newFixture(t)
+	for field, value := range map[string]float64{"temperature": 2.5, "top_p": 1.5} {
+		res := f.do(t, "PUT", "/api/config", map[string]any{field: value})
+		if res.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", field, res.Code)
+		}
+	}
+	if c := f.cfg.Config(); c.Temperature != nil || c.TopP != nil {
+		t.Errorf("the store changed anyway: %v %v", c.Temperature, c.TopP)
+	}
+}
+
 func TestPermissionRoute(t *testing.T) {
 	f := newFixture(t)
 	go f.perms.Ask(context.Background(), perms.Request{

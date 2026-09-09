@@ -20,6 +20,8 @@ type File struct {
 	Model             *string  `json:"model,omitempty"`
 	Effort            *string  `json:"effort,omitempty"`
 	PreserveReasoning *bool    `json:"preserve_reasoning,omitempty"`
+	Temperature       *float64 `json:"temperature,omitempty"`
+	TopP              *float64 `json:"top_p,omitempty"`
 	Permissions       *string  `json:"permissions,omitempty"`
 	CompactAt         *float64 `json:"compact_at,omitempty"`
 	Shell             *string  `json:"shell,omitempty"`
@@ -44,11 +46,15 @@ type Config struct {
 	Model             string
 	Effort            Effort
 	PreserveReasoning bool
-	Mode              Mode
-	CompactAt         float64
-	Shell             string
-	CommandTimeout    time.Duration
-	OutputLimitBytes  int
+	// Temperature and TopP are sent with every request that generates. Nil is
+	// left out of the body, so the model server's own value stands.
+	Temperature      *float64
+	TopP             *float64
+	Mode             Mode
+	CompactAt        float64
+	Shell            string
+	CommandTimeout   time.Duration
+	OutputLimitBytes int
 	// MaxToolCalls bounds the tool calls one turn may make. Zero is no bound,
 	// which leaves the Stop button as the only thing that ends a runaway turn.
 	MaxToolCalls int
@@ -101,6 +107,8 @@ func Defaults() Config {
 		Model:             "",
 		Effort:            EffortMedium,
 		PreserveReasoning: true,
+		Temperature:       nil,
+		TopP:              nil,
 		Mode:              ModeAsk,
 		CompactAt:         0.8,
 		Shell:             defaultShell(),
@@ -167,6 +175,20 @@ func (f File) Resolve(d Config) (Config, []string) {
 	if f.PreserveReasoning != nil {
 		c.PreserveReasoning = *f.PreserveReasoning
 	}
+	if f.Temperature != nil {
+		if *f.Temperature >= 0 && *f.Temperature <= 2 {
+			c.Temperature = clonef(f.Temperature)
+		} else {
+			note("temperature " + strconv.FormatFloat(*f.Temperature, 'g', -1, 64) + " is outside 0 to 2, leaving it to the model server")
+		}
+	}
+	if f.TopP != nil {
+		if *f.TopP >= 0 && *f.TopP <= 1 {
+			c.TopP = clonef(f.TopP)
+		} else {
+			note("top_p " + strconv.FormatFloat(*f.TopP, 'g', -1, 64) + " is outside 0 to 1, leaving it to the model server")
+		}
+	}
 	if f.Permissions != nil {
 		if ValidMode(*f.Permissions) {
 			c.Mode = Mode(*f.Permissions)
@@ -232,6 +254,8 @@ func (f File) Resolve(d Config) (Config, []string) {
 
 // File is the inverse of Resolve: every field written, so a saved file is a
 // complete document and a later reader never guesses which defaults applied.
+// A sampling value left to the server is the one thing not written, since
+// there is no number to write.
 func (c Config) File() File {
 	listen, model, effort := c.Listen, c.Model, string(c.Effort)
 	shell, mode, compact := c.Shell, string(c.Mode), c.CompactAt
@@ -249,6 +273,8 @@ func (c Config) File() File {
 		Model:             &model,
 		Effort:            &effort,
 		PreserveReasoning: &preserve,
+		Temperature:       clonef(c.Temperature),
+		TopP:              clonef(c.TopP),
 		Permissions:       &mode,
 		CompactAt:         &compact,
 		Shell:             &shell,
@@ -257,6 +283,16 @@ func (c Config) File() File {
 		MaxToolCalls:      &maxCalls,
 		Projects:          projects,
 	}
+}
+
+// clonef copies a float behind a pointer, so a resolved config and the file
+// it came from never share the value.
+func clonef(p *float64) *float64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 func validListen(s string) (string, bool) {

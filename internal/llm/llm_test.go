@@ -202,6 +202,48 @@ func TestLlamaBodyPreserveReasoning(t *testing.T) {
 	}
 }
 
+// Temperature and top_p are fields the chat API defines, so both backends
+// send them, and a value left to the server is left out of the body.
+func TestSamplingFields(t *testing.T) {
+	temp, topP := 0.35, 0.0
+	builds := map[string]func(ChatRequest) ([]byte, error){
+		"llamacpp": buildLlamaBody,
+		"openai":   buildOpenAIBody,
+	}
+	for name, build := range builds {
+		t.Run(name, func(t *testing.T) {
+			raw, err := build(ChatRequest{Model: "m", Temperature: &temp, TopP: &topP})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["temperature"] != 0.35 {
+				t.Errorf("temperature = %v, want 0.35", body["temperature"])
+			}
+			if body["top_p"] != 0.0 {
+				t.Errorf("top_p = %v, want 0", body["top_p"])
+			}
+
+			raw, err = build(ChatRequest{Model: "m"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = nil
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range []string{"temperature", "top_p"} {
+				if _, ok := body[field]; ok {
+					t.Errorf("%s was sent for a value left to the server", field)
+				}
+			}
+		})
+	}
+}
+
 func TestReasoningContentRidesTheAssistantMessage(t *testing.T) {
 	raw, err := buildLlamaBody(ChatRequest{Model: "m", Messages: []Message{
 		{Role: "user", Content: "hello"},

@@ -694,12 +694,15 @@ func (e *Engine) titleSession(ctx context.Context, s *Session, model string, cap
 	}
 	tctx, cancel := context.WithTimeout(ctx, titleTimeout)
 	defer cancel()
+	cfg := e.cfg.Config()
 	res, err := e.llama().Chat(tctx, llm.ChatRequest{
-		Model:     model,
-		Messages:  []llm.Message{{Role: "user", Content: prompts.Title(text)}},
-		Effort:    llm.EffortOff,
-		Caps:      caps,
-		MaxTokens: titleTokens,
+		Model:       model,
+		Messages:    []llm.Message{{Role: "user", Content: prompts.Title(text)}},
+		Effort:      llm.EffortOff,
+		Temperature: cfg.Temperature,
+		TopP:        cfg.TopP,
+		Caps:        caps,
+		MaxTokens:   titleTokens,
 	}, nil)
 	if err != nil {
 		return
@@ -999,6 +1002,8 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			Messages:          msgs,
 			Effort:            cfg.Effort,
 			PreserveReasoning: cfg.PreserveReasoning,
+			Temperature:       cfg.Temperature,
+			TopP:              cfg.TopP,
 			Caps:              caps,
 		}
 		if !spent {
@@ -1345,9 +1350,11 @@ func (e *Engine) compact(ctx context.Context, s *Session, model string, caps llm
 	before := s.computeFill()
 	s.mu.Unlock()
 
+	cfg := e.cfg.Config()
 	res, err := e.llama().Chat(ctx, llm.ChatRequest{
 		Model: model, Messages: msgs, Effort: llm.EffortOff,
-		PreserveReasoning: e.cfg.Config().PreserveReasoning, Caps: caps}, nil)
+		PreserveReasoning: cfg.PreserveReasoning,
+		Temperature:       cfg.Temperature, TopP: cfg.TopP, Caps: caps}, nil)
 	if err != nil {
 		return err
 	}

@@ -5,12 +5,16 @@
     onclose,
     align = "left",
     up = false,
+    beside = false,
     width = 300,
     children,
   }: {
     onclose: () => void;
     align?: "left" | "right";
     up?: boolean;
+    /** Opens to the right of the anchor, level with its bottom edge, which is
+        what a row inside another popover needs. */
+    beside?: boolean;
     width?: number;
     children: Snippet;
   } = $props();
@@ -35,9 +39,9 @@
 
 <div
   bind:this={el}
-  class="popover absolute z-40 {up ? 'bottom-[42px]' : 'top-[38px]'} {align === 'right'
-    ? 'right-0'
-    : 'left-0'}"
+  class="popover absolute z-40 {beside
+    ? 'bottom-0 left-full ml-1.5'
+    : `${up ? 'bottom-[42px]' : 'top-[38px]'} ${align === 'right' ? 'right-0' : 'left-0'}`}"
   style="width:{width}px"
 >
   {@render children()}

@@ -2,6 +2,7 @@
   import Paperclip from "phosphor-svelte/lib/Paperclip";
   import Plus from "phosphor-svelte/lib/Plus";
   import Popover from "./Popover.svelte";
+  import SamplingMenu from "./SamplingMenu.svelte";
   import {
     maxToolCalls,
     nextToolCallLimit,
@@ -67,6 +68,9 @@
           onchange={(e) => setPreserveReasoning(e.currentTarget.checked)}
         />
       </label>
+
+      <div class="popover-head">Sampling</div>
+      <SamplingMenu />
 
       <div class="popover-head">Tools</div>
       <button

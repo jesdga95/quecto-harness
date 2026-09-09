@@ -628,6 +628,46 @@
     transform: translateX(16px);
   }
 
+  /* A sampling bar inside a popover. The input carries the height the thumb
+     needs; the track and the thumb are named separately by each engine, so
+     both pairs are written out. */
+  .range {
+    appearance: none;
+    display: block;
+    width: 100%;
+    height: 14px;
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  .range::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--surface-2);
+  }
+  .range::-webkit-slider-thumb {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    /* Half the difference between the thumb and the track, so it rides the
+       middle of the bar. */
+    margin-top: -4px;
+    border-radius: 999px;
+    background: var(--btn);
+  }
+  .range::-moz-range-track {
+    height: 4px;
+    border-radius: 999px;
+    background: var(--surface-2);
+  }
+  .range::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--btn);
+  }
+
   .popover-head {
     padding: 7px 9px 3px;
     font-size: 10.5px;

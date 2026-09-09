@@ -478,6 +478,47 @@ export function preserveReasoning(): boolean {
   return app.config?.preserve_reasoning ?? true;
 }
 
+/** The steps a sampling slider moves through. Null is the first of them: the
+    field is left out of the request and the model server's value stands. */
+function samplingSteps(max: number): (number | null)[] {
+  const out: (number | null)[] = [null];
+  for (let i = 0; i * 0.05 <= max + 1e-9; i++) out.push(Math.round(i * 5) / 100);
+  return out;
+}
+
+export const TEMPERATURE_STEPS = samplingSteps(2);
+export const TOP_P_STEPS = samplingSteps(1);
+
+/** The step nearest a value, so a hand-edited number still lands on the bar. */
+export function samplingIndex(steps: (number | null)[], value: number | null): number {
+  if (value === null) return 0;
+  let best = 1;
+  for (let i = 2; i < steps.length; i++) {
+    if (Math.abs((steps[i] as number) - value) < Math.abs((steps[best] as number) - value)) {
+      best = i;
+    }
+  }
+  return best;
+}
+
+export function temperature(): number | null {
+  return app.config?.temperature ?? null;
+}
+
+export function setTemperature(value: number | null): void {
+  if (app.config) app.config.temperature = value;
+  void guard(() => api.updateConfig({ temperature: value }));
+}
+
+export function topP(): number | null {
+  return app.config?.top_p ?? null;
+}
+
+export function setTopP(value: number | null): void {
+  if (app.config) app.config.top_p = value;
+  void guard(() => api.updateConfig({ top_p: value }));
+}
+
 /** What the tool call limit rotates through. Zero is no limit. */
 export const TOOL_CALL_STEPS = [25, 50, 100, 0];
 

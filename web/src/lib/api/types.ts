@@ -57,6 +57,10 @@ export interface Config {
   effort: Effort;
   /** Keeps thinking from earlier turns in the prompt. */
   preserve_reasoning: boolean;
+  /** Sampling, as the chat API names it. Null is sent as no field at all, so
+      the model server's own value stands. */
+  temperature: number | null;
+  top_p: number | null;
   permissions: PermMode;
   compact_at: number;
   /** Tool calls one turn may make. Zero is no limit. */

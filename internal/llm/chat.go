@@ -121,7 +121,11 @@ type ChatRequest struct {
 	// PreserveReasoning asks the template to keep thinking from earlier turns
 	// in the prompt rather than dropping it.
 	PreserveReasoning bool
-	Caps              Caps
+	// Temperature and TopP are the sampling fields the chat API defines. A nil
+	// field is left out of the body, so the server's own default stands.
+	Temperature *float64
+	TopP        *float64
+	Caps        Caps
 	// MaxTokens caps the generation. Zero leaves it to the server, which is
 	// what a turn wants; a request sent only for its usage report sets it to 1.
 	MaxTokens int
@@ -159,6 +163,12 @@ func baseBody(req ChatRequest) map[string]any {
 	}
 	if req.MaxTokens > 0 {
 		body["max_tokens"] = req.MaxTokens
+	}
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
+	}
+	if req.TopP != nil {
+		body["top_p"] = *req.TopP
 	}
 	return body
 }

@@ -52,6 +52,8 @@ func TestResolveClamps(t *testing.T) {
 		{"shell", File{Shell: ptr("sh")}, func(c Config) bool { return c.Shell == "/bin/sh" }, "shell"},
 		{"timeout", File{CommandTimeoutS: ptr(99999)}, func(c Config) bool { return c.CommandTimeout == 120*time.Second }, "command_timeout_s"},
 		{"output", File{OutputLimitBytes: ptr(10)}, func(c Config) bool { return c.OutputLimitBytes == 16384 }, "output_limit_bytes"},
+		{"temperature", File{Temperature: ptr(2.5)}, func(c Config) bool { return c.Temperature == nil }, "temperature"},
+		{"top_p", File{TopP: ptr(-0.1)}, func(c Config) bool { return c.TopP == nil }, "top_p"},
 		{"project", File{Projects: []string{"relative/path"}}, func(c Config) bool { return len(c.Projects) == 0 }, "project"},
 	}
 	for _, tc := range cases {
@@ -64,6 +66,47 @@ func TestResolveClamps(t *testing.T) {
 				t.Errorf("notes = %v, want one mentioning %q", notes, tc.says)
 			}
 		})
+	}
+}
+
+// Sampling is the one setting with no default of its own: what is not set is
+// written as no field, and reads back unset.
+func TestSamplingRoundTrip(t *testing.T) {
+	d := Defaults()
+	c, notes := File{Temperature: ptr(0.35), TopP: ptr(0.0)}.Resolve(d)
+	if len(notes) != 0 {
+		t.Fatalf("notes = %v", notes)
+	}
+	if c.Temperature == nil || *c.Temperature != 0.35 {
+		t.Errorf("temperature = %v, want 0.35", c.Temperature)
+	}
+	if c.TopP == nil || *c.TopP != 0 {
+		t.Errorf("top_p = %v, want 0", c.TopP)
+	}
+
+	b, err := json.Marshal(c.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var written map[string]any
+	if err := json.Unmarshal(b, &written); err != nil {
+		t.Fatal(err)
+	}
+	if written["temperature"] != 0.35 || written["top_p"] != 0.0 {
+		t.Errorf("written = %v", written)
+	}
+
+	c.Temperature, c.TopP = nil, nil
+	b, err = json.Marshal(c.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "temperature") || strings.Contains(string(b), "top_p") {
+		t.Errorf("an unset value was written anyway: %s", b)
+	}
+	back, notes := File{}.Resolve(d)
+	if len(notes) != 0 || back.Temperature != nil || back.TopP != nil {
+		t.Errorf("read back as %v, %v with notes %v", back.Temperature, back.TopP, notes)
 	}
 }
 

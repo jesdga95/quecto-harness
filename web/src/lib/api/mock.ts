@@ -230,6 +230,8 @@ export class MockApi implements HarnessApi {
     model: "Gemma4-12B",
     effort: "medium",
     preserve_reasoning: true,
+    temperature: null,
+    top_p: null,
     permissions: "ask",
     compact_at: 0.8,
     max_tool_calls: 50,
