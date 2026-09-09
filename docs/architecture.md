@@ -3591,11 +3591,14 @@ there that leaves out what means nothing before an agent exists. The setup scree
 while `agents` is empty and for no other reason: an address that stops answering is a
 reason to switch agents, which is inside the app.
 
-`AgentChip` on the composer shows the agent's name, since that is what the reader chose and
-model ids run long; the id is the second line of every row in its popover, which ends in
-`Manage agents`. Nothing is loaded by the choice. The first message that needs the model
-loads it inside its turn, where the transcript shows the wait and the chip's dot goes amber
-until the read lands.
+`AgentChip` on the composer shows an agent icon and the agent's name, since the name is what
+the reader chose and model ids run long; the id is the second line of every row in its
+popover, which ends in `Manage agents`. The icon takes the amber while a model is being
+read and the red when the agent cannot answer, which is the whole of the state the chip
+carries; the sentence itself is at the top of the popover, where the switch is. There is no
+status dot on the chip or on its rows: a dot per row would report on addresses nobody has
+asked. Nothing is loaded by the choice. The first message that needs the model loads it
+inside its turn, where the transcript shows the wait.
 
 The wait row is the only thing on the page while a model loads, so it carries a clock. It
 appears under the message that started the turn, reads `Working on it`, counts from the

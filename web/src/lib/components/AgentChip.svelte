@@ -2,20 +2,13 @@
   import CaretDown from "phosphor-svelte/lib/CaretDown";
   import Check from "phosphor-svelte/lib/Check";
   import Sliders from "phosphor-svelte/lib/Sliders";
+  import Robot from "phosphor-svelte/lib/Robot";
   import Popover from "./Popover.svelte";
-  import StatusDot from "./StatusDot.svelte";
-  import type { ModelStatus } from "../api";
   import { activeAgent, agentReady, app, setActiveAgent } from "../state/app.svelte";
   import { probeMessage } from "../format";
 
   let open = $state(false);
   const current = $derived(activeAgent());
-  // The harness is reading the model whatever the cached list says.
-  const status = $derived<ModelStatus>(
-    app.status === "loading"
-      ? "loading"
-      : (app.models.find((m) => m.id === current?.model)?.status ?? "unloaded"),
-  );
   const problem = $derived(
     agentReady()
       ? ""
@@ -51,9 +44,10 @@
     onclick={() => (open = !open)}
   >
     {#if current}
-      <StatusDot {status} />
+      <Robot class={problem ? "text-crit" : app.status === "loading" ? "text-warn" : ""} />
       <span class="max-w-[190px] truncate">{current.name}</span>
     {:else}
+      <Robot />
       <span>Add an agent</span>
     {/if}
     <CaretDown />
@@ -66,11 +60,6 @@
       {/if}
       {#each app.agents as agent (agent.id)}
         <button class="popover-item" onclick={() => pick(agent.id)}>
-          {#if agent.id === current?.id}
-            <StatusDot {status} />
-          {:else}
-            <span class="dot"></span>
-          {/if}
           <span class="min-w-0 flex-1">
             <span class="block truncate text-left">{agent.name}</span>
             <span class="block truncate text-left text-[12px] text-muted">
