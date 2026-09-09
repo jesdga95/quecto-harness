@@ -8,7 +8,6 @@
     app,
     removeAgent,
     saveAgent,
-    setActiveAgent,
   } from "../state/app.svelte";
   import { confirm } from "./../state/confirm.svelte";
   import { isTop, pushOverlay } from "../overlay";
@@ -205,14 +204,8 @@
         </div>
 
         <footer
-          class="flex shrink-0 items-center gap-2.5 border-t border-hair bg-panel px-6 py-3"
+          class="flex shrink-0 items-center justify-end gap-2.5 border-t border-hair bg-panel px-6 py-3"
         >
-          {#if stored.id !== active}
-            <button class="btn btn-ghost" onclick={() => setActiveAgent(stored.id)}>
-              Use this agent
-            </button>
-          {/if}
-          <span class="flex-1"></span>
           <button class="btn btn-danger !border-transparent" onclick={remove}>Delete</button>
           <button class="btn btn-primary" disabled={!dirty || saving} onclick={save}>
             {saving ? "Saving" : "Save"}

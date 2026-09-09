@@ -36,8 +36,8 @@
 
   let probe = $state<Probe | null>(null);
   let checking = $state(false);
-  // The address and key a reading was taken with, so it is not taken twice for
-  // one and is taken again when either moves.
+  // The address and key a reading was taken with, so one is not taken twice
+  // for the same pair.
   let probedAt = $state("");
   // Which agent the drafts were filled from. The identity of the record
   // changes on every edit of an unsaved one, and that is not a new agent.
@@ -54,27 +54,22 @@
     seed = agent.seed === null ? "" : String(agent.seed);
     probe = null;
     probedAt = "";
+    void look(agent.url, agent.key, false);
   });
-
-  const at = $derived({ url: agent.url, key: agent.key });
-  $effect(() => {
-    if (at.url !== "" && mark(at) !== probedAt) void look(false);
-  });
-
-  function mark(a: { url: string; key: string }): string {
-    return a.url + " " + a.key;
-  }
 
   // The address is read with the key beside it, so an agent that has not been
-  // stored yet is still read with the key the reader typed for it.
-  async function look(refresh: boolean) {
-    const asked = at;
-    if (asked.url === "") return;
-    probedAt = mark(asked);
+  // stored yet is still read with the key the reader typed for it. A reading
+  // is a call to the address, so it is taken when the panel is pointed at an
+  // agent and when either field is left, never while one is being typed into.
+  async function look(addr: string, token: string, refresh: boolean) {
+    if (addr === "") return;
+    const asked = addr + " " + token;
+    if (!refresh && asked === probedAt) return;
+    probedAt = asked;
     checking = true;
-    const got = await probeAgent({ agent: agent.id, ...asked }, refresh);
+    const got = await probeAgent({ agent: agent.id, url: addr, key: token }, refresh);
     checking = false;
-    if (mark(at) === probedAt) probe = got;
+    if (asked === probedAt) probe = got;
   }
 
   const models = $derived(probe?.models ?? []);
@@ -82,22 +77,31 @@
   // rather than in the dark.
   const window = $derived(models.find((m) => m.id === agent.model)?.ctx ?? 0);
 
-  function commitName() {
-    // A blank name is not a name, so the field goes back to the stored one.
+  // Every field commits as it is typed, so Save is lit by a change already
+  // made rather than waiting for the field to be left. Each takes the text
+  // rather than reading its own draft, so none of them depends on whether the
+  // binding or the handler runs first.
+  function commitName(text: string) {
+    // A blank name is not a name, and is left uncommitted rather than written,
+    // so the field has something to go back to when it is left.
+    const next = text.trim();
+    if (next !== "" && next !== agent.name) onchange({ name: next });
+  }
+
+  function restoreName() {
     if (name.trim() === "") name = agent.name;
-    else if (name.trim() !== agent.name) onchange({ name: name.trim() });
   }
 
-  function commitUrl() {
-    if (url.trim() !== agent.url) onchange({ url: url.trim() });
+  function commitUrl(text: string) {
+    if (text.trim() !== agent.url) onchange({ url: text.trim() });
   }
 
-  function commitKey() {
-    if (key !== agent.key) onchange({ key });
+  function commitKey(text: string) {
+    if (text !== agent.key) onchange({ key: text });
   }
 
-  function commitInstructions() {
-    if (instructions.trim() !== agent.instructions) onchange({ instructions: instructions.trim() });
+  function commitInstructions(text: string) {
+    if (text.trim() !== agent.instructions) onchange({ instructions: text.trim() });
   }
 
   /** A count field, where anything that is not a number is no value at all. */
@@ -107,23 +111,24 @@
     if (next !== current) apply(next);
   }
 
-  function commitMaxTokens() {
-    commitCount(maxTokens, agent.max_tokens, (max_tokens) => onchange({ max_tokens }));
+  function commitMaxTokens(text: string) {
+    commitCount(text, agent.max_tokens, (max_tokens) => onchange({ max_tokens }));
   }
 
-  function commitSeed() {
-    commitCount(seed, agent.seed, (v) => onchange({ seed: v }));
+  function commitSeed(text: string) {
+    commitCount(text, agent.seed, (v) => onchange({ seed: v }));
   }
 
   /** Writes anything typed but not yet committed. Called before the panel is
       pointed at another agent or taken off the screen. */
   export function flush() {
-    commitName();
-    commitUrl();
-    commitKey();
-    commitInstructions();
-    commitMaxTokens();
-    commitSeed();
+    restoreName();
+    commitName(name);
+    commitUrl(url);
+    commitKey(key);
+    commitInstructions(instructions);
+    commitMaxTokens(maxTokens);
+    commitSeed(seed);
   }
 </script>
 
@@ -135,8 +140,8 @@
       class="input"
       placeholder="Local llama.cpp"
       bind:value={name}
-      onblur={commitName}
-      onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+      oninput={(e) => commitName(e.currentTarget.value)}
+      onblur={restoreName}
     />
   </div>
 
@@ -147,7 +152,8 @@
       class="input num"
       placeholder="http://127.0.0.1:8080"
       bind:value={url}
-      onblur={commitUrl}
+      oninput={(e) => commitUrl(e.currentTarget.value)}
+      onblur={() => void look(url.trim(), key, false)}
       onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
       spellcheck="false"
       autocapitalize="off"
@@ -160,7 +166,8 @@
       type="password"
       placeholder="Leave empty if the address takes none"
       bind:value={key}
-      onblur={commitKey}
+      oninput={(e) => commitKey(e.currentTarget.value)}
+      onblur={() => void look(url.trim(), key, false)}
       onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
     />
 
@@ -173,7 +180,7 @@
       hasKey={agent.key !== ""}
       hasAddress={agent.url !== ""}
       onpick={(model) => onchange({ model })}
-      onrefresh={() => void look(true)}
+      onrefresh={() => void look(url.trim(), key, true)}
     />
   </div>
 {:else}
@@ -185,8 +192,8 @@
         class="input"
         placeholder="Local llama.cpp"
         bind:value={name}
-        onblur={commitName}
-        onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+        oninput={(e) => commitName(e.currentTarget.value)}
+        onblur={restoreName}
       />
     </label>
     <div class="grid grid-cols-2 gap-3">
@@ -196,7 +203,8 @@
           class="input num"
           placeholder="http://127.0.0.1:8080"
           bind:value={url}
-          onblur={commitUrl}
+          oninput={(e) => commitUrl(e.currentTarget.value)}
+          onblur={() => void look(url.trim(), key, false)}
           onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
           spellcheck="false"
           autocapitalize="off"
@@ -209,7 +217,8 @@
           type="password"
           placeholder="Leave empty if the address takes none"
           bind:value={key}
-          onblur={commitKey}
+          oninput={(e) => commitKey(e.currentTarget.value)}
+          onblur={() => void look(url.trim(), key, false)}
           onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
         />
       </label>
@@ -224,7 +233,7 @@
         hasKey={agent.key !== ""}
         hasAddress={agent.url !== ""}
         onpick={(model) => onchange({ model })}
-        onrefresh={() => void look(true)}
+        onrefresh={() => void look(url.trim(), key, true)}
       />
     </div>
   </div>
@@ -302,8 +311,7 @@
         class="input num w-[96px] shrink-0 !px-2.5 !py-1.5"
         placeholder="Auto"
         bind:value={maxTokens}
-        onblur={commitMaxTokens}
-        onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+        oninput={(e) => commitMaxTokens(e.currentTarget.value)}
       />
       {#if window > 0}
         <span class="shrink-0 text-[12px] text-muted">of {k(window)} context</span>
@@ -314,8 +322,7 @@
         class="input num w-[96px] shrink-0 !px-2.5 !py-1.5"
         placeholder="Random"
         bind:value={seed}
-        onblur={commitSeed}
-        onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+        oninput={(e) => commitSeed(e.currentTarget.value)}
       />
     </div>
   </div>
@@ -331,7 +338,7 @@
       maxlength="4000"
       placeholder="Anything this agent should always be told"
       bind:value={instructions}
-      onblur={commitInstructions}
+      oninput={(e) => commitInstructions(e.currentTarget.value)}
     ></textarea>
   </div>
 {/if}

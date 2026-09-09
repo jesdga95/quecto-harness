@@ -3559,13 +3559,19 @@ the list reads as a place rather than as another panel.
 
 Choosing a row selects it for editing and nothing else, so the dialog can be opened, read
 and closed without the harness switching underneath. The row that answers carries a lit dot
-and every other a flat one, which is honest about an address nobody has asked. Making an
-agent answer is `Use this agent` in the footer, absent on the one already answering: it acts
-at once, so it sits apart from the two buttons that act on the record.
+and every other a flat one, which is honest about an address nobody has asked. Nothing in
+the dialog makes an agent answer: that is the composer chip, which is where the reader is
+when the question comes up, and it keeps every control in the dialog acting on the record
+in front of it.
 
 Nothing reaches the harness until Save. The dialog holds a draft of the selected agent, Save
 is dead until the draft differs from what is stored, and moving to another row or closing
 with something typed asks before dropping it. Delete sits beside Save.
+
+Fields commit into that draft as they are typed, so Save is lit by a change already made.
+The address and the key are the exception only in what they do on the way out: a reading of
+the address costs a call to it, so one is taken when the panel is pointed at an agent and
+when either field is left, never per keystroke.
 
 The right pane is one card per group of fields: connection, thinking, sampling and extra
 instructions. Group names and the agent's name in the header are the page's own type scale,
