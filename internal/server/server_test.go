@@ -555,7 +555,7 @@ func TestAllowlistRoutes(t *testing.T) {
 func TestSessionLifecycle(t *testing.T) {
 	f := newFixture(t)
 	created := decode(t, f.do(t, "POST", "/api/sessions",
-		map[string]string{"project": f.project, "model": "Alpha-12B"}))
+		map[string]string{"project": f.project}))
 	id, _ := created["id"].(string)
 	// Creating one reads no model, so it is idle from the start.
 	if id == "" || created["state"] != "idle" {
@@ -1434,7 +1434,7 @@ func TestResendRoute(t *testing.T) {
 func (f *fixture) newSession(t *testing.T) string {
 	t.Helper()
 	body := decode(t, f.do(t, "POST", "/api/sessions",
-		map[string]string{"project": f.project, "model": "Alpha-12B"}))
+		map[string]string{"project": f.project}))
 	id, _ := body["id"].(string)
 	if id == "" {
 		t.Fatalf("no session id: %v", body)
