@@ -28,6 +28,14 @@
     item.kind === "tool" && typeof item.args.task === "string" ? item.args.task : "",
   );
 
+  // What a send_message call was given, so expanding the row shows the message
+  // rather than the word the model got back for sending it.
+  const message = $derived(
+    item.kind === "tool" && item.name === "send_message" && typeof item.args.text === "string"
+      ? item.args.text
+      : "",
+  );
+
   const command = $derived(
     item.kind === "tool" && typeof item.args.command === "string" ? item.args.command : "",
   );
@@ -74,9 +82,7 @@
       const to = typeof item.args.agent === "string" ? item.args.agent : "";
       return to === "" ? task : `${to}: ${task}`;
     }
-    if (item.name === "send_message") {
-      return typeof item.args.text === "string" ? item.args.text : "";
-    }
+    if (item.name === "send_message") return message;
     return path || describeCommand(command);
   });
 
@@ -194,6 +200,13 @@
         {/if}
         {#if item.output}
           <p class="text-[13px] text-ink-2">{item.output}</p>
+        {/if}
+      {:else if item.kind === "tool" && item.name === "send_message"}
+        {#if message}
+          <p class="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{message}</p>
+        {/if}
+        {#if item.output}
+          <span class="text-[11.5px] text-muted">{item.output}</span>
         {/if}
       {:else if item.kind === "tool" && item.name === "read_file" && item.output}
         <FileBlock {path} output={item.output} />

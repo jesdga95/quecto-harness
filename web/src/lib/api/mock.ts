@@ -1117,6 +1117,7 @@ export class MockApi implements HarnessApi {
 // what that agent sent back when it was done.
 function delegationEvents(child: string): HarnessEvent[] {
   const call = nextId("t");
+  const note = nextId("t");
   return [
     {
       type: "tool_call",
@@ -1129,8 +1130,17 @@ function delegationEvents(child: string): HarnessEvent[] {
     },
     { type: "tool_output", id: call, output: `started Studio box (${child})`, exit_code: null, truncated: false },
     { type: "child", session: child, status: "idle", callId: call, agent: "Studio box" },
+    { type: "tool_call", id: note, name: "send_message", args: { to: child, text: sent } },
+    { type: "tool_output", id: note, output: "sent, and it joins the turn already running", exit_code: null, truncated: false },
   ];
 }
+
+// Long enough that the row cuts it, so the expanded card is the only place the
+// whole message is readable.
+const sent =
+  "Check hub.go and sse.go together rather than one at a time. The subscribe " +
+  "path is the one that hands both tabs the same channel, so a fix that only " +
+  "touches publish will read as correct and still drop events.";
 
 // A subagent part way through, so the panel has a running step to draw.
 function auditorEvents(): HarnessEvent[] {
