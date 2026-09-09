@@ -9,6 +9,7 @@
     beside = false,
     width = 300,
     fill = false,
+    min = 0,
     float = false,
     children,
   }: {
@@ -22,6 +23,9 @@
     /** Spans the anchor rather than taking a width of its own, which is what a
         list under a field needs. */
     fill?: boolean;
+    /** How narrow a filled list may get. A field beside its heading is only as
+        wide as its value, and a list of sentences needs more room than that. */
+    min?: number;
     /** Places itself against the viewport rather than against the anchor, so a
         pane that scrolls cannot clip it. It follows the anchor while anything
         scrolls, and turns upward when there is no room below. */
@@ -34,14 +38,19 @@
   let box = $state<{ top: number; left: number; width: number } | null>(null);
 
   // A floating popover is measured against the viewport, so it is placed after
-  // it has a size and placed again whenever anything under it moves.
+  // it has a size and placed again whenever anything under it moves. A list
+  // that grows or shrinks is watched too, since its height is what decides
+  // whether it opens downward.
   $effect(() => {
-    if (!float) return;
+    if (!float || !el) return;
     place();
     const again = () => place();
+    const watch = new ResizeObserver(again);
+    watch.observe(el);
     window.addEventListener("scroll", again, true);
     window.addEventListener("resize", again);
     return () => {
+      watch.disconnect();
       window.removeEventListener("scroll", again, true);
       window.removeEventListener("resize", again);
     };
@@ -54,7 +63,11 @@
     const anchor = el?.parentElement;
     if (!el || !anchor) return;
     const r = anchor.getBoundingClientRect();
-    const w = fill ? r.width : width;
+    const w = fill ? Math.max(r.width, min) : width;
+    // The width decides where the rows wrap, so it is set before the height is
+    // read. Measuring an unconstrained box answers with a height the popover
+    // never has, and the answer is always too short to turn it upward.
+    el.style.width = w + "px";
     const h = el.offsetHeight;
     // Below the anchor unless it was asked to open upward or there is no room.
     const above = up || (h > 0 && r.bottom + GAP + h > window.innerHeight - EDGE);

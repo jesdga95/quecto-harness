@@ -280,14 +280,13 @@
   <div class="field-card">
     <div class="flex items-center justify-between gap-4">
       <h4 class="field-head">Thinking</h4>
-      <div class="w-[168px] shrink-0">
-        <OptionPicker
-          value={agent.effort}
-          options={EFFORTS}
-          onpick={(effort) => onchange({ effort })}
-          label="Effort"
-        />
-      </div>
+      <OptionPicker
+        value={agent.effort}
+        options={EFFORTS}
+        onpick={(effort) => onchange({ effort })}
+        label="Effort"
+        inline
+      />
     </div>
     <label class="flex cursor-pointer items-center justify-between gap-6 border-t border-hair pt-3">
       <span class="flex min-w-0 flex-col gap-0.5">

@@ -1,9 +1,8 @@
 <script lang="ts">
-  import CaretDown from "phosphor-svelte/lib/CaretDown";
-  import Check from "phosphor-svelte/lib/Check";
-  import ImageIcon from "phosphor-svelte/lib/Image";
   import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
-  import Popover from "./Popover.svelte";
+  import ImageIcon from "phosphor-svelte/lib/Image";
+  import Picker from "./Picker.svelte";
+  import PickerRow from "./PickerRow.svelte";
   import type { Model, Probe } from "../api";
   import { k, probeMessage } from "../format";
 
@@ -71,59 +70,53 @@
   }
 </script>
 
-<div class="relative">
-  <input
-    class="input num pr-9"
-    placeholder="The model this agent answers with"
-    bind:value={draft}
-    oninput={(e) => type(e.currentTarget.value)}
-    onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-    spellcheck="false"
-    autocapitalize="off"
-  />
-  <button
-    class="icon-btn absolute top-1/2 right-1 -translate-y-1/2"
-    aria-label="Choose from the models this address lists"
-    aria-expanded={open}
-    onclick={() => (open ? close() : (open = true))}
-  >
-    <CaretDown size={14} />
-  </button>
+<Picker
+  label="Choose from the models this address lists"
+  {open}
+  caretOpens
+  onopen={() => (open = true)}
+  onclose={close}
+>
+  {#snippet trigger()}
+    <input
+      class="input num has-caret"
+      placeholder="The model this agent answers with"
+      bind:value={draft}
+      oninput={(e) => type(e.currentTarget.value)}
+      onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+      spellcheck="false"
+      autocapitalize="off"
+    />
+  {/snippet}
 
-  {#if open}
-    <Popover onclose={close} fill float>
-      <div class="max-h-[248px] overflow-y-auto">
-        {#each rows as model (model.id)}
-          <button class="popover-item" onclick={() => pick(model.id)}>
-            <span class="min-w-0 flex-1 truncate text-left">{model.id}</span>
-            {#if model.vision}
-              <ImageIcon size={14} class="text-muted" />
-            {/if}
-            <span class="num text-[12px] text-muted">{k(model.ctx)}</span>
-            {#if model.id === value}
-              <Check size={14} class="text-accent" />
-            {/if}
-          </button>
-        {:else}
-          <p class="px-[9px] py-1.5 text-[12px] text-muted">
-            {models.length === 0
-              ? "This address listed no models."
-              : "Nothing in the list matches what you typed."}
-          </p>
-        {/each}
-      </div>
-      {#if hits.length > rows.length}
-        <p class="px-[9px] py-1.5 text-[12px] text-muted">
-          {hits.length - rows.length} more. Keep typing to narrow the list.
-        </p>
-      {/if}
-      <button class="popover-item text-ink-2" onclick={onrefresh}>
-        <ArrowClockwise size={14} />
-        <span class="min-w-0 flex-1">Refresh list</span>
-      </button>
-    </Popover>
+  <div class="max-h-[248px] overflow-y-auto">
+    {#each rows as model (model.id)}
+      <PickerRow label={model.id} checked={model.id === value} onpick={() => pick(model.id)}>
+        {#snippet meta()}
+          {#if model.vision}
+            <ImageIcon size={14} class="shrink-0 text-muted" />
+          {/if}
+          <span class="num shrink-0 text-[12px] text-muted">{k(model.ctx)}</span>
+        {/snippet}
+      </PickerRow>
+    {:else}
+      <p class="px-[9px] py-1.5 text-[12px] text-muted">
+        {models.length === 0
+          ? "This address listed no models."
+          : "Nothing in the list matches what you typed."}
+      </p>
+    {/each}
+  </div>
+  {#if hits.length > rows.length}
+    <p class="px-[9px] py-1.5 text-[12px] text-muted">
+      {hits.length - rows.length} more. Keep typing to narrow the list.
+    </p>
   {/if}
-</div>
+  <button class="popover-item text-ink-2" onclick={onrefresh}>
+    <ArrowClockwise size={14} />
+    <span class="min-w-0 flex-1">Refresh list</span>
+  </button>
+</Picker>
 
 {#if !hasAddress}
   <p class="mt-1.5 text-[12px] text-muted">Enter an address to list models.</p>

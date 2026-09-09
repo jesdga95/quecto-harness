@@ -776,7 +776,8 @@
 
   .input,
   .select,
-  .textarea {
+  .textarea,
+  .picker {
     padding: 8px 11px;
     border: 1px solid var(--hair);
     border-radius: 10px;
@@ -1565,6 +1566,10 @@
     gap: 9px;
     width: 100%;
     padding: 8px 10px;
+    /* Rows carry their own gap, so a hover background never runs into the one
+       above or below it. The rail's own gap sits between its three parts, not
+       between the rows inside the list. */
+    margin-bottom: 3px;
     border: 0;
     border-radius: 9px;
     background: none;
@@ -1575,12 +1580,15 @@
     text-align: left;
   }
   .rail-row:hover {
-    background: rgb(255 255 255 / 0.06);
+    background: rgb(255 255 255 / 0.05);
     color: var(--term-ink);
   }
+  /* Well clear of the hover above it, and weighted as well as lit, so a row
+     under the pointer is never mistaken for the row being edited. */
   .rail-row.is-active {
-    background: rgb(255 255 255 / 0.1);
+    background: rgb(255 255 255 / 0.16);
     color: var(--term-ink);
+    font-weight: 500;
   }
   .rail-add {
     display: flex;
@@ -1616,23 +1624,20 @@
     border: 1px solid var(--hair);
     border-radius: 12px;
   }
-  /* A field that opens a list. Shaped like an input so it sits in a form
-     beside them, rather than like a chip. */
+  /* A field that opens a list. It takes the box above, so it is the same
+     height as the inputs it sits beside, and adds what a button needs. */
   .picker {
     display: flex;
     align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 8px 11px;
-    border: 1px solid var(--hair);
-    border-radius: 10px;
-    background: var(--page);
-    color: var(--text);
-    font-family: inherit;
-    font-size: 13px;
     text-align: left;
     cursor: pointer;
     transition: border-color 90ms ease;
+  }
+  /* Beside its heading rather than under it. Fixed rather than sized to its
+     value, so the field does not resize as the value is changed. */
+  .picker.is-inline {
+    width: 168px;
+    flex: none;
   }
   .picker:hover {
     border-color: var(--border-2);
@@ -1641,5 +1646,27 @@
     outline: 2px solid var(--accent);
     outline-offset: -1px;
     border-color: transparent;
+  }
+  /* Room at the right edge of a field for the caret that opens its list. */
+  .has-caret {
+    padding-right: 32px;
+  }
+  /* The caret itself, placed the same whether the field under it is a button
+     or an input that can also be typed into. */
+  .field-caret {
+    position: absolute;
+    top: 50%;
+    right: 11px;
+    transform: translateY(-50%);
+    display: grid;
+    place-items: center;
+    border: 0;
+    background: none;
+    line-height: 0;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .field-caret:hover {
+    color: var(--text-2);
   }
 }

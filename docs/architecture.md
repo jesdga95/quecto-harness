@@ -3310,6 +3310,9 @@ web/
     components/Agents.svelte        the dialog
     components/AgentPanel.svelte    the parameters, shared with setup
     components/AgentModelField.svelte
+    components/Picker.svelte        a field that opens a list
+    components/PickerRow.svelte     one row of that list
+    components/OptionPicker.svelte  a picker over a fixed set, for effort and protocol
     components/Modal.svelte
     components/ContextMeter.svelte
     components/SettingsPanel.svelte
@@ -3575,7 +3578,10 @@ takes the console's palette rather than the page's, for the same reason the cons
 the list reads as a place rather than as another panel.
 
 Choosing a row selects it for editing and nothing else, so the dialog can be opened, read
-and closed without the harness switching underneath. Every row is an icon and a name.
+and closed without the harness switching underneath. Every row is an icon and a name. The
+selected row is lit well clear of the hover under the pointer and weighted as well, since
+two washes a few percent apart read as the same thing and made hovering a row look like
+selecting it.
 Nothing in the dialog makes an agent answer: that is the composer chip, which is where the
 reader is when the question comes up, and it leaves every control in the dialog acting on
 the record in front of it.
@@ -3604,12 +3610,32 @@ The right pane is one card per group of fields: connection, thinking, sampling a
 instructions. Group names and the agent's name in the header are the page's own type scale,
 not a heavier one, so the dialog reads as part of the app rather than as a form.
 
-Effort, protocol and the model all open the same kind of list: a field shaped like the
-inputs beside it, and rows carrying the sentence that says what choosing each one means. A
-sentence per row beats one under the field, since the reader sees every answer while
-choosing rather than one at a time afterwards. Those lists set `float` on `Popover`, which
-places itself against the viewport and follows the anchor as anything scrolls: the pane
-they sit in scrolls, and a scroll container clips a popover positioned inside it.
+Effort, protocol and the model are one control drawn three times. `Picker` is the shell:
+the field, the caret at its right edge and the list under it, with the field itself passed
+in, since two of them are chosen from and the third can also be typed into. `PickerRow` is
+one row of that list. So the box, the caret, the check and the truncation are written once
+and the three fields cannot drift apart, which they had: the model field's caret was a
+button with a hover box of its own and the other two were a bare glyph.
+
+A row carries the sentence saying what choosing it means, which beats one sentence under
+the field, since the reader sees every answer while choosing rather than one at a time
+afterwards. A row with such a sentence is taller than one without, and the model rows go
+without: a list long enough to need a search wants rows a search can scan, so what is known
+about a model sits at the right edge of its one line instead.
+
+Those lists set `float` on `Popover`, which places itself against the viewport and follows
+the anchor as anything scrolls: the pane they sit in scrolls, and a scroll container clips
+a popover positioned inside it. It sets its own width before reading its height, because a
+list that spans its field wraps at that width and an unmeasured box is always shorter than
+the one that renders, which is what decides whether the list opens downward. A resize
+observer places it again when the list itself grows or shrinks, which is what a search does
+to it.
+
+Effort takes the picker's inline variant, beside its heading rather than under it, since
+thinking is one setting and a labelled field of its own would say it twice. A field that
+narrow cannot carry the list: its rows would wrap to three lines each. So an inline list
+takes a width of its own and hangs from the field's right edge, which is where the room in
+the card is.
 
 The name is a labelled field at the top of the connection card and the header only shows it.
 An in-place title reads as a heading, and a heading is not somewhere people look for a field.
