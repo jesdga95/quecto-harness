@@ -66,3 +66,36 @@ func TestToolDescriptionsNameTheirArguments(t *testing.T) {
 		t.Errorf("ask_question description omits its arguments: %q", ToolAskQuestion())
 	}
 }
+
+func TestSystemAppendsInstructions(t *testing.T) {
+	base := System(SystemVars{Project: "/src/x", OS: "darwin"})
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", Instructions: "Review Go, do not write it."})
+
+	if !strings.HasPrefix(got, base) {
+		t.Fatalf("instructions did not follow the built-in prompt: %q", got)
+	}
+	if !strings.HasSuffix(got, "Review Go, do not write it.") {
+		t.Errorf("instructions are not last: %q", got)
+	}
+	for _, want := range []string{"/src/x", "darwin", "read_file", "run_shell"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("appending dropped %q: %q", want, got)
+		}
+	}
+}
+
+func TestSystemWithoutInstructionsIsUnchanged(t *testing.T) {
+	base := System(SystemVars{Project: "/src/x", OS: "darwin"})
+	for _, in := range []string{"", "   ", "\n\t\n"} {
+		if got := System(SystemVars{Project: "/src/x", OS: "darwin", Instructions: in}); got != base {
+			t.Errorf("instructions %q changed the prompt:\n%q\nwant\n%q", in, got, base)
+		}
+	}
+}
+
+func TestSystemDoesNotParseInstructions(t *testing.T) {
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", Instructions: "Work in {{.Project}} and {{if"})
+	if !strings.Contains(got, "{{.Project}} and {{if") {
+		t.Errorf("instructions were not passed through verbatim: %q", got)
+	}
+}

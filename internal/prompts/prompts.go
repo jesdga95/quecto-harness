@@ -28,10 +28,13 @@ func mustRead(name string) string {
 	return strings.TrimRight(string(b), " \t\r\n")
 }
 
-// SystemVars are the values system.md takes.
+// SystemVars are the values system.md takes. Instructions is the agent's own
+// text, which follows the built-in prompt in the same message. It is inserted
+// as a value and never parsed, so a stray template action in it is text.
 type SystemVars struct {
-	Project string
-	OS      string
+	Project      string
+	OS           string
+	Instructions string
 }
 
 func System(v SystemVars) string {
@@ -39,7 +42,7 @@ func System(v SystemVars) string {
 	if err := systemTmpl.Execute(&b, v); err != nil {
 		panic("prompts: render system.md: " + err.Error())
 	}
-	return b.String()
+	return strings.TrimRight(b.String(), " \t\r\n")
 }
 
 // Compaction is the message the summary is sent back as, so the entry keeps
