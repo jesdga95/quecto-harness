@@ -1769,7 +1769,16 @@ func TestSubagentSessionsAreNotListed(t *testing.T) {
 	if len(kids) != 1 {
 		t.Fatalf("children = %v, want the one launched", kids)
 	}
-	if one, _ := kids[0].(map[string]any); one["id"] != child.ID {
+	one, _ := kids[0].(map[string]any)
+	if one["id"] != child.ID {
 		t.Errorf("children = %v", kids)
+	}
+	// The panel names the agent and says whether the run is still working, and
+	// this is the only place a reloaded page reads either from.
+	if one["agent"] != "Local" {
+		t.Errorf("agent = %v, want the name rather than the id", one["agent"])
+	}
+	if one["state"] != "idle" {
+		t.Errorf("state = %v, want idle for a run nothing is running", one["state"])
 	}
 }

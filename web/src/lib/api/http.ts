@@ -86,6 +86,7 @@ interface WireAgent {
   max_context?: number | null;
   seed?: number | null;
   concurrency?: number;
+  description?: string;
   instructions?: string;
 }
 
@@ -197,7 +198,7 @@ interface WireSnapshot {
   question?: { id?: string; call_id?: string } | null;
   state?: string;
   parent?: string;
-  children?: { id?: string; title?: string; agent?: string }[] | null;
+  children?: { id?: string; title?: string; agent?: string; state?: string }[] | null;
   steer?: WireSteer | null;
   last_seq?: number;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
@@ -357,6 +358,7 @@ function toAgent(a: WireAgent): Agent {
     max_context: a.max_context ?? null,
     seed: a.seed ?? null,
     concurrency: a.concurrency ?? 1,
+    description: a.description ?? "",
     instructions: a.instructions ?? "",
   };
 }
@@ -719,6 +721,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
       id: c.id ?? "",
       title: c.title ?? "",
       agent: c.agent ?? "",
+      status: toStatus(c.state),
     })),
   };
   summaries.set(id, session);
@@ -757,6 +760,10 @@ interface OpenCall {
   args: string;
 }
 
+// Every frame the harness sends is named, and a name with no listener is
+// dropped rather than reaching onmessage, so a type missing here is a feature
+// that silently does nothing. error is registered separately, since a
+// transport failure arrives on the same listener.
 const EVENT_NAMES = [
   "status",
   "delta",
@@ -773,6 +780,8 @@ const EVENT_NAMES = [
   "compacted",
   "queued",
   "message",
+  "child",
+  "changed",
   "done",
   "resync",
 ];
@@ -834,6 +843,9 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
         },
       ];
 
+    case "changed":
+      return [{ type: "changed" }];
+
     case "child":
       return [
         {
@@ -842,6 +854,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           status: toStatus(ev.state),
           callId: ev.call_id,
           agent: ev.agent,
+          title: ev.title,
         },
       ];
 

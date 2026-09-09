@@ -34,8 +34,8 @@
   }
 </script>
 
-<aside class="changes">
-  <div class="changes-head">
+<aside class="dock">
+  <div class="dock-head">
     <h2 class="text-[13px] font-medium">Changes in this session</h2>
     <span class="num ml-auto text-[12px]">
       <span class="stat-add">+{app.changes.added}</span>

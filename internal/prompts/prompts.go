@@ -29,13 +29,12 @@ func mustRead(name string) string {
 	return strings.TrimRight(string(b), " \t\r\n")
 }
 
-// AgentBrief is one agent as the prompt names it to another: what it is
-// called, what it runs, and what it is for.
+// AgentBrief is one agent as the prompt names it to another: what it is called
+// and what it is for. The model behind it is not named, since which model an
+// agent runs is not what the one delegating chooses on.
 type AgentBrief struct {
-	Name  string
-	Model string
-	// Role is the first line of that agent's instructions, which is the only
-	// field on the record saying what the agent is for.
+	Name string
+	// Role is the one line saying what the agent is for.
 	Role string
 }
 

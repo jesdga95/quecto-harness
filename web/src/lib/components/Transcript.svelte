@@ -11,7 +11,7 @@
   import QuestionCard from "./QuestionCard.svelte";
   import StepRow from "./StepRow.svelte";
   import type { Attached, TranscriptItem } from "../api";
-  import { app, canResend, resend, selectSession } from "../state/app.svelte";
+  import { app, canResend, resend } from "../state/app.svelte";
   import { bytes, duration, fileKind, fileName, k } from "../format";
 
   let scroller = $state<HTMLDivElement | null>(null);
@@ -274,7 +274,7 @@
             <QuestionCard {item} />
           </div>
         {:else}
-          <StepRow {item} onopen={(id) => void selectSession(id)} />
+          <StepRow {item} />
         {/if}
       {/each}
 

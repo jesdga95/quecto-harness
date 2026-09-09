@@ -227,10 +227,157 @@ func TestChildMessageReachesItsLauncher(t *testing.T) {
 	waitIdle(t, s)
 }
 
+// A subagent that answered with send_message does not have the same answer
+// handed over again when its turn ends.
+func TestASubagentThatSpokeIsNotReportedTwice(t *testing.T) {
+	h, _ := launcher(t)
+	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_send_parent.txt", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "delegate it", nil)
+	child := childOf(t, h, s)
+
+	waitForEntryFrom(t, s, "Reviewer")
+	waitIdle(t, child)
+	waitIdle(t, s)
+
+	var said []string
+	s.mu.Lock()
+	for _, e := range s.Entries {
+		if e.From == "Reviewer" {
+			said = append(said, e.Content)
+		}
+	}
+	s.mu.Unlock()
+	if len(said) != 1 {
+		t.Errorf("the launcher was told %d times: %q", len(said), said)
+	}
+	if !strings.Contains(said[0], "which package did you mean") {
+		t.Errorf("the launcher got %q, want what the subagent chose to send", said[0])
+	}
+}
+
+// The launcher is told its change panel is stale when a subagent writes, since
+// nothing else on its stream mentions a file it did not write itself.
+func TestARollUpTellsTheLauncherItsFilesMoved(t *testing.T) {
+	h, _ := launcher(t)
+	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
+	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_write_once.txt", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "delegate it", nil)
+	child := childOf(t, h, s)
+	waitIdle(t, child)
+	waitForEntryFrom(t, s, "Reviewer")
+	waitIdle(t, s)
+
+	if len(h.rec.ofType("changed")) == 0 {
+		t.Error("the launcher was never told its files moved")
+	}
+	s.mu.Lock()
+	held := len(s.Baselines)
+	s.mu.Unlock()
+	if held == 0 {
+		t.Error("nothing rolled up, so the event proved nothing")
+	}
+}
+
+// The launcher follows a subagent all the way to idle. A turn ends outside
+// setState, so the state that says the work is over is the one most easily
+// left unpublished.
+func TestTheLauncherIsToldWhenASubagentGoesIdle(t *testing.T) {
+	h, _ := launcher(t)
+	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "delegate it", nil)
+	child := childOf(t, h, s)
+	waitIdle(t, child)
+	waitIdle(t, s)
+
+	// The state is set before it is published, so the event is what to wait
+	// for rather than the state that produced it.
+	deadline := time.Now().Add(10 * time.Second)
+	var states []string
+	for time.Now().Before(deadline) {
+		states = states[:0]
+		for _, e := range h.rec.ofType("child") {
+			if e.Fields["session"] == child.ID {
+				states = append(states, e.Fields["state"].(string))
+			}
+		}
+		if len(states) > 0 && states[len(states)-1] == string(StateIdle) {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Errorf("the subagent was never reported idle to its launcher: %v", states)
+}
+
+// A message from another agent reaches an idle launcher as an event, or the
+// turn it starts answers a message no browser ever drew.
+func TestAMessageToAnIdleLauncherIsPublished(t *testing.T) {
+	h, _ := launcher(t)
+	// The launcher's turn ends before the subagent reports, so the report
+	// starts a turn rather than joining one.
+	release := h.replay.hold("Beta-30B")
+	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "delegate it", nil)
+	childOf(t, h, s)
+	waitIdle(t, s)
+
+	release()
+	got := waitForEntryFrom(t, s, "Reviewer")
+	waitIdle(t, s)
+
+	drawn := false
+	for _, e := range h.rec.ofType("message") {
+		if e.Fields["from"] == "Reviewer" && e.Fields["seq"] == got.Seq {
+			drawn = true
+		}
+	}
+	if !drawn {
+		t.Errorf("no message event named the sender: %+v", h.rec.ofType("message"))
+	}
+
+	// A typed message is on the page that sent it, so drawing it again would
+	// be a second bubble for one message.
+	for _, e := range h.rec.ofType("message") {
+		if e.Fields["from"] == "" {
+			t.Errorf("a typed message was drawn by the harness: %+v", e.Fields)
+		}
+	}
+}
+
+// A subagent that never reached for send_message still answers, or the work
+// its launcher asked for lands nowhere.
+func TestASilentSubagentStillReports(t *testing.T) {
+	h, _ := launcher(t)
+	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "delegate it", nil)
+
+	got := waitForEntryFrom(t, s, "Reviewer")
+	if got.Content != "The repository has cmd, internal and web." {
+		t.Errorf("the entry = %q, want the answer as it was written", got.Content)
+	}
+	waitIdle(t, s)
+}
+
 // The limit is the launcher's own, and it counts the subagents still working.
 func TestConcurrencyBoundsLiveChildren(t *testing.T) {
-	h, _ := launcher(t)
-	h.setAgent(t, func(a *config.Agent) { a.Concurrency = 1 })
+	h, reviewer := launcher(t)
+	if _, _, err := h.cfg.UpdateAgent(reviewer.ID, func(a *config.Agent) { a.Concurrency = 1 }); err != nil {
+		t.Fatal(err)
+	}
 	release := h.replay.hold("Beta-30B")
 	h.replay.forModel("Alpha-12B", "stream_run_agent_two.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
@@ -254,10 +401,32 @@ func TestConcurrencyBoundsLiveChildren(t *testing.T) {
 	if !strings.Contains(outs[0], "started Reviewer") {
 		t.Errorf("the first launch = %q", outs[0])
 	}
-	if !strings.Contains(outs[1], "which is the limit") {
+	if !strings.Contains(outs[1], "runs 1 at a time") {
 		t.Errorf("the second launch = %q, want it refused", outs[1])
 	}
 	release()
+}
+
+// A model pinned to one slot answers one request at a time, so an agent that
+// runs one at a time cannot take work from itself: its own turn is the slot.
+func TestAnAgentThatRunsOneAtATimeWillNotTakeItsOwnWork(t *testing.T) {
+	h := newHarness(t)
+	// The only agent is the one answering, so run_agent names it and nothing
+	// else. Its own turn is under way when the call is made.
+	mine := h.setAgent(t, func(a *config.Agent) { a.Name = "Alpha"; a.Concurrency = 1 })
+	h.replay.forModel("Alpha-12B", "stream_run_agent_self.txt", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "hand it to yourself", nil)
+	waitIdle(t, s)
+
+	out := toolOutput(t, s, "run_agent")
+	if !strings.Contains(out, "runs 1 at a time") {
+		t.Errorf("run_agent answered %q, want it refused against the agent's own slot", out)
+	}
+	if h.engine.busy(mine.ID) != 0 {
+		t.Errorf("the launcher is still counted busy after its turn ended")
+	}
 }
 
 // A card a subagent raises is drawn in the conversation the person has open,
@@ -454,13 +623,19 @@ func TestBriefFollowsTheParent(t *testing.T) {
 	h, _ := launcher(t)
 	cfg := h.cfg.Config()
 	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B")
-	if b := h.engine.briefFor(top, cfg); !b.offer.Agents || !b.offer.Ask || len(b.agents) != 2 || b.launcher != "" {
+	// Two agents are configured, and the one answering is spending its only
+	// slot on this turn, so the one it can hand work to is the other.
+	b := h.engine.briefFor(top, cfg)
+	if !b.offer.Agents || !b.offer.Ask || b.launcher != "" {
 		t.Errorf("a conversation's brief = %+v", b)
+	}
+	if len(b.agents) != 1 || b.agents[0].Name != "Reviewer" {
+		t.Errorf("the agents it may hand work to = %+v", b.agents)
 	}
 	child := newSession("sess_kid", h.project, h.agent.ID, "Alpha-12B")
 	child.Parent = "sess_top"
 	child.Entries = []store.Entry{{Kind: "user", From: "Local", Content: "do it"}}
-	b := h.engine.briefFor(child, cfg)
+	b = h.engine.briefFor(child, cfg)
 	if b.offer.Agents || b.offer.Ask || !b.offer.Message || b.launcher != "Local" {
 		t.Errorf("a subagent's brief = %+v", b)
 	}
@@ -480,6 +655,18 @@ func TestRoleIsTheFirstLine(t *testing.T) {
 		if got := role(config.Agent{Instructions: tc.in}); got != tc.want {
 			t.Errorf("role(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// The description says what an agent is for. Instructions answer for an agent
+// written before the field existed, and are not read once one is set.
+func TestDescriptionOutranksTheInstructions(t *testing.T) {
+	a := config.Agent{Description: "Used for design work.", Instructions: "Answer in British English."}
+	if got := role(a); got != "Used for design work." {
+		t.Errorf("role = %q, want the description", got)
+	}
+	if got := role(config.Agent{Instructions: "Reviews Go."}); got != "Reviews Go." {
+		t.Errorf("role = %q, want the instructions where there is no description", got)
 	}
 }
 

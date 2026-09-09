@@ -5,6 +5,7 @@ import type {
   AgentPatch,
   Attached,
   Changes,
+  Child,
   Config,
   HarnessEvent,
   Model,
@@ -50,6 +51,15 @@ export const app = $state({
   todos: [] as Todo[],
   changes: { files: [], added: 0, removed: 0 } as Changes,
   changesOpen: false,
+  // The subagent runs this session launched, newest first, with what each is
+  // doing now. The chip counts them and the panel lists them.
+  runs: [] as Child[],
+  runsOpen: false,
+  // The run the panel is showing and the steps it has taken. They are fetched
+  // when a run is opened, so a panel nobody opened costs no request and holds
+  // no stream.
+  runId: "",
+  runItems: [] as TranscriptItem[],
   usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: 0 } as Usage,
   status: "idle" as TurnStatus,
   // The model has been asked and nothing has come back yet. True from the
@@ -70,6 +80,9 @@ export const app = $state({
 });
 
 let unsubscribe: (() => void) | null = null;
+// The stream of the run the panel is showing. One at a time: a reader follows
+// one subagent, and the rest report their state on the launcher's own stream.
+let runStream: (() => void) | null = null;
 
 /** Runs one call and reports failure once, in the bar at the top of the page. */
 async function guard<T>(work: () => Promise<T>): Promise<T | null> {
@@ -165,6 +178,8 @@ function clearSession(): void {
   app.awaitingModel = false;
   app.changes = { files: [], added: 0, removed: 0 };
   app.changesOpen = false;
+  closeRuns();
+  app.runs = [];
   // Nothing is known about the next session's context until its model has
   // been read, and a zero window draws no chip.
   app.usage = { prompt_tokens: 0, completion_tokens: 0, n_ctx: 0 };
@@ -194,6 +209,10 @@ export async function selectSession(id: string): Promise<void> {
   app.status = t.status;
   app.awaitingModel = WAITING.has(t.status);
   app.changes = { files: [], added: 0, removed: 0 };
+  // A reloaded page reads which subagents are still working from the snapshot,
+  // since their state only reaches the launcher's stream when it changes.
+  closeRuns();
+  app.runs = t.session.children;
   unsubscribe = api.events(id, onEvent);
   void loadChanges();
 }
@@ -517,9 +536,13 @@ export const TOP_P_STEPS = samplingSteps(1);
 export const TOP_K_STEPS = wholeSteps(200, 5);
 export const REPEAT_PENALTY_STEPS = samplingSteps(2);
 
-/** How many agents one may have working for it at once. The ceiling matches
-    the harness's, so a number the form takes is never one the write refuses. */
+/** How many tasks one agent runs at once. The ceiling matches the harness's,
+    so a number the form takes is never one the write refuses. */
 export const MAX_CONCURRENCY = 16;
+
+/** How long the line describing an agent may be. The ceiling matches the
+    harness's, so a description the form takes is never one the write refuses. */
+export const MAX_DESCRIPTION = 200;
 
 /** A reply length doubles rather than creeps, so the bar does too. */
 export const MAX_TOKENS_STEPS: (number | null)[] = [
@@ -590,8 +613,76 @@ export async function loadChanges(): Promise<void> {
   }
 }
 
+/** Opens the change panel, closing the agents panel. The two share the column
+    beside the transcript, which is too narrow for both. */
 export function toggleChanges(): void {
   app.changesOpen = !app.changesOpen;
+  if (app.changesOpen) closeRuns();
+}
+
+export function toggleRuns(): void {
+  if (app.runsOpen) {
+    closeRuns();
+    return;
+  }
+  app.changesOpen = false;
+  app.runsOpen = true;
+  // The one still working is what a reader opening the panel came for.
+  const first = app.runs.find((r) => r.status !== "idle") ?? app.runs[0];
+  if (first) void openRun(first.id);
+}
+
+/** Closes the agents panel and drops the stream it was following. */
+export function closeRuns(): void {
+  runStream?.();
+  runStream = null;
+  app.runsOpen = false;
+  app.runId = "";
+  app.runItems = [];
+}
+
+/** Shows one subagent run in the panel: its steps as they stand, and its
+    stream from there. Nothing else is followed, so the panel holds one stream
+    however many agents are working. */
+export async function openRun(id: string): Promise<void> {
+  runStream?.();
+  runStream = null;
+  app.runId = id;
+  app.runItems = [];
+  const t = await guard(() => api.getSession(id));
+  if (!t || app.runId !== id) return;
+  app.runItems = t.items;
+  noteRun(id, t.status);
+  runStream = api.events(id, onRunEvent);
+}
+
+/** The panel's stream. It builds the run's steps and nothing else: the
+    launcher's own screen is not this session's. */
+function onRunEvent(event: HarnessEvent): void {
+  if (event.type === "resync") {
+    app.runItems = event.transcript.items;
+    return;
+  }
+  if (event.type === "message") {
+    if (!app.runItems.some((i) => i.kind === "user" && i.seq === event.seq)) {
+      pushUser(app.runItems, event.text, event.files, event.seq, false, event.from);
+    }
+    return;
+  }
+  applyEvent(app.runItems, event);
+}
+
+/** Records where a subagent run has got to. A launch is the first the launcher
+    hears of one, so an id nothing holds is added rather than dropped. */
+function noteRun(id: string, status: TurnStatus, agent = "", title = ""): void {
+  const run = app.runs.find((r) => r.id === id);
+  if (run) {
+    run.status = status;
+    if (agent) run.agent = agent;
+    if (title) run.title = title;
+    return;
+  }
+  app.runs.unshift({ id, title, agent, status });
 }
 
 // Statuses that mean a request is out and nothing has come back for it.
@@ -630,6 +721,17 @@ function onEvent(event: HarnessEvent): void {
     return;
   }
 
+  if (event.type === "child") {
+    noteRun(event.session, event.status, event.agent ?? "", event.title ?? "");
+  }
+
+  // The harness says the files moved for a reason this stream cannot show,
+  // which is a subagent having written one.
+  if (event.type === "changed") {
+    void loadChanges();
+    return;
+  }
+
   if (event.type === "connection") {
     app.connected = event.connected;
     if (event.connected) {
@@ -658,13 +760,18 @@ function onEvent(event: HarnessEvent): void {
 
   applyEvent(app.items, event);
 
-  // Only the file tools change the list, and the event carries an id rather
-  // than a name, so the card it filled is what names it.
+  // The event carries an id rather than a name, so the card it filled is what
+  // names it. A write moves the list by definition. A command can create,
+  // change or delete anything, but only a path some write already kept a copy
+  // of can appear in the list, so an empty list stays empty and is not refetched.
   if (event.type === "tool_output") {
     const card = app.items.find((i) => i.id === event.id);
-    const wrote =
-      card?.kind === "tool" && (card.name === "write_file" || card.name === "replace_in_file");
-    if (wrote) void loadChanges();
+    const touched =
+      card?.kind === "tool" &&
+      (card.name === "write_file" ||
+        card.name === "replace_in_file" ||
+        (card.name === "run_shell" && app.changes.files.length > 0));
+    if (touched) void loadChanges();
   }
 
   if (event.type === "usage") {

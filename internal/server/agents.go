@@ -29,6 +29,7 @@ type agentBody struct {
 	MaxContext        patch[int]     `json:"max_context"`
 	Seed              patch[int]     `json:"seed"`
 	Concurrency       *int           `json:"concurrency"`
+	Description       *string        `json:"description"`
 	Instructions      *string        `json:"instructions"`
 }
 
@@ -66,6 +67,10 @@ func (b agentBody) check() error {
 	}
 	if b.Concurrency != nil && (*b.Concurrency < 1 || *b.Concurrency > config.MaxConcurrency) {
 		return errors.New("Concurrency is outside 1 to " + strconv.Itoa(config.MaxConcurrency) + ": one agent works alone")
+	}
+	if b.Description != nil && len(strings.TrimSpace(*b.Description)) > config.MaxDescription {
+		return errors.New("Description is longer than " + strconv.Itoa(config.MaxDescription) +
+			" characters: it is one line in a list the other agents read")
 	}
 	return nil
 }
@@ -117,6 +122,9 @@ func (b agentBody) apply(a *config.Agent) {
 	}
 	if b.Concurrency != nil {
 		a.Concurrency = *b.Concurrency
+	}
+	if b.Description != nil {
+		a.Description = strings.TrimSpace(*b.Description)
 	}
 	if b.Instructions != nil {
 		a.Instructions = *b.Instructions

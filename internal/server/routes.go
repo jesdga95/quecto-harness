@@ -88,6 +88,7 @@ type agentJSON struct {
 	MaxContext        *int     `json:"max_context"`
 	Seed              *int     `json:"seed"`
 	Concurrency       int      `json:"concurrency"`
+	Description       string   `json:"description"`
 	Instructions      string   `json:"instructions"`
 }
 
@@ -97,7 +98,7 @@ func toAgentJSON(a config.Agent) agentJSON {
 		Model: a.Model, Effort: string(a.Effort), PreserveReasoning: a.PreserveReasoning,
 		Temperature: a.Temperature, TopP: a.TopP, TopK: a.TopK,
 		RepeatPenalty: a.RepeatPenalty, MaxTokens: a.MaxTokens, MaxContext: a.MaxContext, Seed: a.Seed,
-		Concurrency: a.Concurrency, Instructions: a.Instructions,
+		Concurrency: a.Concurrency, Description: a.Description, Instructions: a.Instructions,
 	}
 }
 
@@ -390,6 +391,23 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// children lists the subagent runs one session launched, each with the name of
+// the agent running it and what it is doing now. A reloaded page reads which
+// are still working from here and nowhere else.
+func (s *Server) children(id string) []map[string]any {
+	kids := s.store.Children(id)
+	out := make([]map[string]any, 0, len(kids))
+	cfg := s.cfg.Config()
+	for _, k := range kids {
+		a, _ := cfg.AgentByID(k.Agent)
+		out = append(out, map[string]any{
+			"id": k.ID, "title": k.Title, "agent": a.Name,
+			"state": string(s.engine.LiveState(k.ID)),
+		})
+	}
+	return out
+}
+
 func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.engine.Open(r.PathValue("id"))
 	if err != nil {
@@ -417,7 +435,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		"id": doc.ID, "project": doc.Project, "model": doc.Model, "parent": doc.Parent,
 		// A subagent run is reachable only from the transcript that launched
 		// it, so a launcher carries the list of what it launched.
-		"children": s.store.Children(doc.ID),
+		"children": s.children(doc.ID),
 		// A tab that refetches still draws the message waiting for the turn.
 		"steer": steerJSON(sess.Steer()),
 		"state": string(state), "n_ctx": nctx, "n_ctx_source": source,

@@ -272,6 +272,7 @@ type FileAgent struct {
 	Temperature       *float64 `json:"temperature,omitempty"`
 	TopP              *float64 `json:"top_p,omitempty"`
 	Concurrency       *int     `json:"concurrency,omitempty"`
+	Description       *string  `json:"description,omitempty"`
 	Instructions      *string  `json:"instructions,omitempty"`
 }
 
@@ -335,6 +336,7 @@ the id is the identity and dropping a working connection over a label is worse.
     "preserve_reasoning": true,
     "temperature": 0.35,
     "concurrency": 1,
+    "description": "",
     "instructions": ""
   }],
   "agent": "agt_2f7qk3m9x4pd8s1v",
@@ -395,6 +397,7 @@ And per agent:
 | `temperature` | 0 to 2 | left to the model server |
 | `top_p` | 0 to 1 | left to the model server |
 | `concurrency` | 1 to 16 | 1 |
+| `description` | first line, at most 200 characters | empty |
 | `instructions` | any text, trimmed | trimming is not a violation |
 | `model` | anything | never validated: it is a remote id and the list is not known at read time |
 
@@ -2347,28 +2350,57 @@ characters of its task rather than costing a naming request, and reports to its 
 a turn of it ends. Its context derives from the engine's rather than from the turn that
 started it, since it outlives that turn.
 
+The delegation list names each agent as `name: role`, and nothing else. `role` is
+`Agent.Description`, the one line saying what an agent is for, and falls back to the first line
+of its instructions for an agent written before the field existed. It is bounded at 200
+characters and cut to one line whatever was typed, since every delegating agent reads the whole
+list. The model behind an agent is not named: which model it runs is not what the one
+delegating chooses on, and naming it invites a choice made on the wrong thing.
+
 Messages between the two are steering. `deliverFrom` is `deliver` with a sender: it joins a
 turn that is running and starts one that is not, which is the machinery a typed message
-already uses. Two arriving at once join, and a join across senders keeps neither name. The
+already uses. A message that starts a turn is published as a `message` event only when it has
+a sender: a typed one is already on the page it was typed into, and one from another agent was
+typed into no composer, so without the event the launcher answers a message no browser drew. Two arriving at once join, and a join across senders keeps neither name. The
 entry holds the message as it was written and `Entry.From` holds the sender; the name is put
 in front of the text where the prompt is built, since a message from a person and one from
 another agent arrive on the same role and the model has nothing else to tell them apart.
 
-Reporting is automatic. Every subagent turn ends by handing its last reply to its launcher,
-truncated through the output limit, so one that never reached for `send_message` still
-answers. A subagent that was stopped or failed says so instead. A launcher that has already
-gone idle is woken into a turn by this, which costs tokens nobody typed for and is the direct
+Reporting is the subagent's own call. `send_message` is how it answers, and the harness adds
+nothing on top of one: the same words arriving twice are noise in the launcher's turn. A turn
+that ends without the subagent having said anything hands over its last reply instead,
+truncated through the output limit, so work a launcher asked for does not land nowhere. A run
+that was stopped or failed says so whether or not it spoke. A launcher that has already gone
+idle is woken into a turn by either, which costs tokens nobody typed for and is the direct
 consequence of the launch not blocking.
 
-The files a subagent wrote are rolled onto its launcher when it ends, blob and all. The
-first-writer-wins rule in `recordBaseline` is the merge: a path the launcher wrote first keeps
-the launcher's older copy, which is the state the work started from. Without the roll-up the
-launcher's change panel is empty after work it asked for.
+The files a subagent wrote are rolled onto its launcher when it ends, blob and all, spoken or
+silent, since the change panel is not a message. The first-writer-wins rule in
+`recordBaseline` is the merge: a path the launcher wrote first keeps the launcher's older
+copy, which is the state the work started from. Without the roll-up the launcher's change
+panel is empty after work it asked for.
 
-`Agent.Concurrency` bounds the subagents one agent may have working at once. It counts the
-live ones, and a launch past the limit is a tool error the model can wait on. Stopping a
-conversation stops the agents working for it, and deleting one deletes them: a subagent run is
-reachable only through its launcher, so leaving it behind leaks a file nothing can open. That
+`Agent.Concurrency` belongs to the agent being asked, not to the one asking. It counts every
+live session running that agent, a conversation as well as a subagent run, because what it
+stands for is concurrent requests to one model server: a model pinned to a single slot answers
+one at a time whoever is asking. The launcher's own turn is therefore one of them, so an agent
+that runs one at a time cannot take work from itself. A launch past the number is a tool error
+the model can wait on.
+
+The list is what is left rather than what exists. `briefFor` subtracts the launcher's own slot
+from its own agent and leaves out any agent with none free, so an agent every launch would
+refuse is never named. When that leaves nobody, `run_agent` is not offered at all, which is the
+right answer for a lone agent that runs one at a time. The subtraction is static, so the
+system message does not move with live state: another conversation already running one of those
+agents is caught at the call, since a prompt that changed as subagents started would invalidate
+the measured context base each time.
+
+A launcher follows its subagents through `announce`, which publishes a state to the session's
+own stream and, when the session has a parent, a `child` event to that parent. Every state a
+browser draws goes through it, `finish` included: a turn ends outside `setState`, and a
+launcher that never hears the last state is left drawing the one before it. Stopping a
+conversation stops the agents working for it, and deleting one deletes them: a subagent run is reachable only through
+its launcher, so leaving it behind leaks a file nothing can open. That
 is the one place the harness's usual no-cascade rule does not hold.
 
 Depth is one. A subagent is not offered `run_agent`, which removes a class of runaway for the
@@ -2680,7 +2712,7 @@ All request and response bodies are `application/json` unless stated. Errors are
      "model": "Gemma4-12B",
      "effort": "medium", "preserve_reasoning": true,
      "temperature": 0.35, "top_p": null, "top_k": null, "repeat_penalty": null,
-     "max_tokens": null, "seed": null, "concurrency": 1, "instructions": ""}
+     "max_tokens": null, "seed": null, "concurrency": 1, "description": "", "instructions": ""}
   ],
   "agent": "agt_2f7qk3m9x4pd8s1v",
   "autoload": true,
@@ -2923,12 +2955,22 @@ Response is the created `Summary` plus `"state": "idle"`.
   "breakdown": {"system": 154, "tools": 1026, "messages": 3131},
   "compactions": 1,
   "pending": [],
+  "parent": "",
+  "children": [
+    {"id": "sess_p2r8w6h3jx9tc4bd", "title": "review internal/llm", "agent": "Reviewer", "state": "executing"}
+  ],
   "entries": [ ... as in section 9.2 ... ],
   "last_seq": 41
 }
 ```
 
 `breakdown` is absent until the parts have been measured, which is section 8.6.
+
+`parent` names the session that launched this one and is empty for a conversation somebody
+started. `children` lists the subagent runs this session launched, which `GET /api/sessions`
+leaves out and nothing else reaches. Each carries the agent's name rather than its id, since
+the name is what the transcript already calls it, and the state it is in now, since a reloaded
+page has no other way to tell a run that is still working from one that has finished.
 
 `pending` carries any unanswered `perms.Request` for this session, so a page reload restores
 the blocked composer. `question` is present only while a turn waits on `ask_question`, and
@@ -3048,8 +3090,14 @@ Event payloads:
 {"type":"status_entry","seq":127,"content":"Stopped"}
 {"type":"error","seq":128,"kind":"model_loading","message":"model \"Gemma4-12B\" is loading: send the message again in a moment"}
 {"type":"done","seq":129,"finish_reason":"stop","iterations":2}
-{"type":"resync","seq":130}
+{"type":"child","seq":130,"session":"sess_p2r8w6h3jx9tc4bd","agent":"Reviewer","title":"review internal/llm","state":"executing"}
+{"type":"changed","seq":131}
+{"type":"resync","seq":132}
 ```
+
+`child` and `changed` go to a launcher about a subagent it started, not about itself. `child`
+is that run's state, and `changed` says the launcher's own change panel is stale because the
+subagent wrote something.
 
 `tool_call` carries the argument fragment from one chunk, so the UI can show arguments
 arriving. The complete call is also implied by the `tool_output` event that follows.
@@ -3433,6 +3481,7 @@ export type Agent = {
   max_tokens: number | null;
   seed: number | null;
   concurrency: number;
+  description: string;
   instructions: string;
 };
 
@@ -3585,6 +3634,8 @@ typing, but Send is disabled while `connected` is false.
 | `status_entry` | appends a plain row for something the harness did rather than the model: the stopped marker and the tool call limit |
 | `error` | appends a red row with the message; does not clear the transcript |
 | `done` | sets `streaming: false` on the last assistant entry, `state` returns to `idle` |
+| `child` | updates that run's row in the agents dock and its state on the `run_agent` row |
+| `changed` | refetches the change list, which nothing else on this stream would have moved |
 | `resync` | triggers the snapshot refetch of 12.5 |
 
 Assistant content is rendered as plain text with fenced code blocks detected by a small
@@ -3770,6 +3821,33 @@ way to clear rules left behind by a project that was removed from the list.
 Each session row in the sidebar carries a remove control that calls
 `DELETE /api/sessions/{id}` behind a confirmation, since there is no undo. A 409 shows
 `stop the current turn first` on the row.
+
+### 12.10 The agents dock
+
+A subagent works unattended, and its steps are in a transcript the sidebar does not list. The
+dock is how they are read without leaving the conversation that asked for them.
+
+`RunsChip` sits in the session header beside the changes chip. It counts `app.runs`: `N
+running` with a spinner while any are working, `N agents` when none are. `RunsPanel` is the
+column it opens, and it shares that column with the change panel. The two chips are mutually
+exclusive, since 460 pixels of dock beside a transcript is as much as the narrowest supported
+window holds.
+
+`app.runs` is seeded from `children` on the session snapshot, which carries each run's agent
+name and what it is doing now, and is kept current by the `child` events the launcher already
+receives from `announce`. That covers the chip and the strip of runs at the top of the dock
+with no extra stream.
+
+The steps are a second matter. The panel follows one run at a time: opening a row fetches that
+run's snapshot and subscribes to its stream, and switching rows or closing the dock drops it.
+A reader follows one subagent, so a dock holding one `EventSource` however many are working is
+what the screen is worth. `onRunEvent` reduces into `app.runItems` with the same `applyEvent`
+the main transcript uses, and the rows are the same `StepRow`. A permission card is skipped:
+a subagent's card is drawn in the conversation that launched it, so a copy here would be a
+second view of one answered elsewhere.
+
+The dock head carries a control that opens the run as the main transcript, which is the way
+into its composer, its change panel and its own header.
 
 ---
 

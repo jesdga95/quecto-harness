@@ -5,6 +5,7 @@
   import type { Agent, AgentPatch, Effort, Probe, Protocol } from "../api";
   import {
     MAX_CONCURRENCY,
+    MAX_DESCRIPTION,
     REPEAT_PENALTY_STEPS,
     TEMPERATURE_STEPS,
     TOP_K_STEPS,
@@ -41,6 +42,7 @@
   let name = $state("");
   let url = $state("");
   let key = $state("");
+  let description = $state("");
   let instructions = $state("");
   let maxTokens = $state("");
   let maxContext = $state("");
@@ -62,6 +64,7 @@
     name = agent.name;
     url = agent.url;
     key = agent.key;
+    description = agent.description;
     instructions = agent.instructions;
     maxTokens = agent.max_tokens === null ? "" : String(agent.max_tokens);
     maxContext = agent.max_context === null ? "" : String(agent.max_context);
@@ -127,6 +130,10 @@
     if (text !== agent.key) onchange({ key: text });
   }
 
+  function commitDescription(text: string) {
+    if (text.trim() !== agent.description) onchange({ description: text.trim() });
+  }
+
   function commitInstructions(text: string) {
     if (text.trim() !== agent.instructions) onchange({ instructions: text.trim() });
   }
@@ -171,6 +178,7 @@
     commitName(name);
     commitUrl(url);
     commitKey(key);
+    commitDescription(description);
     commitInstructions(instructions);
     commitMaxTokens(maxTokens);
     commitMaxContext(maxContext);
@@ -340,8 +348,8 @@
       />
     </div>
     <p class="-mt-1 text-[12px] text-muted">
-      How many agents this one may have working for it at once, up to {MAX_CONCURRENCY}. No agent
-      delegates yet, so the number is recorded and nothing reads it.
+      How many tasks this agent runs at once, up to {MAX_CONCURRENCY}. Its own conversation
+      counts, so an agent set to one never takes work from itself.
     </p>
   </div>
 
@@ -415,6 +423,24 @@
         the model server reports, and a server that reports nothing has no limit.
       </p>
     </div>
+  </div>
+
+  <div class="field-card !gap-2.5">
+    <div class="flex items-center justify-between gap-3">
+      <h4 class="field-head">What it is for</h4>
+      <span class="num text-[12px] text-muted">{description.length} / {MAX_DESCRIPTION}</span>
+    </div>
+    <p class="-mt-1 text-[12px] text-muted">
+      One line, read by the agents that may hand this one work. Empty takes the first line of the
+      instructions below.
+    </p>
+    <input
+      class="input"
+      maxlength={MAX_DESCRIPTION}
+      placeholder="Used when there is design work to do"
+      bind:value={description}
+      oninput={(e) => commitDescription(e.currentTarget.value)}
+    />
   </div>
 
   <div class="field-card !gap-2.5">

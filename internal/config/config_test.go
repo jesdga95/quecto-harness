@@ -259,9 +259,25 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	for _, key := range []string{"listen", "agents", "agent", "permissions", "compact_at", "shell",
 		"command_timeout_s", "output_limit_bytes", "projects",
 		"id", "name", "url", "key", "protocol", "model", "effort", "preserve_reasoning",
-		"concurrency", "instructions"} {
+		"concurrency", "description", "instructions"} {
 		if !strings.Contains(string(raw), `"`+key+`"`) {
 			t.Errorf("saved file omits %q, a reader would have to guess the default", key)
+		}
+	}
+}
+
+// The description is one line in a list every delegating agent reads, so what
+// is stored is a line whatever was typed.
+func TestDescriptionIsOneBoundedLine(t *testing.T) {
+	long := strings.Repeat("x", MaxDescription+50)
+	for _, tc := range []struct{ in, want string }{
+		{"  Used for design work.  ", "Used for design work."},
+		{"Used for design work.\nAnd nothing else.", "Used for design work."},
+		{long, long[:MaxDescription]},
+	} {
+		c, _ := oneAgent(FileAgent{Description: ptr(tc.in)}).Resolve(Defaults())
+		if got := c.Agents[0].Description; got != tc.want {
+			t.Errorf("description = %q, want %q", got, tc.want)
 		}
 	}
 }

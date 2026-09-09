@@ -1641,6 +1641,9 @@ func TestForgetDropsWhatWasReadFromAnAgent(t *testing.T) {
 
 // topBrief is what a conversation somebody started is shaped with, for a test
 // rendering a prompt without running a turn.
+// topBrief is what a conversation is offered in a harness holding one agent.
+// That agent's own turn takes its only slot, so there is nobody to hand work
+// to and run_agent is not sent.
 func topBrief() brief {
-	return brief{offer: tools.Offer{Ask: true, Agents: true, Message: true}}
+	return brief{offer: tools.Offer{Ask: true, Message: true}}
 }

@@ -125,7 +125,8 @@ const AGENTS: Agent[] = [
     id: "agt_local", name: "Local llama.cpp", url: "http://192.168.2.205:8080",
     key: "", protocol: "llamacpp", model: "Gemma4-12B", effort: "medium", preserve_reasoning: true,
     temperature: null, top_p: null, top_k: null, repeat_penalty: null,
-    max_tokens: null, max_context: null, seed: null, concurrency: 1, instructions: "",
+    max_tokens: null, max_context: null, seed: null, concurrency: 1,
+    description: "", instructions: "",
   },
   {
     id: "agt_studio", name: "Studio box", url: "http://10.0.0.14:1234",
@@ -133,13 +134,15 @@ const AGENTS: Agent[] = [
     preserve_reasoning: false,
     temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.1,
     max_tokens: 8192, max_context: 200000, seed: null, concurrency: 4,
+    description: "Reviews Go and writes none of it.",
     instructions: "Answer in British English.",
   },
   {
     id: "agt_cloud", name: "Cloud endpoint", url: "https://api.example.com/v1",
     key: "", protocol: "chat", model: "gpt-oss-120b", effort: "medium", preserve_reasoning: true,
     temperature: null, top_p: null, top_k: null, repeat_penalty: null,
-    max_tokens: null, max_context: null, seed: null, concurrency: 1, instructions: "",
+    max_tokens: null, max_context: null, seed: null, concurrency: 1,
+    description: "", instructions: "",
   },
 ];
 
@@ -384,7 +387,7 @@ export class MockApi implements HarnessApi {
       protocol: "llamacpp", effort: "medium", preserve_reasoning: true,
       temperature: null, top_p: null,
       top_k: null, repeat_penalty: null, max_tokens: null, max_context: null, seed: null,
-      concurrency: 1, instructions: "", ...patch, name,
+      concurrency: 1, description: "", instructions: "", ...patch, name,
     };
     this.agents.push(agent);
     if (this.config.agent === "") this.config.agent = agent.id;
@@ -488,7 +491,9 @@ export class MockApi implements HarnessApi {
       usage: { ...t.usage },
       todos: t.todos.map((todo) => ({ ...todo })),
       steer: t.steer ? { text: t.steer.text, from: t.steer.from, files: [...t.steer.files] } : null,
-      status: run ? (run.compacting ? "compacting" : "streaming") : "idle",
+      // A session the mock is not running keeps the status it was seeded with,
+      // so a subagent left part way through still reads as working.
+      status: run ? (run.compacting ? "compacting" : "streaming") : t.status,
     };
   }
 
@@ -1028,9 +1033,36 @@ export class MockApi implements HarnessApi {
       parent: first.id,
       children: [],
     };
-    first.children = [{ id: worker.id, title: worker.title, agent: "Studio box" }];
-    this.sessions.push(first, second, third, worker);
+    // A second run, still working, so the chip counts one and the panel draws
+    // a step that has not finished.
+    const auditor: Session = {
+      id: nextId("s"),
+      project,
+      model: "Kimi K2 Thinking",
+      title: "check every handler for a missing context",
+      created: new Date(Date.now() - 300_000).toISOString(),
+      parent: first.id,
+      children: [],
+    };
+    first.children = [
+      { id: auditor.id, title: auditor.title, agent: "Cloud reasoner", status: "running" },
+      { id: worker.id, title: worker.title, agent: "Studio box", status: "idle" },
+    ];
+    this.sessions.push(first, second, third, worker, auditor);
     this.turnIndex.set(first.id, 2);
+
+    const auditorItems: TranscriptItem[] = [];
+    pushUser(auditorItems, "check every handler for a missing context and report what you find",
+      [], this.mintSeq(auditor.id), false, "Local llama.cpp");
+    for (const e of auditorEvents()) applyEvent(auditorItems, e);
+    this.transcripts.set(auditor.id, {
+      session: auditor,
+      items: auditorItems,
+      usage: split({ prompt_tokens: 5200, completion_tokens: 300, n_ctx: 262144 }),
+      todos: [],
+      steer: null,
+      status: "running",
+    });
 
     const workerItems: TranscriptItem[] = [];
     pushUser(workerItems, "audit internal/server/hub.go for races and say what you found",
@@ -1097,6 +1129,23 @@ function delegationEvents(child: string): HarnessEvent[] {
     },
     { type: "tool_output", id: call, output: `started Studio box (${child})`, exit_code: null, truncated: false },
     { type: "child", session: child, status: "idle", callId: call, agent: "Studio box" },
+  ];
+}
+
+// A subagent part way through, so the panel has a running step to draw.
+function auditorEvents(): HarnessEvent[] {
+  const done = nextId("t");
+  const call = nextId("t");
+  return [
+    { type: "tool_call", id: done, name: "find", args: { text: "func (s *Server)", name: "*.go" } },
+    {
+      type: "tool_output",
+      id: done,
+      output: "internal/server/routes.go: 31 matches\ninternal/server/sse.go: 4 matches",
+      exit_code: null,
+      truncated: false,
+    },
+    { type: "tool_call", id: call, name: "read_file", args: { path: "internal/server/routes.go" } },
   ];
 }
 

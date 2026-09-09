@@ -15,6 +15,7 @@
     model: "",
     effort: "medium",
     preserve_reasoning: true,
+    description: "",
     temperature: null,
     top_p: null,
     top_k: null,

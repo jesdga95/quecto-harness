@@ -1236,8 +1236,9 @@
     color: var(--term-ink);
   }
 
-  /* The change panel. A column beside the transcript, scrolling on its own. */
-  .changes {
+  /* The column beside the transcript, scrolling on its own. The changes and
+     the agents working share it, since the two never open at once. */
+  .dock {
     width: 460px;
     flex: none;
     display: flex;
@@ -1248,12 +1249,49 @@
   }
   /* The same height as the session header beside it, so the two headings sit
      on one line. */
-  .changes-head {
+  .dock-head {
     display: flex;
     align-items: center;
     gap: 8px;
     height: 56px;
     padding: 0 16px;
+  }
+
+  /* One subagent run in the strip at the top of the agents dock. */
+  .run-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    /* Clear of the row below, so the one under the pointer and the one being
+       read are two backgrounds rather than one block. */
+    margin-bottom: 4px;
+    border: 0;
+    border-radius: 9px;
+    background: none;
+    text-align: left;
+    font-size: 12.5px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .run-row:hover {
+    background: color-mix(in oklab, var(--text) 5%, transparent);
+  }
+  .run-row.is-on {
+    background: color-mix(in oklab, var(--text) 16%, transparent);
+    font-weight: 500;
+  }
+  /* What the launcher told the subagent: its task, and anything sent after.
+     Full width rather than a bubble, since the dock is a narrow column. */
+  .run-said {
+    padding: 8px 11px;
+    border-radius: 12px;
+    background: var(--surface-2);
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   /* Pulled right, so the icon rather than its hit area lines up with the edge. */
   .changes-copy {
@@ -1566,10 +1604,11 @@
     gap: 9px;
     width: 100%;
     padding: 8px 10px;
-    /* Rows carry their own gap, so a hover background never runs into the one
-       above or below it. The rail's own gap sits between its three parts, not
-       between the rows inside the list. */
-    margin-bottom: 3px;
+    /* Rows carry their own gap, so a lit row reads as clear of the ones above
+       and below rather than running into them. Two filled pills need more air
+       between them than a hairline. The rail's own gap sits between its three
+       parts, not between the rows inside the list. */
+    margin-bottom: 6px;
     border: 0;
     border-radius: 9px;
     background: none;

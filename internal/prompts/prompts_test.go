@@ -106,7 +106,7 @@ func TestSystemDoesNotParseInstructions(t *testing.T) {
 // reaches for one it does not have.
 func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
 	full := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, CanMessage: true,
-		Agents: []AgentBrief{{Name: "Reviewer", Model: "Beta-30B"}}})
+		Agents: []AgentBrief{{Name: "Reviewer"}}})
 	for _, name := range []string{"ask_question", "run_agent", "send_message"} {
 		if !strings.Contains(full, name) {
 			t.Errorf("prompt does not name %s: %q", name, full)
@@ -126,15 +126,15 @@ func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
 
 func TestSystemListsTheAgentsWithTheirRoles(t *testing.T) {
 	got := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, Agents: []AgentBrief{
-		{Name: "Reviewer", Model: "Beta-30B", Role: "Reviews Go and does not write it."},
-		{Name: "Searcher", Model: "Alpha-12B"},
+		{Name: "Reviewer", Role: "Reviews Go and does not write it."},
+		{Name: "Searcher"},
 	}})
-	for _, want := range []string{"Reviewer", "Beta-30B", "Reviews Go and does not write it.", "Searcher", "Alpha-12B"} {
+	for _, want := range []string{"- Reviewer: Reviews Go and does not write it.", "- Searcher"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt omits %q: %q", want, got)
 		}
 	}
-	if strings.Contains(got, "Searcher, running Alpha-12B:") {
+	if strings.Contains(got, "Searcher:") {
 		t.Errorf("an agent with no role got an empty one: %q", got)
 	}
 	if strings.Contains(got, "{{") {
@@ -142,11 +142,22 @@ func TestSystemListsTheAgentsWithTheirRoles(t *testing.T) {
 	}
 }
 
+// An agent is chosen on what it is for, so what it runs is not in the prompt.
+// The list carries a name and a description and nothing else.
+func TestSystemDoesNotNameTheModelBehindAnAgent(t *testing.T) {
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", Agents: []AgentBrief{
+		{Name: "Reviewer", Role: "Reviews Go and does not write it."},
+	}})
+	if !strings.Contains(got, "- Reviewer: Reviews Go and does not write it.\n") {
+		t.Errorf("the line is not the name and the description alone: %q", got)
+	}
+}
+
 // A name or a role is a value like the instructions are, so a template action
 // inside one is text.
 func TestSystemDoesNotParseAgentNames(t *testing.T) {
 	got := System(SystemVars{Project: "/src/x", OS: "darwin",
-		Agents:   []AgentBrief{{Name: "{{.Project}}", Model: "m", Role: "{{if"}},
+		Agents:   []AgentBrief{{Name: "{{.Project}}", Role: "{{if"}},
 		Launcher: "{{range}}"})
 	for _, want := range []string{"{{.Project}}", "{{if", "{{range}}"} {
 		if !strings.Contains(got, want) {

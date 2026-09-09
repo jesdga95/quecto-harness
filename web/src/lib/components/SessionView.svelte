@@ -5,12 +5,15 @@
   import Composer from "./Composer.svelte";
   import ContextChip from "./ContextChip.svelte";
   import PlanPanel from "./PlanPanel.svelte";
+  import RunsChip from "./RunsChip.svelte";
+  import RunsPanel from "./RunsPanel.svelte";
   import Transcript from "./Transcript.svelte";
   import { activeSession, app, selectSession } from "../state/app.svelte";
   import { shortPath } from "../format";
 
   const session = $derived(activeSession());
   const showChanges = $derived(app.changesOpen && app.changes.files.length > 0);
+  const showRuns = $derived(app.runsOpen && app.runs.length > 0);
   // The chip draws once there is something to draw: a window to measure
   // against, or tokens counted where no window is known.
   const measured = $derived(
@@ -39,6 +42,7 @@
         {/if}
       </div>
       <div class="ml-auto flex shrink-0 items-center gap-2">
+        <RunsChip />
         <ChangesChip />
         {#if measured}
           <ContextChip />
@@ -58,5 +62,7 @@
 
   {#if showChanges}
     <ChangesPanel />
+  {:else if showRuns}
+    <RunsPanel />
   {/if}
 </div>

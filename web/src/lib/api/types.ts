@@ -55,6 +55,9 @@ export interface Child {
   id: string;
   title: string;
   agent: string;
+  /** What the run is doing now. Idle is one that has stopped working, whether
+      it finished, failed or was stopped. */
+  status: TurnStatus;
 }
 
 /** A named connection: where a model runs, what key opens it, which model, and
@@ -86,9 +89,12 @@ export interface Agent {
   max_context: number | null;
   /** Makes a reply repeatable. Null is a new one each turn. */
   seed: number | null;
-  /** How many agents this one may have working for it at once. Nothing
-      delegates yet, so the number is recorded and read by nothing. */
+  /** How many tasks this agent runs at once, its own conversation counted. A
+      run_agent call naming it past that is refused. */
   concurrency: number;
+  /** What this agent is for, in one line, as the agents that may hand it work
+      are told. Empty falls back to the first line of the instructions. */
+  description: string;
   /** Added to the end of the built-in system prompt. */
   instructions: string;
 }
@@ -213,9 +219,19 @@ export type HarnessEvent =
   /** The harness appended a user message, which is a queued one being picked
       up by the turn it was typed against. */
   | { type: "message"; seq: number; text: string; files: Attached[]; from: string }
+  /** The files this session is answerable for moved for a reason its own
+      stream does not carry, such as a subagent writing one. */
+  | { type: "changed" }
   /** A subagent this session launched moved. The row the run_agent call drew
       follows it without mirroring its stream. */
-  | { type: "child"; session: string; status: TurnStatus; callId?: string; agent?: string }
+  | {
+      type: "child";
+      session: string;
+      status: TurnStatus;
+      callId?: string;
+      agent?: string;
+      title?: string;
+    }
   | { type: "error"; message: string }
   | { type: "done"; cost?: TurnCost }
   /** The stream fell too far behind to replay, so it carries a fresh snapshot. */

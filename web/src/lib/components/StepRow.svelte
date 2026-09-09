@@ -18,7 +18,7 @@
   import { describeCommand, firstSentence, k } from "../format";
   import { asked } from "../question";
 
-  let { item, onopen }: { item: TranscriptItem; onopen?: (session: string) => void } = $props();
+  let { item }: { item: TranscriptItem } = $props();
   let open = $state(false);
 
   // A run_agent row names the agent it started and follows it, since what that
@@ -194,13 +194,6 @@
         {/if}
         {#if item.output}
           <p class="text-[13px] text-ink-2">{item.output}</p>
-        {/if}
-        {#if child && onopen}
-          <div>
-            <button class="btn" onclick={() => onopen(child.session)}>
-              Open {child.agent || "the agent"}
-            </button>
-          </div>
         {/if}
       {:else if item.kind === "tool" && item.name === "read_file" && item.output}
         <FileBlock {path} output={item.output} />

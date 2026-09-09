@@ -31,22 +31,39 @@ type brief struct {
 // what it has instead is the launcher waiting on it.
 func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	s.mu.Lock()
-	parent, launcher := s.Parent, s.launcher()
+	parent, launcher, mine := s.Parent, s.launcher(), s.AgentID
 	s.mu.Unlock()
 	if parent != "" {
 		return brief{offer: tools.Offer{Message: true}, launcher: launcher}
 	}
-	b := brief{offer: tools.Offer{Ask: true, Agents: true, Message: true}}
+	b := brief{offer: tools.Offer{Ask: true, Message: true}}
 	for _, a := range cfg.Agents {
-		b.agents = append(b.agents, prompts.AgentBrief{Name: a.Name, Model: a.Model, Role: role(a)})
+		// This turn is already one of its own agent's tasks, so a launch onto
+		// that agent has one fewer place to go. An agent with none left is not
+		// listed: naming one that every launch would refuse only buys a wasted
+		// call.
+		free := a.Concurrency
+		if a.ID == mine {
+			free--
+		}
+		if free < 1 {
+			continue
+		}
+		b.agents = append(b.agents, prompts.AgentBrief{Name: a.Name, Role: role(a)})
 	}
+	b.offer.Agents = len(b.agents) > 0
 	return b
 }
 
-// role is the first line of an agent's own instructions, which is the only
-// field on the record saying what the agent is for.
+// role is what the delegation list says an agent is for: its description, or
+// the first line of its instructions when it has none, which is where the
+// answer was read from before the field existed.
 func role(a config.Agent) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(a.Instructions), "\n")
+	text := a.Description
+	if text == "" {
+		text = a.Instructions
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
 	return strings.TrimSpace(line)
 }
 
@@ -59,6 +76,22 @@ func (e *Engine) rootOf(s *Session) string {
 		return s.Parent
 	}
 	return s.ID
+}
+
+// busy counts the sessions running one agent that have a turn under way,
+// whoever started them. A model pinned to one slot answers one request at a
+// time, so a conversation and a subagent on the same agent are one queue.
+func (e *Engine) busy(agentID string) int {
+	n := 0
+	for _, s := range e.liveSessions() {
+		s.mu.Lock()
+		mine, state := s.AgentID, s.state
+		s.mu.Unlock()
+		if mine == agentID && state != StateIdle {
+			n++
+		}
+	}
+	return n
 }
 
 // liveChildren are the subagent runs of one session that are still working. A
@@ -102,9 +135,12 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 	mine, project := s.AgentID, s.Project
 	s.mu.Unlock()
 	me, _ := cfg.AgentByID(mine)
-	if live := len(e.liveChildren(s.ID)); me.Concurrency > 0 && live >= me.Concurrency {
-		return tools.Result{}, fmt.Errorf("run_agent: %d agents are already working for you, which is the limit: wait for one to report",
-			live)
+	// The limit belongs to the agent being asked, not to the one asking: what
+	// it counts is requests to one model server. This session is one of them,
+	// so an agent that runs one at a time cannot take work from itself.
+	if live := e.busy(target.ID); target.Concurrency > 0 && live >= target.Concurrency {
+		return tools.Result{}, fmt.Errorf("run_agent: %s runs %d at a time and that many are working now: wait for one to finish, or pick another agent",
+			target.Name, target.Concurrency)
 	}
 
 	child := newSession(store.NewID(), project, target.ID, target.Model)
@@ -120,7 +156,8 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 		return tools.Result{}, fmt.Errorf("run_agent: %s", err)
 	}
 	e.publish(s.ID, ev("child", map[string]any{
-		"call_id": call.ID, "session": child.ID, "agent": target.Name, "state": string(StatePreflight)}))
+		"call_id": call.ID, "session": child.ID, "agent": target.Name,
+		"title": child.Title, "state": string(StatePreflight)}))
 	// The handle is on the entry as well as in the sentence, so a page loaded
 	// later still links the row to the transcript it started.
 	return tools.Result{
@@ -172,24 +209,35 @@ func (e *Engine) sendMessage(s *Session, call llm.ToolCall) (tools.Result, error
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("send_message: %s", err)
 	}
+	if target.ID == parent {
+		s.mu.Lock()
+		s.spoke = true
+		s.mu.Unlock()
+	}
 	if sent.Queued {
 		return tools.Result{Output: "sent, and it joins the turn already running"}, nil
 	}
 	return tools.Result{Output: "sent"}, nil
 }
 
-// report hands a finished subagent's answer to its launcher and rolls up the
-// files it wrote. Every turn of a subagent ends here, so one that never
-// reached for send_message still answers.
+// report rolls the files a subagent wrote onto its launcher and, when the
+// subagent said nothing itself, hands over what it finished with. A subagent
+// that used send_message has already answered, and the same words arriving
+// again are noise in the launcher's turn. A run that ended early is news
+// whether or not it spoke.
 func (e *Engine) report(child *Session) {
 	child.mu.Lock()
 	parentID, agentID := child.Parent, child.AgentID
+	spoke, state := child.spoke, child.state
 	child.mu.Unlock()
 	parent, err := e.Get(parentID)
 	if err != nil {
 		return
 	}
 	e.rollUp(child, parent)
+	if spoke && state != StateStopped && state != StateFailed {
+		return
+	}
 
 	from, _ := e.cfg.Config().AgentByID(agentID)
 	limit := e.cfg.Config().OutputLimitBytes
@@ -270,6 +318,10 @@ func (e *Engine) rollUp(child, parent *Session) {
 	if added {
 		e.save(parent)
 	}
+	// The launcher's own stream carries no tool output for a file a subagent
+	// wrote, and a path it already kept a copy of moves the diff without moving
+	// the list, so this is the only thing that says its change panel is stale.
+	e.publish(parent.ID, ev("changed", nil))
 }
 
 // findAgent matches an agent by name, which is what the model was given.

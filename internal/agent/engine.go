@@ -145,6 +145,13 @@ func (e *Engine) setState(s *Session, st State) {
 	if same {
 		return
 	}
+	e.announce(s, st)
+}
+
+// announce publishes a state to the session's own stream and, for a subagent
+// run, to the launcher watching it. Every state a browser draws goes through
+// here, or the launcher is left holding the last one that did.
+func (e *Engine) announce(s *Session, st State) {
 	e.publish(s.ID, ev("status", map[string]any{"state": string(st)}))
 	if parent := s.Parent; parent != "" {
 		e.publish(parent, ev("child", map[string]any{"session": s.ID, "state": string(st)}))
@@ -239,6 +246,19 @@ func (e *Engine) State(id string) State {
 	return s.State()
 }
 
+// LiveState is what a session is doing, without reading one back from disk to
+// answer. Nothing runs a session that is not in memory, so an id nothing holds
+// is idle.
+func (e *Engine) LiveState(id string) State {
+	e.mu.Lock()
+	s, ok := e.live[id]
+	e.mu.Unlock()
+	if !ok {
+		return StateIdle
+	}
+	return s.State()
+}
+
 // Sent reports what became of a message: the entry it was appended as, or the
 // queue it joined behind a turn that was already running.
 type Sent struct {
@@ -307,7 +327,13 @@ func (e *Engine) deliverFrom(s *Session, from, text string, attachments []store.
 	s.mu.Unlock()
 
 	e.save(s)
-	e.publish(s.ID, ev("status", map[string]any{"state": string(StatePreflight)}))
+	// A message from another agent was typed into no composer, so nothing has
+	// drawn it and the turn it starts would answer a message the page cannot
+	// see. One from a person is already on the page it was typed into.
+	if from != "" {
+		e.publishMessage(s, entry)
+	}
+	e.announce(s, StatePreflight)
 	e.startTurn(ctx, s, cancel)
 	return Sent{Seq: entry.Seq}, nil
 }
@@ -447,7 +473,7 @@ func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 	// The transcript every browser holds ends in entries that are gone, so
 	// they refetch rather than being patched.
 	e.publish(s.ID, ev("resync", nil))
-	e.publish(s.ID, ev("status", map[string]any{"state": string(StatePreflight)}))
+	e.announce(s, StatePreflight)
 	e.startTurn(ctx, s, cancel)
 	return entry.Seq, nil
 }
@@ -459,6 +485,9 @@ func (e *Engine) startTurn(ctx context.Context, s *Session, cancel context.Cance
 	go func() {
 		defer e.wg.Done()
 		defer cancel()
+		s.mu.Lock()
+		s.spoke = false
+		s.mu.Unlock()
 		e.run(ctx, s)
 		if s.Parent != "" {
 			e.report(s)
@@ -588,7 +617,7 @@ func (e *Engine) Compact(id string) error {
 	s.cancel = cancel
 	s.mu.Unlock()
 
-	e.publish(s.ID, ev("status", map[string]any{"state": string(StateCompacting)}))
+	e.announce(s, StateCompacting)
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
@@ -998,7 +1027,7 @@ func (e *Engine) finish(s *Session, next State, finishReason string, iterations 
 		fields[k] = v
 	}
 	e.publish(s.ID, ev("done", fields))
-	e.publish(s.ID, ev("status", map[string]any{"state": string(next)}))
+	e.announce(s, next)
 }
 
 // noteCost records what the turn spent on the assistant entry that ended it,

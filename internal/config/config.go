@@ -49,6 +49,7 @@ type FileAgent struct {
 	MaxContext        *int     `json:"max_context,omitempty"`
 	Seed              *int     `json:"seed,omitempty"`
 	Concurrency       *int     `json:"concurrency,omitempty"`
+	Description       *string  `json:"description,omitempty"`
 	Instructions      *string  `json:"instructions,omitempty"`
 }
 
@@ -99,10 +100,14 @@ type Agent struct {
 	// takes what the model server reports, and a server that reports nothing
 	// leaves the window unknown, which is no limit.
 	MaxContext *int
-	// Concurrency is how many agents this one may have working for it at once.
-	// Nothing delegates yet, so it is recorded and read by nothing: it is here
-	// so the number exists on the record before anything spawns against it.
+	// Concurrency is how many tasks this agent runs at once. It counts every
+	// live session on the agent, a conversation as well as a subagent run,
+	// since what it stands for is requests to one model server.
 	Concurrency int
+	// Description is what this agent is for, in one line, as the agents that
+	// may hand it work are told. Empty falls back to the first line of the
+	// instructions, which is where the answer lived before the field existed.
+	Description string
 	// Instructions follow the built-in system prompt in the same message.
 	Instructions string
 }
@@ -176,13 +181,29 @@ const (
 	ProtocolResponses = llm.ProtocolResponses
 )
 
-// How many agents one may have working for it at once. A new agent starts at
-// one, so an agent that fans out is told to rather than found to; the ceiling
-// is where a hosted endpoint starts refusing rather than answering.
+// How many tasks one agent runs at once. A new agent starts at one, since a
+// model pinned to a single slot answers one request at a time; the ceiling is
+// where a hosted endpoint starts refusing rather than answering.
 const (
 	DefaultConcurrency = 1
 	MaxConcurrency     = 16
 )
+
+// MaxDescription bounds the line an agent is described by. It is read by every
+// agent that may hand it work, so it belongs in a list rather than in a
+// paragraph.
+const MaxDescription = 200
+
+// cutLine takes the first line of text and bounds it, which is what a field
+// rendered into a list can hold however it was typed.
+func cutLine(text string, n int) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
+	line = strings.TrimSpace(line)
+	if len(line) > n {
+		line = strings.TrimSpace(line[:n])
+	}
+	return line
+}
 
 // What a context override is accepted within. The floor is above the cost of
 // a system prompt, since a window under that would compact a session that has
@@ -363,7 +384,7 @@ func (c Config) File() File {
 		id, name, url, key := a.ID, a.Name, a.URL, a.Key
 		protocol, model, effort := string(a.Protocol), a.Model, string(a.Effort)
 		preserve, instructions := a.PreserveReasoning, a.Instructions
-		concurrency := a.Concurrency
+		concurrency, description := a.Concurrency, a.Description
 		agents = append(agents, FileAgent{
 			ID:                &id,
 			Name:              &name,
@@ -381,6 +402,7 @@ func (c Config) File() File {
 			MaxContext:        clonei(a.MaxContext),
 			Seed:              clonei(a.Seed),
 			Concurrency:       &concurrency,
+			Description:       &description,
 			Instructions:      &instructions,
 		})
 	}
@@ -510,6 +532,9 @@ func resolveAgents(in []FileAgent, note func(string)) []Agent {
 			} else {
 				note("agent " + strconv.Quote(a.Name) + " concurrency " + strconv.Itoa(*f.Concurrency) + " is outside 1 to " + strconv.Itoa(MaxConcurrency) + ", using " + strconv.Itoa(DefaultConcurrency))
 			}
+		}
+		if f.Description != nil {
+			a.Description = cutLine(*f.Description, MaxDescription)
 		}
 		if f.Instructions != nil {
 			a.Instructions = strings.TrimSpace(*f.Instructions)
