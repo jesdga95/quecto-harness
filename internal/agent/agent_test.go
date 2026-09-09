@@ -59,6 +59,8 @@ type harness struct {
 	store   *store.Sessions
 	project string
 	cancel  context.CancelFunc
+	url     string
+	agent   config.Agent
 }
 
 func newHarness(t *testing.T, fixtures ...string) *harness {
@@ -96,7 +98,7 @@ func newHarness(t *testing.T, fixtures ...string) *harness {
 	rec := &recorder{}
 	broker := perms.New(cfg, func(sid string, r perms.Request) { rec.Publish(sid, PermissionEvent(r)) })
 	ctx, cancel := context.WithCancel(context.Background())
-	engine := NewEngine(ctx, cfg, st, blobs, llm.New(srv.URL, ""), broker, rec)
+	engine := NewEngine(ctx, cfg, st, blobs, Clients{Pool: llm.NewPool()}, broker, rec)
 	// The temporary home goes away when the test ends, so nothing the engine
 	// started may still be writing sessions into it.
 	t.Cleanup(func() {
@@ -104,8 +106,40 @@ func newHarness(t *testing.T, fixtures ...string) *harness {
 		engine.Wait(5 * time.Second)
 	})
 
-	return &harness{engine: engine, cfg: cfg, broker: broker, rec: rec,
-		replay: rp, store: st, project: real, cancel: cancel}
+	h := &harness{engine: engine, cfg: cfg, broker: broker, rec: rec,
+		replay: rp, store: st, project: real, cancel: cancel, url: srv.URL}
+	h.agent = h.addAgent(t, "Local", srv.URL, "Alpha-12B")
+	if _, err := cfg.SelectAgent(h.agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// addAgent stores an agent without selecting it, so a test can have two
+// addresses to move between.
+func (h *harness) addAgent(t *testing.T, name, url, model string) config.Agent {
+	t.Helper()
+	_, a, err := h.cfg.AddAgent(config.Agent{
+		Name: name, URL: url, Model: model,
+		Effort: config.EffortMedium, PreserveReasoning: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// setAgent applies an edit to the harness's own agent and moves live sessions
+// onto the result, the way the HTTP route does.
+func (h *harness) setAgent(t *testing.T, fn func(*config.Agent)) config.Agent {
+	t.Helper()
+	_, a, err := h.cfg.UpdateAgent(h.agent.ID, fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.agent = a
+	h.engine.SetAgent()
+	return a
 }
 
 func (h *harness) session(t *testing.T) *Session {
@@ -114,9 +148,7 @@ func (h *harness) session(t *testing.T) *Session {
 
 func (h *harness) sessionWith(t *testing.T, model string) *Session {
 	t.Helper()
-	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = model }); err != nil {
-		t.Fatal(err)
-	}
+	h.setAgent(t, func(a *config.Agent) { a.Model = model })
 	s, err := h.engine.Create(h.project)
 	if err != nil {
 		t.Fatal(err)
@@ -268,9 +300,7 @@ func TestStoppedTurnReportsNoCost(t *testing.T) {
 
 func TestEffortReachesTheRequestBody(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt")
-	if _, err := h.cfg.Update(func(c *config.Config) { c.Effort = config.EffortHigh }); err != nil {
-		t.Fatal(err)
-	}
+	h.setAgent(t, func(a *config.Agent) { a.Effort = config.EffortHigh })
 	s := h.session(t)
 	h.engine.Send(s.ID, "hello", nil)
 	waitIdle(t, s)
@@ -305,9 +335,7 @@ func TestEffortReachesTheRequestBody(t *testing.T) {
 // already shaped by what its template accepts.
 func TestFirstRequestIsShapedByTheTemplate(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt")
-	if _, err := h.cfg.Update(func(c *config.Config) { c.PreserveReasoning = false }); err != nil {
-		t.Fatal(err)
-	}
+	h.setAgent(t, func(a *config.Agent) { a.PreserveReasoning = false })
 	s := h.sessionWith(t, "Delta3.8-27B Q5")
 	h.engine.Send(s.ID, "first", nil)
 	waitIdle(t, s)
@@ -639,11 +667,19 @@ func TestCreateRejectsUnknownProject(t *testing.T) {
 	if _, err := h.engine.Create("/not/a/project"); err != ErrNoProject {
 		t.Errorf("Create = %v, want ErrNoProject", err)
 	}
-	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = "" }); err != nil {
-		t.Fatal(err)
-	}
+	h.setAgent(t, func(a *config.Agent) { a.Model = "" })
 	if _, err := h.engine.Create(h.project); err != ErrNoModel {
 		t.Errorf("Create with no model chosen = %v", err)
+	}
+	h.setAgent(t, func(a *config.Agent) { a.URL = "" })
+	if _, err := h.engine.Create(h.project); err != ErrNoAddress {
+		t.Errorf("Create with no address = %v", err)
+	}
+	if _, err := h.cfg.RemoveAgent(h.agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.engine.Create(h.project); err != ErrNoAgent {
+		t.Errorf("Create with no agent = %v", err)
 	}
 }
 
@@ -720,7 +756,7 @@ func TestCompactionRewritesInContextOnly(t *testing.T) {
 	// The entry keeps the summary alone; the framing is added to the message
 	// built from it, so the transcript can show the summary as it was written.
 	s.mu.Lock()
-	msgs := s.contextMessages("darwin", nil)
+	msgs := s.contextMessages(config.Agent{}, "darwin", nil)
 	s.mu.Unlock()
 	sent := msgs[len(msgs)-1]
 	if sent.Role != "user" || !strings.HasPrefix(sent.Content, "Summary of earlier work:") ||
@@ -827,10 +863,10 @@ func TestCompactRefusedWhileBusy(t *testing.T) {
 	waitIdle(t, s)
 }
 
-// Choosing a model points every session at it and forgets what the previous
+// Choosing an agent points every session at it and forgets what the previous
 // model's tokenizer implied. Nothing is sent to the model server: a choice
 // made in a menu loads nothing, whether a session is open or not.
-func TestSetModelRepointsAndResets(t *testing.T) {
+func TestSetAgentRepointsAndResets(t *testing.T) {
 	h := newHarness(t)
 	s := h.session(t)
 	s.mu.Lock()
@@ -838,11 +874,16 @@ func TestSetModelRepointsAndResets(t *testing.T) {
 	s.LastUsage = &llm.Usage{PromptTokens: 100}
 	s.mu.Unlock()
 
-	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = "Delta3.8-27B Q5" }); err != nil {
+	other := h.addAgent(t, "Other", h.url, "Delta3.8-27B Q5")
+	if _, err := h.cfg.SelectAgent(other.ID); err != nil {
 		t.Fatal(err)
 	}
-	h.engine.SetModel("Delta3.8-27B Q5")
+	h.engine.SetAgent()
 	h.engine.Wait(5 * time.Second)
+
+	if doc, _, _, _ := s.Snapshot(); doc.Agent != other.ID {
+		t.Errorf("session agent = %q, want %q", doc.Agent, other.ID)
+	}
 
 	doc, state, _, caps := s.Snapshot()
 	if doc.Model != "Delta3.8-27B Q5" {
@@ -917,7 +958,7 @@ func TestSessionTakesTheModelAtItsNextTurn(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt")
 	s := h.session(t)
 	// Changed behind the session's back, as a session on disk would see it.
-	if _, err := h.cfg.Update(func(c *config.Config) { c.Model = "Delta3.8-27B Q5" }); err != nil {
+	if _, _, err := h.cfg.UpdateAgent(h.agent.ID, func(a *config.Agent) { a.Model = "Delta3.8-27B Q5" }); err != nil {
 		t.Fatal(err)
 	}
 	h.engine.Send(s.ID, "hello", nil)
@@ -1008,7 +1049,7 @@ func TestUnansweredToolCallIsRepaired(t *testing.T) {
 	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
 		ToolCalls: []llm.ToolCall{{ID: "call_x", Type: "function",
 			Function: llm.FunctionCall{Name: "run_shell", Arguments: `{"command":"ls"}`}}}})
-	msgs := s.contextMessages("darwin", nil)
+	msgs := s.contextMessages(config.Agent{}, "darwin", nil)
 	s.mu.Unlock()
 
 	last := msgs[len(msgs)-1]
@@ -1461,5 +1502,114 @@ func TestContextMeasurementRunsOncePerSession(t *testing.T) {
 	h.replay.mu.Unlock()
 	if got != 2 {
 		t.Errorf("the parts were measured %d times, want twice for one model", got)
+	}
+}
+
+// The agent is read once at the start of a turn. An edit that lands part way
+// through must not change the prompt under the model.
+func TestTurnKeepsItsAgentSnapshot(t *testing.T) {
+	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
+	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
+	s := h.session(t)
+	h.engine.Send(s.ID, "list", nil)
+
+	// The turn is under way once it has asked something, so an edit now lands
+	// between two of its steps.
+	waitForRequests(t, h, 1)
+	h.setAgent(t, func(a *config.Agent) { a.Model = "Delta3.8-27B Q5" })
+	waitIdle(t, s)
+	if h.replay.Count() < 2 {
+		t.Fatalf("the turn made %d requests, want the tool call and the reply after it", h.replay.Count())
+	}
+
+	for i := 0; i < h.replay.Count(); i++ {
+		if got := h.replay.Body(i)["model"]; got != "Alpha-12B" {
+			t.Errorf("request %d asked %v, want the model the turn started with", i, got)
+		}
+	}
+}
+
+func TestAgentSamplingReachesTheRequest(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	temp, top := 0.35, 0.9
+	h.setAgent(t, func(a *config.Agent) { a.Temperature, a.TopP = &temp, &top })
+	s := h.session(t)
+	h.engine.Send(s.ID, "hello", nil)
+	waitIdle(t, s)
+
+	body := h.replay.Body(0)
+	if body["temperature"] != 0.35 || body["top_p"] != 0.9 {
+		t.Errorf("body carried temperature %v top_p %v", body["temperature"], body["top_p"])
+	}
+}
+
+func TestInstructionsReachTheRequest(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	h.setAgent(t, func(a *config.Agent) { a.Instructions = "Answer in Latin." })
+	s := h.session(t)
+	h.engine.Send(s.ID, "hello", nil)
+	waitIdle(t, s)
+
+	msgs, _ := h.replay.Body(0)["messages"].([]any)
+	if len(msgs) == 0 {
+		t.Fatalf("no messages in %v", h.replay.Body(0))
+	}
+	first, _ := msgs[0].(map[string]any)
+	system, _ := first["content"].(string)
+	if !strings.HasSuffix(system, "Answer in Latin.") {
+		t.Errorf("system message did not end with the agent's instructions: %q", system)
+	}
+	if !strings.Contains(system, "read_file") {
+		t.Errorf("the built-in prompt was lost: %q", system)
+	}
+}
+
+// A measurement is only true for the text it was taken against, so editing the
+// instructions of an agent a session is already on throws it away.
+func TestContextBaseIsRemeasuredWhenInstructionsChange(t *testing.T) {
+	h := newHarness(t)
+	s := h.session(t)
+	s.mu.Lock()
+	system := s.systemMessage(h.agent, "darwin")
+	s.ContextBase = &store.ContextBase{Model: "Alpha-12B", Chars: len(system.Content), System: 154, Tools: 1026}
+	s.LastUsage = &llm.Usage{PromptTokens: 2000, CompletionTokens: 10}
+	fits := s.ContextBase.Fits(s.Model, s.sysChars)
+	s.mu.Unlock()
+	if !fits {
+		t.Fatal("the base did not fit the text it was measured against")
+	}
+
+	edited := h.setAgent(t, func(a *config.Agent) { a.Instructions = "Answer in Latin." })
+	s.mu.Lock()
+	s.systemMessage(edited, "darwin")
+	still := s.ContextBase.Fits(s.Model, s.sysChars)
+	s.mu.Unlock()
+	if still {
+		t.Error("a base measured against the old system message was kept")
+	}
+}
+
+// An address that moved may not be answered by the same thing, so what was
+// read from it is dropped.
+func TestForgetDropsWhatWasReadFromAnAgent(t *testing.T) {
+	h := newHarness(t)
+	s := h.session(t)
+	s.mu.Lock()
+	s.NCtx, s.NCtxSource, s.prepared = 131072, "props", true
+	s.LastUsage = &llm.Usage{PromptTokens: 100}
+	s.mu.Unlock()
+
+	h.engine.Forget("agt_someone_else")
+	if doc, _, _, _ := s.Snapshot(); doc.NCtxSource != "props" {
+		t.Error("another agent's change reached this session")
+	}
+
+	h.engine.Forget(h.agent.ID)
+	doc, _, _, caps := s.Snapshot()
+	if doc.NCtxSource != "" || caps.Known {
+		t.Errorf("the window and the template survived: %q %+v", doc.NCtxSource, caps)
+	}
+	if doc.LastUsage == nil {
+		t.Error("the usage report was dropped, and it is still what the last turn cost")
 	}
 }

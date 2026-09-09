@@ -36,6 +36,7 @@ type fixture struct {
 	engine   *agent.Engine
 	perms    *perms.Broker
 	project  string
+	agent    string
 	upstream *httptest.Server
 
 	// The frames are swapped between turns while an earlier turn's request
@@ -101,11 +102,6 @@ func newFixture(t *testing.T) *fixture {
 	}
 	project := t.TempDir()
 	if _, err := cfg.AddProject(project); err != nil {
-		t.Fatal(err)
-	}
-	// There is one model and it is the harness's, so a session takes it from
-	// here rather than being created against one.
-	if _, err := cfg.Update(func(c *config.Config) { c.Model = "Alpha-12B" }); err != nil {
 		t.Fatal(err)
 	}
 	real, _ := filepath.EvalSymlinks(project)
@@ -176,11 +172,22 @@ func newFixture(t *testing.T) *fixture {
 	}))
 	t.Cleanup(f.upstream.Close)
 
-	client := llm.New(f.upstream.URL, "")
+	// One agent answers for the whole harness, so a session takes its model
+	// from here rather than being created against one.
+	_, ag, err := cfg.AddAgent(config.Agent{
+		Name: "Local", URL: f.upstream.URL, Model: "Alpha-12B",
+		Effort: config.EffortMedium, PreserveReasoning: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.agent = ag.ID
+
+	pool := llm.NewPool()
 	hub := NewHub()
 	broker := perms.New(cfg, func(sid string, r perms.Request) { hub.Publish(sid, agent.PermissionEvent(r)) })
 	ctx, cancel := context.WithCancel(context.Background())
-	engine := agent.NewEngine(ctx, cfg, sessions, blobs, client, broker, hub)
+	engine := agent.NewEngine(ctx, cfg, sessions, blobs, agent.Clients{Pool: pool}, broker, hub)
 	// The temporary home goes away when the test ends, so nothing the engine
 	// started may still be writing sessions into it.
 	t.Cleanup(func() {
@@ -188,10 +195,44 @@ func newFixture(t *testing.T) *fixture {
 		engine.Wait(5 * time.Second)
 	})
 
-	srv := New(cfg, sessions, blobs, pastes, engine, broker, client, hub, testToken, "127.0.0.1:7331", "0.1.0-test")
+	srv := New(cfg, sessions, blobs, pastes, engine, broker, pool, hub, testToken, "127.0.0.1:7331", "0.1.0-test")
 	f.srv, f.handler, f.hub, f.engine, f.perms = srv, srv.Handler(), hub, engine, broker
 	f.files = blobs
 	return f
+}
+
+// pointAt moves the active agent to another address, the way the agents route
+// does, so a test can put a different server behind the harness.
+func (f *fixture) pointAt(t *testing.T, url string) {
+	t.Helper()
+	w := f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"url": url})
+	if w.Code != http.StatusOK {
+		t.Fatalf("point at %s = %d %s", url, w.Code, w.Body.String())
+	}
+}
+
+// addAgent creates an agent through the route and answers with its id.
+func (f *fixture) addAgent(t *testing.T, body map[string]any) string {
+	t.Helper()
+	w := f.do(t, "POST", "/api/agents", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create agent = %d %s", w.Code, w.Body.String())
+	}
+	id, _ := f.saved(t, w)["id"].(string)
+	if id == "" {
+		t.Fatalf("create agent returned no id: %s", w.Body.String())
+	}
+	return id
+}
+
+// saved is the agent a write answered with.
+func (f *fixture) saved(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	out, _ := decode(t, w)["saved"].(map[string]any)
+	if out == nil {
+		t.Fatalf("no saved agent in %s", w.Body.String())
+	}
+	return out
 }
 
 func serveTestdata(t *testing.T, w http.ResponseWriter, name string) {
@@ -357,14 +398,16 @@ func TestGetState(t *testing.T) {
 		t.Errorf("first model = %v", first)
 	}
 	cfg, _ := body["config"].(map[string]any)
-	if cfg["effort"] != "medium" || cfg["listen"] != "127.0.0.1:7331" {
+	if cfg["listen"] != "127.0.0.1:7331" || cfg["agent"] != f.agent {
 		t.Errorf("config = %v", cfg)
 	}
-	if _, ok := cfg["server_token"]; ok {
-		t.Error("the server token was returned")
+	agents, _ := body["agents"].([]any)
+	if len(agents) != 1 {
+		t.Fatalf("agents = %v", agents)
 	}
-	if cfg["server_token_set"] != false {
-		t.Errorf("server_token_set = %v", cfg["server_token_set"])
+	one, _ := agents[0].(map[string]any)
+	if one["name"] != "Local" || one["model"] != "Alpha-12B" || one["effort"] != "medium" {
+		t.Errorf("agent = %v", one)
 	}
 	if body["detect_error"] != "" || body["models_error"] != "" {
 		t.Errorf("errors = %v %v", body["detect_error"], body["models_error"])
@@ -376,7 +419,7 @@ func TestGetState(t *testing.T) {
 
 func TestGetStateSurvivesADeadModelServer(t *testing.T) {
 	f := newFixture(t)
-	f.srv.SetClient(llm.New("http://127.0.0.1:1", ""))
+	f.pointAt(t, "http://127.0.0.1:1")
 	body := decode(t, f.do(t, "GET", "/api/state", nil))
 	if body["mode"] != "unknown" {
 		t.Errorf("mode = %v, want unknown", body["mode"])
@@ -399,7 +442,7 @@ func TestGetStateWithAnOpenAICompatibleServer(t *testing.T) {
 		serveTestdata(t, w, "openai-models.json")
 	}))
 	defer upstream.Close()
-	f.srv.SetClient(llm.New(upstream.URL, ""))
+	f.pointAt(t, upstream.URL)
 
 	body := decode(t, f.do(t, "GET", "/api/state", nil))
 	if body["mode"] != "openai" {
@@ -450,7 +493,7 @@ func TestGetModelPropsUnloadedIs409(t *testing.T) {
 		fmt.Fprint(w, `{"error":{"message":"model is not loaded"}}`)
 	}))
 	defer upstream.Close()
-	f.srv.SetClient(llm.New(upstream.URL, ""))
+	f.pointAt(t, upstream.URL)
 	w := f.do(t, "GET", "/api/models/props?id=Beta%2030B%20Q5", nil)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", w.Code)
@@ -559,18 +602,20 @@ func TestCreateSessionRejectsUnknownProject(t *testing.T) {
 	}
 }
 
-// The model is chosen for the harness, and every session takes it.
-func TestModelRouteRepointsEverySession(t *testing.T) {
+// One agent answers for the harness, and every session takes it.
+func TestSelectingAnAgentRepointsEverySession(t *testing.T) {
 	f := newFixture(t)
 	first := f.newSession(t)
 	second := f.newSession(t)
 
-	w := f.do(t, "PUT", "/api/config", map[string]any{"model": "Delta3.8-27B Q5"})
+	other := f.addAgent(t, map[string]any{
+		"name": "Other", "url": f.upstream.URL, "model": "Delta3.8-27B Q5"})
+	w := f.do(t, "POST", "/api/agents/"+other+"/select", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
-	if decode(t, w)["model"] != "Delta3.8-27B Q5" {
-		t.Errorf("config = %v", decode(t, w))
+	if decode(t, w)["agent"] != other {
+		t.Errorf("state = %v", decode(t, w))
 	}
 	for _, id := range []string{first, second} {
 		f.waitIdle(t, id)
@@ -688,50 +733,53 @@ func TestPutConfigRejectsAnUnknownMode(t *testing.T) {
 
 // A sampling value is set by a number and cleared by null. A body that leaves
 // the field out changes nothing, which is what every other setting relies on.
-func TestPutConfigSetsAndClearsSampling(t *testing.T) {
+func TestPutAgentSetsAndClearsSampling(t *testing.T) {
 	f := newFixture(t)
+	temp := func() *float64 {
+		a, _ := f.cfg.Config().AgentByID(f.agent)
+		return a.Temperature
+	}
 
-	res := f.do(t, "PUT", "/api/config", map[string]any{"temperature": 0.35, "top_p": 0.9})
+	res := f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"temperature": 0.35, "top_p": 0.9})
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
 	}
-	if got := f.cfg.Config().Temperature; got == nil || *got != 0.35 {
+	if got := temp(); got == nil || *got != 0.35 {
 		t.Fatalf("temperature = %v, want 0.35", got)
 	}
-	if got := decode(t, res)["temperature"]; got != 0.35 {
+	if got := f.saved(t, res)["temperature"]; got != 0.35 {
 		t.Errorf("the reply said temperature = %v", got)
 	}
 
-	f.do(t, "PUT", "/api/config", map[string]any{"effort": "low"})
-	if got := f.cfg.Config().Temperature; got == nil || *got != 0.35 {
+	f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"effort": "low"})
+	if got := temp(); got == nil || *got != 0.35 {
 		t.Errorf("temperature = %v after a body that left it out", got)
 	}
 
-	res = f.do(t, "PUT", "/api/config", map[string]any{"temperature": nil})
+	res = f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"temperature": nil})
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
 	}
-	if got := f.cfg.Config().Temperature; got != nil {
+	if got := temp(); got != nil {
 		t.Errorf("temperature = %v, want it back with the model server", *got)
 	}
-	if body := decode(t, res); body["temperature"] != nil {
-		t.Errorf("the reply said temperature = %v, want null", body["temperature"])
+	if got := f.saved(t, res)["temperature"]; got != nil {
+		t.Errorf("the reply said temperature = %v, want null", got)
 	}
-	if got := f.cfg.Config().TopP; got == nil || *got != 0.9 {
-		t.Errorf("top_p = %v, want 0.9 left alone", got)
+	a, _ := f.cfg.Config().AgentByID(f.agent)
+	if a.TopP == nil || *a.TopP != 0.9 {
+		t.Errorf("top_p = %v, want 0.9 left alone", a.TopP)
 	}
 }
 
-func TestPutConfigRejectsSamplingOutOfRange(t *testing.T) {
+func TestPutAgentRejectsValuesOutOfRange(t *testing.T) {
 	f := newFixture(t)
-	for field, value := range map[string]float64{"temperature": 2.5, "top_p": 1.5} {
-		res := f.do(t, "PUT", "/api/config", map[string]any{field: value})
-		if res.Code != http.StatusBadRequest {
-			t.Errorf("%s: status = %d, want 400", field, res.Code)
+	for _, body := range []map[string]any{
+		{"temperature": 2.5}, {"top_p": 1.5}, {"effort": "extreme"}, {"url": "ftp://x"},
+	} {
+		if res := f.do(t, "PUT", "/api/agents/"+f.agent, body); res.Code != http.StatusBadRequest {
+			t.Errorf("%v = %d, want 400", body, res.Code)
 		}
-	}
-	if c := f.cfg.Config(); c.Temperature != nil || c.TopP != nil {
-		t.Errorf("the store changed anyway: %v %v", c.Temperature, c.TopP)
 	}
 }
 
@@ -949,19 +997,16 @@ func TestChangesRoute(t *testing.T) {
 func TestPutConfig(t *testing.T) {
 	f := newFixture(t)
 	body := decode(t, f.do(t, "PUT", "/api/config", map[string]any{
-		"effort": "auto", "permissions": "full", "compact_at": 0.5, "model": "Alpha-12B",
+		"permissions": "full", "compact_at": 0.5, "max_tool_calls": 10,
 	}))
-	if body["effort"] != "auto" || body["permissions"] != "full" || body["compact_at"] != 0.5 {
+	if body["permissions"] != "full" || body["compact_at"] != 0.5 || body["max_tool_calls"] != 10.0 {
 		t.Errorf("config = %v", body)
 	}
 	if f.cfg.Config().Mode != config.ModeFull {
 		t.Errorf("the store was not updated: mode = %v", f.cfg.Config().Mode)
 	}
-	if f.cfg.Config().Effort != config.EffortAuto {
-		t.Errorf("the store was not updated: %v", f.cfg.Config().Effort)
-	}
-	if w := f.do(t, "PUT", "/api/config", map[string]any{"effort": "extreme"}); w.Code != 400 {
-		t.Errorf("bad effort = %d", w.Code)
+	if w := f.do(t, "PUT", "/api/config", map[string]any{"permissions": "sometimes"}); w.Code != 400 {
+		t.Errorf("bad permissions = %d", w.Code)
 	}
 	body = decode(t, f.do(t, "PUT", "/api/config", map[string]any{"listen": "127.0.0.1:9999"}))
 	if body["note"] != "Listen changes take effect on restart" {
@@ -969,16 +1014,162 @@ func TestPutConfig(t *testing.T) {
 	}
 }
 
-func TestPutConfigServerURLResetsTheCache(t *testing.T) {
+// A model is a property of the agent, so the config route must not be a second
+// way to set one.
+func TestPutConfigIgnoresTheModel(t *testing.T) {
 	f := newFixture(t)
-	f.do(t, "GET", "/api/state", nil)
-	w := f.do(t, "PUT", "/api/config", map[string]any{"server": map[string]any{"url": "http://127.0.0.1:1"}})
-	if w.Code != 200 {
+	if w := f.do(t, "PUT", "/api/config", map[string]any{"model": "Delta3.8-27B Q5"}); w.Code != 200 {
 		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
+	a, _ := f.cfg.Config().AgentByID(f.agent)
+	if a.Model != "Alpha-12B" {
+		t.Errorf("model = %q, want it unchanged", a.Model)
+	}
+}
+
+func TestMovingAnAgentAddressResetsTheCache(t *testing.T) {
+	f := newFixture(t)
+	f.do(t, "GET", "/api/state", nil)
+	f.pointAt(t, "http://127.0.0.1:1")
 	body := decode(t, f.do(t, "GET", "/api/state", nil))
 	if body["detect_error"] == "" {
-		t.Error("the detect cache was not invalidated")
+		t.Error("the reading of the old address was still served")
+	}
+}
+
+func TestAgentsCRUD(t *testing.T) {
+	f := newFixture(t)
+	second := f.addAgent(t, map[string]any{"name": "Studio", "url": f.upstream.URL, "model": "Beta 30B Q5"})
+
+	body := decode(t, f.do(t, "GET", "/api/agents", nil))
+	agents, _ := body["agents"].([]any)
+	if len(agents) != 2 {
+		t.Fatalf("agents = %v", agents)
+	}
+	if body["agent"] != f.agent {
+		t.Errorf("adding an agent moved the selection to %v", body["agent"])
+	}
+
+	if w := f.do(t, "POST", "/api/agents", map[string]any{"name": "studio"}); w.Code != http.StatusConflict {
+		t.Errorf("a duplicate name = %d, want 409", w.Code)
+	}
+	if w := f.do(t, "POST", "/api/agents", map[string]any{"name": "  "}); w.Code != http.StatusBadRequest {
+		t.Errorf("a blank name = %d, want 400", w.Code)
+	}
+	if w := f.do(t, "PUT", "/api/agents/agt_nothing", map[string]any{"name": "x"}); w.Code != http.StatusNotFound {
+		t.Errorf("unknown agent = %d, want 404", w.Code)
+	}
+
+	w := f.do(t, "PUT", "/api/agents/"+second, map[string]any{"name": "Renamed", "instructions": " Be brief. "})
+	if w.Code != http.StatusOK {
+		t.Fatalf("rename = %d %s", w.Code, w.Body.String())
+	}
+	if saved := f.saved(t, w); saved["name"] != "Renamed" || saved["instructions"] != "Be brief." {
+		t.Errorf("saved = %v", saved)
+	}
+
+	// Deleting the active agent hands the turn to the one left, and deleting
+	// the last leaves the state a first run is in.
+	body = decode(t, f.do(t, "DELETE", "/api/agents/"+f.agent, nil))
+	if body["agent"] != second {
+		t.Errorf("agent = %v, want the one remaining", body["agent"])
+	}
+	body = decode(t, f.do(t, "DELETE", "/api/agents/"+second, nil))
+	if body["agent"] != "" || len(body["agents"].([]any)) != 0 {
+		t.Errorf("state after the last delete = %v", body)
+	}
+	if w := f.do(t, "POST", "/api/sessions", map[string]string{"project": f.project}); w.Code != 400 {
+		t.Errorf("a session with no agent = %d, want 400", w.Code)
+	}
+}
+
+// The key is write only. It goes in and never comes back, and a body that does
+// not name it leaves the stored one alone.
+func TestAgentKeyNeverLeaves(t *testing.T) {
+	f := newFixture(t)
+	const key = "sk-do-not-echo-this"
+	id := f.addAgent(t, map[string]any{"name": "Keyed", "url": f.upstream.URL, "key": key})
+
+	for _, path := range []string{"/api/agents", "/api/state"} {
+		w := f.do(t, "GET", path, nil)
+		if strings.Contains(w.Body.String(), key) {
+			t.Errorf("%s returned the key: %s", path, w.Body.String())
+		}
+	}
+	if saved := f.saved(t, f.do(t, "PUT", "/api/agents/"+id, map[string]any{"name": "Keyed"})); saved["key_set"] != true {
+		t.Errorf("a body that did not name the key cleared it: %v", saved)
+	}
+	stored := func() string {
+		a, _ := f.cfg.Config().AgentByID(id)
+		return a.Key
+	}
+	if stored() != key {
+		t.Errorf("stored key = %q", stored())
+	}
+	if saved := f.saved(t, f.do(t, "PUT", "/api/agents/"+id, map[string]any{"key": nil})); saved["key_set"] != false {
+		t.Errorf("null did not clear the key: %v", saved)
+	}
+	if stored() != "" {
+		t.Errorf("stored key = %q after clearing", stored())
+	}
+}
+
+// The model list belongs to the address it was read from, so a second agent
+// elsewhere is not answered out of the first one's cache.
+func TestModelsFollowTheActiveAgent(t *testing.T) {
+	f := newFixture(t)
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		serveTestdata(t, w, "openai-models.json")
+	}))
+	defer other.Close()
+
+	if got := decode(t, f.do(t, "GET", "/api/models", nil))["models"].([]any); len(got) != 6 {
+		t.Fatalf("the first agent listed %d models, want 6", len(got))
+	}
+	id := f.addAgent(t, map[string]any{"name": "Elsewhere", "url": other.URL, "model": "Delta3.8-27B"})
+	if w := f.do(t, "POST", "/api/agents/"+id+"/select", nil); w.Code != 200 {
+		t.Fatalf("select = %d %s", w.Code, w.Body.String())
+	}
+	got := decode(t, f.do(t, "GET", "/api/models", nil))["models"].([]any)
+	if len(got) != 1 {
+		t.Fatalf("the second agent listed %d models, want the one its own address names", len(got))
+	}
+}
+
+// The probe answers a bad address in the body, so the dialog draws it in the
+// form rather than as a failed request.
+func TestProbeReportsAFailureAt200(t *testing.T) {
+	f := newFixture(t)
+	body := decode(t, f.do(t, "POST", "/api/agents/probe", map[string]any{"url": f.upstream.URL}))
+	if body["mode"] != "router" || len(body["models"].([]any)) != 6 {
+		t.Errorf("probe of a live address = %v", body)
+	}
+
+	body = decode(t, f.do(t, "POST", "/api/agents/probe", map[string]any{"url": "http://127.0.0.1:1"}))
+	if body["mode"] != "unknown" || body["detect_error"] == "" || body["detect_kind"] != "unreachable" {
+		t.Errorf("probe of a dead address = %v", body)
+	}
+	if w := f.do(t, "POST", "/api/agents/probe", map[string]any{"url": "ftp://x"}); w.Code != 400 {
+		t.Errorf("probe of a bad address = %d, want 400", w.Code)
+	}
+}
+
+func TestStateWithNoAgents(t *testing.T) {
+	f := newFixture(t)
+	f.do(t, "DELETE", "/api/agents/"+f.agent, nil)
+	body := decode(t, f.do(t, "GET", "/api/state", nil))
+	if body["mode"] != "unknown" || body["agent"] != "" {
+		t.Errorf("state = %v", body)
+	}
+	if len(body["agents"].([]any)) != 0 || len(body["models"].([]any)) != 0 {
+		t.Errorf("state named an agent or a model: %v", body)
+	}
+	if !strings.Contains(body["detect_error"].(string), "No agent is selected") {
+		t.Errorf("detect_error = %v", body["detect_error"])
 	}
 }
 
@@ -1324,28 +1515,45 @@ func (p *pipeRecorder) WriteHeader(int)             {}
 func (p *pipeRecorder) Write(b []byte) (int, error) { return p.w.Write(b) }
 func (p *pipeRecorder) Flush()                      {}
 
-// A changed server address has to reach the turn loop too, not just the
-// routes that list models.
-func TestConfigRepointsEngine(t *testing.T) {
+// A changed address has to reach the turn loop too, not just the routes that
+// list models. The engine resolves the agent every turn, so what proves it is
+// the request arriving at the new address.
+func TestATurnFollowsTheAgentAddress(t *testing.T) {
 	f := newFixture(t)
-	before := f.srv.engine.Llama()
-	w := f.do(t, "PUT", "/api/config", map[string]any{
-		"server": map[string]string{"url": "http://192.0.2.9:9999", "token": "k"},
-	})
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
+	var askedMu sync.Mutex
+	var asked []string
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		askedMu.Lock()
+		asked = append(asked, r.URL.Path)
+		askedMu.Unlock()
+		switch r.URL.Path {
+		case "/props":
+			serveTestdata(t, w, "props-router.json")
+		case "/v1/models":
+			serveTestdata(t, w, "v1-models.json")
+		default:
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`+"\n\n")
+			fmt.Fprint(w, "data: [DONE]\n\n")
+		}
+	}))
+	defer other.Close()
+
+	f.pointAt(t, other.URL)
+	id := f.newSession(t)
+	if w := f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "hi"}); w.Code != http.StatusAccepted {
+		t.Fatalf("message = %d %s", w.Code, w.Body.String())
 	}
-	after := f.srv.engine.Llama()
-	if after == before {
-		t.Fatal("the engine kept the old client, so a turn would still use the old address")
+	f.waitIdle(t, id)
+
+	askedMu.Lock()
+	defer askedMu.Unlock()
+	for _, path := range asked {
+		if path == "/v1/chat/completions" {
+			return
+		}
 	}
-	cl, ok := after.(*llm.Client)
-	if !ok {
-		t.Fatalf("engine backend = %T, want a model client", after)
-	}
-	if cl.BaseURL != "http://192.0.2.9:9999" {
-		t.Errorf("engine BaseURL = %q, want the address just saved", cl.BaseURL)
-	}
+	t.Fatalf("the turn went to the old address, the new one saw %v", asked)
 }
 
 // TestFileRouteServesAnAttachment asserts that an image is served back by its

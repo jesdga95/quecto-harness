@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"quecto-harness/internal/llm"
 )
 
 // Store holds the resolved configuration and the allowlist, and is the only
@@ -68,7 +70,9 @@ func (s *Store) Paths() Paths { return s.paths }
 func (s *Store) Config() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cfg
+	c := s.cfg
+	c.Agents = cloneAgents(s.cfg.Agents)
+	return c
 }
 
 func (s *Store) Notes() []string {
@@ -84,6 +88,7 @@ func (s *Store) Update(fn func(*Config)) (Config, error) {
 	defer s.mu.Unlock()
 	next := s.cfg
 	next.Projects = append([]string(nil), s.cfg.Projects...)
+	next.Agents = cloneAgents(s.cfg.Agents)
 	fn(&next)
 	resolved, notes := next.File().Resolve(Defaults())
 	s.cfg = resolved
@@ -276,4 +281,129 @@ func (s *Store) HasProject(path string) bool {
 		}
 	}
 	return false
+}
+
+// AddAgent stores a new agent and mints its id. It becomes the active one when
+// nothing was selected, so a first run leaves a harness that can answer.
+func (s *Store) AddAgent(a Agent) (Config, Agent, error) {
+	a.Name = strings.TrimSpace(a.Name)
+	if a.Name == "" {
+		return s.Config(), Agent{}, errors.New("Name the agent: an agent needs a name")
+	}
+	if err := s.nameIsFree(a.Name, ""); err != nil {
+		return s.Config(), Agent{}, err
+	}
+	a.ID = NewAgentID()
+	cfg, err := s.Update(func(c *Config) {
+		c.Agents = append(c.Agents, a)
+		if c.AgentID == "" {
+			c.AgentID = a.ID
+		}
+	})
+	if err != nil {
+		return cfg, Agent{}, err
+	}
+	stored, _ := cfg.AgentByID(a.ID)
+	return cfg, stored, nil
+}
+
+// UpdateAgent applies fn to one agent. The name is checked after fn runs, so a
+// rename is refused before anything is written.
+func (s *Store) UpdateAgent(id string, fn func(*Agent)) (Config, Agent, error) {
+	s.mu.RLock()
+	current, ok := s.cfg.AgentByID(id)
+	s.mu.RUnlock()
+	if !ok {
+		return s.Config(), Agent{}, ErrNoSuchAgent
+	}
+	next := current
+	next.Temperature, next.TopP = clonef(current.Temperature), clonef(current.TopP)
+	fn(&next)
+	next.Name = strings.TrimSpace(next.Name)
+	if next.Name == "" {
+		return s.Config(), Agent{}, errors.New("Name the agent: an agent needs a name")
+	}
+	if err := s.nameIsFree(next.Name, id); err != nil {
+		return s.Config(), Agent{}, err
+	}
+	cfg, err := s.Update(func(c *Config) {
+		for i := range c.Agents {
+			if c.Agents[i].ID == id {
+				c.Agents[i] = next
+			}
+		}
+	})
+	if err != nil {
+		return cfg, Agent{}, err
+	}
+	stored, _ := cfg.AgentByID(id)
+	return cfg, stored, nil
+}
+
+// RemoveAgent drops an agent. Removing the active one hands the turn to the
+// first agent left, and removing the last one leaves nothing selected, which
+// is the state a first run is in.
+func (s *Store) RemoveAgent(id string) (Config, error) {
+	s.mu.RLock()
+	_, ok := s.cfg.AgentByID(id)
+	s.mu.RUnlock()
+	if !ok {
+		return s.Config(), ErrNoSuchAgent
+	}
+	return s.Update(func(c *Config) {
+		keep := make([]Agent, 0, len(c.Agents))
+		for _, a := range c.Agents {
+			if a.ID != id {
+				keep = append(keep, a)
+			}
+		}
+		c.Agents = keep
+		if c.AgentID == id {
+			c.AgentID = ""
+			if len(keep) > 0 {
+				c.AgentID = keep[0].ID
+			}
+		}
+	})
+}
+
+// SelectAgent points the harness at one agent. A half-configured one may be
+// selected: what it is missing is reported when a message is sent.
+func (s *Store) SelectAgent(id string) (Config, error) {
+	s.mu.RLock()
+	_, ok := s.cfg.AgentByID(id)
+	s.mu.RUnlock()
+	if !ok {
+		return s.Config(), ErrNoSuchAgent
+	}
+	return s.Update(func(c *Config) { c.AgentID = id })
+}
+
+// AgentKeys is the identity of every agent's model client, for the pool to
+// keep and for anything else to compare against.
+func (s *Store) AgentKeys() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	keys := make([]string, 0, len(s.cfg.Agents))
+	for _, a := range s.cfg.Agents {
+		keys = append(keys, llm.Key(a.URL, a.Key))
+	}
+	return keys
+}
+
+// ErrNoSuchAgent is returned by every method that takes an agent id, so the
+// caller answers 404 without matching on a sentence.
+var ErrNoSuchAgent = errors.New("No agent with that id: it may have been deleted")
+
+// nameIsFree refuses a name another agent already has. The id is the identity,
+// so this is about the reader, who picks an agent out of a list by its name.
+func (s *Store) nameIsFree(name, own string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, a := range s.cfg.Agents {
+		if a.ID != own && strings.EqualFold(a.Name, name) {
+			return fmt.Errorf("An agent named %q already exists: choose another name", a.Name)
+		}
+	}
+	return nil
 }

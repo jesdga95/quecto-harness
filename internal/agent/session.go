@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"quecto-harness/internal/config"
 	"quecto-harness/internal/llm"
 	"quecto-harness/internal/prompts"
 	"quecto-harness/internal/store"
@@ -41,6 +42,7 @@ type Session struct {
 
 	ID      string
 	Project string
+	AgentID string
 	Model   string
 	Created time.Time
 	Updated time.Time
@@ -74,6 +76,9 @@ type Session struct {
 	// baseProbed stops the measurement being retried every turn against a
 	// server that will not answer it.
 	baseProbed bool
+	// sysChars is the size of the system message last rendered for this
+	// session, which is what says whether a stored measurement still holds.
+	sysChars int
 	// prepared reports that the model has been read: its window and its chat
 	// template are known and a request can be shaped for it.
 	prepared bool
@@ -86,20 +91,27 @@ type Session struct {
 	gone bool
 }
 
-// repoint moves the session to a model and forgets everything the previous
-// model's tokenizer implied. The transcript says nothing about it: the chip
-// already shows which model a session is on. The caller holds the lock.
-func (s *Session) repoint(model string) {
+// repoint moves the session to an agent and a model and forgets everything the
+// previous model's tokenizer implied. The transcript says nothing about it: the
+// chip already shows which agent a session is on. The caller holds the lock.
+func (s *Session) repoint(agentID, model string) {
+	s.AgentID = agentID
 	s.Model = model
-	s.NCtx, s.NCtxSource = 0, ""
-	s.caps = llm.Caps{}
-	s.prepared = false
+	s.forgetModel()
 	s.LastUsage = nil
 	s.LastToolTokens = 0
 	s.lastSentTools = false
 	s.ContextBase = nil
-	s.baseProbed = false
 	s.lastUsageEntry = -1
+}
+
+// forgetModel drops what was read from the model server, so the next turn
+// reads it again. The caller holds the lock.
+func (s *Session) forgetModel() {
+	s.NCtx, s.NCtxSource = 0, ""
+	s.caps = llm.Caps{}
+	s.prepared = false
+	s.baseProbed = false
 }
 
 // forget marks the session deleted, so nothing still running writes it back.
@@ -119,10 +131,10 @@ func (s *Session) reopen() {
 	}
 }
 
-func newSession(id, project, model string) *Session {
+func newSession(id, project, agentID, model string) *Session {
 	now := time.Now().UTC()
 	return &Session{
-		ID: id, Project: project, Model: model,
+		ID: id, Project: project, AgentID: agentID, Model: model,
 		Created: now, Updated: now,
 		state: StateIdle, lastUsageEntry: -1,
 	}
@@ -130,7 +142,7 @@ func newSession(id, project, model string) *Session {
 
 func fromDoc(d *store.Session) *Session {
 	return &Session{
-		ID: d.ID, Project: d.Project, Model: d.Model,
+		ID: d.ID, Project: d.Project, AgentID: d.Agent, Model: d.Model,
 		Created: d.Created, Updated: d.Updated, Title: d.Title, Named: d.Named,
 		Entries:        append([]store.Entry(nil), d.Entries...),
 		NCtx:           d.NCtx,
@@ -151,7 +163,7 @@ func fromDoc(d *store.Session) *Session {
 // doc renders the on-disk shape. The caller holds the session lock.
 func (s *Session) doc() *store.Session {
 	return &store.Session{
-		ID: s.ID, Project: s.Project, Model: s.Model, Title: s.Title, Named: s.Named,
+		ID: s.ID, Project: s.Project, Agent: s.AgentID, Model: s.Model, Title: s.Title, Named: s.Named,
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, LastUsage: s.LastUsage,
@@ -372,14 +384,22 @@ func (s *Session) imageRefs() []string {
 	return out
 }
 
+// systemMessage is the system prompt as this agent renders it. Everything that
+// sends one goes through here, so a turn, a compaction and the measurement of
+// the fixed context all carry the same text. The caller holds the lock.
+func (s *Session) systemMessage(a config.Agent, osName string) llm.Message {
+	content := prompts.System(prompts.SystemVars{
+		Project: s.Project, OS: osName, Instructions: a.Instructions,
+	})
+	s.sysChars = len(content)
+	return llm.Message{Role: "system", Content: content}
+}
+
 // contextMessages is the system prompt followed by every in-context entry,
 // with the invariants the wire format requires repaired. images maps a file
 // id to the part built from it.
-func (s *Session) contextMessages(osName string, images map[string]llm.Part) []llm.Message {
-	msgs := []llm.Message{{
-		Role:    "system",
-		Content: prompts.System(prompts.SystemVars{Project: s.Project, OS: osName}),
-	}}
+func (s *Session) contextMessages(a config.Agent, osName string, images map[string]llm.Part) []llm.Message {
+	msgs := []llm.Message{s.systemMessage(a, osName)}
 	for i := 0; i < len(s.Entries); i++ {
 		e := s.Entries[i]
 		if !e.InContext {
@@ -508,7 +528,7 @@ func (s *Session) Breakdown() *Breakdown {
 // the remainder, which is exact because every part of it came from the model
 // server rather than from counting characters. The caller holds the lock.
 func (s *Session) breakdown() *Breakdown {
-	if s.LastUsage == nil || s.ContextBase == nil || s.ContextBase.Model != s.Model {
+	if s.LastUsage == nil || !s.ContextBase.Fits(s.Model, s.sysChars) {
 		return nil
 	}
 	b := Breakdown{System: s.ContextBase.System, Tools: s.LastToolTokens}

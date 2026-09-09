@@ -38,7 +38,7 @@ type Server struct {
 	uploads *store.Uploads
 	engine  *agent.Engine
 	perms   *perms.Broker
-	client  *llm.Client
+	pool    *llm.Pool
 	hub     *Hub
 
 	token   string
@@ -46,40 +46,51 @@ type Server struct {
 	version string
 	ui      http.Handler
 
-	mu        sync.Mutex
-	modelsAt  time.Time
-	modelsVal []llm.Model
-	modelsErr error
+	mu     sync.Mutex
+	probes map[string]*probe
+}
+
+// probe is what one address last said about itself and what it holds. Keyed by
+// address and key, so two agents at one address share a reading and a changed
+// address is a different entry.
+type probe struct {
 	infoAt    time.Time
-	infoVal   llm.Info
+	info      llm.Info
 	infoErr   error
+	modelsAt  time.Time
+	models    []llm.Model
+	modelsErr error
 }
 
 func New(cfg *config.Store, st *store.Sessions, files *store.Files, uploads *store.Uploads,
-	engine *agent.Engine, pb *perms.Broker, cl *llm.Client, hub *Hub,
+	engine *agent.Engine, pb *perms.Broker, pool *llm.Pool, hub *Hub,
 	token, listen, version string) *Server {
 	return &Server{
-		cfg: cfg, store: st, files: files, uploads: uploads, engine: engine, perms: pb, client: cl, hub: hub,
+		cfg: cfg, store: st, files: files, uploads: uploads, engine: engine, perms: pb, pool: pool, hub: hub,
 		token: token, listen: listen, version: version, ui: web.Handler(),
+		probes: map[string]*probe{},
 	}
 }
 
-// SetClient swaps the model client after server.url changed, and clears the
-// caches that were filled from the old one. The new client works out on its
-// own which protocol the new address speaks.
-func (s *Server) SetClient(cl *llm.Client) {
+// forget drops what was read at one address and key, and drops the clients no
+// agent points at any more. Called after a write that moved an address.
+func (s *Server) forget(url, key string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.client = cl
-	s.modelsAt, s.infoAt = time.Time{}, time.Time{}
-	s.modelsVal, s.modelsErr = nil, nil
-	s.infoVal, s.infoErr = llm.Info{}, nil
+	delete(s.probes, llm.Key(url, key))
+	s.mu.Unlock()
+	s.pool.Retain(s.cfg.AgentKeys())
 }
 
-func (s *Server) modelClient() *llm.Client {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.client
+// probeFor is the reading for one address and key, created empty on the first
+// look. The caller holds the lock.
+func (s *Server) probeFor(url, key string) *probe {
+	k := llm.Key(url, key)
+	pr, ok := s.probes[k]
+	if !ok {
+		pr = &probe{}
+		s.probes[k] = pr
+	}
+	return pr
 }
 
 func (s *Server) Handler() http.Handler {
@@ -105,6 +116,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/resend", s.postResend)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", s.postStop)
 	mux.HandleFunc("POST /api/sessions/{id}/compact", s.postCompact)
+	mux.HandleFunc("GET /api/agents", s.listAgents)
+	mux.HandleFunc("POST /api/agents", s.createAgent)
+	mux.HandleFunc("POST /api/agents/probe", s.probeAgent)
+	mux.HandleFunc("PUT /api/agents/{id}", s.updateAgent)
+	mux.HandleFunc("DELETE /api/agents/{id}", s.deleteAgent)
+	mux.HandleFunc("POST /api/agents/{id}/select", s.selectAgent)
 	mux.HandleFunc("POST /api/permissions/{id}", s.postPermission)
 	mux.HandleFunc("POST /api/questions/{id}", s.postQuestion)
 	mux.HandleFunc("PUT /api/config", s.putConfig)

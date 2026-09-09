@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/base32"
 	"net"
 	"net/url"
 	"os"
@@ -15,41 +17,41 @@ import (
 // File mirrors config.json. A nil field is absent and takes the default,
 // which is why every scalar is a pointer.
 type File struct {
-	Listen            *string  `json:"listen,omitempty"`
-	Server            *Server  `json:"server,omitempty"`
+	Listen *string `json:"listen,omitempty"`
+	// Agents and Projects have no omitempty: a saved file names every field, so
+	// a reader never has to know which default was in force.
+	Agents           []FileAgent `json:"agents"`
+	Agent            *string     `json:"agent,omitempty"`
+	Permissions      *string     `json:"permissions,omitempty"`
+	CompactAt        *float64    `json:"compact_at,omitempty"`
+	Shell            *string     `json:"shell,omitempty"`
+	CommandTimeoutS  *int        `json:"command_timeout_s,omitempty"`
+	OutputLimitBytes *int        `json:"output_limit_bytes,omitempty"`
+	MaxToolCalls     *int        `json:"max_tool_calls,omitempty"`
+	Projects         []string    `json:"projects"`
+}
+
+// FileAgent mirrors one entry of the agents array.
+type FileAgent struct {
+	ID                *string  `json:"id,omitempty"`
+	Name              *string  `json:"name,omitempty"`
+	URL               *string  `json:"url,omitempty"`
+	Key               *string  `json:"key,omitempty"`
 	Model             *string  `json:"model,omitempty"`
 	Effort            *string  `json:"effort,omitempty"`
 	PreserveReasoning *bool    `json:"preserve_reasoning,omitempty"`
 	Temperature       *float64 `json:"temperature,omitempty"`
 	TopP              *float64 `json:"top_p,omitempty"`
-	Permissions       *string  `json:"permissions,omitempty"`
-	CompactAt         *float64 `json:"compact_at,omitempty"`
-	Shell             *string  `json:"shell,omitempty"`
-	CommandTimeoutS   *int     `json:"command_timeout_s,omitempty"`
-	OutputLimitBytes  *int     `json:"output_limit_bytes,omitempty"`
-	MaxToolCalls      *int     `json:"max_tool_calls,omitempty"`
-	// Projects has no omitempty: a saved file names every field, so a reader
-	// never has to know which default was in force.
-	Projects []string `json:"projects"`
-}
-
-type Server struct {
-	URL   *string `json:"url,omitempty"`
-	Token *string `json:"token,omitempty"`
+	Instructions      *string  `json:"instructions,omitempty"`
 }
 
 // Config is the resolved configuration. Every field is usable as it stands.
 type Config struct {
-	Listen            string
-	ServerURL         string
-	ServerToken       string
-	Model             string
-	Effort            Effort
-	PreserveReasoning bool
-	// Temperature and TopP are sent with every request that generates. Nil is
-	// left out of the body, so the model server's own value stands.
-	Temperature      *float64
-	TopP             *float64
+	Listen string
+	Agents []Agent
+	// AgentID names the active agent. Empty when none is chosen, which is the
+	// state the setup screen answers.
+	AgentID          string
 	Mode             Mode
 	CompactAt        float64
 	Shell            string
@@ -59,6 +61,62 @@ type Config struct {
 	// which leaves the Stop button as the only thing that ends a runaway turn.
 	MaxToolCalls int
 	Projects     []string
+}
+
+// Agent is one model server the harness can answer with: where it is, what key
+// opens it, which model, and how that model is asked. One is active at a time
+// and every session uses it.
+type Agent struct {
+	ID                string
+	Name              string
+	URL               string
+	Key               string
+	Model             string
+	Effort            Effort
+	PreserveReasoning bool
+	// Temperature and TopP are sent with every request that generates. Nil is
+	// left out of the body, so the model server's own value stands.
+	Temperature *float64
+	TopP        *float64
+	// Instructions follow the built-in system prompt in the same message.
+	Instructions string
+}
+
+// Agent is the active agent. The second result is false when none is chosen.
+func (c Config) Agent() (Agent, bool) { return c.AgentByID(c.AgentID) }
+
+// AgentByID finds one agent by id, so callers never write the loop.
+func (c Config) AgentByID(id string) (Agent, bool) {
+	if id == "" {
+		return Agent{}, false
+	}
+	for _, a := range c.Agents {
+		if a.ID == id {
+			return a, true
+		}
+	}
+	return Agent{}, false
+}
+
+// DefaultAgent is what a new agent starts as, before anything it was created
+// with is folded in.
+func DefaultAgent() Agent {
+	return Agent{Effort: EffortMedium, PreserveReasoning: true}
+}
+
+// cloneAgents copies the list and the values behind its pointers, so a
+// resolved config and the one it came from never share a value.
+func cloneAgents(in []Agent) []Agent {
+	if in == nil {
+		return nil
+	}
+	out := make([]Agent, len(in))
+	for i, a := range in {
+		a.Temperature = clonef(a.Temperature)
+		a.TopP = clonef(a.TopP)
+		out[i] = a
+	}
+	return out
 }
 
 // Effort is defined in internal/llm, which is what turns it into request
@@ -101,21 +159,16 @@ func ValidMode(s string) bool {
 
 func Defaults() Config {
 	return Config{
-		Listen:            "127.0.0.1:7331",
-		ServerURL:         "",
-		ServerToken:       "",
-		Model:             "",
-		Effort:            EffortMedium,
-		PreserveReasoning: true,
-		Temperature:       nil,
-		TopP:              nil,
-		Mode:              ModeAsk,
-		CompactAt:         0.8,
-		Shell:             defaultShell(),
-		CommandTimeout:    120 * time.Second,
-		OutputLimitBytes:  16384,
-		MaxToolCalls:      50,
-		Projects:          nil,
+		Listen:           "127.0.0.1:7331",
+		Agents:           nil,
+		AgentID:          "",
+		Mode:             ModeAsk,
+		CompactAt:        0.8,
+		Shell:            defaultShell(),
+		CommandTimeout:   120 * time.Second,
+		OutputLimitBytes: 16384,
+		MaxToolCalls:     50,
+		Projects:         nil,
 	}
 }
 
@@ -146,48 +199,13 @@ func (f File) Resolve(d Config) (Config, []string) {
 			note("listen " + strconv.Quote(*f.Listen) + " is not a host:port with a port from 1 to 65535, using " + d.Listen)
 		}
 	}
-	if f.Server != nil {
-		if f.Server.URL != nil {
-			if v, ok := validURL(*f.Server.URL); ok {
-				c.ServerURL = v
-			} else if strings.TrimSpace(*f.Server.URL) == "" {
-				// Empty means no server has been set yet, which the setup
-				// screen answers. It is not a bad value to report.
-				c.ServerURL = ""
-			} else {
-				note("server.url " + strconv.Quote(*f.Server.URL) + " is not an http or https URL with a host, using " + d.ServerURL)
-			}
-		}
-		if f.Server.Token != nil {
-			c.ServerToken = *f.Server.Token
-		}
+	c.Agents = resolveAgents(f.Agents, note)
+	if f.Agent != nil {
+		c.AgentID = *f.Agent
 	}
-	if f.Model != nil {
-		c.Model = *f.Model
-	}
-	if f.Effort != nil {
-		if llm.ValidEffort(*f.Effort) {
-			c.Effort = Effort(*f.Effort)
-		} else {
-			note("effort " + strconv.Quote(*f.Effort) + " is not " + EffortNames + ", using medium")
-		}
-	}
-	if f.PreserveReasoning != nil {
-		c.PreserveReasoning = *f.PreserveReasoning
-	}
-	if f.Temperature != nil {
-		if *f.Temperature >= 0 && *f.Temperature <= 2 {
-			c.Temperature = clonef(f.Temperature)
-		} else {
-			note("temperature " + strconv.FormatFloat(*f.Temperature, 'g', -1, 64) + " is outside 0 to 2, leaving it to the model server")
-		}
-	}
-	if f.TopP != nil {
-		if *f.TopP >= 0 && *f.TopP <= 1 {
-			c.TopP = clonef(f.TopP)
-		} else {
-			note("top_p " + strconv.FormatFloat(*f.TopP, 'g', -1, 64) + " is outside 0 to 1, leaving it to the model server")
-		}
+	if _, ok := c.Agent(); !ok && c.AgentID != "" {
+		note("agent " + strconv.Quote(c.AgentID) + " is not in the agent list, no agent is selected")
+		c.AgentID = ""
 	}
 	if f.Permissions != nil {
 		if ValidMode(*f.Permissions) {
@@ -257,32 +275,131 @@ func (f File) Resolve(d Config) (Config, []string) {
 // A sampling value left to the server is the one thing not written, since
 // there is no number to write.
 func (c Config) File() File {
-	listen, model, effort := c.Listen, c.Model, string(c.Effort)
-	shell, mode, compact := c.Shell, string(c.Mode), c.CompactAt
-	preserve := c.PreserveReasoning
+	listen, mode, compact := c.Listen, string(c.Mode), c.CompactAt
+	shell := c.Shell
 	timeout, limit := int(c.CommandTimeout/time.Second), c.OutputLimitBytes
-	maxCalls := c.MaxToolCalls
-	surl, stok := c.ServerURL, c.ServerToken
+	maxCalls, agent := c.MaxToolCalls, c.AgentID
 	projects := c.Projects
 	if projects == nil {
 		projects = []string{}
 	}
-	return File{
-		Listen:            &listen,
-		Server:            &Server{URL: &surl, Token: &stok},
-		Model:             &model,
-		Effort:            &effort,
-		PreserveReasoning: &preserve,
-		Temperature:       clonef(c.Temperature),
-		TopP:              clonef(c.TopP),
-		Permissions:       &mode,
-		CompactAt:         &compact,
-		Shell:             &shell,
-		CommandTimeoutS:   &timeout,
-		OutputLimitBytes:  &limit,
-		MaxToolCalls:      &maxCalls,
-		Projects:          projects,
+	agents := make([]FileAgent, 0, len(c.Agents))
+	for _, a := range c.Agents {
+		id, name, url, key := a.ID, a.Name, a.URL, a.Key
+		model, effort := a.Model, string(a.Effort)
+		preserve, instructions := a.PreserveReasoning, a.Instructions
+		agents = append(agents, FileAgent{
+			ID:                &id,
+			Name:              &name,
+			URL:               &url,
+			Key:               &key,
+			Model:             &model,
+			Effort:            &effort,
+			PreserveReasoning: &preserve,
+			Temperature:       clonef(a.Temperature),
+			TopP:              clonef(a.TopP),
+			Instructions:      &instructions,
+		})
 	}
+	return File{
+		Listen:           &listen,
+		Agents:           agents,
+		Agent:            &agent,
+		Permissions:      &mode,
+		CompactAt:        &compact,
+		Shell:            &shell,
+		CommandTimeoutS:  &timeout,
+		OutputLimitBytes: &limit,
+		MaxToolCalls:     &maxCalls,
+		Projects:         projects,
+	}
+}
+
+// resolveAgents folds each file entry over the agent defaults. A bad value
+// falls back and produces one note; only a repeated id costs the entry, since
+// two agents that cannot be told apart cannot both be selected.
+func resolveAgents(in []FileAgent, note func(string)) []Agent {
+	if in == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]Agent, 0, len(in))
+	for _, f := range in {
+		a := DefaultAgent()
+		if f.Name != nil {
+			a.Name = strings.TrimSpace(*f.Name)
+		}
+		if f.ID != nil {
+			a.ID = strings.TrimSpace(*f.ID)
+		}
+		if a.ID == "" {
+			a.ID = NewAgentID()
+			note("agent " + strconv.Quote(a.Name) + " had no id, using " + a.ID)
+		}
+		if seen[a.ID] {
+			note("agent " + strconv.Quote(a.Name) + " repeats id " + a.ID + ", dropped")
+			continue
+		}
+		seen[a.ID] = true
+		if a.Name == "" {
+			a.Name = "Agent"
+			note("agent " + a.ID + " has no name, using " + strconv.Quote(a.Name))
+		}
+		// A blank address is an agent still being filled in, not a bad value.
+		if f.URL != nil && strings.TrimSpace(*f.URL) != "" {
+			if v, ok := ValidAddress(*f.URL); ok {
+				a.URL = v
+			} else {
+				note("agent " + strconv.Quote(a.Name) + " address " + strconv.Quote(*f.URL) + " is not an http or https URL with a host, clearing it")
+			}
+		}
+		if f.Key != nil {
+			a.Key = *f.Key
+		}
+		if f.Model != nil {
+			a.Model = *f.Model
+		}
+		if f.Effort != nil {
+			if llm.ValidEffort(*f.Effort) {
+				a.Effort = Effort(*f.Effort)
+			} else {
+				note("agent " + strconv.Quote(a.Name) + " effort " + strconv.Quote(*f.Effort) + " is not " + EffortNames + ", using medium")
+			}
+		}
+		if f.PreserveReasoning != nil {
+			a.PreserveReasoning = *f.PreserveReasoning
+		}
+		if f.Temperature != nil {
+			if *f.Temperature >= 0 && *f.Temperature <= 2 {
+				a.Temperature = clonef(f.Temperature)
+			} else {
+				note("agent " + strconv.Quote(a.Name) + " temperature " + strconv.FormatFloat(*f.Temperature, 'g', -1, 64) + " is outside 0 to 2, leaving it to the model server")
+			}
+		}
+		if f.TopP != nil {
+			if *f.TopP >= 0 && *f.TopP <= 1 {
+				a.TopP = clonef(f.TopP)
+			} else {
+				note("agent " + strconv.Quote(a.Name) + " top_p " + strconv.FormatFloat(*f.TopP, 'g', -1, 64) + " is outside 0 to 1, leaving it to the model server")
+			}
+		}
+		if f.Instructions != nil {
+			a.Instructions = strings.TrimSpace(*f.Instructions)
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+var idEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
+
+// NewAgentID mints an id for an agent. It is minted rather than taken from the
+// name so that a rename moves nothing: not the selection, not a session, not
+// a pooled client.
+func NewAgentID() string {
+	b := make([]byte, 10)
+	rand.Read(b)
+	return "agt_" + idEncoding.EncodeToString(b)[:16]
 }
 
 // clonef copies a float behind a pointer, so a resolved config and the file
@@ -308,7 +425,9 @@ func validListen(s string) (string, bool) {
 	return s, true
 }
 
-func validURL(s string) (string, bool) {
+// ValidAddress reports whether s is an address the harness can reach, and
+// answers with it trimmed of the trailing slash a client would drop anyway.
+func ValidAddress(s string) (string, bool) {
 	u, err := url.Parse(s)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return "", false

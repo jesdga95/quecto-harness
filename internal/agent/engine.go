@@ -40,7 +40,9 @@ var (
 	ErrEmptyText  = errors.New("The message is empty: type something or attach a file")
 	ErrNotLast    = errors.New("That is not the last message: only the last one can be sent again")
 	ErrNoProject  = errors.New("That folder is not in the project list: add it first")
-	ErrNoModel    = errors.New("No model is selected: pick one from the model list")
+	ErrNoAgent    = errors.New("No agent is selected: create one in the agents dialog")
+	ErrNoAddress  = errors.New("The agent has no address: add it in the agents dialog")
+	ErrNoModel    = errors.New("The agent has no model: choose one in the agents dialog")
 	ErrCompacting = errors.New("The conversation is being compacted: that finishes on its own")
 )
 
@@ -49,8 +51,7 @@ type Engine struct {
 	cfg      *config.Store
 	store    *store.Sessions
 	files    *store.Files
-	clientMu sync.RWMutex
-	client   Backend
+	backends Backends
 	perms    *perms.Broker
 	asks     *asker
 	hub      Publisher
@@ -64,16 +65,37 @@ type Engine struct {
 }
 
 func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files *store.Files,
-	cl Backend, pb *perms.Broker, hub Publisher) *Engine {
+	backends Backends, pb *perms.Broker, hub Publisher) *Engine {
 	return &Engine{
-		cfg: cfg, store: st, files: files, client: cl, perms: pb, asks: newAsker(), hub: hub,
+		cfg: cfg, store: st, files: files, backends: backends, perms: pb, asks: newAsker(), hub: hub,
 		ctx: ctx, os: runtime.GOOS, live: map[string]*Session{},
 	}
 }
 
+// usable reports what stops an agent answering, so a message is refused where
+// it was typed rather than part way into a turn.
+func usable(a config.Agent) error {
+	switch {
+	case a.URL == "":
+		return ErrNoAddress
+	case a.Model == "":
+		return ErrNoModel
+	}
+	return nil
+}
+
+// active is the agent every session answers with, checked before it is used.
+func (e *Engine) active() (config.Agent, error) {
+	a, ok := e.cfg.Config().Agent()
+	if !ok {
+		return config.Agent{}, ErrNoAgent
+	}
+	return a, usable(a)
+}
+
 // messages builds the prompt for a session. The image bytes are read between
 // the two locks, so nothing does file IO while the session is held.
-func (e *Engine) messages(s *Session) []llm.Message {
+func (e *Engine) messages(s *Session, a config.Agent) []llm.Message {
 	s.mu.Lock()
 	refs := s.imageRefs()
 	s.mu.Unlock()
@@ -91,7 +113,7 @@ func (e *Engine) messages(s *Session) []llm.Message {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.contextMessages(e.os, images)
+	return s.contextMessages(a, e.os, images)
 }
 
 // mimeOf reads the type back off the bytes, so the data URI says what the
@@ -141,35 +163,19 @@ func (e *Engine) save(s *Session) {
 	}
 }
 
-// SetClient re-points the engine after the server address changes. A turn
-// already running keeps the client it started with.
-func (e *Engine) SetClient(cl Backend) {
-	e.clientMu.Lock()
-	e.client = cl
-	e.clientMu.Unlock()
-}
-
-// Llama is the backend a turn would use right now.
-func (e *Engine) Llama() Backend { return e.llama() }
-
-func (e *Engine) llama() Backend {
-	e.clientMu.RLock()
-	defer e.clientMu.RUnlock()
-	return e.client
-}
-
-// Create starts a session in a project the user has added, bound to a model.
-// The model is not read here. A session is created by the message that starts
-// its first turn, and that turn reads the model before it sends anything.
+// Create starts a session in a project the user has added, bound to the agent
+// answering now. Nothing is read from the model server here. A session is
+// created by the message that starts its first turn, and that turn reads the
+// model before it sends anything.
 func (e *Engine) Create(project string) (*Session, error) {
 	if !e.cfg.HasProject(project) {
 		return nil, ErrNoProject
 	}
-	model := e.cfg.Config().Model
-	if model == "" {
-		return nil, ErrNoModel
+	a, err := e.active()
+	if err != nil {
+		return nil, err
 	}
-	s := newSession(store.NewID(), project, model)
+	s := newSession(store.NewID(), project, a.ID, a.Model)
 	e.mu.Lock()
 	e.live[s.ID] = s
 	e.mu.Unlock()
@@ -256,9 +262,11 @@ func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 	}
 	// A model that cannot read pictures refuses the message where it was
 	// typed, rather than when the turn picks the message up. The check is
-	// against the harness's model, which is the one that will answer.
-	if err := e.checkImages(e.cfg.Config().Model, attachments); err != nil {
-		return Sent{}, err
+	// against the agent answering now, which is the one that will take it.
+	if a, err := e.active(); err == nil {
+		if err := e.checkImages(a, attachments); err != nil {
+			return Sent{}, err
+		}
 	}
 	return e.deliver(s, text, attachments)
 }
@@ -381,9 +389,11 @@ func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 	s.mu.Unlock()
 
 	// The message was accepted once, but the harness may have been pointed at
-	// another model since, and that one may not read pictures.
-	if err := e.checkImages(e.cfg.Config().Model, attachments); err != nil {
-		return 0, err
+	// another agent since, and its model may not read pictures.
+	if a, err := e.active(); err == nil {
+		if err := e.checkImages(a, attachments); err != nil {
+			return 0, err
+		}
 	}
 
 	s.mu.Lock()
@@ -474,7 +484,7 @@ func (e *Engine) readAttachments(paths []string) ([]store.Attachment, error) {
 // checkImages asks the model server what the model takes before an image is
 // sent to it, since a model with no vision answers a request carrying one
 // with an error that says nothing about the picture.
-func (e *Engine) checkImages(model string, attachments []store.Attachment) error {
+func (e *Engine) checkImages(a config.Agent, attachments []store.Attachment) error {
 	images := false
 	for _, a := range attachments {
 		if a.Kind == "image" {
@@ -486,12 +496,12 @@ func (e *Engine) checkImages(model string, attachments []store.Attachment) error
 	}
 	ctx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
 	defer cancel()
-	models, err := e.llama().Models(ctx)
+	models, err := e.backends.For(a).Models(ctx)
 	if err != nil {
-		return fmt.Errorf("Ask the model server what %s takes: %w", model, err)
+		return fmt.Errorf("Ask %s what %s takes: %w", a.Name, a.Model, err)
 	}
 	for _, m := range models {
-		if m.ID != model {
+		if m.ID != a.Model {
 			continue
 		}
 		for _, mod := range m.Modalities {
@@ -499,9 +509,9 @@ func (e *Engine) checkImages(model string, attachments []store.Attachment) error
 				return nil
 			}
 		}
-		return fmt.Errorf("%s does not take images: pick a model that does", model)
+		return fmt.Errorf("%s does not take images: choose a model that does", a.Model)
 	}
-	return fmt.Errorf("%s is not on the model server: pick another from the model list", model)
+	return fmt.Errorf("%s is not on %s: choose another model for this agent", a.Model, a.Name)
 }
 
 // Stop cancels the turn. It never appends: the loop reaches stopped and
@@ -542,6 +552,12 @@ func (e *Engine) Compact(id string) error {
 	if err != nil {
 		return err
 	}
+	// The agent is resolved before the session is marked busy, so a harness
+	// with none to answer with refuses here rather than inside the goroutine.
+	a, err := e.point(s)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	if s.state != StateIdle {
 		s.mu.Unlock()
@@ -557,8 +573,7 @@ func (e *Engine) Compact(id string) error {
 	go func() {
 		defer e.wg.Done()
 		defer cancel()
-		model, caps := e.turnModel(s)
-		if err := e.compact(ctx, s, model, caps); err != nil {
+		if err := e.compact(ctx, s, e.backends.For(a), a, e.turnCaps(s)); err != nil {
 			e.endWithError(s, err, 0)
 			return
 		}
@@ -570,32 +585,53 @@ func (e *Engine) Compact(id string) error {
 	return nil
 }
 
-// SetModel points the harness at a model. There is one model and every session
-// uses it, so this moves all of them onto it.
+// SetAgent moves every live session onto the agent answering now. One agent
+// answers for the whole harness, so a change of agent moves all of them.
 //
 // Nothing is sent to the model server. Making a model ready can cost minutes
 // of another machine's memory, so it waits for a message that needs the model
 // rather than following a choice made in a menu.
-func (e *Engine) SetModel(model string) {
+func (e *Engine) SetAgent() {
+	a, _ := e.cfg.Config().Agent()
+	for _, s := range e.liveSessions() {
+		e.pointTo(s, a.ID, a.Model)
+	}
+}
+
+// Forget drops what a session read from one agent, for when that agent's
+// address or key changed. What answered before may not be what answers next,
+// so the window and the template capabilities are read again.
+func (e *Engine) Forget(agentID string) {
+	for _, s := range e.liveSessions() {
+		s.mu.Lock()
+		hit := s.AgentID == agentID
+		if hit {
+			s.forgetModel()
+		}
+		s.mu.Unlock()
+		if hit {
+			e.save(s)
+		}
+	}
+}
+
+func (e *Engine) liveSessions() []*Session {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	live := make([]*Session, 0, len(e.live))
 	for _, s := range e.live {
 		live = append(live, s)
 	}
-	e.mu.Unlock()
-
-	for _, s := range live {
-		e.pointTo(s, model)
-	}
+	return live
 }
 
-// pointTo moves a session onto a model, forgetting everything the last one's
-// tokenizer implied.
-func (e *Engine) pointTo(s *Session, model string) {
+// pointTo moves a session onto an agent and a model, forgetting everything the
+// last one's tokenizer implied.
+func (e *Engine) pointTo(s *Session, agentID, model string) {
 	s.mu.Lock()
-	changed := s.Model != model
+	changed := s.AgentID != agentID || s.Model != model
 	if changed {
-		s.repoint(model)
+		s.repoint(agentID, model)
 	}
 	s.mu.Unlock()
 	if changed {
@@ -603,14 +639,14 @@ func (e *Engine) pointTo(s *Session, model string) {
 	}
 }
 
-// point moves a session onto the harness's model and answers with it.
-func (e *Engine) point(s *Session) (string, error) {
-	model := e.cfg.Config().Model
-	if model == "" {
-		return "", ErrNoModel
+// point moves a session onto the agent answering now and answers with it.
+func (e *Engine) point(s *Session) (config.Agent, error) {
+	a, err := e.active()
+	if err != nil {
+		return config.Agent{}, err
 	}
-	e.pointTo(s, model)
-	return model, nil
+	e.pointTo(s, a.ID, a.Model)
+	return a, nil
 }
 
 // Rename sets the session title. An empty title hands it back to the harness,
@@ -687,7 +723,7 @@ func (e *Engine) Wait(d time.Duration) {
 // tokens either way.
 //
 // A failure is not an error: the session keeps the title cut from the message.
-func (e *Engine) titleSession(ctx context.Context, s *Session, model string, caps llm.Caps) {
+func (e *Engine) titleSession(ctx context.Context, s *Session, back Backend, a config.Agent, caps llm.Caps) {
 	s.mu.Lock()
 	first, text := s.firstTurn(), s.firstUserMessage()
 	s.mu.Unlock()
@@ -696,13 +732,12 @@ func (e *Engine) titleSession(ctx context.Context, s *Session, model string, cap
 	}
 	tctx, cancel := context.WithTimeout(ctx, titleTimeout)
 	defer cancel()
-	cfg := e.cfg.Config()
-	res, err := e.llama().Chat(tctx, llm.ChatRequest{
-		Model:       model,
+	res, err := back.Chat(tctx, llm.ChatRequest{
+		Model:       a.Model,
 		Messages:    []llm.Message{{Role: "user", Content: prompts.Title(text)}},
 		Effort:      llm.EffortOff,
-		Temperature: cfg.Temperature,
-		TopP:        cfg.TopP,
+		Temperature: a.Temperature,
+		TopP:        a.TopP,
 		Caps:        caps,
 		MaxTokens:   titleTokens,
 	}, nil)
@@ -737,39 +772,39 @@ func cleanTitle(reply string) string {
 	return store.Title(line)
 }
 
-// ensureReady points the session at the harness's model and makes sure it has
-// been read, inside the turn about to use it. It is the only place a model is
-// read, so a message is what makes one ready. A session that last ran against
-// another model forgets what that tokenizer implied and takes this one.
-func (e *Engine) ensureReady(ctx context.Context, s *Session) error {
-	model, err := e.point(s)
+// ensureReady points the session at the agent answering now and makes sure its
+// model has been read, inside the turn about to use it. It is the only place a
+// model is read, so a message is what makes one ready. It answers with the
+// agent, which is the snapshot the rest of the turn is shaped by.
+func (e *Engine) ensureReady(ctx context.Context, s *Session) (config.Agent, error) {
+	a, err := e.point(s)
 	if err != nil {
-		return err
+		return config.Agent{}, err
 	}
 	s.mu.Lock()
 	done := s.prepared
 	s.mu.Unlock()
 	if done {
-		return nil
+		return a, nil
 	}
 	e.setState(s, StateLoading)
 	// loadTimeout applies to the read alone. The turn around it has no
 	// deadline of its own.
 	ctx, cancel := context.WithTimeout(ctx, loadTimeout)
 	defer cancel()
-	r, err := e.llama().Prepare(ctx, model)
+	r, err := e.backends.For(a).Prepare(ctx, a.Model)
 	if err != nil {
-		return err
+		return config.Agent{}, err
 	}
-	e.apply(s, model, r)
-	return nil
+	e.apply(s, a, r)
+	return a, nil
 }
 
 // apply writes what a model answered onto a session, unless it has moved to
-// another model since the read began.
-func (e *Engine) apply(s *Session, model string, r llm.Ready) {
+// another agent or model since the read began.
+func (e *Engine) apply(s *Session, a config.Agent, r llm.Ready) {
 	s.mu.Lock()
-	if s.Model != model {
+	if s.AgentID != a.ID || s.Model != a.Model {
 		s.mu.Unlock()
 		return
 	}
@@ -783,11 +818,11 @@ func (e *Engine) apply(s *Session, model string, r llm.Ready) {
 	e.publishUsage(s)
 }
 
-// turnModel is the model and the capabilities a whole turn is shaped by.
-func (e *Engine) turnModel(s *Session) (string, llm.Caps) {
+// turnCaps is what the model's template said it takes, read once for a turn.
+func (e *Engine) turnCaps(s *Session) llm.Caps {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.Model, s.caps
+	return s.caps
 }
 
 // probeContextBase measures the fixed parts of a prompt against the model that
@@ -798,16 +833,16 @@ func (e *Engine) turnModel(s *Session) (string, llm.Caps) {
 //
 // It runs after a turn has streamed rather than beside the preparation, so a
 // session that is ready to type into is not waiting on a measurement.
-func (e *Engine) probeContextBase(s *Session) {
+func (e *Engine) probeContextBase(s *Session, a config.Agent) {
 	s.mu.Lock()
-	model, caps := s.Model, s.caps
-	done := s.baseProbed || (s.ContextBase != nil && s.ContextBase.Model == model)
-	system := llm.Message{Role: "system",
-		Content: prompts.System(prompts.SystemVars{Project: s.Project, OS: e.os})}
+	caps := s.caps
+	system := s.systemMessage(a, e.os)
+	done := s.baseProbed || s.ContextBase.Fits(a.Model, s.sysChars)
 	s.mu.Unlock()
-	if model == "" || done {
+	if a.Model == "" || done {
 		return
 	}
+	chars := len(system.Content)
 	// Counted like a turn, so a shutdown waits for the write it ends in
 	// rather than racing it.
 	e.wg.Add(1)
@@ -816,8 +851,8 @@ func (e *Engine) probeContextBase(s *Session) {
 		ctx, cancel := context.WithTimeout(e.ctx, 60*time.Second)
 		defer cancel()
 		count := func(schemas []llm.Tool) (int, bool) {
-			res, err := e.llama().Chat(ctx, llm.ChatRequest{
-				Model: model, Messages: []llm.Message{system}, Tools: schemas,
+			res, err := e.backends.For(a).Chat(ctx, llm.ChatRequest{
+				Model: a.Model, Messages: []llm.Message{system}, Tools: schemas,
 				Effort: llm.EffortOff, Caps: caps, MaxTokens: 1}, nil)
 			if err != nil || res.Usage == nil || res.Usage.PromptTokens <= 0 {
 				return 0, false
@@ -829,10 +864,10 @@ func (e *Engine) probeContextBase(s *Session) {
 
 		s.mu.Lock()
 		s.baseProbed = true
-		stale := s.Model != model
+		stale := s.Model != a.Model || s.sysChars != chars
 		measured := okBare && okArmed && armed >= bare && !stale
 		if measured {
-			s.ContextBase = &store.ContextBase{Model: model, System: bare, Tools: armed - bare}
+			s.ContextBase = &store.ContextBase{Model: a.Model, Chars: chars, System: bare, Tools: armed - bare}
 			// The turn that triggered the probe already reported its usage, so
 			// it is attributed here rather than a turn later.
 			if s.LastUsage != nil && s.lastSentTools {
@@ -944,21 +979,24 @@ func (e *Engine) noteCost(s *Session, cost map[string]any) {
 }
 
 func (e *Engine) run(ctx context.Context, s *Session) {
-	if err := e.ensureReady(ctx, s); err != nil {
+	a, err := e.ensureReady(ctx, s)
+	if err != nil {
 		e.endWithError(s, err, 0)
 		return
 	}
 	cfg := e.cfg.Config()
-	// The model, the settings and the capabilities are read once and hold for
-	// the whole turn. All three decide how the template renders the prompt, so
-	// a change that lands between two steps of one turn would change the prompt
-	// under the model and cost a reprocess of everything before it. A change
-	// made meanwhile is used by the next turn.
-	model, caps := e.turnModel(s)
-	e.titleSession(ctx, s, model, caps)
-	runner, err := tools.NewRunner(s.Project, cfg)
-	if err != nil {
-		e.fail(s, err)
+	// The agent, the settings and the capabilities are read once and hold for
+	// the whole turn, and so does the backend they resolve to. All of them
+	// decide how the template renders the prompt, so a change that lands
+	// between two steps of one turn would change the prompt under the model and
+	// cost a reprocess of everything before it. A change made meanwhile is used
+	// by the next turn.
+	caps := e.turnCaps(s)
+	back := e.backends.For(a)
+	e.titleSession(ctx, s, back, a, caps)
+	runner, rerr := tools.NewRunner(s.Project, cfg)
+	if rerr != nil {
+		e.fail(s, rerr)
 		return
 	}
 	runner.Baseline = func(sn tools.Snapshot) { e.recordBaseline(s, sn) }
@@ -982,7 +1020,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		s.mu.Unlock()
 		if float64(fill) >= cfg.CompactAt*float64(nctx) {
 			e.setState(s, StateCompacting)
-			if err := e.compact(ctx, s, model, caps); err != nil {
+			if err := e.compact(ctx, s, back, a, caps); err != nil {
 				e.endWithError(s, err, iteration)
 				return
 			}
@@ -997,15 +1035,15 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		}
 
 		e.setState(s, StateStreaming)
-		msgs := e.messages(s)
+		msgs := e.messages(s, a)
 		s.mu.Lock()
 		req := llm.ChatRequest{
-			Model:             model,
+			Model:             a.Model,
 			Messages:          msgs,
-			Effort:            cfg.Effort,
-			PreserveReasoning: cfg.PreserveReasoning,
-			Temperature:       cfg.Temperature,
-			TopP:              cfg.TopP,
+			Effort:            a.Effort,
+			PreserveReasoning: a.PreserveReasoning,
+			Temperature:       a.Temperature,
+			TopP:              a.TopP,
 			Caps:              caps,
 		}
 		if !spent {
@@ -1017,7 +1055,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		// generation rate is measured against. Chat calls on synchronously
 		// from its read loop, so no lock is needed here.
 		var first time.Time
-		res, err := e.llama().Chat(ctx, req, func(event llm.Event) error {
+		res, err := back.Chat(ctx, req, func(event llm.Event) error {
 			if first.IsZero() && carriesOutput(event.Kind) {
 				first = time.Now()
 			}
@@ -1053,7 +1091,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			s.lastUsageEntry = len(s.Entries) - 1
 			s.mu.Unlock()
 			e.save(s)
-			e.probeContextBase(s)
+			e.probeContextBase(s, a)
 			e.publishUsage(s)
 			// A message that landed while the model was answering makes this
 			// the middle of the turn rather than the end of it.
@@ -1348,17 +1386,16 @@ func argSummary(call llm.ToolCall) (command, path string) {
 
 // compact replaces the in-context set with one summary. A failure leaves the
 // history untouched, so a failed compaction never loses context.
-func (e *Engine) compact(ctx context.Context, s *Session, model string, caps llm.Caps) error {
-	msgs := append(e.messages(s), llm.Message{Role: "user", Content: prompts.Compact()})
+func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config.Agent, caps llm.Caps) error {
+	msgs := append(e.messages(s, a), llm.Message{Role: "user", Content: prompts.Compact()})
 	s.mu.Lock()
 	before := s.computeFill()
 	s.mu.Unlock()
 
-	cfg := e.cfg.Config()
-	res, err := e.llama().Chat(ctx, llm.ChatRequest{
-		Model: model, Messages: msgs, Effort: llm.EffortOff,
-		PreserveReasoning: cfg.PreserveReasoning,
-		Temperature:       cfg.Temperature, TopP: cfg.TopP, Caps: caps}, nil)
+	res, err := back.Chat(ctx, llm.ChatRequest{
+		Model: a.Model, Messages: msgs, Effort: llm.EffortOff,
+		PreserveReasoning: a.PreserveReasoning,
+		Temperature:       a.Temperature, TopP: a.TopP, Caps: caps}, nil)
 	if err != nil {
 		return err
 	}

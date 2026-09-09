@@ -159,13 +159,13 @@ func serve(argv []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	client := llm.New(cfg.Config().ServerURL, cfg.Config().ServerToken)
+	pool := llm.NewPool()
 	hub := server.NewHub()
 	broker := perms.New(cfg, func(sessionID string, r perms.Request) {
 		hub.Publish(sessionID, agent.PermissionEvent(r))
 	})
-	engine := agent.NewEngine(ctx, cfg, sessions, blobs, client, broker, hub)
-	srv := server.New(cfg, sessions, blobs, pastes, engine, broker, client, hub, token, listen, version)
+	engine := agent.NewEngine(ctx, cfg, sessions, blobs, agent.Clients{Pool: pool}, broker, hub)
+	srv := server.New(cfg, sessions, blobs, pastes, engine, broker, pool, hub, token, listen, version)
 
 	go srv.Detect(ctx)
 

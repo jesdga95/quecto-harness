@@ -51,32 +51,54 @@ func (p *patch[T]) UnmarshalJSON(b []byte) error {
 }
 
 type configJSON struct {
+	Agent            string  `json:"agent"`
+	Permissions      string  `json:"permissions"`
+	CompactAt        float64 `json:"compact_at"`
+	Shell            string  `json:"shell"`
+	CommandTimeoutS  int     `json:"command_timeout_s"`
+	OutputLimitBytes int     `json:"output_limit_bytes"`
+	MaxToolCalls     int     `json:"max_tool_calls"`
+	Listen           string  `json:"listen"`
+	Note             string  `json:"note,omitempty"`
+}
+
+func toConfigJSON(c config.Config) configJSON {
+	return configJSON{
+		Agent: c.AgentID, Permissions: string(c.Mode), CompactAt: c.CompactAt,
+		Shell: c.Shell, CommandTimeoutS: int(c.CommandTimeout / time.Second),
+		OutputLimitBytes: c.OutputLimitBytes, MaxToolCalls: c.MaxToolCalls, Listen: c.Listen,
+	}
+}
+
+// agentJSON is the one wire shape for an agent. There is no key field on it,
+// so no route can leak the key by forgetting a branch.
+type agentJSON struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	URL               string   `json:"url"`
+	KeySet            bool     `json:"key_set"`
 	Model             string   `json:"model"`
 	Effort            string   `json:"effort"`
 	PreserveReasoning bool     `json:"preserve_reasoning"`
 	Temperature       *float64 `json:"temperature"`
 	TopP              *float64 `json:"top_p"`
-	Permissions       string   `json:"permissions"`
-	CompactAt         float64  `json:"compact_at"`
-	Shell             string   `json:"shell"`
-	CommandTimeoutS   int      `json:"command_timeout_s"`
-	OutputLimitBytes  int      `json:"output_limit_bytes"`
-	MaxToolCalls      int      `json:"max_tool_calls"`
-	Listen            string   `json:"listen"`
-	ServerURL         string   `json:"server_url"`
-	ServerTokenSet    bool     `json:"server_token_set"`
-	Note              string   `json:"note,omitempty"`
+	Instructions      string   `json:"instructions"`
 }
 
-func toConfigJSON(c config.Config) configJSON {
-	return configJSON{
-		Model: c.Model, Effort: string(c.Effort), PreserveReasoning: c.PreserveReasoning,
-		Temperature: c.Temperature, TopP: c.TopP,
-		Permissions: string(c.Mode), CompactAt: c.CompactAt,
-		Shell: c.Shell, CommandTimeoutS: int(c.CommandTimeout / time.Second),
-		OutputLimitBytes: c.OutputLimitBytes, MaxToolCalls: c.MaxToolCalls, Listen: c.Listen,
-		ServerURL: c.ServerURL, ServerTokenSet: c.ServerToken != "",
+func toAgentJSON(a config.Agent) agentJSON {
+	return agentJSON{
+		ID: a.ID, Name: a.Name, URL: a.URL, KeySet: a.Key != "",
+		Model: a.Model, Effort: string(a.Effort), PreserveReasoning: a.PreserveReasoning,
+		Temperature: a.Temperature, TopP: a.TopP, Instructions: a.Instructions,
 	}
+}
+
+func toAgentsJSON(in []config.Agent) []agentJSON {
+	out := make([]agentJSON, 0, len(in))
+	for _, a := range in {
+		out = append(out, toAgentJSON(a))
+	}
+	return out
 }
 
 func toModelJSON(models []llm.Model) []modelJSON {
@@ -92,64 +114,90 @@ func toModelJSON(models []llm.Model) []modelJSON {
 	return out
 }
 
-// info returns the cached detect result, retrying a failure once the cache is
-// older than the TTL so a model server that came up is noticed.
-func (s *Server) info(ctx context.Context) (llm.Info, error) {
+// info returns what one address said it is, retrying a failure once the
+// reading is older than the TTL so a model server that came up is noticed.
+func (s *Server) info(ctx context.Context, a config.Agent) (llm.Info, error) {
 	s.mu.Lock()
-	if time.Since(s.infoAt) < cacheTTL {
-		v, err := s.infoVal, s.infoErr
+	pr := s.probeFor(a.URL, a.Key)
+	if time.Since(pr.infoAt) < cacheTTL {
+		v, err := pr.info, pr.infoErr
 		s.mu.Unlock()
 		return v, err
 	}
 	s.mu.Unlock()
 
-	if s.modelClient().BaseURL == "" {
-		err := errors.New("No model server is set: add its address in setup")
+	if a.URL == "" {
+		err := errors.New("The agent has no address: add it in the agents dialog")
 		s.mu.Lock()
-		s.infoVal, s.infoErr, s.infoAt = llm.Info{}, err, time.Now()
+		pr.info, pr.infoErr, pr.infoAt = llm.Info{}, err, time.Now()
 		s.mu.Unlock()
 		return llm.Info{}, err
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	v, err := s.modelClient().Detect(callCtx)
+	v, err := s.pool.Get(a.URL, a.Key).Detect(callCtx)
 
 	s.mu.Lock()
-	s.infoVal, s.infoErr, s.infoAt = v, err, time.Now()
+	pr.info, pr.infoErr, pr.infoAt = v, err, time.Now()
 	s.mu.Unlock()
 	return v, err
 }
 
-func (s *Server) models(ctx context.Context, refresh bool) ([]llm.Model, error) {
+func (s *Server) models(ctx context.Context, a config.Agent, refresh bool) ([]llm.Model, error) {
 	s.mu.Lock()
-	if !refresh && time.Since(s.modelsAt) < cacheTTL {
-		v, err := s.modelsVal, s.modelsErr
+	pr := s.probeFor(a.URL, a.Key)
+	if !refresh && time.Since(pr.modelsAt) < cacheTTL {
+		v, err := pr.models, pr.modelsErr
 		s.mu.Unlock()
 		return v, err
 	}
 	s.mu.Unlock()
 
+	if a.URL == "" {
+		err := errors.New("The agent has no address: add it in the agents dialog")
+		s.mu.Lock()
+		pr.models, pr.modelsErr, pr.modelsAt = nil, err, time.Now()
+		s.mu.Unlock()
+		return nil, err
+	}
+
 	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	v, err := s.modelClient().Models(callCtx)
+	v, err := s.pool.Get(a.URL, a.Key).Models(callCtx)
 
 	s.mu.Lock()
-	s.modelsVal, s.modelsErr, s.modelsAt = v, err, time.Now()
+	pr.models, pr.modelsErr, pr.modelsAt = v, err, time.Now()
 	s.mu.Unlock()
 	return v, err
 }
 
-// Detect warms the caches at startup, so the first page load does not wait.
+// Detect warms the reading for the active agent at startup, so the first page
+// load does not wait. With no agent selected there is nothing to read.
 func (s *Server) Detect(ctx context.Context) {
-	s.info(ctx)
-	s.models(ctx, false)
+	a, ok := s.cfg.Config().Agent()
+	if !ok {
+		return
+	}
+	s.info(ctx, a)
+	s.models(ctx, a, false)
 }
 
 func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg.Config()
-	info, infoErr := s.info(r.Context())
-	models, modelsErr := s.models(r.Context(), false)
+	// Only the active agent is read. Probing every address on a state read
+	// would cost one call each to draw one chip; the agents dialog asks for
+	// the rest itself, one at a time, when a row is opened.
+	a, ok := cfg.Agent()
+	var info llm.Info
+	var models []llm.Model
+	infoErr, modelsErr := error(nil), error(nil)
+	if ok {
+		info, infoErr = s.info(r.Context(), a)
+		models, modelsErr = s.models(r.Context(), a, false)
+	} else {
+		infoErr = errors.New("No agent is selected: create one in the agents dialog")
+	}
 
 	mode := info.Mode
 	if mode == "" {
@@ -169,7 +217,8 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"mode":         string(mode),
 		"build":        info.Build,
-		"server_url":   cfg.ServerURL,
+		"agents":       toAgentsJSON(cfg.Agents),
+		"agent":        cfg.AgentID,
 		"autoload":     info.Autoload,
 		"detect_error": errText(infoErr),
 		// The kind separates a server that refused from one that never
@@ -186,8 +235,17 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// getModels lists what the active agent's address holds. It is read on every
+// status event to redraw the dots, and it always wants the agent answering, so
+// it takes no agent of its own. The dialog asks about the others through the
+// probe route.
 func (s *Server) getModels(w http.ResponseWriter, r *http.Request) {
-	models, err := s.models(r.Context(), r.URL.Query().Get("refresh") == "1")
+	a, ok := s.cfg.Config().Agent()
+	if !ok {
+		writeError(w, http.StatusConflict, "No agent is selected: create one in the agents dialog")
+		return
+	}
+	models, err := s.models(r.Context(), a, r.URL.Query().Get("refresh") == "1")
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -201,9 +259,14 @@ func (s *Server) getModelProps(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "No model id: pass ?id=<model>")
 		return
 	}
+	a, ok := s.cfg.Config().Agent()
+	if !ok {
+		writeError(w, http.StatusConflict, "No agent is selected: create one in the agents dialog")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	props, err := s.modelClient().Props(ctx, id)
+	props, err := s.pool.Get(a.URL, a.Key).Props(ctx, id)
 	if err != nil {
 		var le *llm.Error
 		if errors.As(err, &le) && le.Status >= 400 && le.Status < 500 {
@@ -615,40 +678,19 @@ func (s *Server) postQuestion(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Model             *string        `json:"model"`
-		Effort            *string        `json:"effort"`
-		PreserveReasoning *bool          `json:"preserve_reasoning"`
-		Temperature       patch[float64] `json:"temperature"`
-		TopP              patch[float64] `json:"top_p"`
-		Permissions       *string        `json:"permissions"`
-		CompactAt         *float64       `json:"compact_at"`
-		Shell             *string        `json:"shell"`
-		CommandTimeoutS   *int           `json:"command_timeout_s"`
-		OutputLimitBytes  *int           `json:"output_limit_bytes"`
-		MaxToolCalls      *int           `json:"max_tool_calls"`
-		Listen            *string        `json:"listen"`
-		Server            *struct {
-			URL   *string `json:"url"`
-			Token *string `json:"token"`
-		} `json:"server"`
+		Permissions      *string  `json:"permissions"`
+		CompactAt        *float64 `json:"compact_at"`
+		Shell            *string  `json:"shell"`
+		CommandTimeoutS  *int     `json:"command_timeout_s"`
+		OutputLimitBytes *int     `json:"output_limit_bytes"`
+		MaxToolCalls     *int     `json:"max_tool_calls"`
+		Listen           *string  `json:"listen"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
-	if body.Effort != nil && !llm.ValidEffort(*body.Effort) {
-		writeError(w, http.StatusBadRequest, "Effort \""+*body.Effort+"\" is not "+config.EffortNames)
-		return
-	}
 	if body.MaxToolCalls != nil && (*body.MaxToolCalls < 0 || *body.MaxToolCalls > 1000) {
 		writeError(w, http.StatusBadRequest, "Max tool calls is outside 0 to 1000: 0 is no limit")
-		return
-	}
-	if v := body.Temperature.Value; v != nil && (*v < 0 || *v > 2) {
-		writeError(w, http.StatusBadRequest, "Temperature is outside 0 to 2: send null to leave it to the model server")
-		return
-	}
-	if v := body.TopP.Value; v != nil && (*v < 0 || *v > 1) {
-		writeError(w, http.StatusBadRequest, "Top p is outside 0 to 1: send null to leave it to the model server")
 		return
 	}
 	if body.Permissions != nil && !config.ValidMode(*body.Permissions) {
@@ -657,21 +699,6 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	before := s.cfg.Config()
 	cfg, err := s.cfg.Update(func(c *config.Config) {
-		if body.Model != nil {
-			c.Model = *body.Model
-		}
-		if body.Effort != nil {
-			c.Effort = config.Effort(*body.Effort)
-		}
-		if body.PreserveReasoning != nil {
-			c.PreserveReasoning = *body.PreserveReasoning
-		}
-		if body.Temperature.Set {
-			c.Temperature = body.Temperature.Value
-		}
-		if body.TopP.Set {
-			c.TopP = body.TopP.Value
-		}
 		if body.Permissions != nil {
 			c.Mode = config.Mode(*body.Permissions)
 		}
@@ -693,30 +720,10 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		if body.Listen != nil {
 			c.Listen = *body.Listen
 		}
-		if body.Server != nil {
-			if body.Server.URL != nil {
-				c.ServerURL = *body.Server.URL
-			}
-			if body.Server.Token != nil {
-				c.ServerToken = *body.Server.Token
-			}
-		}
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	if cfg.ServerURL != before.ServerURL || cfg.ServerToken != before.ServerToken {
-		client := llm.New(cfg.ServerURL, cfg.ServerToken)
-		s.SetClient(client)
-		s.engine.SetClient(client)
-		go s.Detect(context.Background())
-	}
-	// The model is the harness's, not a session's, so choosing one repoints
-	// every session. Nothing is read here: the next message that needs the
-	// model is what loads it.
-	if cfg.Model != before.Model {
-		s.engine.SetModel(cfg.Model)
 	}
 	out := toConfigJSON(cfg)
 	if body.Listen != nil && cfg.Listen != before.Listen {
