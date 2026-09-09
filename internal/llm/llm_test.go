@@ -698,8 +698,8 @@ func TestErrorTaxonomy(t *testing.T) {
 		want   ErrKind
 		says   string
 	}{
-		{401, `{"error":{"message":"bad key"}}`, KindAuth, "server.token"},
-		{403, ``, KindAuth, "server.token"},
+		{401, `{"error":{"message":"bad key"}}`, KindAuth, "the API key"},
+		{403, ``, KindAuth, "the API key"},
 		{404, `{"error":{"message":"model not found"}}`, KindNotFound, "pick another"},
 		{400, `{"error":{"message":"the model foo was not found"}}`, KindNotFound, "pick another"},
 		{400, `{"error":{"message":"bad temperature"}}`, KindBadRequest, "bad temperature"},

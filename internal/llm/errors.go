@@ -89,10 +89,10 @@ func classify(op, baseURL, model string, status int, body string, err error) *Er
 		e.Message = "The request was cancelled"
 	case err != nil && isUnreachable(err):
 		e.Kind = KindUnreachable
-		e.Message = "Reach " + baseURL + ": the model server is not answering, check it is running and that server.url is right"
+		e.Message = "Reach " + baseURL + ": the model server is not answering, check it is running and that the address is right"
 	case status == 401 || status == 403:
 		e.Kind = KindAuth
-		e.Message = "Authenticate with " + baseURL + ": the server rejected the token, set server.token in settings"
+		e.Message = "Authenticate with " + baseURL + ": the key was rejected, check the API key for this address"
 	case status == 404 || (status == 400 && strings.Contains(strings.ToLower(msg), "model") && strings.Contains(strings.ToLower(msg), "not found")):
 		e.Kind = KindNotFound
 		e.Message = "Model " + strconv.Quote(model) + " is not on " + baseURL + ": pick another from the model list"

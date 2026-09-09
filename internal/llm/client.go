@@ -98,3 +98,9 @@ func (c *Client) getJSON(ctx context.Context, op, model, u string, v any) error 
 	}
 	return nil
 }
+
+// CloseIdle releases the connections a client is no longer going to use. A
+// request in flight keeps its own connection.
+func (c *Client) CloseIdle() {
+	c.httpClient().CloseIdleConnections()
+}
