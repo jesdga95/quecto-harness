@@ -1,7 +1,7 @@
 <script lang="ts">
   import Plus from "phosphor-svelte/lib/Plus";
+  import Trash from "phosphor-svelte/lib/Trash";
   import Modal from "./Modal.svelte";
-  import RowMenu from "./RowMenu.svelte";
   import StatusDot from "./StatusDot.svelte";
   import AgentPanel from "./AgentPanel.svelte";
   import type { Agent, AgentPatch, ModelStatus } from "../api";
@@ -96,7 +96,13 @@
               <span class="min-w-0 flex-1 truncate text-left">{agent.name}</span>
             </button>
             <div class="row-act">
-              <RowMenu ondelete={() => remove(agent)} />
+              <button
+                class="row-menu hover:text-crit"
+                aria-label="Delete {agent.name}"
+                onclick={() => remove(agent)}
+              >
+                <Trash />
+              </button>
             </div>
           </div>
         {/each}
