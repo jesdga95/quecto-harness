@@ -1542,4 +1542,134 @@
     text-decoration: underline;
     text-underline-offset: 2px;
   }
+
+  /* The agents dialog. The rail is the one dark surface in a modal, kept out
+     of the palette for the same reason the console is: it stays dark in both
+     schemes so the list of agents reads as a place rather than a panel. */
+  .rail {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 22px 16px;
+    background: #14201c;
+  }
+  .rail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 8px 18px;
+    font-size: 17px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .rail-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 11px 12px;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    font-size: 14.5px;
+    color: #c3ccc9;
+    cursor: pointer;
+    text-align: left;
+  }
+  .rail-row:hover {
+    background: rgb(255 255 255 / 0.06);
+  }
+  .rail-row.is-active {
+    background: rgb(255 255 255 / 0.1);
+    font-weight: 600;
+    color: #fff;
+  }
+  /* A flat dot for an agent nobody has asked, a lit one for the agent
+     answering. */
+  .rail-dot {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: #4a5b56;
+  }
+  .rail-dot.is-live {
+    background: #4fd1a5;
+    box-shadow: 0 0 8px rgb(79 209 165 / 0.7);
+  }
+  .rail-add {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 12px;
+    border: 0;
+    border-radius: 10px;
+    background: rgb(255 255 255 / 0.08);
+    font-size: 14.5px;
+    font-weight: 600;
+    color: #fff;
+    cursor: pointer;
+  }
+  .rail-add:hover {
+    background: rgb(255 255 255 / 0.16);
+  }
+
+  /* One group of fields in the agents dialog. */
+  .field-card {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px 20px;
+    border: 1px solid var(--hair);
+    border-radius: 14px;
+  }
+  .field-card h4 {
+    font-size: 15px;
+    font-weight: 700;
+  }
+  /* The name, edited in place at the top of the pane. */
+  .title-input {
+    width: 100%;
+    padding: 2px 0;
+    border: 0;
+    border-bottom: 1px solid transparent;
+    background: none;
+    font-family: inherit;
+    font-size: 21px;
+    font-weight: 600;
+    color: var(--text);
+    outline: none;
+  }
+  .title-input:hover {
+    border-bottom-color: var(--border);
+  }
+  .title-input:focus {
+    border-bottom-color: var(--accent);
+  }
+  /* A segmented control, for a choice of three or four short words. */
+  .seg {
+    display: flex;
+    gap: 4px;
+    padding: 3px;
+    border-radius: 9px;
+    background: var(--surface-2);
+  }
+  .seg button {
+    padding: 6px 13px;
+    border: 0;
+    border-radius: 7px;
+    background: none;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-2);
+    cursor: pointer;
+  }
+  .seg button.is-active {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.1);
+  }
 }

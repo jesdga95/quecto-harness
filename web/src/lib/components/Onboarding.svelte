@@ -16,6 +16,10 @@
     preserve_reasoning: true,
     temperature: null,
     top_p: null,
+    top_k: null,
+    repeat_penalty: null,
+    max_tokens: null,
+    seed: null,
     instructions: "",
   });
   let panel = $state<ReturnType<typeof AgentPanel> | null>(null);

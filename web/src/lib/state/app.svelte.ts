@@ -494,8 +494,22 @@ function samplingSteps(max: number): (number | null)[] {
   return out;
 }
 
+/** Whole steps, for a count rather than a fraction. */
+function wholeSteps(max: number, by: number): (number | null)[] {
+  const out: (number | null)[] = [null];
+  for (let v = 0; v <= max; v += by) out.push(v);
+  return out;
+}
+
 export const TEMPERATURE_STEPS = samplingSteps(2);
 export const TOP_P_STEPS = samplingSteps(1);
+export const TOP_K_STEPS = wholeSteps(200, 5);
+export const REPEAT_PENALTY_STEPS = samplingSteps(2);
+
+/** A reply length doubles rather than creeps, so the bar does too. */
+export const MAX_TOKENS_STEPS: (number | null)[] = [
+  null, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072,
+];
 
 /** The step nearest a value, so a hand-edited number still lands on the bar. */
 export function samplingIndex(steps: (number | null)[], value: number | null): number {

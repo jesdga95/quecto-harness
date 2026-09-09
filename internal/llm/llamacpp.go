@@ -266,6 +266,14 @@ func applyPreserve(kwargs map[string]any, preserve bool, caps Caps) {
 func buildLlamaBody(req ChatRequest) ([]byte, error) {
 	body := baseBody(req)
 	body["reasoning_format"] = "deepseek"
+	// top_k and repeat_penalty are this server's, and the OpenAI API defines
+	// neither, so they are built here rather than in the shared body.
+	if req.TopK != nil {
+		body["top_k"] = *req.TopK
+	}
+	if req.RepeatPenalty != nil {
+		body["repeat_penalty"] = *req.RepeatPenalty
+	}
 	kwargs := map[string]any{}
 	applyEffort(body, kwargs, req.Effort, req.Caps)
 	applyPreserve(kwargs, req.PreserveReasoning, req.Caps)

@@ -121,11 +121,16 @@ type ChatRequest struct {
 	// PreserveReasoning asks the template to keep thinking from earlier turns
 	// in the prompt rather than dropping it.
 	PreserveReasoning bool
-	// Temperature and TopP are the sampling fields the chat API defines. A nil
-	// field is left out of the body, so the server's own default stands.
+	// Temperature, TopP and Seed are sampling fields the chat API defines. A
+	// nil field is left out of the body, so the server's own default stands.
 	Temperature *float64
 	TopP        *float64
-	Caps        Caps
+	Seed        *int
+	// TopK and RepeatPenalty are llama.cpp's names for two more. Only the
+	// backend that defines them sends them.
+	TopK          *int
+	RepeatPenalty *float64
+	Caps          Caps
 	// MaxTokens caps the generation. Zero leaves it to the server, which is
 	// what a turn wants; a request sent only for its usage report sets it to 1.
 	MaxTokens int
@@ -169,6 +174,9 @@ func baseBody(req ChatRequest) map[string]any {
 	}
 	if req.TopP != nil {
 		body["top_p"] = *req.TopP
+	}
+	if req.Seed != nil {
+		body["seed"] = *req.Seed
 	}
 	return body
 }

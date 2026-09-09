@@ -205,14 +205,14 @@ func TestLlamaBodyPreserveReasoning(t *testing.T) {
 // Temperature and top_p are fields the chat API defines, so both backends
 // send them, and a value left to the server is left out of the body.
 func TestSamplingFields(t *testing.T) {
-	temp, topP := 0.35, 0.0
+	temp, topP, seed := 0.35, 0.0, 7
 	builds := map[string]func(ChatRequest) ([]byte, error){
 		"llamacpp": buildLlamaBody,
 		"openai":   buildOpenAIBody,
 	}
 	for name, build := range builds {
 		t.Run(name, func(t *testing.T) {
-			raw, err := build(ChatRequest{Model: "m", Temperature: &temp, TopP: &topP})
+			raw, err := build(ChatRequest{Model: "m", Temperature: &temp, TopP: &topP, Seed: &seed})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -225,6 +225,9 @@ func TestSamplingFields(t *testing.T) {
 			}
 			if body["top_p"] != 0.0 {
 				t.Errorf("top_p = %v, want 0", body["top_p"])
+			}
+			if body["seed"] != 7.0 {
+				t.Errorf("seed = %v, want 7", body["seed"])
 			}
 
 			raw, err = build(ChatRequest{Model: "m"})
@@ -732,5 +735,38 @@ func TestErrorUnreachable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "check it is running") {
 		t.Errorf("message = %q", err.Error())
+	}
+}
+
+// top_k and repeat_penalty are llama.cpp's names. The OpenAI API defines
+// neither, so a request built for that protocol carries neither.
+func TestOnlyLlamaCarriesItsOwnSamplingFields(t *testing.T) {
+	topK, penalty := 40, 1.1
+	req := ChatRequest{Model: "m", TopK: &topK, RepeatPenalty: &penalty}
+
+	raw, err := buildLlamaBody(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["top_k"] != 40.0 || body["repeat_penalty"] != 1.1 {
+		t.Errorf("llama.cpp body = %v", body)
+	}
+
+	raw, err = buildOpenAIBody(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = nil
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"top_k", "repeat_penalty"} {
+		if _, ok := body[key]; ok {
+			t.Errorf("the OpenAI body carried %q, which that API does not define", key)
+		}
 	}
 }

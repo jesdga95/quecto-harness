@@ -21,6 +21,10 @@ type agentBody struct {
 	PreserveReasoning *bool          `json:"preserve_reasoning"`
 	Temperature       patch[float64] `json:"temperature"`
 	TopP              patch[float64] `json:"top_p"`
+	TopK              patch[int]     `json:"top_k"`
+	RepeatPenalty     patch[float64] `json:"repeat_penalty"`
+	MaxTokens         patch[int]     `json:"max_tokens"`
+	Seed              patch[int]     `json:"seed"`
 	Instructions      *string        `json:"instructions"`
 }
 
@@ -39,6 +43,15 @@ func (b agentBody) check() error {
 	}
 	if v := b.TopP.Value; v != nil && (*v < 0 || *v > 1) {
 		return errors.New("Top p is outside 0 to 1: send null to leave it to the model server")
+	}
+	if v := b.TopK.Value; v != nil && (*v < 0 || *v > 1000) {
+		return errors.New("Top k is outside 0 to 1000: send null to leave it to the model server")
+	}
+	if v := b.RepeatPenalty.Value; v != nil && (*v < 0 || *v > 2) {
+		return errors.New("Repeat penalty is outside 0 to 2: send null to leave it to the model server")
+	}
+	if v := b.MaxTokens.Value; v != nil && (*v < 1 || *v > 1000000) {
+		return errors.New("Max output tokens is outside 1 to 1000000: send null to leave it to the model server")
 	}
 	return nil
 }
@@ -69,6 +82,18 @@ func (b agentBody) apply(a *config.Agent) {
 	}
 	if b.TopP.Set {
 		a.TopP = b.TopP.Value
+	}
+	if b.TopK.Set {
+		a.TopK = b.TopK.Value
+	}
+	if b.RepeatPenalty.Set {
+		a.RepeatPenalty = b.RepeatPenalty.Value
+	}
+	if b.MaxTokens.Set {
+		a.MaxTokens = b.MaxTokens.Value
+	}
+	if b.Seed.Set {
+		a.Seed = b.Seed.Value
 	}
 	if b.Instructions != nil {
 		a.Instructions = *b.Instructions

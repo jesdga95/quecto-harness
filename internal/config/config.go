@@ -42,6 +42,10 @@ type FileAgent struct {
 	PreserveReasoning *bool    `json:"preserve_reasoning,omitempty"`
 	Temperature       *float64 `json:"temperature,omitempty"`
 	TopP              *float64 `json:"top_p,omitempty"`
+	TopK              *int     `json:"top_k,omitempty"`
+	RepeatPenalty     *float64 `json:"repeat_penalty,omitempty"`
+	MaxTokens         *int     `json:"max_tokens,omitempty"`
+	Seed              *int     `json:"seed,omitempty"`
 	Instructions      *string  `json:"instructions,omitempty"`
 }
 
@@ -74,10 +78,17 @@ type Agent struct {
 	Model             string
 	Effort            Effort
 	PreserveReasoning bool
-	// Temperature and TopP are sent with every request that generates. Nil is
-	// left out of the body, so the model server's own value stands.
-	Temperature *float64
-	TopP        *float64
+	// The sampling fields are sent with every request that generates. Nil is
+	// left out of the body, so the model server's own value stands. TopK and
+	// RepeatPenalty reach a llama.cpp server alone, since the OpenAI API
+	// defines neither.
+	Temperature   *float64
+	TopP          *float64
+	TopK          *int
+	RepeatPenalty *float64
+	// MaxTokens caps one reply. Seed makes a reply repeatable.
+	MaxTokens *int
+	Seed      *int
 	// Instructions follow the built-in system prompt in the same message.
 	Instructions string
 }
@@ -112,8 +123,9 @@ func cloneAgents(in []Agent) []Agent {
 	}
 	out := make([]Agent, len(in))
 	for i, a := range in {
-		a.Temperature = clonef(a.Temperature)
-		a.TopP = clonef(a.TopP)
+		a.Temperature, a.TopP = clonef(a.Temperature), clonef(a.TopP)
+		a.RepeatPenalty = clonef(a.RepeatPenalty)
+		a.TopK, a.MaxTokens, a.Seed = clonei(a.TopK), clonei(a.MaxTokens), clonei(a.Seed)
 		out[i] = a
 	}
 	return out
@@ -298,6 +310,10 @@ func (c Config) File() File {
 			PreserveReasoning: &preserve,
 			Temperature:       clonef(a.Temperature),
 			TopP:              clonef(a.TopP),
+			TopK:              clonei(a.TopK),
+			RepeatPenalty:     clonef(a.RepeatPenalty),
+			MaxTokens:         clonei(a.MaxTokens),
+			Seed:              clonei(a.Seed),
 			Instructions:      &instructions,
 		})
 	}
@@ -383,6 +399,30 @@ func resolveAgents(in []FileAgent, note func(string)) []Agent {
 				note("agent " + strconv.Quote(a.Name) + " top_p " + strconv.FormatFloat(*f.TopP, 'g', -1, 64) + " is outside 0 to 1, leaving it to the model server")
 			}
 		}
+		if f.TopK != nil {
+			if *f.TopK >= 0 && *f.TopK <= 1000 {
+				a.TopK = clonei(f.TopK)
+			} else {
+				note("agent " + strconv.Quote(a.Name) + " top_k " + strconv.Itoa(*f.TopK) + " is outside 0 to 1000, leaving it to the model server")
+			}
+		}
+		if f.RepeatPenalty != nil {
+			if *f.RepeatPenalty >= 0 && *f.RepeatPenalty <= 2 {
+				a.RepeatPenalty = clonef(f.RepeatPenalty)
+			} else {
+				note("agent " + strconv.Quote(a.Name) + " repeat_penalty " + strconv.FormatFloat(*f.RepeatPenalty, 'g', -1, 64) + " is outside 0 to 2, leaving it to the model server")
+			}
+		}
+		if f.MaxTokens != nil {
+			if *f.MaxTokens >= 1 && *f.MaxTokens <= 1000000 {
+				a.MaxTokens = clonei(f.MaxTokens)
+			} else {
+				note("agent " + strconv.Quote(a.Name) + " max_tokens " + strconv.Itoa(*f.MaxTokens) + " is outside 1 to 1000000, leaving it to the model server")
+			}
+		}
+		if f.Seed != nil {
+			a.Seed = clonei(f.Seed)
+		}
 		if f.Instructions != nil {
 			a.Instructions = strings.TrimSpace(*f.Instructions)
 		}
@@ -400,6 +440,15 @@ func NewAgentID() string {
 	b := make([]byte, 10)
 	rand.Read(b)
 	return "agt_" + idEncoding.EncodeToString(b)[:16]
+}
+
+// clonei copies an int behind a pointer, for the same reason clonef does.
+func clonei(p *int) *int {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // clonef copies a float behind a pointer, so a resolved config and the file

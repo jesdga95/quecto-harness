@@ -52,10 +52,17 @@ export interface Agent {
   effort: Effort;
   /** Keeps thinking from earlier turns in the prompt. */
   preserve_reasoning: boolean;
-  /** Sampling, as the chat API names it. Null is sent as no field at all, so
-      the model server's own value stands. */
+  /** Sampling. Null is sent as no field at all, so the model server's own
+      value stands. top_k and repeat_penalty reach a llama.cpp server alone,
+      since the OpenAI API defines neither. */
   temperature: number | null;
   top_p: number | null;
+  top_k: number | null;
+  repeat_penalty: number | null;
+  /** Caps one reply. Null leaves the length to the model server. */
+  max_tokens: number | null;
+  /** Makes a reply repeatable. Null is a new one each turn. */
+  seed: number | null;
   /** Added to the end of the built-in system prompt. */
   instructions: string;
 }

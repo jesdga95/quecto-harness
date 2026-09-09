@@ -121,17 +121,20 @@ const AGENTS: Agent[] = [
   {
     id: "agt_local", name: "Local llama.cpp", url: "http://192.168.2.205:8080",
     key: "", model: "Gemma4-12B", effort: "medium", preserve_reasoning: true,
-    temperature: null, top_p: null, instructions: "",
+    temperature: null, top_p: null, top_k: null, repeat_penalty: null,
+    max_tokens: null, seed: null, instructions: "",
   },
   {
     id: "agt_studio", name: "Studio box", url: "http://10.0.0.14:1234",
     key: "sk-studio", model: "Qwen3.8-27B Q5", effort: "high", preserve_reasoning: false,
-    temperature: 0.7, top_p: 0.9, instructions: "Answer in British English.",
+    temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.1,
+    max_tokens: 8192, seed: null, instructions: "Answer in British English.",
   },
   {
     id: "agt_cloud", name: "Cloud endpoint", url: "https://api.example.com/v1",
     key: "", model: "gpt-oss-120b", effort: "medium", preserve_reasoning: true,
-    temperature: null, top_p: null, instructions: "",
+    temperature: null, top_p: null, top_k: null, repeat_penalty: null,
+    max_tokens: null, seed: null, instructions: "",
   },
 ];
 
@@ -374,6 +377,7 @@ export class MockApi implements HarnessApi {
     const agent: Agent = {
       id: nextId("agt"), url: "", key: "", model: "",
       effort: "medium", preserve_reasoning: true, temperature: null, top_p: null,
+      top_k: null, repeat_penalty: null, max_tokens: null, seed: null,
       instructions: "", ...patch, name,
     };
     this.agents.push(agent);

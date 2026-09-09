@@ -1044,7 +1044,15 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			PreserveReasoning: a.PreserveReasoning,
 			Temperature:       a.Temperature,
 			TopP:              a.TopP,
+			TopK:              a.TopK,
+			RepeatPenalty:     a.RepeatPenalty,
+			Seed:              a.Seed,
 			Caps:              caps,
+		}
+		// The agent's cap is the reply's. The title request and the context
+		// measurement set their own, since what they ask for is not a reply.
+		if a.MaxTokens != nil {
+			req.MaxTokens = *a.MaxTokens
 		}
 		if !spent {
 			req.Tools = tools.Schemas()
@@ -1395,7 +1403,8 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	res, err := back.Chat(ctx, llm.ChatRequest{
 		Model: a.Model, Messages: msgs, Effort: llm.EffortOff,
 		PreserveReasoning: a.PreserveReasoning,
-		Temperature:       a.Temperature, TopP: a.TopP, Caps: caps}, nil)
+		Temperature:       a.Temperature, TopP: a.TopP, TopK: a.TopK,
+		RepeatPenalty: a.RepeatPenalty, Seed: a.Seed, Caps: caps}, nil)
 	if err != nil {
 		return err
 	}

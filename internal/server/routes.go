@@ -81,6 +81,10 @@ type agentJSON struct {
 	PreserveReasoning bool     `json:"preserve_reasoning"`
 	Temperature       *float64 `json:"temperature"`
 	TopP              *float64 `json:"top_p"`
+	TopK              *int     `json:"top_k"`
+	RepeatPenalty     *float64 `json:"repeat_penalty"`
+	MaxTokens         *int     `json:"max_tokens"`
+	Seed              *int     `json:"seed"`
 	Instructions      string   `json:"instructions"`
 }
 
@@ -88,7 +92,9 @@ func toAgentJSON(a config.Agent) agentJSON {
 	return agentJSON{
 		ID: a.ID, Name: a.Name, URL: a.URL, Key: a.Key,
 		Model: a.Model, Effort: string(a.Effort), PreserveReasoning: a.PreserveReasoning,
-		Temperature: a.Temperature, TopP: a.TopP, Instructions: a.Instructions,
+		Temperature: a.Temperature, TopP: a.TopP, TopK: a.TopK,
+		RepeatPenalty: a.RepeatPenalty, MaxTokens: a.MaxTokens, Seed: a.Seed,
+		Instructions: a.Instructions,
 	}
 }
 

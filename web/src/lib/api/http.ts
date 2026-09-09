@@ -78,6 +78,10 @@ interface WireAgent {
   preserve_reasoning?: boolean;
   temperature?: number | null;
   top_p?: number | null;
+  top_k?: number | null;
+  repeat_penalty?: number | null;
+  max_tokens?: number | null;
+  seed?: number | null;
   instructions?: string;
 }
 
@@ -331,6 +335,10 @@ function toAgent(a: WireAgent): Agent {
     preserve_reasoning: a.preserve_reasoning ?? true,
     temperature: a.temperature ?? null,
     top_p: a.top_p ?? null,
+    top_k: a.top_k ?? null,
+    repeat_penalty: a.repeat_penalty ?? null,
+    max_tokens: a.max_tokens ?? null,
+    seed: a.seed ?? null,
     instructions: a.instructions ?? "",
   };
 }

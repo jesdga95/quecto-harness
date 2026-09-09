@@ -3,11 +3,13 @@
 
   let {
     label,
+    hint,
     steps,
     value,
     onpick,
   }: {
     label: string;
+    hint: string;
     steps: (number | null)[];
     value: number | null;
     onpick: (value: number | null) => void;
@@ -18,7 +20,13 @@
   let dragged = $state<number | null>(null);
   const index = $derived(dragged ?? samplingIndex(steps, value));
   const shown = $derived(steps[index] ?? null);
-  const text = $derived(shown === null ? "Auto" : shown.toFixed(2));
+  const text = $derived(shown === null ? "Auto" : format(shown));
+
+  // A step is whole or two decimals, and the readout says which without a
+  // separate setting for each slider.
+  function format(v: number): string {
+    return Number.isInteger(v) ? String(v) : v.toFixed(2);
+  }
 
   function commit(i: number) {
     dragged = null;
@@ -26,15 +34,13 @@
   }
 </script>
 
-<div class="px-[9px] pt-1.5 pb-1">
-  <div class="flex items-center gap-2 text-[13px]">
-    <span class="min-w-0 flex-1">{label}</span>
-    <span class="pill pill-mute num w-[42px] shrink-0 justify-center px-1.5 text-[10.5px]">
-      {text}
-    </span>
+<div class="field-card !gap-3">
+  <div class="flex items-baseline justify-between gap-3">
+    <span class="text-[14.5px] font-medium">{label}</span>
+    <span class="num text-[17px] font-medium text-accent">{text}</span>
   </div>
   <input
-    class="range mt-1.5"
+    class="range"
     type="range"
     min="0"
     max={steps.length - 1}
@@ -45,4 +51,5 @@
     oninput={(e) => (dragged = e.currentTarget.valueAsNumber)}
     onchange={(e) => commit(e.currentTarget.valueAsNumber)}
   />
+  <p class="text-[12.5px] text-muted">{hint}</p>
 </div>
