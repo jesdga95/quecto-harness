@@ -15,8 +15,9 @@ import (
 func sample(id string, updated time.Time) *Session {
 	code := 0
 	return &Session{
-		ID: id, Project: "/proj", Model: "Alpha-12B", Title: "list the files here",
-		Created: updated.Add(-time.Minute), Updated: updated,
+		ID: id, Project: "/proj", Agent: "agt_alpha", Model: "Alpha-12B", Title: "list the files here",
+		ContextBase: &ContextBase{Model: "Alpha-12B", Chars: 412, System: 154, Tools: 1026},
+		Created:     updated.Add(-time.Minute), Updated: updated,
 		NCtx: 131072, NCtxSource: "props", Compactions: 1,
 		LastUsage: &llm.Usage{PromptTokens: 4193, CompletionTokens: 118, TotalTokens: 4311, CachedTokens: 3968},
 		Entries: []Entry{
@@ -255,5 +256,37 @@ func TestFilesRoundTripAndGuardTheID(t *testing.T) {
 	}
 	if err := files.Remove(id); err != nil {
 		t.Errorf("removing a file that is already gone: %v", err)
+	}
+}
+
+func TestSessionCarriesItsAgentAndBase(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(sample("sess_aaaaaaaaaaaaaaaa", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := reopened.Load("sess_aaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent != "agt_alpha" {
+		t.Errorf("agent = %q, want agt_alpha", got.Agent)
+	}
+	if !got.ContextBase.Fits("Alpha-12B", 412) {
+		t.Errorf("context base = %+v, want it to fit the model and size it was measured at", got.ContextBase)
+	}
+	if got.ContextBase.Fits("Alpha-12B", 413) {
+		t.Error("a system message of another size fitted a base measured against this one")
+	}
+	if list := reopened.List("/proj"); len(list) != 1 || list[0].Agent != "agt_alpha" {
+		t.Errorf("summary agent = %+v", list)
 	}
 }

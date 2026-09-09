@@ -87,8 +87,11 @@ type Todo struct {
 type Session struct {
 	ID      string `json:"id"`
 	Project string `json:"project"`
-	Model   string `json:"model"`
-	Title   string `json:"title"`
+	// Agent is the agent this session last ran under. It is the only record of
+	// that after a restart, which is what tells a reloaded session it moved.
+	Agent string `json:"agent"`
+	Model string `json:"model"`
+	Title string `json:"title"`
 	// Named is set when the user typed the title. Nothing overwrites it.
 	Named       bool       `json:"named"`
 	Created     time.Time  `json:"created"`
@@ -110,18 +113,27 @@ type Session struct {
 }
 
 // ContextBase is the token cost of the two parts of a prompt that never
-// change: the system message and the tool schemas. Both are measured against
-// the model named here, so a rebind discards them.
+// change: the system message and the tool schemas. Model and Chars say what
+// was measured, since a different tokenizer or a different system message
+// makes the numbers something else.
 type ContextBase struct {
 	Model  string `json:"model"`
+	Chars  int    `json:"chars"`
 	System int    `json:"system"`
 	Tools  int    `json:"tools"`
+}
+
+// Fits reports that the measurement was taken against this model and a system
+// message of this size, which is what makes it still true.
+func (b *ContextBase) Fits(model string, chars int) bool {
+	return b != nil && b.Model == model && b.Chars == chars
 }
 
 // Summary is what the sidebar needs, cheap enough to keep for every session.
 type Summary struct {
 	ID       string    `json:"id"`
 	Project  string    `json:"project"`
+	Agent    string    `json:"agent"`
 	Model    string    `json:"model"`
 	Title    string    `json:"title"`
 	Created  time.Time `json:"created"`
@@ -297,6 +309,7 @@ func summarise(sess *Session, size int64) Summary {
 	return Summary{
 		ID:       sess.ID,
 		Project:  sess.Project,
+		Agent:    sess.Agent,
 		Model:    sess.Model,
 		Title:    sess.Title,
 		Created:  sess.Created,
