@@ -123,20 +123,20 @@ const AGENTS: Agent[] = [
     id: "agt_local", name: "Local llama.cpp", url: "http://192.168.2.205:8080",
     key: "", protocol: "llamacpp", model: "Gemma4-12B", effort: "medium", preserve_reasoning: true,
     temperature: null, top_p: null, top_k: null, repeat_penalty: null,
-    max_tokens: null, seed: null, instructions: "",
+    max_tokens: null, seed: null, concurrency: 1, instructions: "",
   },
   {
     id: "agt_studio", name: "Studio box", url: "http://10.0.0.14:1234",
     key: "sk-studio", protocol: "responses", model: "Qwen3.8-27B Q5", effort: "high",
     preserve_reasoning: false,
     temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.1,
-    max_tokens: 8192, seed: null, instructions: "Answer in British English.",
+    max_tokens: 8192, seed: null, concurrency: 4, instructions: "Answer in British English.",
   },
   {
     id: "agt_cloud", name: "Cloud endpoint", url: "https://api.example.com/v1",
     key: "", protocol: "chat", model: "gpt-oss-120b", effort: "medium", preserve_reasoning: true,
     temperature: null, top_p: null, top_k: null, repeat_penalty: null,
-    max_tokens: null, seed: null, instructions: "",
+    max_tokens: null, seed: null, concurrency: 1, instructions: "",
   },
 ];
 
@@ -381,7 +381,7 @@ export class MockApi implements HarnessApi {
       protocol: "llamacpp", effort: "medium", preserve_reasoning: true,
       temperature: null, top_p: null,
       top_k: null, repeat_penalty: null, max_tokens: null, seed: null,
-      instructions: "", ...patch, name,
+      concurrency: 1, instructions: "", ...patch, name,
     };
     this.agents.push(agent);
     if (this.config.agent === "") this.config.agent = agent.id;

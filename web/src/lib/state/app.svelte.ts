@@ -507,6 +507,10 @@ export const TOP_P_STEPS = samplingSteps(1);
 export const TOP_K_STEPS = wholeSteps(200, 5);
 export const REPEAT_PENALTY_STEPS = samplingSteps(2);
 
+/** How many agents one may have working for it at once. The ceiling matches
+    the harness's, so a number the form takes is never one the write refuses. */
+export const MAX_CONCURRENCY = 16;
+
 /** A reply length doubles rather than creeps, so the bar does too. */
 export const MAX_TOKENS_STEPS: (number | null)[] = [
   null, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072,

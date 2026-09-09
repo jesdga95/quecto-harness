@@ -21,6 +21,7 @@
     repeat_penalty: null,
     max_tokens: null,
     seed: null,
+    concurrency: 1,
     instructions: "",
   });
   let panel = $state<ReturnType<typeof AgentPanel> | null>(null);

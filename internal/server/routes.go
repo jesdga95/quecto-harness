@@ -86,6 +86,7 @@ type agentJSON struct {
 	RepeatPenalty     *float64 `json:"repeat_penalty"`
 	MaxTokens         *int     `json:"max_tokens"`
 	Seed              *int     `json:"seed"`
+	Concurrency       int      `json:"concurrency"`
 	Instructions      string   `json:"instructions"`
 }
 
@@ -95,7 +96,7 @@ func toAgentJSON(a config.Agent) agentJSON {
 		Model: a.Model, Effort: string(a.Effort), PreserveReasoning: a.PreserveReasoning,
 		Temperature: a.Temperature, TopP: a.TopP, TopK: a.TopK,
 		RepeatPenalty: a.RepeatPenalty, MaxTokens: a.MaxTokens, Seed: a.Seed,
-		Instructions: a.Instructions,
+		Concurrency: a.Concurrency, Instructions: a.Instructions,
 	}
 }
 

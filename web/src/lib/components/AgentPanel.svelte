@@ -4,6 +4,7 @@
   import AgentModelField from "./AgentModelField.svelte";
   import type { Agent, AgentPatch, Effort, Probe, Protocol } from "../api";
   import {
+    MAX_CONCURRENCY,
     REPEAT_PENALTY_STEPS,
     TEMPERATURE_STEPS,
     TOP_K_STEPS,
@@ -43,6 +44,7 @@
   let instructions = $state("");
   let maxTokens = $state("");
   let seed = $state("");
+  let concurrency = $state("");
 
   let probe = $state<Probe | null>(null);
   let checking = $state(false);
@@ -62,6 +64,7 @@
     instructions = agent.instructions;
     maxTokens = agent.max_tokens === null ? "" : String(agent.max_tokens);
     seed = agent.seed === null ? "" : String(agent.seed);
+    concurrency = String(agent.concurrency);
     probe = null;
     probedAt = "";
     void look(agent.url, agent.key, agent.protocol, false);
@@ -141,6 +144,20 @@
     commitCount(text, agent.seed, (v) => onchange({ seed: v }));
   }
 
+  // Concurrency always has a value, so an unreadable draft is not a null but
+  // nothing at all, and a number out of range is pulled into it here rather
+  // than sent to be refused.
+  function commitConcurrency(text: string) {
+    const n = Number.parseInt(text.trim(), 10);
+    if (Number.isNaN(n)) return;
+    const next = Math.min(MAX_CONCURRENCY, Math.max(1, n));
+    if (next !== agent.concurrency) onchange({ concurrency: next });
+  }
+
+  function restoreConcurrency() {
+    concurrency = String(agent.concurrency);
+  }
+
   /** Writes anything typed but not yet committed. Called before the panel is
       pointed at another agent or taken off the screen. */
   export function flush() {
@@ -151,6 +168,8 @@
     commitInstructions(instructions);
     commitMaxTokens(maxTokens);
     commitSeed(seed);
+    commitConcurrency(concurrency);
+    restoreConcurrency();
   }
 </script>
 
@@ -300,6 +319,23 @@
         onchange={(e) => onchange({ preserve_reasoning: e.currentTarget.checked })}
       />
     </label>
+  </div>
+
+  <div class="field-card">
+    <div class="flex items-center justify-between gap-4">
+      <h4 class="field-head">Concurrency</h4>
+      <input
+        class="input num w-[168px] shrink-0"
+        bind:value={concurrency}
+        oninput={(e) => commitConcurrency(e.currentTarget.value)}
+        onblur={restoreConcurrency}
+        onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+      />
+    </div>
+    <p class="-mt-1 text-[12px] text-muted">
+      How many agents this one may have working for it at once, up to {MAX_CONCURRENCY}. No agent
+      delegates yet, so the number is recorded and nothing reads it.
+    </p>
   </div>
 
   <div class="flex flex-col gap-3">

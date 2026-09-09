@@ -69,6 +69,9 @@ export interface Agent {
   max_tokens: number | null;
   /** Makes a reply repeatable. Null is a new one each turn. */
   seed: number | null;
+  /** How many agents this one may have working for it at once. Nothing
+      delegates yet, so the number is recorded and read by nothing. */
+  concurrency: number;
   /** Added to the end of the built-in system prompt. */
   instructions: string;
 }

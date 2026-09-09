@@ -1090,6 +1090,31 @@ func TestAgentsCRUD(t *testing.T) {
 	}
 }
 
+// Concurrency is on the record before anything reads it, so what a write does
+// with it is the whole of its behaviour: a new agent works alone, a number in
+// range is kept, and one out of range is refused rather than clamped.
+func TestAgentConcurrency(t *testing.T) {
+	f := newFixture(t)
+	id := f.addAgent(t, map[string]any{"name": "Fanning", "url": f.upstream.URL})
+	if got := f.saved(t, f.do(t, "PUT", "/api/agents/"+id, map[string]any{"name": "Fanning"})); got["concurrency"] != 1.0 {
+		t.Errorf("a new agent's concurrency = %v, want 1", got["concurrency"])
+	}
+	if got := f.saved(t, f.do(t, "PUT", "/api/agents/"+id, map[string]any{"concurrency": 6})); got["concurrency"] != 6.0 {
+		t.Errorf("concurrency = %v, want 6", got["concurrency"])
+	}
+	if a, _ := f.cfg.Config().AgentByID(id); a.Concurrency != 6 {
+		t.Errorf("stored concurrency = %d, want 6", a.Concurrency)
+	}
+	for _, bad := range []int{0, config.MaxConcurrency + 1} {
+		if w := f.do(t, "PUT", "/api/agents/"+id, map[string]any{"concurrency": bad}); w.Code != http.StatusBadRequest {
+			t.Errorf("concurrency %d = %d, want 400", bad, w.Code)
+		}
+	}
+	if a, _ := f.cfg.Config().AgentByID(id); a.Concurrency != 6 {
+		t.Errorf("a refused write moved concurrency to %d", a.Concurrency)
+	}
+}
+
 // The key is a field like any other: it round trips, a body that does not name
 // it leaves it alone, and an empty one is no key.
 func TestAgentKeyRoundTrips(t *testing.T) {

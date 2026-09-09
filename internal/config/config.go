@@ -47,6 +47,7 @@ type FileAgent struct {
 	RepeatPenalty     *float64 `json:"repeat_penalty,omitempty"`
 	MaxTokens         *int     `json:"max_tokens,omitempty"`
 	Seed              *int     `json:"seed,omitempty"`
+	Concurrency       *int     `json:"concurrency,omitempty"`
 	Instructions      *string  `json:"instructions,omitempty"`
 }
 
@@ -93,6 +94,10 @@ type Agent struct {
 	// MaxTokens caps one reply. Seed makes a reply repeatable.
 	MaxTokens *int
 	Seed      *int
+	// Concurrency is how many agents this one may have working for it at once.
+	// Nothing delegates yet, so it is recorded and read by nothing: it is here
+	// so the number exists on the record before anything spawns against it.
+	Concurrency int
 	// Instructions follow the built-in system prompt in the same message.
 	Instructions string
 }
@@ -116,7 +121,12 @@ func (c Config) AgentByID(id string) (Agent, bool) {
 // DefaultAgent is what a new agent starts as, before anything it was created
 // with is folded in.
 func DefaultAgent() Agent {
-	return Agent{Protocol: ProtocolLlama, Effort: EffortMedium, PreserveReasoning: true}
+	return Agent{
+		Protocol:          ProtocolLlama,
+		Effort:            EffortMedium,
+		PreserveReasoning: true,
+		Concurrency:       DefaultConcurrency,
+	}
 }
 
 // cloneAgents copies the list and the values behind its pointers, so a
@@ -144,6 +154,14 @@ const (
 	ProtocolLlama     = llm.ProtocolLlama
 	ProtocolChat      = llm.ProtocolChat
 	ProtocolResponses = llm.ProtocolResponses
+)
+
+// How many agents one may have working for it at once. A new agent starts at
+// one, so an agent that fans out is told to rather than found to; the ceiling
+// is where a hosted endpoint starts refusing rather than answering.
+const (
+	DefaultConcurrency = 1
+	MaxConcurrency     = 16
 )
 
 // ProtocolNames lists what the protocol field accepts, for the note a
@@ -317,6 +335,7 @@ func (c Config) File() File {
 		id, name, url, key := a.ID, a.Name, a.URL, a.Key
 		protocol, model, effort := string(a.Protocol), a.Model, string(a.Effort)
 		preserve, instructions := a.PreserveReasoning, a.Instructions
+		concurrency := a.Concurrency
 		agents = append(agents, FileAgent{
 			ID:                &id,
 			Name:              &name,
@@ -332,6 +351,7 @@ func (c Config) File() File {
 			RepeatPenalty:     clonef(a.RepeatPenalty),
 			MaxTokens:         clonei(a.MaxTokens),
 			Seed:              clonei(a.Seed),
+			Concurrency:       &concurrency,
 			Instructions:      &instructions,
 		})
 	}
@@ -447,6 +467,13 @@ func resolveAgents(in []FileAgent, note func(string)) []Agent {
 		}
 		if f.Seed != nil {
 			a.Seed = clonei(f.Seed)
+		}
+		if f.Concurrency != nil {
+			if *f.Concurrency >= 1 && *f.Concurrency <= MaxConcurrency {
+				a.Concurrency = *f.Concurrency
+			} else {
+				note("agent " + strconv.Quote(a.Name) + " concurrency " + strconv.Itoa(*f.Concurrency) + " is outside 1 to " + strconv.Itoa(MaxConcurrency) + ", using " + strconv.Itoa(DefaultConcurrency))
+			}
 		}
 		if f.Instructions != nil {
 			a.Instructions = strings.TrimSpace(*f.Instructions)

@@ -271,6 +271,7 @@ type FileAgent struct {
 	PreserveReasoning *bool    `json:"preserve_reasoning,omitempty"`
 	Temperature       *float64 `json:"temperature,omitempty"`
 	TopP              *float64 `json:"top_p,omitempty"`
+	Concurrency       *int     `json:"concurrency,omitempty"`
 	Instructions      *string  `json:"instructions,omitempty"`
 }
 
@@ -303,6 +304,8 @@ type Agent struct {
 	PreserveReasoning bool
 	Temperature       *float64
 	TopP              *float64
+	// Concurrency is how many agents this one may have working for it at once.
+	Concurrency int
 	// Instructions follow the built-in system prompt in the same message.
 	Instructions string
 }
@@ -331,6 +334,7 @@ the id is the identity and dropping a working connection over a label is worse.
     "effort": "medium",
     "preserve_reasoning": true,
     "temperature": 0.35,
+    "concurrency": 1,
     "instructions": ""
   }],
   "agent": "agt_2f7qk3m9x4pd8s1v",
@@ -390,6 +394,7 @@ And per agent:
 | `effort` | one of auto, off, low, medium, high | `medium` |
 | `temperature` | 0 to 2 | left to the model server |
 | `top_p` | 0 to 1 | left to the model server |
+| `concurrency` | 1 to 16 | 1 |
 | `instructions` | any text, trimmed | trimming is not a violation |
 | `model` | anything | never validated: it is a remote id and the list is not known at read time |
 
@@ -2628,7 +2633,7 @@ All request and response bodies are `application/json` unless stated. Errors are
      "model": "Gemma4-12B",
      "effort": "medium", "preserve_reasoning": true,
      "temperature": 0.35, "top_p": null, "top_k": null, "repeat_penalty": null,
-     "max_tokens": null, "seed": null, "instructions": ""}
+     "max_tokens": null, "seed": null, "concurrency": 1, "instructions": ""}
   ],
   "agent": "agt_2f7qk3m9x4pd8s1v",
   "autoload": true,
@@ -2695,6 +2700,7 @@ stored. The new agent is selected when nothing was selected.
 - 400 `Effort "extreme" is not auto, off, low, medium or high`
 - 400 `Temperature is outside 0 to 2: send null to leave it to the model server`
 - 400 `Top p is outside 0 to 1: send null to leave it to the model server`
+- 400 `Concurrency is outside 1 to 16: one agent works alone`
 
 #### PUT /api/agents/{id}
 
@@ -3379,6 +3385,7 @@ export type Agent = {
   repeat_penalty: number | null;
   max_tokens: number | null;
   seed: number | null;
+  concurrency: number;
   instructions: string;
 };
 
@@ -3606,8 +3613,8 @@ and a summary is the only readable form there is, so a turn that asks for thinki
 the summary of it too. Some accounts and models produce none even so, and the turn is no
 worse for it.
 
-The right pane is one card per group of fields: connection, thinking, sampling and extra
-instructions. Group names and the agent's name in the header are the page's own type scale,
+The right pane is one card per group of fields: connection, thinking, concurrency, sampling
+and extra instructions. Group names and the agent's name in the header are the page's own type scale,
 not a heavier one, so the dialog reads as part of the app rather than as a form.
 
 Effort, protocol and the model are one control drawn three times. `Picker` is the shell:
@@ -3657,6 +3664,14 @@ and the rest are counted, because a hosted endpoint lists more models than anyon
 past. The rows are the id, a mark for vision and the window, with no grouping by loaded and
 unloaded: which models a router happens to be holding is not how anyone picks one, and it
 is stale the moment a turn runs.
+
+Concurrency is how many agents this one may have working for it at once. Nothing delegates
+yet: no code reads the number, and the field says so under itself. It is on the record now
+so that when a delegate tool lands, the fan-out it is allowed is already written down per
+agent rather than being invented globally at that point. A new agent works alone, since an
+agent that fans out should be told to rather than found to, and the ceiling is 16, which is
+where a hosted endpoint starts refusing rather than answering. The form pulls a number into
+range instead of sending one the write would refuse with a 400.
 
 `AgentPanel` is the same component in the dialog and on the setup screen, in a compact form
 there that leaves out what means nothing before an agent exists. The setup screen shows

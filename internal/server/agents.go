@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"quecto-harness/internal/config"
@@ -26,6 +27,7 @@ type agentBody struct {
 	RepeatPenalty     patch[float64] `json:"repeat_penalty"`
 	MaxTokens         patch[int]     `json:"max_tokens"`
 	Seed              patch[int]     `json:"seed"`
+	Concurrency       *int           `json:"concurrency"`
 	Instructions      *string        `json:"instructions"`
 }
 
@@ -56,6 +58,9 @@ func (b agentBody) check() error {
 	}
 	if v := b.MaxTokens.Value; v != nil && (*v < 1 || *v > 1000000) {
 		return errors.New("Max output tokens is outside 1 to 1000000: send null to leave it to the model server")
+	}
+	if b.Concurrency != nil && (*b.Concurrency < 1 || *b.Concurrency > config.MaxConcurrency) {
+		return errors.New("Concurrency is outside 1 to " + strconv.Itoa(config.MaxConcurrency) + ": one agent works alone")
 	}
 	return nil
 }
@@ -101,6 +106,9 @@ func (b agentBody) apply(a *config.Agent) {
 	}
 	if b.Seed.Set {
 		a.Seed = b.Seed.Value
+	}
+	if b.Concurrency != nil {
+		a.Concurrency = *b.Concurrency
 	}
 	if b.Instructions != nil {
 		a.Instructions = *b.Instructions

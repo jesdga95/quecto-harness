@@ -70,6 +70,7 @@ func TestResolveClamps(t *testing.T) {
 		{"output", File{OutputLimitBytes: ptr(10)}, func(c Config) bool { return c.OutputLimitBytes == 16384 }, "output_limit_bytes"},
 		{"temperature", oneAgent(FileAgent{Temperature: ptr(2.5)}), func(c Config) bool { return c.Agents[0].Temperature == nil }, "temperature"},
 		{"top_p", oneAgent(FileAgent{TopP: ptr(-0.1)}), func(c Config) bool { return c.Agents[0].TopP == nil }, "top_p"},
+		{"concurrency", oneAgent(FileAgent{Concurrency: ptr(0)}), func(c Config) bool { return c.Agents[0].Concurrency == DefaultConcurrency }, "concurrency"},
 		{"selection", File{Agent: ptr("agt_gone")}, func(c Config) bool { return c.AgentID == "" }, "agt_gone"},
 		{"project", File{Projects: []string{"relative/path"}}, func(c Config) bool { return len(c.Projects) == 0 }, "project"},
 	}
@@ -216,7 +217,7 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	in.Agents = []Agent{{
 		ID: "agt_aaaaaaaaaaaaaaaa", Name: "Local", URL: "http://127.0.0.1:8080",
 		Key: "sk-secret", Protocol: ProtocolResponses, Model: "Alpha-12B", Effort: EffortAuto,
-		PreserveReasoning: false, Instructions: "Review Go, do not write it.",
+		PreserveReasoning: false, Concurrency: 4, Instructions: "Review Go, do not write it.",
 	}}
 	in.AgentID = "agt_aaaaaaaaaaaaaaaa"
 	raw, err := json.Marshal(in.File())
@@ -241,10 +242,20 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	for _, key := range []string{"listen", "agents", "agent", "permissions", "compact_at", "shell",
 		"command_timeout_s", "output_limit_bytes", "projects",
 		"id", "name", "url", "key", "protocol", "model", "effort", "preserve_reasoning",
-		"instructions"} {
+		"concurrency", "instructions"} {
 		if !strings.Contains(string(raw), `"`+key+`"`) {
 			t.Errorf("saved file omits %q, a reader would have to guess the default", key)
 		}
+	}
+}
+
+func TestAgentWithoutConcurrencyWorksAlone(t *testing.T) {
+	c, notes := oneAgent(FileAgent{}).Resolve(Defaults())
+	if len(notes) != 0 {
+		t.Fatalf("notes = %v", notes)
+	}
+	if c.Agents[0].Concurrency != 1 {
+		t.Errorf("concurrency = %d, want 1", c.Agents[0].Concurrency)
 	}
 }
 
