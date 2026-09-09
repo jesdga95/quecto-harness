@@ -42,8 +42,14 @@ func (b *openAIBackend) Detect(ctx context.Context) (Info, error) {
 // Models lists what the server offers. Every model it names can answer, so
 // none of them is reported as waiting to be loaded.
 func (b *openAIBackend) Models(ctx context.Context) ([]Model, error) {
+	return listOpenAIModels(ctx, b.c)
+}
+
+// listOpenAIModels reads GET /v1/models, which is the one route every server
+// speaking either OpenAI protocol has, and is shared by both backends.
+func listOpenAIModels(ctx context.Context, c *Client) ([]Model, error) {
 	var body openAIModelsBody
-	if err := b.c.getJSON(ctx, "models", "", b.c.BaseURL+modelsPath, &body); err != nil {
+	if err := c.getJSON(ctx, "models", "", c.BaseURL+modelsPath, &body); err != nil {
 		return nil, err
 	}
 	out := make([]Model, 0, len(body.Data))
@@ -75,7 +81,11 @@ func (b *openAIBackend) Prepare(ctx context.Context, model string) (Ready, error
 // Props reports the one model property such a server publishes, the context
 // window, and leaves the rest unknown.
 func (b *openAIBackend) Props(ctx context.Context, model string) (Props, error) {
-	models, err := b.Models(ctx)
+	return openAIProps(ctx, b.c, model)
+}
+
+func openAIProps(ctx context.Context, c *Client, model string) (Props, error) {
+	models, err := listOpenAIModels(ctx, c)
 	if err != nil {
 		return Props{}, err
 	}
@@ -89,7 +99,7 @@ func (b *openAIBackend) Props(ctx context.Context, model string) (Props, error) 
 		}
 	}
 	return Props{}, &Error{Kind: KindNotFound, Op: "props",
-		Message: "Model " + strconv.Quote(model) + " is not on " + b.c.BaseURL + ": pick another from the model list"}
+		Message: "Model " + strconv.Quote(model) + " is not on " + c.BaseURL + ": pick another from the model list"}
 }
 
 // Chat streams one completion using only fields the OpenAI API defines.
@@ -98,7 +108,7 @@ func (b *openAIBackend) Chat(ctx context.Context, req ChatRequest, on func(Event
 	if err != nil {
 		return Result{}, buildError(err)
 	}
-	return b.c.stream(ctx, body, req.Model, on)
+	return b.c.stream(ctx, chatPath, body, req.Model, newStreamState(), on)
 }
 
 // buildOpenAIBody renders the wire request. Thinking travels as

@@ -16,6 +16,7 @@ type agentBody struct {
 	Name              *string        `json:"name"`
 	URL               *string        `json:"url"`
 	Key               *string        `json:"key"`
+	Protocol          *string        `json:"protocol"`
 	Model             *string        `json:"model"`
 	Effort            *string        `json:"effort"`
 	PreserveReasoning *bool          `json:"preserve_reasoning"`
@@ -34,6 +35,9 @@ func (b agentBody) check() error {
 		if _, ok := config.ValidAddress(strings.TrimSpace(*b.URL)); !ok {
 			return errors.New("Address \"" + *b.URL + "\" is not an http or https URL with a host")
 		}
+	}
+	if b.Protocol != nil && !llm.ValidProtocol(*b.Protocol) {
+		return errors.New("Protocol \"" + *b.Protocol + "\" is not " + config.ProtocolNames)
 	}
 	if b.Effort != nil && !llm.ValidEffort(*b.Effort) {
 		return errors.New("Effort \"" + *b.Effort + "\" is not " + config.EffortNames)
@@ -67,6 +71,9 @@ func (b agentBody) apply(a *config.Agent) {
 	}
 	if b.Key != nil {
 		a.Key = *b.Key
+	}
+	if b.Protocol != nil {
+		a.Protocol = config.Protocol(*b.Protocol)
 	}
 	if b.Model != nil {
 		a.Model = *b.Model
@@ -143,7 +150,7 @@ func (s *Server) updateAgent(w http.ResponseWriter, r *http.Request) {
 	// An address or a key that moved leaves a reading of something else, and
 	// the sessions on this agent holding a window it may no longer have.
 	if stored.URL != before.URL || stored.Key != before.Key {
-		s.forget(before.URL, before.Key)
+		s.forget(before)
 		s.engine.Forget(id)
 	}
 	s.afterAgentWrite(stored)
@@ -158,7 +165,7 @@ func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
 		writeAgentError(w, err)
 		return
 	}
-	s.forget(gone.URL, gone.Key)
+	s.forget(gone)
 	s.engine.SetAgent()
 	s.writeAgents(w, http.StatusOK, cfg, nil)
 }
@@ -185,19 +192,30 @@ func (s *Server) selectAgent(w http.ResponseWriter, r *http.Request) {
 // of a record when only one field is being tried.
 func (s *Server) probeAgent(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Agent string  `json:"agent"`
-		URL   *string `json:"url"`
-		Key   *string `json:"key"`
+		Agent    string  `json:"agent"`
+		URL      *string `json:"url"`
+		Key      *string `json:"key"`
+		Protocol *string `json:"protocol"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
-	a, _ := s.cfg.Config().AgentByID(body.Agent)
+	a, ok := s.cfg.Config().AgentByID(body.Agent)
+	if !ok {
+		a = config.DefaultAgent()
+	}
 	if body.URL != nil {
 		a.URL = strings.TrimRight(strings.TrimSpace(*body.URL), "/")
 	}
 	if body.Key != nil {
 		a.Key = *body.Key
+	}
+	if body.Protocol != nil {
+		if !llm.ValidProtocol(*body.Protocol) {
+			writeError(w, http.StatusBadRequest, "Protocol \""+*body.Protocol+"\" is not "+config.ProtocolNames)
+			return
+		}
+		a.Protocol = config.Protocol(*body.Protocol)
 	}
 	if _, ok := config.ValidAddress(a.URL); a.URL != "" && !ok {
 		writeError(w, http.StatusBadRequest, "Address \""+a.URL+"\" is not an http or https URL with a host")

@@ -165,7 +165,7 @@ func (b *llamaBackend) Chat(ctx context.Context, req ChatRequest, on func(Event)
 	if err != nil {
 		return Result{}, buildError(err)
 	}
-	return b.c.stream(ctx, body, req.Model, on)
+	return b.c.stream(ctx, chatPath, body, req.Model, newStreamState(), on)
 }
 
 // modelURL builds a model-scoped GET. autoload says whether the server may

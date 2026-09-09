@@ -205,7 +205,14 @@ func newFixture(t *testing.T) *fixture {
 // does, so a test can put a different server behind the harness.
 func (f *fixture) pointAt(t *testing.T, url string) {
 	t.Helper()
-	w := f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"url": url})
+	f.pointAtVia(t, url, "llamacpp")
+}
+
+// pointAtVia moves the fixture's agent to an address and says what it speaks.
+func (f *fixture) pointAtVia(t *testing.T, url, protocol string) {
+	t.Helper()
+	w := f.do(t, "PUT", "/api/agents/"+f.agent,
+		map[string]any{"url": url, "protocol": protocol})
 	if w.Code != http.StatusOK {
 		t.Fatalf("point at %s = %d %s", url, w.Code, w.Body.String())
 	}
@@ -442,7 +449,7 @@ func TestGetStateWithAnOpenAICompatibleServer(t *testing.T) {
 		serveTestdata(t, w, "openai-models.json")
 	}))
 	defer upstream.Close()
-	f.pointAt(t, upstream.URL)
+	f.pointAtVia(t, upstream.URL, "chat")
 
 	body := decode(t, f.do(t, "GET", "/api/state", nil))
 	if body["mode"] != "openai" {

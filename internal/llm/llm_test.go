@@ -53,7 +53,7 @@ func writeFixture(t *testing.T, w http.ResponseWriter, name string) {
 func TestDetectRouter(t *testing.T) {
 	srv := fixtureServer(t)
 	defer srv.Close()
-	info, err := New(srv.URL, "").Detect(context.Background())
+	info, err := New(srv.URL, "", ProtocolLlama).Detect(context.Background())
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestDetectSingle(t *testing.T) {
 		fmt.Fprint(w, `{"model_alias":"local","build_info":"b1","default_generation_settings":{"n_ctx":4096}}`)
 	}))
 	defer srv.Close()
-	info, err := New(srv.URL, "").Detect(context.Background())
+	info, err := New(srv.URL, "", ProtocolLlama).Detect(context.Background())
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestDetectSingle(t *testing.T) {
 func TestModelsCtxHint(t *testing.T) {
 	srv := fixtureServer(t)
 	defer srv.Close()
-	models, err := New(srv.URL, "").Models(context.Background())
+	models, err := New(srv.URL, "", ProtocolLlama).Models(context.Background())
 	if err != nil {
 		t.Fatalf("models: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestModelsCtxHint(t *testing.T) {
 func TestPropsCaps(t *testing.T) {
 	srv := fixtureServer(t)
 	defer srv.Close()
-	p, err := New(srv.URL, "").Props(context.Background(), "Alpha-12B")
+	p, err := New(srv.URL, "", ProtocolLlama).Props(context.Background(), "Alpha-12B")
 	if err != nil {
 		t.Fatalf("props: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestPropsCaps(t *testing.T) {
 func TestPropsReadsPreserveReasoning(t *testing.T) {
 	srv := fixtureServer(t)
 	defer srv.Close()
-	p, err := New(srv.URL, "").Props(context.Background(), "Delta3.8-27B Q5")
+	p, err := New(srv.URL, "", ProtocolLlama).Props(context.Background(), "Delta3.8-27B Q5")
 	if err != nil {
 		t.Fatalf("props: %v", err)
 	}
@@ -380,7 +380,7 @@ func chatFrames(t *testing.T, frames []string) (Result, []Event, error) {
 	srv := sseServer(t, frames)
 	defer srv.Close()
 	var events []Event
-	res, err := New(srv.URL, "").stream(context.Background(), sent, "m", func(e Event) error {
+	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), func(e Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -596,7 +596,7 @@ func TestChatNonStreamingReply(t *testing.T) {
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"whole"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`)
 	}))
 	defer srv.Close()
-	res, err := New(srv.URL, "").stream(context.Background(), sent, "m", nil)
+	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), nil)
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
@@ -609,7 +609,7 @@ func TestChatCanceled(t *testing.T) {
 	srv := sseServer(t, []string{`data: {"choices":[{"delta":{"content":"a"}}]}`})
 	defer srv.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	_, err := New(srv.URL, "").stream(ctx, sent, "m", func(e Event) error {
+	_, err := New(srv.URL, "", ProtocolLlama).stream(ctx, chatPath, sent, "m", newStreamState(), func(e Event) error {
 		cancel()
 		return nil
 	})
@@ -665,7 +665,7 @@ func TestChatCanceledClosesTheConnection(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		cancel()
 	}()
-	if _, err := New("http://"+ln.Addr().String(), "").stream(ctx, sent, "m", nil); Kind(err) != KindCanceled {
+	if _, err := New("http://"+ln.Addr().String(), "", ProtocolLlama).stream(ctx, chatPath, sent, "m", newStreamState(), nil); Kind(err) != KindCanceled {
 		t.Fatalf("kind = %q, err = %v", Kind(err), err)
 	}
 	select {
@@ -686,7 +686,7 @@ func TestChatCallbackErrorAborts(t *testing.T) {
 	})
 	defer srv.Close()
 	sentinel := errors.New("stop reading")
-	_, err := New(srv.URL, "").stream(context.Background(), sent, "m", func(e Event) error {
+	_, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), func(e Event) error {
 		return sentinel
 	})
 	if !errors.Is(err, sentinel) {
@@ -717,7 +717,7 @@ func TestErrorTaxonomy(t *testing.T) {
 				fmt.Fprint(w, tc.body)
 			}))
 			defer srv.Close()
-			_, err := New(srv.URL, "").Chat(context.Background(), ChatRequest{Model: "m"}, nil)
+			_, err := New(srv.URL, "", ProtocolLlama).Chat(context.Background(), ChatRequest{Model: "m"}, nil)
 			if Kind(err) != tc.want {
 				t.Fatalf("kind = %q, want %q (err %v)", Kind(err), tc.want, err)
 			}
@@ -729,7 +729,7 @@ func TestErrorTaxonomy(t *testing.T) {
 }
 
 func TestErrorUnreachable(t *testing.T) {
-	_, err := New("http://127.0.0.1:1", "").Detect(context.Background())
+	_, err := New("http://127.0.0.1:1", "", ProtocolLlama).Detect(context.Background())
 	if Kind(err) != KindUnreachable {
 		t.Fatalf("kind = %q, err = %v", Kind(err), err)
 	}

@@ -64,11 +64,26 @@ type partial struct {
 	args strings.Builder
 }
 
-// stream sends one rendered request and decodes the reply. on is called
-// synchronously from the read loop, in stream order; returning an error from
-// it aborts the request.
-func (c *Client) stream(ctx context.Context, body []byte, model string, on func(Event) error) (Result, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+chatPath, bytes.NewReader(body))
+// sink folds the frames of one stream into a Result. Each protocol brings its
+// own, because a completion chunk and a named response event are read
+// differently even though they arrive down the same pipe.
+type sink interface {
+	// dispatch decodes one payload and reports whether the stream is over.
+	dispatch(payload []byte, on func(Event) error) (bool, error)
+	// whole reads a reply from a server that ignored stream:true.
+	whole(raw []byte, on func(Event) error) error
+	// drop counts a frame that could not be read.
+	drop()
+	// failure is the error the server sent mid-stream, or nil.
+	failure() error
+	result() Result
+}
+
+// stream sends one rendered request to path and decodes the reply with st. on
+// is called synchronously from the read loop, in stream order; returning an
+// error from it aborts the request.
+func (c *Client) stream(ctx context.Context, path string, body []byte, model string, st sink, on func(Event) error) (Result, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return Result{}, classify("chat", c.BaseURL, model, 0, "", err)
 	}
@@ -87,25 +102,20 @@ func (c *Client) stream(ctx context.Context, body []byte, model string, on func(
 		return Result{}, classify("chat", c.BaseURL, model, resp.StatusCode, string(raw), nil)
 	}
 	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return c.readWhole(resp.Body, on)
+		return c.readWhole(resp.Body, st, on)
 	}
-	return c.readStream(ctx, resp.Body, on)
+	return c.readStream(ctx, resp.Body, st, on)
 }
 
 // readWhole handles a server that ignored stream:true and answered with one
-// completion object, converting it into the same event sequence.
-func (c *Client) readWhole(body io.Reader, on func(Event) error) (Result, error) {
+// object, converting it into the same event sequence.
+func (c *Client) readWhole(body io.Reader, st sink, on func(Event) error) (Result, error) {
 	raw, err := io.ReadAll(io.LimitReader(body, 32<<20))
 	if err != nil {
 		return Result{}, &Error{Kind: KindMalformed, Op: "chat", err: err,
 			Message: "Read the reply: " + err.Error()}
 	}
-	var ch chunk
-	if err := json.Unmarshal(raw, &ch); err != nil {
-		return Result{}, malformedError("chat", 1)
-	}
-	st := newStreamState()
-	if err := st.apply(&ch, on); err != nil {
+	if err := st.whole(raw, on); err != nil {
 		return st.result(), err
 	}
 	res := st.result()
@@ -120,7 +130,7 @@ type streamState struct {
 	acc     map[int]*partial
 	order   []int
 	lastIdx int
-	failure *Error
+	fail    *Error
 	done    bool
 }
 
@@ -130,8 +140,7 @@ func newStreamState() *streamState {
 
 // readStream drives the frame state machine over the response body. A
 // malformed frame is counted and skipped; it never ends the stream.
-func (c *Client) readStream(ctx context.Context, body io.Reader, on func(Event) error) (Result, error) {
-	st := newStreamState()
+func (c *Client) readStream(ctx context.Context, body io.Reader, st sink, on func(Event) error) (Result, error) {
 	r := bufio.NewReaderSize(body, 64<<10)
 
 	const (
@@ -162,7 +171,7 @@ func (c *Client) readStream(ctx context.Context, body io.Reader, on func(Event) 
 			break
 		}
 		if tooLong {
-			st.res.Dropped++
+			st.drop()
 			buf = nil
 			state = sSkip
 			continue
@@ -176,7 +185,7 @@ func (c *Client) readStream(ctx context.Context, body io.Reader, on func(Event) 
 				state = sEvent
 			case hasField(line, "event"), hasField(line, "id"), hasField(line, "retry"):
 			default:
-				st.res.Dropped++
+				st.drop()
 			}
 		case sEvent:
 			switch {
@@ -195,7 +204,7 @@ func (c *Client) readStream(ctx context.Context, body io.Reader, on func(Event) 
 				buf = append(buf, '\n')
 				buf = append(buf, fieldValue(line, "data")...)
 				if len(buf) > maxFrameBytes {
-					st.res.Dropped++
+					st.drop()
 					buf = buf[:0]
 					state = sSkip
 				}
@@ -214,8 +223,8 @@ func (c *Client) readStream(ctx context.Context, body io.Reader, on func(Event) 
 	}
 
 	res := st.result()
-	if st.failure != nil {
-		return res, st.failure
+	if err := st.failure(); err != nil {
+		return res, err
 	}
 	if state == sDone {
 		return res, nil
@@ -228,6 +237,26 @@ func (c *Client) readStream(ctx context.Context, body io.Reader, on func(Event) 
 	default:
 		return res, malformedError("chat", res.Dropped)
 	}
+}
+
+func (s *streamState) drop() { s.res.Dropped++ }
+
+func (s *streamState) failure() error {
+	if s.fail == nil {
+		return nil
+	}
+	return s.fail
+}
+
+// whole reads a single completion object, which is what a server that ignored
+// stream:true sends.
+func (s *streamState) whole(raw []byte, on func(Event) error) error {
+	var ch chunk
+	if err := json.Unmarshal(raw, &ch); err != nil {
+		s.drop()
+		return nil
+	}
+	return s.apply(&ch, on)
 }
 
 // dispatch decodes one buffered payload. It reports whether the stream is
@@ -249,7 +278,7 @@ func (s *streamState) dispatch(payload []byte, on func(Event) error) (bool, erro
 	if err := s.apply(&ch, on); err != nil {
 		return true, err
 	}
-	if s.failure != nil {
+	if s.fail != nil {
 		return true, nil
 	}
 	return false, nil
@@ -259,7 +288,7 @@ func (s *streamState) dispatch(payload []byte, on func(Event) error) (bool, erro
 // content, tool-call fragments, finish reason, usage, timings.
 func (s *streamState) apply(ch *chunk, on func(Event) error) error {
 	if ch.Error != nil {
-		s.failure = &Error{Kind: KindUpstream, Op: "chat", Status: deref(ch.Error.Code),
+		s.fail = &Error{Kind: KindUpstream, Op: "chat", Status: deref(ch.Error.Code),
 			Message: "The model server failed: " + fallback(deref(ch.Error.Message), "no reason given")}
 		return nil
 	}

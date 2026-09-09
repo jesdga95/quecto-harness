@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"time"
 )
 
 // Backend is one protocol a model server speaks. Everything above this
@@ -23,11 +22,33 @@ type Backend interface {
 type Mode string
 
 const (
-	ModeUnknown Mode = "unknown"
-	ModeRouter  Mode = "router"
-	ModeSingle  Mode = "single"
-	ModeOpenAI  Mode = "openai"
+	ModeUnknown   Mode = "unknown"
+	ModeRouter    Mode = "router"
+	ModeSingle    Mode = "single"
+	ModeOpenAI    Mode = "openai"
+	ModeResponses Mode = "responses"
 )
+
+// Protocol is the wire protocol an address speaks. It is named rather than
+// found: two of the three answer the same model list at the same address, so
+// no probe can tell them apart, and a probe that can be wrong about the
+// others buys nothing over being told.
+type Protocol string
+
+const (
+	ProtocolLlama     Protocol = "llamacpp"
+	ProtocolChat      Protocol = "chat"
+	ProtocolResponses Protocol = "responses"
+)
+
+// ValidProtocol reports whether s is one of the three.
+func ValidProtocol(s string) bool {
+	switch Protocol(s) {
+	case ProtocolLlama, ProtocolChat, ProtocolResponses:
+		return true
+	}
+	return false
+}
 
 // Info is what one probe tells us about the server as a whole. Autoload is
 // router-only; Build is llama.cpp-only; Model and NCtx are set by a server
@@ -40,93 +61,38 @@ type Info struct {
 	NCtx     int
 }
 
-// resolveTTL bounds how long the protocol is taken on trust. What answers at
-// an address can change while the harness runs, and one probe is not a fact
-// about that address for ever.
-const resolveTTL = time.Minute
-
-// remember stores the protocol the last detection settled on.
-func (c *Client) remember(b Backend) {
-	c.mu.Lock()
-	c.resolved, c.resolvedAt = b, time.Now()
-	c.mu.Unlock()
+// backend is the protocol this address speaks. It costs nothing to build and
+// holds nothing, so there is no memo to go stale and no probe to pay for.
+func (c *Client) backend() Backend {
+	switch c.Protocol {
+	case ProtocolChat:
+		return &openAIBackend{c: c}
+	case ProtocolResponses:
+		return &responsesBackend{c: c}
+	default:
+		return &llamaBackend{c: c}
+	}
 }
 
-// backend is the protocol for a call that is not itself a detection. A run of
-// requests costs one probe; after that the answer is old enough to be worth
-// asking again.
-func (c *Client) backend(ctx context.Context) (Backend, error) {
-	c.mu.Lock()
-	b, at := c.resolved, c.resolvedAt
-	c.mu.Unlock()
-	if b != nil && time.Since(at) < resolveTTL {
-		return b, nil
-	}
-	if _, err := c.Detect(ctx); err != nil {
-		return nil, err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.resolved, nil
-}
-
-// Detect asks the address what it is, and asks every time rather than
-// answering from what it found before.
-//
-// The llama.cpp read comes first because it is also that protocol's
-// detection: GET /props with no query parameters is a read on any llama.cpp
-// server and cannot load a model, and a reply carrying a build says which
-// server this is. Anything else that answers a model list is treated as
-// OpenAI-compatible. A refused token and silence name no protocol, so they
-// come back as the failure they are and nothing is remembered.
+// Detect asks the address about itself. It does not settle which protocol is
+// spoken, only what the server running it says: a build and an autoload
+// setting from llama.cpp, and the model it holds when it holds exactly one.
 func (c *Client) Detect(ctx context.Context) (Info, error) {
-	llama := &llamaBackend{c: c}
-	info, err := llama.Detect(ctx)
-	if err == nil && info.Build != "" {
-		c.remember(llama)
-		return info, nil
-	}
-	switch Kind(err) {
-	case KindAuth, KindUnreachable, KindCanceled:
-		return Info{Mode: ModeUnknown}, err
-	}
-	openai := &openAIBackend{c: c}
-	info, err = openai.Detect(ctx)
-	if err != nil {
-		return Info{Mode: ModeUnknown}, err
-	}
-	c.remember(openai)
-	return info, nil
+	return c.backend().Detect(ctx)
 }
 
 func (c *Client) Models(ctx context.Context) ([]Model, error) {
-	b, err := c.backend(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return b.Models(ctx)
+	return c.backend().Models(ctx)
 }
 
 func (c *Client) Prepare(ctx context.Context, model string) (Ready, error) {
-	b, err := c.backend(ctx)
-	if err != nil {
-		return Ready{}, err
-	}
-	return b.Prepare(ctx, model)
+	return c.backend().Prepare(ctx, model)
 }
 
 func (c *Client) Props(ctx context.Context, model string) (Props, error) {
-	b, err := c.backend(ctx)
-	if err != nil {
-		return Props{}, err
-	}
-	return b.Props(ctx, model)
+	return c.backend().Props(ctx, model)
 }
 
 func (c *Client) Chat(ctx context.Context, req ChatRequest, on func(Event) error) (Result, error) {
-	b, err := c.backend(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-	return b.Chat(ctx, req, on)
+	return c.backend().Chat(ctx, req, on)
 }

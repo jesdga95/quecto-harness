@@ -72,19 +72,20 @@ func New(cfg *config.Store, st *store.Sessions, files *store.Files, uploads *sto
 	}
 }
 
-// forget drops what was read at one address and key, and drops the clients no
-// agent points at any more. Called after a write that moved an address.
-func (s *Server) forget(url, key string) {
+// forget drops what was read at one address, and drops the clients no agent
+// points at any more. Called after a write that moved an address, a key or a
+// protocol, any of which makes what was read no longer about the same thing.
+func (s *Server) forget(a config.Agent) {
 	s.mu.Lock()
-	delete(s.probes, llm.Key(url, key))
+	delete(s.probes, llm.Key(a.URL, a.Key, a.Protocol))
 	s.mu.Unlock()
 	s.pool.Retain(s.cfg.AgentKeys())
 }
 
-// probeFor is the reading for one address and key, created empty on the first
-// look. The caller holds the lock.
-func (s *Server) probeFor(url, key string) *probe {
-	k := llm.Key(url, key)
+// probeFor is the reading for one address, key and protocol, created empty on
+// the first look. The caller holds the lock.
+func (s *Server) probeFor(a config.Agent) *probe {
+	k := llm.Key(a.URL, a.Key, a.Protocol)
 	pr, ok := s.probes[k]
 	if !ok {
 		pr = &probe{}

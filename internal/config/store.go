@@ -386,7 +386,7 @@ func (s *Store) AgentKeys() []string {
 	defer s.mu.RUnlock()
 	keys := make([]string, 0, len(s.cfg.Agents))
 	for _, a := range s.cfg.Agents {
-		keys = append(keys, llm.Key(a.URL, a.Key))
+		keys = append(keys, llm.Key(a.URL, a.Key, a.Protocol))
 	}
 	return keys
 }

@@ -76,6 +76,7 @@ type agentJSON struct {
 	Name              string   `json:"name"`
 	URL               string   `json:"url"`
 	Key               string   `json:"key"`
+	Protocol          string   `json:"protocol"`
 	Model             string   `json:"model"`
 	Effort            string   `json:"effort"`
 	PreserveReasoning bool     `json:"preserve_reasoning"`
@@ -90,7 +91,7 @@ type agentJSON struct {
 
 func toAgentJSON(a config.Agent) agentJSON {
 	return agentJSON{
-		ID: a.ID, Name: a.Name, URL: a.URL, Key: a.Key,
+		ID: a.ID, Name: a.Name, URL: a.URL, Key: a.Key, Protocol: string(a.Protocol),
 		Model: a.Model, Effort: string(a.Effort), PreserveReasoning: a.PreserveReasoning,
 		Temperature: a.Temperature, TopP: a.TopP, TopK: a.TopK,
 		RepeatPenalty: a.RepeatPenalty, MaxTokens: a.MaxTokens, Seed: a.Seed,
@@ -123,7 +124,7 @@ func toModelJSON(models []llm.Model) []modelJSON {
 // reading is older than the TTL so a model server that came up is noticed.
 func (s *Server) info(ctx context.Context, a config.Agent) (llm.Info, error) {
 	s.mu.Lock()
-	pr := s.probeFor(a.URL, a.Key)
+	pr := s.probeFor(a)
 	if time.Since(pr.infoAt) < cacheTTL {
 		v, err := pr.info, pr.infoErr
 		s.mu.Unlock()
@@ -141,7 +142,7 @@ func (s *Server) info(ctx context.Context, a config.Agent) (llm.Info, error) {
 
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	v, err := s.pool.Get(a.URL, a.Key).Detect(callCtx)
+	v, err := s.pool.Get(a.URL, a.Key, a.Protocol).Detect(callCtx)
 
 	s.mu.Lock()
 	pr.info, pr.infoErr, pr.infoAt = v, err, time.Now()
@@ -151,7 +152,7 @@ func (s *Server) info(ctx context.Context, a config.Agent) (llm.Info, error) {
 
 func (s *Server) models(ctx context.Context, a config.Agent, refresh bool) ([]llm.Model, error) {
 	s.mu.Lock()
-	pr := s.probeFor(a.URL, a.Key)
+	pr := s.probeFor(a)
 	if !refresh && time.Since(pr.modelsAt) < cacheTTL {
 		v, err := pr.models, pr.modelsErr
 		s.mu.Unlock()
@@ -169,7 +170,7 @@ func (s *Server) models(ctx context.Context, a config.Agent, refresh bool) ([]ll
 
 	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	v, err := s.pool.Get(a.URL, a.Key).Models(callCtx)
+	v, err := s.pool.Get(a.URL, a.Key, a.Protocol).Models(callCtx)
 
 	s.mu.Lock()
 	pr.models, pr.modelsErr, pr.modelsAt = v, err, time.Now()
@@ -271,7 +272,7 @@ func (s *Server) getModelProps(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	props, err := s.pool.Get(a.URL, a.Key).Props(ctx, id)
+	props, err := s.pool.Get(a.URL, a.Key, a.Protocol).Props(ctx, id)
 	if err != nil {
 		var le *llm.Error
 		if errors.As(err, &le) && le.Status >= 400 && le.Status < 500 {

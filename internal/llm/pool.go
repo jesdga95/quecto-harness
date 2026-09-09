@@ -17,21 +17,23 @@ func NewPool() *Pool {
 	return &Pool{clients: map[string]*Client{}}
 }
 
-// Key is the identity of a client. A changed address or a changed key is a
+// Key is the identity of a client. A changed address, key or protocol is a
 // different client, so nothing carries over from the one it replaces, and an
-// edit that moves neither keeps the protocol the address settled on.
-func Key(baseURL, token string) string {
-	return strings.TrimRight(baseURL, "/") + "\x00" + token
+// edit that moves none of the three keeps the protocol the address settled on.
+// Protocol belongs here because a client memoises one backend: two agents at
+// one address speaking different protocols must not share it.
+func Key(baseURL, token string, protocol Protocol) string {
+	return strings.TrimRight(baseURL, "/") + "\x00" + token + "\x00" + string(protocol)
 }
 
-func (p *Pool) Get(baseURL, token string) *Client {
-	k := Key(baseURL, token)
+func (p *Pool) Get(baseURL, token string, protocol Protocol) *Client {
+	k := Key(baseURL, token, protocol)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if c, ok := p.clients[k]; ok {
 		return c
 	}
-	c := New(baseURL, token)
+	c := New(baseURL, token, protocol)
 	p.clients[k] = c
 	return c
 }

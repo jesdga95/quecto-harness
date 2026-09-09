@@ -37,6 +37,7 @@ type FileAgent struct {
 	Name              *string  `json:"name,omitempty"`
 	URL               *string  `json:"url,omitempty"`
 	Key               *string  `json:"key,omitempty"`
+	Protocol          *string  `json:"protocol,omitempty"`
 	Model             *string  `json:"model,omitempty"`
 	Effort            *string  `json:"effort,omitempty"`
 	PreserveReasoning *bool    `json:"preserve_reasoning,omitempty"`
@@ -71,17 +72,20 @@ type Config struct {
 // opens it, which model, and how that model is asked. One is active at a time
 // and every session uses it.
 type Agent struct {
-	ID                string
-	Name              string
-	URL               string
-	Key               string
+	ID   string
+	Name string
+	URL  string
+	Key  string
+	// Protocol is what the address speaks. It is named rather than found:
+	// two of the three answer the same model list at the same address.
+	Protocol          Protocol
 	Model             string
 	Effort            Effort
 	PreserveReasoning bool
 	// The sampling fields are sent with every request that generates. Nil is
 	// left out of the body, so the model server's own value stands. TopK and
-	// RepeatPenalty reach a llama.cpp server alone, since the OpenAI API
-	// defines neither.
+	// RepeatPenalty reach a llama.cpp server alone, since neither OpenAI
+	// protocol defines them.
 	Temperature   *float64
 	TopP          *float64
 	TopK          *int
@@ -112,7 +116,7 @@ func (c Config) AgentByID(id string) (Agent, bool) {
 // DefaultAgent is what a new agent starts as, before anything it was created
 // with is folded in.
 func DefaultAgent() Agent {
-	return Agent{Effort: EffortMedium, PreserveReasoning: true}
+	return Agent{Protocol: ProtocolLlama, Effort: EffortMedium, PreserveReasoning: true}
 }
 
 // cloneAgents copies the list and the values behind its pointers, so a
@@ -133,6 +137,19 @@ func cloneAgents(in []Agent) []Agent {
 
 // Effort is defined in internal/llm, which is what turns it into request
 // fields. The alias keeps callers of this package to one import.
+// Protocol is the wire protocol an agent's address speaks.
+type Protocol = llm.Protocol
+
+const (
+	ProtocolLlama     = llm.ProtocolLlama
+	ProtocolChat      = llm.ProtocolChat
+	ProtocolResponses = llm.ProtocolResponses
+)
+
+// ProtocolNames lists what the protocol field accepts, for the note a
+// rejected value produces.
+const ProtocolNames = "llamacpp, chat or responses"
+
 type Effort = llm.Effort
 
 const (
@@ -298,13 +315,14 @@ func (c Config) File() File {
 	agents := make([]FileAgent, 0, len(c.Agents))
 	for _, a := range c.Agents {
 		id, name, url, key := a.ID, a.Name, a.URL, a.Key
-		model, effort := a.Model, string(a.Effort)
+		protocol, model, effort := string(a.Protocol), a.Model, string(a.Effort)
 		preserve, instructions := a.PreserveReasoning, a.Instructions
 		agents = append(agents, FileAgent{
 			ID:                &id,
 			Name:              &name,
 			URL:               &url,
 			Key:               &key,
+			Protocol:          &protocol,
 			Model:             &model,
 			Effort:            &effort,
 			PreserveReasoning: &preserve,
@@ -371,6 +389,13 @@ func resolveAgents(in []FileAgent, note func(string)) []Agent {
 		}
 		if f.Key != nil {
 			a.Key = *f.Key
+		}
+		if f.Protocol != nil {
+			if llm.ValidProtocol(*f.Protocol) {
+				a.Protocol = Protocol(*f.Protocol)
+			} else {
+				note("agent " + strconv.Quote(a.Name) + " protocol " + strconv.Quote(*f.Protocol) + " is not " + ProtocolNames + ", using llamacpp")
+			}
 		}
 		if f.Model != nil {
 			a.Model = *f.Model

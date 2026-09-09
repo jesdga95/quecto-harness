@@ -63,6 +63,7 @@ func TestResolveClamps(t *testing.T) {
 		{"port", File{Listen: ptr("127.0.0.1:0")}, func(c Config) bool { return c.Listen == d.Listen }, "listen"},
 		{"url", oneAgent(FileAgent{URL: ptr("ftp://x")}), func(c Config) bool { return c.Agents[0].URL == "" }, "address"},
 		{"effort", oneAgent(FileAgent{Effort: ptr("extreme")}), func(c Config) bool { return c.Agents[0].Effort == EffortMedium }, "effort"},
+		{"protocol", oneAgent(FileAgent{Protocol: ptr("grpc")}), func(c Config) bool { return c.Agents[0].Protocol == ProtocolLlama }, "protocol"},
 		{"compact", File{CompactAt: ptr(1.5)}, func(c Config) bool { return c.CompactAt == 0.8 }, "compact_at"},
 		{"shell", File{Shell: ptr("sh")}, func(c Config) bool { return c.Shell == "/bin/sh" }, "shell"},
 		{"timeout", File{CommandTimeoutS: ptr(99999)}, func(c Config) bool { return c.CommandTimeout == 120*time.Second }, "command_timeout_s"},
@@ -214,7 +215,7 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	in.Projects = []string{"/tmp/x"}
 	in.Agents = []Agent{{
 		ID: "agt_aaaaaaaaaaaaaaaa", Name: "Local", URL: "http://127.0.0.1:8080",
-		Key: "sk-secret", Model: "Alpha-12B", Effort: EffortAuto,
+		Key: "sk-secret", Protocol: ProtocolResponses, Model: "Alpha-12B", Effort: EffortAuto,
 		PreserveReasoning: false, Instructions: "Review Go, do not write it.",
 	}}
 	in.AgentID = "agt_aaaaaaaaaaaaaaaa"
@@ -239,7 +240,8 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	}
 	for _, key := range []string{"listen", "agents", "agent", "permissions", "compact_at", "shell",
 		"command_timeout_s", "output_limit_bytes", "projects",
-		"id", "name", "url", "key", "model", "effort", "preserve_reasoning", "instructions"} {
+		"id", "name", "url", "key", "protocol", "model", "effort", "preserve_reasoning",
+		"instructions"} {
 		if !strings.Contains(string(raw), `"`+key+`"`) {
 			t.Errorf("saved file omits %q, a reader would have to guess the default", key)
 		}

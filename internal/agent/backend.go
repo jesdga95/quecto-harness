@@ -31,4 +31,4 @@ type Backends interface {
 // an edit that moves neither keeps the client and the protocol it settled on.
 type Clients struct{ Pool *llm.Pool }
 
-func (c Clients) For(a config.Agent) Backend { return c.Pool.Get(a.URL, a.Key) }
+func (c Clients) For(a config.Agent) Backend { return c.Pool.Get(a.URL, a.Key, a.Protocol) }

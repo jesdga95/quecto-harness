@@ -39,7 +39,7 @@ func openAIServer(t *testing.T, sent *[]byte) *httptest.Server {
 func TestProbeFallsBackToOpenAI(t *testing.T) {
 	srv := openAIServer(t, nil)
 	defer srv.Close()
-	info, err := New(srv.URL, "").Detect(context.Background())
+	info, err := New(srv.URL, "", ProtocolChat).Detect(context.Background())
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestProbeKeepsARefusedToken(t *testing.T) {
 		http.Error(w, `{"error":{"message":"no key"}}`, http.StatusUnauthorized)
 	}))
 	defer srv.Close()
-	_, err := New(srv.URL, "").Detect(context.Background())
+	_, err := New(srv.URL, "", ProtocolChat).Detect(context.Background())
 	if Kind(err) != KindAuth {
 		t.Fatalf("kind = %q, err = %v: a refused token names no protocol", Kind(err), err)
 	}
@@ -65,7 +65,7 @@ func TestProbeKeepsARefusedToken(t *testing.T) {
 func TestOpenAIModelsCarryTheirWindow(t *testing.T) {
 	srv := openAIServer(t, nil)
 	defer srv.Close()
-	models, err := New(srv.URL, "").Models(context.Background())
+	models, err := New(srv.URL, "", ProtocolChat).Models(context.Background())
 	if err != nil {
 		t.Fatalf("models: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestOpenAIModelsCarryTheirWindow(t *testing.T) {
 func TestOpenAIPrepareReadsTheList(t *testing.T) {
 	srv := openAIServer(t, nil)
 	defer srv.Close()
-	r, err := New(srv.URL, "").Prepare(context.Background(), "Delta3.8-27B")
+	r, err := New(srv.URL, "", ProtocolChat).Prepare(context.Background(), "Delta3.8-27B")
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestOpenAIPrepareReadsTheList(t *testing.T) {
 func TestOpenAIPrepareUnknownModel(t *testing.T) {
 	srv := openAIServer(t, nil)
 	defer srv.Close()
-	_, err := New(srv.URL, "").Prepare(context.Background(), "Nothing-7B")
+	_, err := New(srv.URL, "", ProtocolChat).Prepare(context.Background(), "Nothing-7B")
 	if Kind(err) != KindNotFound {
 		t.Fatalf("kind = %q, err = %v", Kind(err), err)
 	}
@@ -146,7 +146,7 @@ func TestOpenAIChatDecodesACapturedStream(t *testing.T) {
 	var sent []byte
 	srv := openAIServer(t, &sent)
 	defer srv.Close()
-	res, err := New(srv.URL, "").Chat(context.Background(), ChatRequest{
+	res, err := New(srv.URL, "", ProtocolChat).Chat(context.Background(), ChatRequest{
 		Model: "Delta3.8-27B", Effort: EffortOff,
 		Messages: []Message{{Role: "user", Content: "List the files here"}},
 	}, nil)
@@ -195,64 +195,19 @@ func TestOpenAIStreamFixtureIsAStream(t *testing.T) {
 	}
 }
 
-// A protocol is what answers now, not what answered first. The address is
-// probed again rather than being taken on trust for the life of the client,
-// so a server restarted as something else is followed, and a failure that
-// happened to look like the other protocol is not remembered as one.
-func TestDetectFollowsAServerThatChangesProtocol(t *testing.T) {
+// The protocol is the one the client was given. A chat client never reads
+// /props, so an address that would have answered it is still spoken to the
+// way it was named, and nothing about the address can change that.
+func TestTheProtocolIsTheOneItWasGiven(t *testing.T) {
 	var mu sync.Mutex
-	stage := "broken"
+	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		at := stage
+		paths = append(paths, r.URL.Path)
 		mu.Unlock()
-		switch {
-		case r.URL.Path == "/props" && at == "broken":
-			http.Error(w, "gateway is starting", http.StatusBadGateway)
-		case r.URL.Path == "/props" && at == "openai":
-			http.NotFound(w, r)
-		case r.URL.Path == "/props":
-			writeFixture(t, w, "props-router.json")
-		case r.URL.Path == "/v1/models" && at == "llama":
-			writeFixture(t, w, "v1-models.json")
-		case r.URL.Path == "/v1/models":
-			writeFixture(t, w, "openai-models.json")
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	c := New(srv.URL, "")
-	for _, tc := range []struct {
-		at   string
-		want Mode
-	}{{"broken", ModeOpenAI}, {"openai", ModeOpenAI}, {"llama", ModeRouter}, {"openai", ModeOpenAI}} {
-		mu.Lock()
-		stage = tc.at
-		mu.Unlock()
-		info, err := c.Detect(context.Background())
-		if err != nil {
-			t.Fatalf("%s: detect: %v", tc.at, err)
-		}
-		if info.Mode != tc.want {
-			t.Errorf("%s: mode = %q, want %q", tc.at, info.Mode, tc.want)
-		}
-	}
-}
-
-// Detection is one request, not one per call: a turn does not re-probe the
-// address before every read.
-func TestTheProtocolIsRememberedBetweenCalls(t *testing.T) {
-	var mu sync.Mutex
-	probes := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/props":
-			mu.Lock()
-			probes++
-			mu.Unlock()
-			http.NotFound(w, r)
+			writeFixture(t, w, "props-router.json")
 		case "/v1/models":
 			writeFixture(t, w, "openai-models.json")
 		default:
@@ -261,10 +216,14 @@ func TestTheProtocolIsRememberedBetweenCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, "")
+	c := New(srv.URL, "", ProtocolChat)
 	ctx := context.Background()
-	if _, err := c.Detect(ctx); err != nil {
+	info, err := c.Detect(ctx)
+	if err != nil {
 		t.Fatalf("detect: %v", err)
+	}
+	if info.Mode != ModeOpenAI {
+		t.Errorf("mode = %q, want %q even though the address answers /props", info.Mode, ModeOpenAI)
 	}
 	for i := 0; i < 3; i++ {
 		if _, err := c.Models(ctx); err != nil {
@@ -276,7 +235,9 @@ func TestTheProtocolIsRememberedBetweenCalls(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if probes != 1 {
-		t.Errorf("probes = %d, want the one detection", probes)
+	for _, p := range paths {
+		if p == "/props" {
+			t.Fatalf("a chat client read /props; paths = %v", paths)
+		}
 	}
 }

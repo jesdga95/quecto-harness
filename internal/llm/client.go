@@ -1,6 +1,8 @@
-// Package llm talks to one model server. Two protocols are spoken: a
-// llama.cpp server, in router or single-model mode, and an OpenAI-compatible
-// endpoint. Which one is behind an address is settled on the first request.
+// Package llm talks to one model server. Three protocols are spoken: a
+// llama.cpp server, in router or single-model mode, an OpenAI-compatible chat
+// endpoint, and the OpenAI responses endpoint. Which one an address speaks is
+// told to the client rather than discovered, so nothing here probes to find
+// out and nothing has to be re-checked when an address changes what it is.
 // The package converts HTTP and SSE into Go values and knows nothing about
 // sessions, tools or permissions.
 package llm
@@ -11,18 +13,19 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 )
 
 // maxErrorBody is how much of a failing response is kept for the message.
 const maxErrorBody = 8 << 10
 
-// Both protocols serve these two routes, and they are the only ones an
-// OpenAI-compatible server is expected to have.
+// Every protocol serves the model list. The other two paths are the two
+// shapes of generating: the chat completion every OpenAI-compatible server
+// has, and the response OpenAI moved to.
 const (
-	modelsPath = "/v1/models"
-	chatPath   = "/v1/chat/completions"
+	modelsPath    = "/v1/models"
+	chatPath      = "/v1/chat/completions"
+	responsesPath = "/v1/responses"
 )
 
 // Client is the model server at one address: the HTTP half every backend
@@ -32,17 +35,17 @@ const (
 type Client struct {
 	BaseURL string
 	Token   string
-	HTTP    *http.Client
-
-	mu         sync.Mutex
-	resolved   Backend
-	resolvedAt time.Time
+	// Protocol is the one this address speaks. It is set once, at
+	// construction, because the pool keys a client on it.
+	Protocol Protocol
+	HTTP     *http.Client
 }
 
-func New(baseURL, token string) *Client {
+func New(baseURL, token string, protocol Protocol) *Client {
 	return &Client{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		Token:   token,
+		BaseURL:  strings.TrimRight(baseURL, "/"),
+		Token:    token,
+		Protocol: protocol,
 		HTTP: &http.Client{
 			Transport: &http.Transport{
 				Proxy:                 http.ProxyFromEnvironment,
