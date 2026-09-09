@@ -9,14 +9,16 @@
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("@fontsource/poppins/files/poppins-latin-400-normal.woff2") format("woff2");
+  src: url("@fontsource/poppins/files/poppins-latin-400-normal.woff2")
+    format("woff2");
 }
 @font-face {
   font-family: "Poppins";
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url("@fontsource/poppins/files/poppins-latin-500-normal.woff2") format("woff2");
+  src: url("@fontsource/poppins/files/poppins-latin-500-normal.woff2")
+    format("woff2");
 }
 
 /* Utilities resolve to the custom properties below, so light and dark are one
@@ -43,9 +45,11 @@
   --color-crit: var(--crit);
   --color-crit-bg: var(--crit-bg);
 
-  --font-sans: "Poppins", ui-sans-serif, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --font-sans:
+    "Poppins", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    system-ui, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 /* Brand teal, unchanged by the colour scheme, for the places the mark's own
@@ -227,7 +231,9 @@
     font-weight: 500;
     white-space: nowrap;
     cursor: pointer;
-    transition: background 90ms ease, border-color 90ms ease;
+    transition:
+      background 90ms ease,
+      border-color 90ms ease;
   }
   .chip:hover {
     background: var(--surface-2);
@@ -295,7 +301,8 @@
   .onboard-panel {
     display: flex;
     flex-direction: column;
-    padding: clamp(64px, 9vh, 120px) clamp(44px, 4vw, 72px) clamp(48px, 7vh, 88px);
+    padding: clamp(64px, 9vh, 120px) clamp(44px, 4vw, 72px)
+      clamp(48px, 7vh, 88px);
     background: #0f2e2a;
     color: #9fbfb9;
   }
@@ -343,7 +350,9 @@
     border-radius: 11px;
     background: var(--page);
     color: var(--text);
-    transition: border-color 120ms ease, box-shadow 120ms ease;
+    transition:
+      border-color 120ms ease,
+      box-shadow 120ms ease;
   }
   .field-lg:focus-within {
     border-color: var(--accent);
@@ -448,7 +457,9 @@
     background: var(--surface);
     color: var(--text-2);
     cursor: pointer;
-    transition: background 90ms ease, opacity 90ms ease;
+    transition:
+      background 90ms ease,
+      opacity 90ms ease;
   }
   .round:hover {
     background: var(--surface-2);
@@ -481,7 +492,9 @@
     background: none;
     color: var(--muted);
     cursor: pointer;
-    transition: background 90ms ease, color 90ms ease;
+    transition:
+      background 90ms ease,
+      color 90ms ease;
   }
   .icon-btn:hover {
     background: var(--border);
@@ -507,7 +520,9 @@
     cursor: pointer;
     border: 1px solid transparent;
     white-space: nowrap;
-    transition: opacity 90ms ease, background 90ms ease;
+    transition:
+      opacity 90ms ease,
+      background 90ms ease;
   }
   .btn:disabled {
     opacity: 0.45;
@@ -606,7 +621,9 @@
     border: 1px solid var(--border-2);
     background: var(--surface-2);
     cursor: pointer;
-    transition: background 110ms ease, border-color 110ms ease;
+    transition:
+      background 110ms ease,
+      border-color 110ms ease;
   }
   .switch::after {
     content: "";
@@ -617,7 +634,9 @@
     height: 12px;
     border-radius: 999px;
     background: var(--muted);
-    transition: transform 110ms ease, background 110ms ease;
+    transition:
+      transform 110ms ease,
+      background 110ms ease;
   }
   .switch:checked {
     background: var(--btn);
@@ -1543,46 +1562,44 @@
     text-underline-offset: 2px;
   }
 
-  /* The agents dialog. The rail is the one dark surface in a modal, kept out
-     of the palette for the same reason the console is: it stays dark in both
-     schemes so the list of agents reads as a place rather than a panel. */
+  /* The agents dialog. The rail is the one dark surface in a modal, on the
+     console's palette for the same reason the console has one: a list of
+     agents reads as a place rather than as another panel. */
   .rail {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 22px 16px;
-    background: #14201c;
+    gap: 2px;
+    padding: 14px 12px;
+    background: var(--term-bg);
   }
   .rail-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 8px 18px;
-    font-size: 17px;
-    font-weight: 600;
-    color: #fff;
+    padding: 4px 10px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--term-ink);
   }
   .rail-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 9px;
     width: 100%;
-    padding: 11px 12px;
+    padding: 8px 10px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 9px;
     background: none;
-    font-size: 14.5px;
-    color: #c3ccc9;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--term-muted);
     cursor: pointer;
     text-align: left;
   }
   .rail-row:hover {
     background: rgb(255 255 255 / 0.06);
+    color: var(--term-ink);
   }
   .rail-row.is-active {
     background: rgb(255 255 255 / 0.1);
-    font-weight: 600;
-    color: #fff;
+    color: var(--term-ink);
   }
   /* A flat dot for an agent nobody has asked, a lit one for the agent
      answering. */
@@ -1591,81 +1608,70 @@
     width: 7px;
     height: 7px;
     border-radius: 999px;
-    background: #4a5b56;
+    background: var(--term-muted);
+    opacity: 0.5;
   }
   .rail-dot.is-live {
-    background: #4fd1a5;
-    box-shadow: 0 0 8px rgb(79 209 165 / 0.7);
+    background: var(--term-prompt);
+    box-shadow: 0 0 8px rgb(99 214 180 / 0.6);
+    opacity: 1;
   }
   .rail-add {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 7px;
     width: 100%;
-    padding: 12px;
+    padding: 9px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 9px;
     background: rgb(255 255 255 / 0.08);
-    font-size: 14.5px;
-    font-weight: 600;
-    color: #fff;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--term-ink);
     cursor: pointer;
   }
   .rail-add:hover {
     background: rgb(255 255 255 / 0.16);
   }
 
+  /* The name of a group of fields, boxed or not. */
+  .field-head {
+    font-size: 13px;
+    font-weight: 500;
+  }
   /* One group of fields in the agents dialog. */
   .field-card {
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    padding: 18px 20px;
+    gap: 11px;
+    padding: 14px 16px;
     border: 1px solid var(--hair);
-    border-radius: 14px;
+    border-radius: 12px;
   }
-  .field-card h4 {
-    font-size: 15px;
-    font-weight: 700;
-  }
-  /* The name, edited in place at the top of the pane. */
-  .title-input {
-    width: 100%;
-    padding: 2px 0;
-    border: 0;
-    border-bottom: 1px solid transparent;
-    background: none;
-    font-family: inherit;
-    font-size: 21px;
-    font-weight: 600;
-    color: var(--text);
-    outline: none;
-  }
-  .title-input:hover {
-    border-bottom-color: var(--border);
-  }
-  .title-input:focus {
-    border-bottom-color: var(--accent);
-  }
-  /* A segmented control, for a choice of three or four short words. */
+  /* A segmented control, for a choice between a few short words. It stays a
+     row rather than a popover so a pane that scrolls cannot clip it. */
   .seg {
     display: flex;
-    gap: 4px;
-    padding: 3px;
+    gap: 2px;
+    padding: 2px;
     border-radius: 9px;
     background: var(--surface-2);
   }
   .seg button {
-    padding: 6px 13px;
+    padding: 4px 10px;
     border: 0;
     border-radius: 7px;
     background: none;
     font-family: inherit;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-2);
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--muted);
     cursor: pointer;
+  }
+  .seg button:hover {
+    color: var(--text-2);
   }
   .seg button.is-active {
     background: var(--surface);

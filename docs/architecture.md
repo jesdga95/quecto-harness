@@ -2610,9 +2610,10 @@ All request and response bodies are `application/json` unless stated. Errors are
   "build": "b10812-8b4b3558f",
   "agents": [
     {"id": "agt_2f7qk3m9x4pd8s1v", "name": "Local llama.cpp",
-     "url": "http://192.168.2.205:8080", "key_set": false, "model": "Gemma4-12B",
+     "url": "http://192.168.2.205:8080", "key": "", "model": "Gemma4-12B",
      "effort": "medium", "preserve_reasoning": true,
-     "temperature": 0.35, "top_p": null, "instructions": ""}
+     "temperature": 0.35, "top_p": null, "top_k": null, "repeat_penalty": null,
+     "max_tokens": null, "seed": null, "instructions": ""}
   ],
   "agent": "agt_2f7qk3m9x4pd8s1v",
   "autoload": true,
@@ -2643,8 +2644,12 @@ All request and response bodies are `application/json` unless stated. Errors are
 }
 ```
 
-`agentJSON` is the one wire shape for an agent, and it has no `key` field on the struct at
-all, only `key_set`, so no route can leak the key by forgetting a branch.
+`agentJSON` is the one wire shape for an agent, and it carries the key. The harness started
+write-only, answering with `key_set` alone, and gave that up so the dialog could offer an
+ordinary password field: a field that cannot show what it holds cannot be cleared by
+emptying it, and needed a `Remove key` button beside it to say what an empty field already
+says. The key is readable by anything that can reach the API, which is the loopback address
+the harness binds by default; `config.json` stays 0600.
 
 `mode`, `build`, `autoload`, `detect_*`, `models` and `models_*` describe the **active
 agent alone**. Probing every address on a state read would cost one call each, with a five
@@ -3343,13 +3348,17 @@ export type Agent = {
   id: string;
   name: string;
   url: string;
-  /** The key never comes back, only whether one is stored. */
-  key_set: boolean;
+  /** Empty is no key. */
+  key: string;
   model: string;
   effort: "auto" | "off" | "low" | "medium" | "high";
   preserve_reasoning: boolean;
   temperature: number | null;
   top_p: number | null;
+  top_k: number | null;
+  repeat_penalty: number | null;
+  max_tokens: number | null;
+  seed: number | null;
   instructions: string;
 };
 
@@ -3542,25 +3551,40 @@ without waiting for a server event, so the composer unblocks immediately.
 
 ### 12.8 The agents dialog, the chip and the context meter
 
-`Agents.svelte` is the list on the left and that agent's parameters on the right, 880 by
-600, each pane scrolling on its own. The height is fixed because one that tracked its
-content would jump on every row click.
+`Agents.svelte` is the list of agents on the left and that agent's parameters on the right,
+880 by 620, each pane scrolling on its own. The height is fixed because one that tracked its
+content would jump on every row click. The left rail is the one dark surface in a modal and
+takes the console's palette rather than the page's, for the same reason the console has one:
+the list reads as a place rather than as another panel.
 
-Choosing a row selects it for editing and nothing else. Making an agent answer is the
-button in the pane header, which is a pill reading `Active` for the one already answering.
-So the dialog can be opened, read and closed without the harness switching underneath. The
-row that answers carries a live status dot; every other carries a flat grey one, which is
-honest about an address nobody has asked.
+Choosing a row selects it for editing and nothing else, so the dialog can be opened, read
+and closed without the harness switching underneath. The row that answers carries a lit dot
+and every other a flat one, which is honest about an address nobody has asked. Making an
+agent answer is `Use this agent` in the footer, absent on the one already answering: it acts
+at once, so it sits apart from the two buttons that act on the record.
 
-Nothing is saved by a button. Pickers commit on the change, text commits on blur and on
-Enter, and switching rows or closing flushes first, so there is never a discard question to
-put to the reader. The key field starts empty whichever agent is showing, since the key
-never comes back: an empty field keeps the stored one, and `Remove key` is what clears it.
+Nothing reaches the harness until Save. The dialog holds a draft of the selected agent, Save
+is dead until the draft differs from what is stored, and moving to another row or closing
+with something typed asks before dropping it. Delete sits beside Save.
+
+The right pane is one card per group of fields: connection, thinking, sampling and extra
+instructions. Group names and the agent's name in the header are the page's own type scale,
+not a heavier one, so the dialog reads as part of the app rather than as a form. Effort is a
+segmented control rather than a menu, because the pane scrolls and a scroll container clips
+a popover that runs past its edge.
+
+The name is a labelled field at the top of the connection card and the header only shows it.
+An in-place title reads as a heading, and a heading is not somewhere people look for a field.
+
+The API key is an ordinary password field carrying the stored key, so it is the same control
+people meet everywhere else and clearing it is selecting and deleting. It reaches the
+browser to do that, which is a change from the write-only shape the harness started with;
+the file is still 0600 and the key still goes nowhere but the address it opens.
 
 The model field takes free text with the address's list beside it, because an endpoint will
 often answer for a model it never named. The list is read when a row is opened, one address
-at a time, through `POST /api/agents/probe`, and one line under the field says which of the
-states the address is in.
+at a time, through `POST /api/agents/probe` carrying the address and the key typed beside
+it, and one line under the field says which of the states the address is in.
 
 `AgentPanel` is the same component in the dialog and on the setup screen, in a compact form
 there that leaves out what means nothing before an agent exists. The setup screen shows

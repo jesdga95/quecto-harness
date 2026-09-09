@@ -34,10 +34,10 @@
   }
 </script>
 
-<div class="field-card !gap-3">
+<div class="field-card !gap-2.5 !px-4 !py-3.5">
   <div class="flex items-baseline justify-between gap-3">
-    <span class="text-[14.5px] font-medium">{label}</span>
-    <span class="num text-[17px] font-medium text-accent">{text}</span>
+    <span class="text-[13px]">{label}</span>
+    <span class="num text-[13px] font-medium text-accent">{text}</span>
   </div>
   <input
     class="range"
@@ -51,5 +51,5 @@
     oninput={(e) => (dragged = e.currentTarget.valueAsNumber)}
     onchange={(e) => commit(e.currentTarget.valueAsNumber)}
   />
-  <p class="text-[12.5px] text-muted">{hint}</p>
+  <p class="text-[12px] text-muted">{hint}</p>
 </div>

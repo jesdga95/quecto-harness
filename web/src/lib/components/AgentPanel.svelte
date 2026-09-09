@@ -1,5 +1,4 @@
 <script lang="ts">
-  import EffortChip from "./EffortChip.svelte";
   import SamplingSlider from "./SamplingSlider.svelte";
   import AgentModelField from "./AgentModelField.svelte";
   import type { Agent, AgentPatch, Effort, Probe } from "../api";
@@ -10,7 +9,9 @@
     TOP_P_STEPS,
     probeAgent,
   } from "../state/app.svelte";
-  import { k } from "../format";
+  import { effortHint, effortLabel, k } from "../format";
+
+  const EFFORTS: Effort[] = ["auto", "off", "low", "medium", "high"];
 
   let {
     agent,
@@ -177,8 +178,18 @@
   </div>
 {:else}
   <div class="field-card">
-    <h4>Connection</h4>
-    <div class="grid grid-cols-2 gap-3.5">
+    <h4 class="field-head">Connection</h4>
+    <label class="flex flex-col gap-1.5">
+      <span class="label">Name</span>
+      <input
+        class="input"
+        placeholder="Local llama.cpp"
+        bind:value={name}
+        onblur={commitName}
+        onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+      />
+    </label>
+    <div class="grid grid-cols-2 gap-3">
       <label class="flex flex-col gap-1.5">
         <span class="label">Address</span>
         <input
@@ -218,20 +229,31 @@
     </div>
   </div>
 
-  <div class="field-card !gap-4">
-    <div class="flex items-center justify-between gap-3">
-      <h4>Thinking</h4>
-      <EffortChip value={agent.effort} onpick={(effort: Effort) => onchange({ effort })} />
+  <div class="field-card">
+    <div class="flex items-start justify-between gap-4">
+      <div class="flex min-w-0 flex-col gap-0.5">
+        <h4 class="field-head">Thinking</h4>
+        <span class="text-[12px] text-muted">{effortHint(agent.effort)}</span>
+      </div>
+      <div class="seg shrink-0" role="group" aria-label="Effort">
+        {#each EFFORTS as level (level)}
+          <button
+            class:is-active={agent.effort === level}
+            aria-pressed={agent.effort === level}
+            onclick={() => onchange({ effort: level })}
+          >
+            {effortLabel(level)}
+          </button>
+        {/each}
+      </div>
     </div>
-    <label
-      class="flex cursor-pointer items-start justify-between gap-6 border-t border-hair pt-3.5"
-    >
+    <label class="flex cursor-pointer items-center justify-between gap-6 border-t border-hair pt-3">
       <span class="flex min-w-0 flex-col gap-0.5">
-        <span class="text-[14.5px] font-medium">Preserve reasoning</span>
-        <span class="text-[12.5px] text-muted">Keep thinking from earlier turns in the prompt.</span>
+        <span class="text-[13px]">Preserve reasoning</span>
+        <span class="text-[12px] text-muted">Keep thinking from earlier turns in the prompt.</span>
       </span>
       <input
-        class="switch mt-0.5"
+        class="switch"
         type="checkbox"
         checked={agent.preserve_reasoning}
         onchange={(e) => onchange({ preserve_reasoning: e.currentTarget.checked })}
@@ -241,10 +263,10 @@
 
   <div class="flex flex-col gap-3">
     <div class="flex items-center justify-between gap-3">
-      <h4 class="text-[15px] font-bold">Sampling</h4>
-      <span class="text-[12.5px] text-muted">Auto leaves the value to the model server</span>
+      <h4 class="field-head">Sampling</h4>
+      <span class="text-[12px] text-muted">Auto leaves the value to the model server</span>
     </div>
-    <div class="grid grid-cols-2 gap-3.5">
+    <div class="grid grid-cols-2 gap-3">
       <SamplingSlider
         label="Temperature"
         hint="Lower is steadier, higher is more inventive."
@@ -261,35 +283,35 @@
       />
       <SamplingSlider
         label="Top k"
-        hint="Candidates per step. Zero is no cap. Sent to llama.cpp only."
+        hint="Candidates per step. Zero is no cap. Only where the engine takes it."
         steps={TOP_K_STEPS}
         value={agent.top_k}
         onpick={(top_k) => onchange({ top_k })}
       />
       <SamplingSlider
         label="Repeat penalty"
-        hint="Discourages verbatim loops. Sent to llama.cpp only."
+        hint="Discourages verbatim loops. Only where the engine takes it."
         steps={REPEAT_PENALTY_STEPS}
         value={agent.repeat_penalty}
         onpick={(repeat_penalty) => onchange({ repeat_penalty })}
       />
     </div>
-    <div class="field-card !flex-row !items-center !gap-3.5 !py-3.5">
-      <span class="shrink-0 text-[14.5px] font-medium">Max output tokens</span>
+    <div class="field-card !flex-row !items-center !gap-3 !py-3">
+      <span class="shrink-0 text-[13px]">Max output tokens</span>
       <input
-        class="input num w-[104px] shrink-0 !px-2.5 !py-2"
+        class="input num w-[96px] shrink-0 !px-2.5 !py-1.5"
         placeholder="Auto"
         bind:value={maxTokens}
         onblur={commitMaxTokens}
         onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
       />
       {#if window > 0}
-        <span class="shrink-0 text-[12.5px] text-muted">of {k(window)} context</span>
+        <span class="shrink-0 text-[12px] text-muted">of {k(window)} context</span>
       {/if}
       <span class="flex-1"></span>
-      <span class="shrink-0 text-[14.5px]">Seed</span>
+      <span class="shrink-0 text-[13px]">Seed</span>
       <input
-        class="input num w-[104px] shrink-0 !px-2.5 !py-2"
+        class="input num w-[96px] shrink-0 !px-2.5 !py-1.5"
         placeholder="Random"
         bind:value={seed}
         onblur={commitSeed}
@@ -298,14 +320,14 @@
     </div>
   </div>
 
-  <div class="field-card !gap-3">
+  <div class="field-card !gap-2.5">
     <div class="flex items-center justify-between gap-3">
-      <h4>Extra instructions</h4>
-      <span class="num text-[12.5px] text-muted">{instructions.length} / 4000</span>
+      <h4 class="field-head">Extra instructions</h4>
+      <span class="num text-[12px] text-muted">{instructions.length} / 4000</span>
     </div>
-    <p class="-mt-1.5 text-[12.5px] text-muted">Added to the end of the built-in system prompt.</p>
+    <p class="-mt-1 text-[12px] text-muted">Added to the end of the built-in system prompt.</p>
     <textarea
-      class="input h-[140px] resize-none leading-[1.6]"
+      class="input h-[112px] resize-none leading-[1.6]"
       maxlength="4000"
       placeholder="Anything this agent should always be told"
       bind:value={instructions}

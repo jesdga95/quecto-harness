@@ -145,25 +145,16 @@
 >
   <div
     bind:this={card}
-    class="card flex max-h-full w-[1000px] max-w-full overflow-hidden !rounded-[18px] p-0"
-    style="height:720px"
+    class="flex max-h-full w-[880px] max-w-full overflow-hidden rounded-2xl bg-surface shadow-[0_24px_60px_rgb(15_23_42/0.28)]"
+    style="height:620px"
     role="dialog"
     aria-modal="true"
     aria-label="Agents"
     tabindex="-1"
     onkeydown={trap}
   >
-    <div class="rail w-[248px] shrink-0">
-      <div class="rail-head">
-        <span>Agents</span>
-        <button
-          class="text-[#7f918b] hover:text-white"
-          aria-label="Close"
-          onclick={leave}
-        >
-          <X size={16} />
-        </button>
-      </div>
+    <div class="rail w-[216px] shrink-0">
+      <p class="rail-head">Agents</p>
 
       <nav class="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         {#each app.agents as agent (agent.id)}
@@ -183,48 +174,52 @@
       </nav>
 
       <button class="rail-add" onclick={create}>
-        <Plus size={15} />
+        <Plus size={14} />
         New agent
       </button>
     </div>
 
-    <div class="flex min-w-0 flex-1 flex-col">
+    <div class="relative flex min-w-0 flex-1 flex-col">
+      <button class="icon-btn absolute top-3.5 right-4 z-10" aria-label="Close" onclick={leave}>
+        <X size={16} />
+      </button>
+
       {#if draft && stored}
-        <header class="flex shrink-0 items-start justify-between gap-5 border-b border-hair px-7 pt-[22px] pb-[18px]">
-          <div class="flex min-w-0 flex-col gap-1">
-            <input
-              class="title-input w-[280px]"
-              aria-label="Agent name"
-              bind:value={draft.name}
-              placeholder="Local llama.cpp"
-            />
-            <span class="truncate text-[13px] text-muted">
+        <header
+          class="shrink-0 border-b border-hair px-6 pt-4 pr-14 pb-3.5"
+        >
+          <div class="flex min-w-0 flex-col gap-0.5">
+            <h3 class="truncate text-[17px] font-medium">
+              {draft.name || "Unnamed agent"}
+            </h3>
+            <span class="truncate text-[12px] text-muted">
               {draft.model || "No model chosen"}{draft.url ? ` · ${draft.url}` : ""}
             </span>
           </div>
-          {#if stored.id === active}
-            <span class="pill pill-ok mt-1 shrink-0">Active</span>
-          {:else}
-            <button class="btn btn-ghost btn-sm mt-0.5 shrink-0" onclick={() => setActiveAgent(stored.id)}>
-              Use this agent
-            </button>
-          {/if}
         </header>
 
-        <div class="flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto px-7 pt-5 pb-7">
+        <div class="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-6 pt-4 pb-6">
           {#key stored.id}
             <AgentPanel bind:this={panel} agent={draft} onchange={edit} />
           {/key}
         </div>
 
-        <footer class="flex shrink-0 items-center justify-end gap-2.5 border-t border-hair bg-panel px-7 py-3.5">
+        <footer
+          class="flex shrink-0 items-center gap-2.5 border-t border-hair bg-panel px-6 py-3"
+        >
+          {#if stored.id !== active}
+            <button class="btn btn-ghost" onclick={() => setActiveAgent(stored.id)}>
+              Use this agent
+            </button>
+          {/if}
+          <span class="flex-1"></span>
           <button class="btn btn-danger !border-transparent" onclick={remove}>Delete</button>
           <button class="btn btn-primary" disabled={!dirty || saving} onclick={save}>
             {saving ? "Saving" : "Save"}
           </button>
         </footer>
       {:else}
-        <div class="grid flex-1 place-items-center px-7 text-center text-[13px] text-muted">
+        <div class="grid flex-1 place-items-center px-6 text-center text-[13px] text-muted">
           No agents yet. Add one to give the harness something to answer with.
         </div>
       {/if}
