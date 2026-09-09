@@ -1083,34 +1083,58 @@ func TestAgentsCRUD(t *testing.T) {
 	}
 }
 
-// The key is write only. It goes in and never comes back, and a body that does
-// not name it leaves the stored one alone.
-func TestAgentKeyNeverLeaves(t *testing.T) {
+// The key is a field like any other: it round trips, a body that does not name
+// it leaves it alone, and an empty one is no key.
+func TestAgentKeyRoundTrips(t *testing.T) {
 	f := newFixture(t)
-	const key = "sk-do-not-echo-this"
+	const key = "sk-a-key"
 	id := f.addAgent(t, map[string]any{"name": "Keyed", "url": f.upstream.URL, "key": key})
 
-	for _, path := range []string{"/api/agents", "/api/state"} {
-		w := f.do(t, "GET", path, nil)
-		if strings.Contains(w.Body.String(), key) {
-			t.Errorf("%s returned the key: %s", path, w.Body.String())
-		}
-	}
-	if saved := f.saved(t, f.do(t, "PUT", "/api/agents/"+id, map[string]any{"name": "Keyed"})); saved["key_set"] != true {
-		t.Errorf("a body that did not name the key cleared it: %v", saved)
-	}
 	stored := func() string {
 		a, _ := f.cfg.Config().AgentByID(id)
 		return a.Key
 	}
 	if stored() != key {
-		t.Errorf("stored key = %q", stored())
+		t.Fatalf("stored key = %q", stored())
 	}
-	if saved := f.saved(t, f.do(t, "PUT", "/api/agents/"+id, map[string]any{"key": nil})); saved["key_set"] != false {
-		t.Errorf("null did not clear the key: %v", saved)
+	if got := f.saved(t, f.do(t, "PUT", "/api/agents/"+id, map[string]any{"name": "Keyed"})); got["key"] != key {
+		t.Errorf("a body that did not name the key changed it: %v", got["key"])
+	}
+	if got := f.saved(t, f.do(t, "PUT", "/api/agents/"+id, map[string]any{"key": ""})); got["key"] != "" {
+		t.Errorf("an empty key was not taken as no key: %v", got["key"])
 	}
 	if stored() != "" {
 		t.Errorf("stored key = %q after clearing", stored())
+	}
+}
+
+// A key typed for an agent that has not been stored yet is what its address is
+// read with, or the model list of a server that wants one is never fetched.
+func TestProbeTakesAKeyThatIsNotStored(t *testing.T) {
+	f := newFixture(t)
+	var seen []string
+	guarded := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("Authorization"))
+		if r.Header.Get("Authorization") != "Bearer sk-typed" {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":{"message":"bad key"}}`)
+			return
+		}
+		serveTestdata(t, w, "openai-models.json")
+	}))
+	defer guarded.Close()
+
+	body := decode(t, f.do(t, "POST", "/api/agents/probe",
+		map[string]any{"url": guarded.URL, "key": "sk-typed"}))
+	if got := body["models"].([]any); len(got) != 1 {
+		t.Fatalf("probe with the typed key listed %d models: %v", len(got), body)
+	}
+	body = decode(t, f.do(t, "POST", "/api/agents/probe", map[string]any{"url": guarded.URL}))
+	if body["models_kind"] != "auth" {
+		t.Errorf("probe with no key = %v, want it refused", body)
+	}
+	if len(seen) == 0 {
+		t.Fatal("the address was never asked")
 	}
 }
 

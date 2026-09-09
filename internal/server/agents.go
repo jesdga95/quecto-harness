@@ -11,13 +11,11 @@ import (
 )
 
 // agentBody is what a write may carry. A field the body leaves out keeps the
-// value it has. Key is the exception that needs three states: absent leaves the
-// stored key alone, which is what lets the dialog save a form it was never
-// given the key for, and null or an empty string clears it.
+// value it has, and an empty key is no key.
 type agentBody struct {
 	Name              *string        `json:"name"`
 	URL               *string        `json:"url"`
-	Key               patch[string]  `json:"key"`
+	Key               *string        `json:"key"`
 	Model             *string        `json:"model"`
 	Effort            *string        `json:"effort"`
 	PreserveReasoning *bool          `json:"preserve_reasoning"`
@@ -54,11 +52,8 @@ func (b agentBody) apply(a *config.Agent) {
 	if b.URL != nil {
 		a.URL = strings.TrimRight(strings.TrimSpace(*b.URL), "/")
 	}
-	if b.Key.Set {
-		a.Key = ""
-		if b.Key.Value != nil {
-			a.Key = *b.Key.Value
-		}
+	if b.Key != nil {
+		a.Key = *b.Key
 	}
 	if b.Model != nil {
 		a.Model = *b.Model
@@ -161,13 +156,13 @@ func (s *Server) selectAgent(w http.ResponseWriter, r *http.Request) {
 
 // probeAgent reads one address and answers with what it said, whether or not
 // it answered well. The dialog draws a bad address inside the form, so a
-// failure here is a body rather than a status. An agent id fills in the key
-// the browser was never given.
+// failure here is a body rather than a status. An agent id fills in the rest
+// of a record when only one field is being tried.
 func (s *Server) probeAgent(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Agent string        `json:"agent"`
-		URL   *string       `json:"url"`
-		Key   patch[string] `json:"key"`
+		Agent string  `json:"agent"`
+		URL   *string `json:"url"`
+		Key   *string `json:"key"`
 	}
 	if !readJSON(w, r, &body) {
 		return
@@ -176,11 +171,8 @@ func (s *Server) probeAgent(w http.ResponseWriter, r *http.Request) {
 	if body.URL != nil {
 		a.URL = strings.TrimRight(strings.TrimSpace(*body.URL), "/")
 	}
-	if body.Key.Set {
-		a.Key = ""
-		if body.Key.Value != nil {
-			a.Key = *body.Key.Value
-		}
+	if body.Key != nil {
+		a.Key = *body.Key
 	}
 	if _, ok := config.ValidAddress(a.URL); a.URL != "" && !ok {
 		writeError(w, http.StatusBadRequest, "Address \""+a.URL+"\" is not an http or https URL with a host")

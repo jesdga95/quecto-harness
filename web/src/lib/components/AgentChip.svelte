@@ -27,7 +27,7 @@
             modelsError: app.modelsError,
             modelsKind: app.modelsKind,
           },
-          current?.key_set ?? false,
+          (current?.key ?? "") !== "",
         ),
   );
 

@@ -72,7 +72,7 @@ interface WireAgent {
   id?: string;
   name?: string;
   url?: string;
-  key_set?: boolean;
+  key?: string;
   model?: string;
   effort?: string;
   preserve_reasoning?: boolean;
@@ -325,7 +325,7 @@ function toAgent(a: WireAgent): Agent {
     id: a.id ?? "",
     name: a.name || "Agent",
     url: a.url ?? "",
-    key_set: a.key_set === true,
+    key: a.key ?? "",
     model: a.model ?? "",
     effort: toEffort(a.effort),
     preserve_reasoning: a.preserve_reasoning ?? true,

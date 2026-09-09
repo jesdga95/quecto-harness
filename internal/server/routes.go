@@ -70,13 +70,12 @@ func toConfigJSON(c config.Config) configJSON {
 	}
 }
 
-// agentJSON is the one wire shape for an agent. There is no key field on it,
-// so no route can leak the key by forgetting a branch.
+// agentJSON is the one wire shape for an agent.
 type agentJSON struct {
 	ID                string   `json:"id"`
 	Name              string   `json:"name"`
 	URL               string   `json:"url"`
-	KeySet            bool     `json:"key_set"`
+	Key               string   `json:"key"`
 	Model             string   `json:"model"`
 	Effort            string   `json:"effort"`
 	PreserveReasoning bool     `json:"preserve_reasoning"`
@@ -87,7 +86,7 @@ type agentJSON struct {
 
 func toAgentJSON(a config.Agent) agentJSON {
 	return agentJSON{
-		ID: a.ID, Name: a.Name, URL: a.URL, KeySet: a.Key != "",
+		ID: a.ID, Name: a.Name, URL: a.URL, Key: a.Key,
 		Model: a.Model, Effort: string(a.Effort), PreserveReasoning: a.PreserveReasoning,
 		Temperature: a.Temperature, TopP: a.TopP, Instructions: a.Instructions,
 	}

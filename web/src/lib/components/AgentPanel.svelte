@@ -18,8 +18,7 @@
   } = $props();
 
   // The drafts are filled from the agent below, and refilled when the panel is
-  // pointed at another one. The key never comes back, so its field starts
-  // empty whichever agent this is, and empty means the stored key is kept.
+  // pointed at another one.
   let name = $state("");
   let url = $state("");
   let key = $state("");
@@ -27,30 +26,43 @@
 
   let probe = $state<Probe | null>(null);
   let checking = $state(false);
-  // The address a reading was taken at, so it is not taken twice for one.
+  // The address and key a reading was taken with, so it is not taken twice for
+  // one and is taken again when either moves.
   let probedAt = $state("");
+  // Which agent the drafts were filled from. The identity of the record
+  // changes on every edit of an unsaved one, and that is not a new agent.
+  let filled = $state<string | null>(null);
 
   $effect(() => {
+    if (filled === agent.id) return;
+    filled = agent.id;
     name = agent.name;
     url = agent.url;
-    key = "";
+    key = agent.key;
     instructions = agent.instructions;
     probe = null;
     probedAt = "";
   });
 
+  const at = $derived({ url: agent.url, key: agent.key });
   $effect(() => {
-    if (agent.url !== "" && agent.url !== probedAt) void look(false);
+    if (at.url !== "" && mark(at) !== probedAt) void look(false);
   });
 
+  function mark(a: { url: string; key: string }): string {
+    return a.url + "\u0000" + a.key;
+  }
+
+  // The address is read with the key beside it, so an agent that has not been
+  // stored yet is still read with the key the reader typed for it.
   async function look(refresh: boolean) {
-    const at = agent.url;
-    if (at === "") return;
-    probedAt = at;
+    const asked = at;
+    if (asked.url === "") return;
+    probedAt = mark(asked);
     checking = true;
-    const got = await probeAgent({ agent: agent.id, url: at }, refresh);
+    const got = await probeAgent({ agent: agent.id, ...asked }, refresh);
     checking = false;
-    if (agent.url === at) probe = got;
+    if (mark(at) === probedAt) probe = got;
   }
 
   const models = $derived(probe?.models ?? []);
@@ -66,10 +78,7 @@
   }
 
   function commitKey() {
-    if (key !== "") {
-      onchange({ key });
-      key = "";
-    }
+    if (key !== agent.key) onchange({ key });
   }
 
   function commitInstructions() {
@@ -115,31 +124,15 @@
   />
 
   <label class="label mt-4 mb-1.5 block" for="agent-key">API key</label>
-  <div class="flex items-center gap-2">
-    <input
-      id="agent-key"
-      class="input min-w-0 flex-1"
-      type="password"
-      placeholder={agent.key_set ? "Saved, type to replace" : "Optional"}
-      bind:value={key}
-      onblur={commitKey}
-      onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-    />
-    {#if agent.key_set}
-      <button
-        class="btn btn-sm btn-ghost shrink-0"
-        onclick={() => {
-          key = "";
-          onchange({ key: null });
-        }}
-      >
-        Remove key
-      </button>
-    {/if}
-  </div>
-  {#if agent.key_set}
-    <p class="mt-1.5 text-[12px] text-muted">Leave empty to keep the saved key.</p>
-  {/if}
+  <input
+    id="agent-key"
+    class="input"
+    type="password"
+    placeholder="Leave empty if the address takes none"
+    bind:value={key}
+    onblur={commitKey}
+    onkeydown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+  />
 
   <label class="label mt-4 mb-1.5 block" for="agent-model">Model</label>
   <AgentModelField
@@ -147,7 +140,7 @@
     {models}
     {probe}
     {checking}
-    hasKey={agent.key_set}
+    hasKey={agent.key !== ""}
     hasAddress={agent.url !== ""}
     onpick={(model) => onchange({ model })}
     onrefresh={() => void look(true)}

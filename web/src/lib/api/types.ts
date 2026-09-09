@@ -46,8 +46,8 @@ export interface Agent {
   id: string;
   name: string;
   url: string;
-  /** The key never comes back, only whether one is stored. */
-  key_set: boolean;
+  /** Empty is no key. */
+  key: string;
   model: string;
   effort: Effort;
   /** Keeps thinking from earlier turns in the prompt. */
@@ -60,9 +60,8 @@ export interface Agent {
   instructions: string;
 }
 
-/** What a write may carry. A field left out keeps the value it has. Key is the
-    exception: absent leaves the stored key alone and null clears it. */
-export type AgentPatch = Partial<Omit<Agent, "id" | "key_set">> & { key?: string | null };
+/** What a write may carry. A field left out keeps the value it has. */
+export type AgentPatch = Partial<Omit<Agent, "id">>;
 
 /** What one address answered when it was asked what it holds. A failure is
     reported here rather than thrown, so a form can draw it. */

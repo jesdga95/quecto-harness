@@ -439,7 +439,7 @@ export function agentById(id: string): Agent | undefined {
 export async function saveAgent(id: string, patch: AgentPatch): Promise<Agent | null> {
   const at = app.agents.findIndex((a) => a.id === id);
   const before = app.agents[at];
-  if (at >= 0 && before) app.agents[at] = { ...before, ...stripKey(patch) };
+  if (at >= 0 && before) app.agents[at] = { ...before, ...patch };
   const saved = await guard(() => api.updateAgent(id, patch));
   if (!saved) {
     if (at >= 0 && before) app.agents[at] = before;
@@ -447,14 +447,6 @@ export async function saveAgent(id: string, patch: AgentPatch): Promise<Agent | 
   }
   if (at >= 0) app.agents[at] = saved;
   return saved;
-}
-
-/** The key is never held here, so a patch carrying one leaves the local copy
-    alone except for whether there is one. */
-function stripKey(patch: AgentPatch): Partial<Agent> {
-  const { key, ...rest } = patch;
-  if (key === undefined) return rest;
-  return { ...rest, key_set: key !== null && key !== "" };
 }
 
 export async function addAgent(patch: AgentPatch): Promise<Agent | null> {

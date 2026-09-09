@@ -10,7 +10,7 @@
     id: "",
     name: "",
     url: "",
-    key_set: false,
+    key: "",
     model: "",
     effort: "medium",
     preserve_reasoning: true,
@@ -18,17 +18,11 @@
     top_p: null,
     instructions: "",
   });
-  let key = $state("");
   let panel = $state<ReturnType<typeof AgentPanel> | null>(null);
   let problem = $state("");
   let saving = $state(false);
 
   function edit(patch: AgentPatch) {
-    if (patch.key !== undefined) {
-      key = patch.key ?? "";
-      draft = { ...draft, key_set: key !== "" };
-      return;
-    }
     draft = { ...draft, ...patch };
   }
 
@@ -40,7 +34,7 @@
     const made = await addAgent({
       name: draft.name.trim(),
       url: draft.url.trim(),
-      key,
+      key: draft.key,
       model: draft.model.trim(),
     });
     saving = false;
