@@ -232,7 +232,7 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	in.Mode = ModeFull
 	in.Projects = []string{"/tmp/x"}
 	in.Agents = []Agent{{
-		ID: "agt_aaaaaaaaaaaaaaaa", Name: "Local", URL: "http://127.0.0.1:8080",
+		ID: "agt_aaaaaaaaaaaaaaaa", Name: "Local", Enabled: true, URL: "http://127.0.0.1:8080",
 		Key: "sk-secret", Protocol: ProtocolResponses, Model: "Alpha-12B", Effort: EffortAuto,
 		PreserveReasoning: false, Concurrency: 4, Instructions: "Review Go, do not write it.",
 	}}
@@ -258,7 +258,7 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	}
 	for _, key := range []string{"listen", "agents", "agent", "permissions", "compact_at", "shell",
 		"command_timeout_s", "output_limit_bytes", "projects",
-		"id", "name", "url", "key", "protocol", "model", "effort", "preserve_reasoning",
+		"id", "name", "enabled", "url", "key", "protocol", "model", "effort", "preserve_reasoning",
 		"concurrency", "description", "instructions"} {
 		if !strings.Contains(string(raw), `"`+key+`"`) {
 			t.Errorf("saved file omits %q, a reader would have to guess the default", key)
@@ -332,7 +332,7 @@ func TestAnAgentBeingFilledInIsNotAnError(t *testing.T) {
 func TestUpdateDoesNotAliasAgents(t *testing.T) {
 	s := openStore(t)
 	temp := 0.5
-	if _, _, err := s.AddAgent(Agent{Name: "Local", Temperature: &temp}); err != nil {
+	if _, _, err := s.AddAgent(Agent{Name: "Local", Enabled: true, Temperature: &temp}); err != nil {
 		t.Fatal(err)
 	}
 	before := s.Config()
@@ -349,7 +349,7 @@ func TestUpdateDoesNotAliasAgents(t *testing.T) {
 
 func TestAgentStoreLifecycle(t *testing.T) {
 	s := openStore(t)
-	cfg, first, err := s.AddAgent(Agent{Name: "Local", URL: "http://127.0.0.1:8080", Model: "Alpha-12B"})
+	cfg, first, err := s.AddAgent(Agent{Name: "Local", Enabled: true, URL: "http://127.0.0.1:8080", Model: "Alpha-12B"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestAgentStoreLifecycle(t *testing.T) {
 		t.Error("a blank name was accepted")
 	}
 
-	_, second, err := s.AddAgent(Agent{Name: "Studio"})
+	_, second, err := s.AddAgent(Agent{Name: "Studio", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,6 +387,54 @@ func TestAgentStoreLifecycle(t *testing.T) {
 	}
 	if len(cfg.Agents) != 0 || cfg.AgentID != "" {
 		t.Errorf("removing the last agent left %+v", cfg)
+	}
+}
+
+// A disabled agent keeps everything it was configured with, but stops being
+// the one that answers.
+func TestDisablingTheActiveAgentMovesTheSelection(t *testing.T) {
+	s := openStore(t)
+	_, first, err := s.AddAgent(Agent{Name: "Local", Enabled: true, URL: "http://127.0.0.1:8080", Model: "Alpha-12B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, second, err := s.AddAgent(Agent{Name: "Studio", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, stored, err := s.UpdateAgent(first.ID, func(a *Agent) { a.Enabled = false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentID != second.ID {
+		t.Errorf("disabling the active agent left %q selected, want the one still enabled", cfg.AgentID)
+	}
+	if stored.URL != first.URL || stored.Model != first.Model {
+		t.Errorf("disabling an agent changed what it was configured with: %+v", stored)
+	}
+	if _, err := s.SelectAgent(first.ID); err == nil {
+		t.Error("a disabled agent was selected")
+	}
+
+	// Nothing is left to hand over to, so the harness has no agent answering.
+	cfg, _, err = s.UpdateAgent(second.ID, func(a *Agent) { a.Enabled = false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentID != "" {
+		t.Errorf("disabling the last agent left %q selected", cfg.AgentID)
+	}
+	if len(cfg.Agents) != 2 {
+		t.Errorf("agents = %d, want both kept", len(cfg.Agents))
+	}
+
+	cfg, _, err = s.UpdateAgent(second.ID, func(a *Agent) { a.Enabled = true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentID != second.ID {
+		t.Errorf("enabling an agent again left %q selected", cfg.AgentID)
 	}
 }
 

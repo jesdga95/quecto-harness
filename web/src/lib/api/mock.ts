@@ -122,14 +122,14 @@ const ADDRESSES: Record<string, Model[]> = {
 
 const AGENTS: Agent[] = [
   {
-    id: "agt_local", name: "Local llama.cpp", url: "http://192.168.2.205:8080",
+    id: "agt_local", name: "Local llama.cpp", enabled: true, url: "http://192.168.2.205:8080",
     key: "", protocol: "llamacpp", model: "Gemma4-12B", effort: "medium", preserve_reasoning: true,
     temperature: null, top_p: null, top_k: null, repeat_penalty: null,
     max_tokens: null, max_context: null, seed: null, concurrency: 1,
     description: "", instructions: "",
   },
   {
-    id: "agt_studio", name: "Studio box", url: "http://10.0.0.14:1234",
+    id: "agt_studio", name: "Studio box", enabled: true, url: "http://10.0.0.14:1234",
     key: "sk-studio", protocol: "responses", model: "Qwen3.8-27B Q5", effort: "high",
     preserve_reasoning: false,
     temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.1,
@@ -138,7 +138,7 @@ const AGENTS: Agent[] = [
     instructions: "Answer in British English.",
   },
   {
-    id: "agt_cloud", name: "Cloud endpoint", url: "https://api.example.com/v1",
+    id: "agt_cloud", name: "Cloud endpoint", enabled: true, url: "https://api.example.com/v1",
     key: "", protocol: "chat", model: "gpt-oss-120b", effort: "medium", preserve_reasoning: true,
     temperature: null, top_p: null, top_k: null, repeat_penalty: null,
     max_tokens: null, max_context: null, seed: null, concurrency: 1,
@@ -358,7 +358,11 @@ export class MockApi implements HarnessApi {
   private probe(at: { key?: string; url: string } | undefined): Probe {
     const empty = { models: [], detectError: "", detectKind: "", modelsError: "", modelsKind: "" };
     if (!at) {
-      return { ...empty, mode: "unknown", detectError: "No agent is selected: create one in the agents dialog" };
+      const why =
+        this.agents.length > 0
+          ? "Every agent is disabled: enable one in the agents dialog"
+          : "No agent is selected: create one in the agents dialog";
+      return { ...empty, mode: "unknown", detectError: why };
     }
     const held = ADDRESSES[at.url];
     if (!held) {
@@ -383,15 +387,20 @@ export class MockApi implements HarnessApi {
       throw new Error(`An agent named "${name}" already exists: choose another name`);
     }
     const agent: Agent = {
-      id: nextId("agt"), url: "", key: "", model: "",
+      id: nextId("agt"), enabled: true, url: "", key: "", model: "",
       protocol: "llamacpp", effort: "medium", preserve_reasoning: true,
       temperature: null, top_p: null,
       top_k: null, repeat_penalty: null, max_tokens: null, max_context: null, seed: null,
       concurrency: 1, description: "", instructions: "", ...patch, name,
     };
     this.agents.push(agent);
-    if (this.config.agent === "") this.config.agent = agent.id;
+    if (this.config.agent === "") this.config.agent = this.firstEnabled();
     return { ...agent };
+  }
+
+  /** The first agent that can answer, which is where the selection falls. */
+  private firstEnabled(): string {
+    return this.agents.find((a) => a.enabled)?.id ?? "";
   }
 
   async updateAgent(id: string, patch: AgentPatch): Promise<Agent> {
@@ -406,7 +415,9 @@ export class MockApi implements HarnessApi {
     }
     const next: Agent = { ...current, ...patch, name };
     this.agents[at] = next;
-    if (id === this.config.agent) this.repoint(next.model);
+    if (!next.enabled && id === this.config.agent) this.config.agent = this.firstEnabled();
+    if (this.config.agent === "") this.config.agent = this.firstEnabled();
+    this.repoint(this.active()?.model ?? "");
     return { ...next };
   }
 
@@ -414,7 +425,7 @@ export class MockApi implements HarnessApi {
     await this.tick(160);
     this.agents = this.agents.filter((a) => a.id !== id);
     if (this.config.agent === id) {
-      this.config.agent = this.agents[0]?.id ?? "";
+      this.config.agent = this.firstEnabled();
       this.repoint(this.active()?.model ?? "");
     }
     return this.agents.map((a) => ({ ...a }));
@@ -422,8 +433,12 @@ export class MockApi implements HarnessApi {
 
   async selectAgent(id: string): Promise<Agent[]> {
     await this.tick(160);
-    if (!this.agents.some((a) => a.id === id)) {
+    const agent = this.agents.find((a) => a.id === id);
+    if (!agent) {
       throw new Error("No agent with that id: it may have been deleted");
+    }
+    if (!agent.enabled) {
+      throw new Error(`Agent "${agent.name}" is disabled: enable it to select it`);
     }
     this.config.agent = id;
     this.repoint(this.active()?.model ?? "");

@@ -15,6 +15,7 @@ import (
 // value it has, and an empty key is no key.
 type agentBody struct {
 	Name              *string        `json:"name"`
+	Enabled           *bool          `json:"enabled"`
 	URL               *string        `json:"url"`
 	Key               *string        `json:"key"`
 	Protocol          *string        `json:"protocol"`
@@ -81,6 +82,9 @@ func (b agentBody) apply(a *config.Agent) {
 	if b.Name != nil {
 		a.Name = *b.Name
 	}
+	if b.Enabled != nil {
+		a.Enabled = *b.Enabled
+	}
 	if b.URL != nil {
 		a.URL = strings.TrimRight(strings.TrimSpace(*b.URL), "/")
 	}
@@ -146,12 +150,13 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	a := config.DefaultAgent()
 	body.apply(&a)
+	was := s.cfg.Config().AgentID
 	cfg, stored, err := s.cfg.AddAgent(a)
 	if err != nil {
 		writeAgentError(w, err)
 		return
 	}
-	s.afterAgentWrite(stored)
+	s.afterAgentWrite(stored, was)
 	s.writeAgents(w, http.StatusCreated, cfg, &stored)
 }
 
@@ -165,7 +170,8 @@ func (s *Server) updateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	before, _ := s.cfg.Config().AgentByID(id)
+	was := s.cfg.Config()
+	before, _ := was.AgentByID(id)
 	cfg, stored, err := s.cfg.UpdateAgent(id, body.apply)
 	if err != nil {
 		writeAgentError(w, err)
@@ -177,7 +183,7 @@ func (s *Server) updateAgent(w http.ResponseWriter, r *http.Request) {
 		s.forget(before)
 		s.engine.Forget(id)
 	}
-	s.afterAgentWrite(stored)
+	s.afterAgentWrite(stored, was.AgentID)
 	s.writeAgents(w, http.StatusOK, cfg, &stored)
 }
 
@@ -265,10 +271,13 @@ func (s *Server) probeAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // afterAgentWrite keeps the client pool to the addresses in use and reads the
-// active agent again, since a write may have been what made it usable.
-func (s *Server) afterAgentWrite(a config.Agent) {
+// active agent again, since a write may have been what made it usable. The
+// selection it is given is the one from before the write: disabling an agent
+// moves the selection, and the live sessions follow it.
+func (s *Server) afterAgentWrite(a config.Agent, was string) {
 	s.pool.Retain(s.cfg.AgentKeys())
-	if cfg := s.cfg.Config(); cfg.AgentID == a.ID {
+	cfg := s.cfg.Config()
+	if cfg.AgentID == a.ID || cfg.AgentID != was {
 		s.engine.SetAgent()
 		go s.Detect(context.Background())
 	}

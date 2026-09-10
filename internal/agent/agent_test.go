@@ -120,7 +120,7 @@ func newHarness(t *testing.T, fixtures ...string) *harness {
 func (h *harness) addAgent(t *testing.T, name, url, model string) config.Agent {
 	t.Helper()
 	_, a, err := h.cfg.AddAgent(config.Agent{
-		Name: name, URL: url, Model: model,
+		Name: name, Enabled: true, URL: url, Model: model,
 		Effort: config.EffortMedium, PreserveReasoning: true,
 	})
 	if err != nil {

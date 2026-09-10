@@ -249,6 +249,23 @@
   </div>
 {:else}
   <div class="field-card">
+    <label class="flex cursor-pointer items-center justify-between gap-6">
+      <span class="flex min-w-0 flex-col gap-0.5">
+        <span class="text-[13px]">Enabled</span>
+        <span class="text-[12px] text-muted">
+          A disabled agent keeps its settings but does not answer or take work.
+        </span>
+      </span>
+      <input
+        class="switch"
+        type="checkbox"
+        checked={agent.enabled}
+        onchange={(e) => onchange({ enabled: e.currentTarget.checked })}
+      />
+    </label>
+  </div>
+
+  <div class="field-card">
     <h4 class="field-head">Connection</h4>
     <label class="flex flex-col gap-1.5">
       <span class="label">Name</span>

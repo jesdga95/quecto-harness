@@ -175,7 +175,7 @@ func newFixture(t *testing.T) *fixture {
 	// One agent answers for the whole harness, so a session takes its model
 	// from here rather than being created against one.
 	_, ag, err := cfg.AddAgent(config.Agent{
-		Name: "Local", URL: f.upstream.URL, Model: "Alpha-12B",
+		Name: "Local", Enabled: true, URL: f.upstream.URL, Model: "Alpha-12B",
 		Effort: config.EffortMedium, PreserveReasoning: true,
 	})
 	if err != nil {

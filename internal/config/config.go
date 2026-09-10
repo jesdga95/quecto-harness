@@ -35,6 +35,7 @@ type File struct {
 type FileAgent struct {
 	ID                *string  `json:"id,omitempty"`
 	Name              *string  `json:"name,omitempty"`
+	Enabled           *bool    `json:"enabled,omitempty"`
 	URL               *string  `json:"url,omitempty"`
 	Key               *string  `json:"key,omitempty"`
 	Protocol          *string  `json:"protocol,omitempty"`
@@ -77,8 +78,12 @@ type Config struct {
 type Agent struct {
 	ID   string
 	Name string
-	URL  string
-	Key  string
+	// Enabled is whether the agent may answer. A disabled one keeps its
+	// address, key and settings, cannot be selected, and is not named to the
+	// agents that hand out work.
+	Enabled bool
+	URL     string
+	Key     string
 	// Protocol is what the address speaks. It is named rather than found:
 	// two of the three answer the same model list at the same address.
 	Protocol          Protocol
@@ -128,6 +133,17 @@ func (c Config) AgentByID(id string) (Agent, bool) {
 	return Agent{}, false
 }
 
+// firstEnabled is the id of the first agent that can answer. Empty means none
+// can, which is the state a first run is in.
+func firstEnabled(agents []Agent) string {
+	for _, a := range agents {
+		if a.Enabled {
+			return a.ID
+		}
+	}
+	return ""
+}
+
 // Window is the size a session's context is measured against, given what the
 // model server reported for it. The agent's override wins, and a window no
 // one named is zero, which is unknown: nothing compacts against it and the
@@ -146,6 +162,7 @@ func (a Agent) Window(reported int, source string) (int, string) {
 // with is folded in.
 func DefaultAgent() Agent {
 	return Agent{
+		Enabled:           true,
 		Protocol:          ProtocolLlama,
 		Effort:            EffortMedium,
 		PreserveReasoning: true,
@@ -300,8 +317,14 @@ func (f File) Resolve(d Config) (Config, []string) {
 		c.AgentID = *f.Agent
 	}
 	if _, ok := c.Agent(); !ok && c.AgentID != "" {
-		note("agent " + strconv.Quote(c.AgentID) + " is not in the agent list, no agent is selected")
+		note("agent " + strconv.Quote(c.AgentID) + " is not in the agent list")
 		c.AgentID = ""
+	}
+	// The selection is an agent that can answer, and a disabled one cannot, so
+	// it falls to the first that can. Nothing enabled leaves nothing selected,
+	// which is the state a first run is in.
+	if a, ok := c.Agent(); !ok || !a.Enabled {
+		c.AgentID = firstEnabled(c.Agents)
 	}
 	if f.Permissions != nil {
 		if ValidMode(*f.Permissions) {
@@ -382,12 +405,14 @@ func (c Config) File() File {
 	agents := make([]FileAgent, 0, len(c.Agents))
 	for _, a := range c.Agents {
 		id, name, url, key := a.ID, a.Name, a.URL, a.Key
+		enabled := a.Enabled
 		protocol, model, effort := string(a.Protocol), a.Model, string(a.Effort)
 		preserve, instructions := a.PreserveReasoning, a.Instructions
 		concurrency, description := a.Concurrency, a.Description
 		agents = append(agents, FileAgent{
 			ID:                &id,
 			Name:              &name,
+			Enabled:           &enabled,
 			URL:               &url,
 			Key:               &key,
 			Protocol:          &protocol,
@@ -449,6 +474,9 @@ func resolveAgents(in []FileAgent, note func(string)) []Agent {
 		if a.Name == "" {
 			a.Name = "Agent"
 			note("agent " + a.ID + " has no name, using " + strconv.Quote(a.Name))
+		}
+		if f.Enabled != nil {
+			a.Enabled = *f.Enabled
 		}
 		// A blank address is an agent still being filled in, not a bad value.
 		if f.URL != nil && strings.TrimSpace(*f.URL) != "" {

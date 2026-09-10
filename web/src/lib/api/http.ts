@@ -72,6 +72,7 @@ interface WireConfig {
 interface WireAgent {
   id?: string;
   name?: string;
+  enabled?: boolean;
   url?: string;
   key?: string;
   protocol?: string;
@@ -344,6 +345,7 @@ function toAgent(a: WireAgent): Agent {
   return {
     id: a.id ?? "",
     name: a.name || "Agent",
+    enabled: a.enabled ?? true,
     url: a.url ?? "",
     key: a.key ?? "",
     protocol: toProtocol(a.protocol),

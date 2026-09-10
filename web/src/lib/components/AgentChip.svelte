@@ -9,6 +9,8 @@
 
   let open = $state(false);
   const current = $derived(activeAgent());
+  // Only an enabled agent can be picked, so the menu holds those.
+  const choices = $derived(app.agents.filter((a) => a.enabled));
   const problem = $derived(
     agentReady()
       ? ""
@@ -47,8 +49,8 @@
       <Robot class={problem ? "text-crit" : app.status === "loading" ? "text-warn" : ""} />
       <span class="max-w-[190px] truncate">{current.name}</span>
     {:else}
-      <Robot />
-      <span>Add an agent</span>
+      <Robot class={app.agents.length > 0 ? "text-crit" : ""} />
+      <span>{app.agents.length > 0 ? "No agent is enabled" : "Add an agent"}</span>
     {/if}
     <CaretDown />
   </button>
@@ -58,7 +60,7 @@
       {#if problem}
         <p class="px-[9px] py-1.5 text-[12px] text-crit">{problem}</p>
       {/if}
-      {#each app.agents as agent (agent.id)}
+      {#each choices as agent (agent.id)}
         <button class="popover-item" onclick={() => pick(agent.id)}>
           <span class="min-w-0 flex-1">
             <span class="block truncate text-left">{agent.name}</span>

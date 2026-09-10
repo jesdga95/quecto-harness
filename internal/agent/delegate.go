@@ -38,6 +38,9 @@ func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	}
 	b := brief{offer: tools.Offer{Ask: true, Message: true}}
 	for _, a := range cfg.Agents {
+		if !a.Enabled {
+			continue
+		}
 		// This turn is already one of its own agent's tasks, so a launch onto
 		// that agent has one fewer place to go. An agent with none left is not
 		// listed: naming one that every launch would refuse only buys a wasted
@@ -324,16 +327,19 @@ func (e *Engine) rollUp(child, parent *Session) {
 	e.publish(parent.ID, ev("changed", nil))
 }
 
-// findAgent matches an agent by name, which is what the model was given.
+// findAgent matches an agent by name, which is what the model was given. An
+// disabled agent is not there to match, since it is not in the list
+// the prompt named either.
 func findAgent(cfg config.Config, name string) (config.Agent, error) {
 	want := strings.TrimSpace(name)
+	var names []string
 	for _, a := range cfg.Agents {
+		if !a.Enabled {
+			continue
+		}
 		if strings.EqualFold(a.Name, want) {
 			return a, nil
 		}
-	}
-	var names []string
-	for _, a := range cfg.Agents {
 		names = append(names, a.Name)
 	}
 	if len(names) == 0 {

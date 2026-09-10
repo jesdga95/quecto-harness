@@ -41,6 +41,8 @@ var (
 	ErrNotLast    = errors.New("That is not the last message: only the last one can be sent again")
 	ErrNoProject  = errors.New("That folder is not in the project list: add it first")
 	ErrNoAgent    = errors.New("No agent is selected: create one in the agents dialog")
+	ErrAgentsOff  = errors.New("Every agent is disabled: enable one in the agents dialog")
+	ErrAgentOff   = errors.New("The agent is disabled: enable it in the agents dialog")
 	ErrNoAddress  = errors.New("The agent has no address: add it in the agents dialog")
 	ErrNoModel    = errors.New("The agent has no model: choose one in the agents dialog")
 	ErrCompacting = errors.New("The conversation is being compacted: that finishes on its own")
@@ -76,6 +78,8 @@ func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files
 // it was typed rather than part way into a turn.
 func usable(a config.Agent) error {
 	switch {
+	case !a.Enabled:
+		return ErrAgentOff
 	case a.URL == "":
 		return ErrNoAddress
 	case a.Model == "":
@@ -86,11 +90,21 @@ func usable(a config.Agent) error {
 
 // active is the agent every session answers with, checked before it is used.
 func (e *Engine) active() (config.Agent, error) {
-	a, ok := e.cfg.Config().Agent()
+	cfg := e.cfg.Config()
+	a, ok := cfg.Agent()
 	if !ok {
-		return config.Agent{}, ErrNoAgent
+		return config.Agent{}, noAgent(cfg)
 	}
 	return a, usable(a)
+}
+
+// noAgent separates a harness with no agents from one whose agents are all
+// disabled, since what the reader does about the two is not the same.
+func noAgent(cfg config.Config) error {
+	if len(cfg.Agents) > 0 {
+		return ErrAgentsOff
+	}
+	return ErrNoAgent
 }
 
 // messages builds the prompt for a session. The image bytes are read between

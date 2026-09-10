@@ -708,3 +708,33 @@ func TestRollUpSkipsAMissingBlob(t *testing.T) {
 	}
 	_ = os.WriteFile(filepath.Join(h.project, "here.txt"), []byte("new\n"), 0o644)
 }
+
+// A disabled agent is not in the list the prompt names, and a name the model
+// remembers from before it was disabled no longer matches.
+func TestADisabledAgentTakesNoWork(t *testing.T) {
+	h, reviewer := launcher(t)
+	if _, _, err := h.cfg.UpdateAgent(reviewer.ID, func(a *config.Agent) { a.Enabled = false }); err != nil {
+		t.Fatal(err)
+	}
+	cfg := h.cfg.Config()
+
+	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B")
+	b := h.engine.briefFor(top, cfg)
+	if len(b.agents) != 0 || b.offer.Agents {
+		t.Errorf("the agents it may hand work to = %+v, want none", b.agents)
+	}
+	if _, err := findAgent(cfg, "Reviewer"); err == nil {
+		t.Error("a disabled agent was found by name")
+	}
+
+	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "have the reviewer look at internal/llm", nil)
+	waitIdle(t, s)
+	if out := toolOutput(t, s, "run_agent"); !strings.Contains(out, "no agent") {
+		t.Errorf("run_agent answered %q, want a refusal", out)
+	}
+	if len(h.engine.liveChildren(s.ID)) != 0 {
+		t.Error("a disabled agent was started anyway")
+	}
+}

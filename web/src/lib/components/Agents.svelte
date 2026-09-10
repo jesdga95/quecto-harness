@@ -126,7 +126,7 @@
 
   async function remove() {
     if (!stored) return;
-    const next = app.agents.find((a) => a.id !== stored.id);
+    const next = app.agents.find((a) => a.id !== stored.id && a.enabled);
     const body =
       stored.id === active && next
         ? `It is the agent answering now, and ${next.name} takes over. Its address, key and settings are removed.`
@@ -164,7 +164,12 @@
             onclick={() => select(agent.id)}
           >
             <Robot size={15} class="shrink-0" />
-            <span class="min-w-0 flex-1 truncate">{agent.name}</span>
+            <span class="min-w-0 flex-1 truncate" class:opacity-55={!agent.enabled}>
+              {agent.name}
+            </span>
+            {#if !agent.enabled}
+              <span class="shrink-0 text-[11px] text-muted">Disabled</span>
+            {/if}
           </button>
         {/each}
       </nav>
@@ -189,7 +194,8 @@
               {draft.name || "Unnamed agent"}
             </h3>
             <span class="truncate text-[12px] text-muted">
-              {draft.model || "No model chosen"}{draft.url ? ` · ${draft.url}` : ""}
+              {draft.enabled ? "" : "Disabled · "}{draft.model ||
+                "No model chosen"}{draft.url ? ` · ${draft.url}` : ""}
             </span>
           </div>
         </header>

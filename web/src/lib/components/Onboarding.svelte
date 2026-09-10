@@ -9,6 +9,7 @@
   let draft = $state<Agent>({
     id: "",
     name: "",
+    enabled: true,
     url: "",
     key: "",
     protocol: "llamacpp",

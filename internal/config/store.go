@@ -294,12 +294,7 @@ func (s *Store) AddAgent(a Agent) (Config, Agent, error) {
 		return s.Config(), Agent{}, err
 	}
 	a.ID = NewAgentID()
-	cfg, err := s.Update(func(c *Config) {
-		c.Agents = append(c.Agents, a)
-		if c.AgentID == "" {
-			c.AgentID = a.ID
-		}
-	})
+	cfg, err := s.Update(func(c *Config) { c.Agents = append(c.Agents, a) })
 	if err != nil {
 		return cfg, Agent{}, err
 	}
@@ -341,8 +336,8 @@ func (s *Store) UpdateAgent(id string, fn func(*Agent)) (Config, Agent, error) {
 }
 
 // RemoveAgent drops an agent. Removing the active one hands the turn to the
-// first agent left, and removing the last one leaves nothing selected, which
-// is the state a first run is in.
+// first agent left that is enabled, and removing the last one leaves nothing
+// selected, which is the state a first run is in.
 func (s *Store) RemoveAgent(id string) (Config, error) {
 	s.mu.RLock()
 	_, ok := s.cfg.AgentByID(id)
@@ -359,10 +354,7 @@ func (s *Store) RemoveAgent(id string) (Config, error) {
 		}
 		c.Agents = keep
 		if c.AgentID == id {
-			c.AgentID = ""
-			if len(keep) > 0 {
-				c.AgentID = keep[0].ID
-			}
+			c.AgentID = firstEnabled(keep)
 		}
 	})
 }
@@ -371,10 +363,13 @@ func (s *Store) RemoveAgent(id string) (Config, error) {
 // selected: what it is missing is reported when a message is sent.
 func (s *Store) SelectAgent(id string) (Config, error) {
 	s.mu.RLock()
-	_, ok := s.cfg.AgentByID(id)
+	a, ok := s.cfg.AgentByID(id)
 	s.mu.RUnlock()
 	if !ok {
 		return s.Config(), ErrNoSuchAgent
+	}
+	if !a.Enabled {
+		return s.Config(), fmt.Errorf("Agent %q is disabled: enable it to select it", a.Name)
 	}
 	return s.Update(func(c *Config) { c.AgentID = id })
 }

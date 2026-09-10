@@ -74,6 +74,7 @@ func toConfigJSON(c config.Config) configJSON {
 type agentJSON struct {
 	ID                string   `json:"id"`
 	Name              string   `json:"name"`
+	Enabled           bool     `json:"enabled"`
 	URL               string   `json:"url"`
 	Key               string   `json:"key"`
 	Protocol          string   `json:"protocol"`
@@ -94,7 +95,7 @@ type agentJSON struct {
 
 func toAgentJSON(a config.Agent) agentJSON {
 	return agentJSON{
-		ID: a.ID, Name: a.Name, URL: a.URL, Key: a.Key, Protocol: string(a.Protocol),
+		ID: a.ID, Name: a.Name, Enabled: a.Enabled, URL: a.URL, Key: a.Key, Protocol: string(a.Protocol),
 		Model: a.Model, Effort: string(a.Effort), PreserveReasoning: a.PreserveReasoning,
 		Temperature: a.Temperature, TopP: a.TopP, TopK: a.TopK,
 		RepeatPenalty: a.RepeatPenalty, MaxTokens: a.MaxTokens, MaxContext: a.MaxContext, Seed: a.Seed,
@@ -204,8 +205,10 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		info, infoErr = s.info(r.Context(), a)
 		models, modelsErr = s.models(r.Context(), a, false)
+	} else if len(cfg.Agents) > 0 {
+		infoErr = agent.ErrAgentsOff
 	} else {
-		infoErr = errors.New("No agent is selected: create one in the agents dialog")
+		infoErr = agent.ErrNoAgent
 	}
 
 	mode := info.Mode

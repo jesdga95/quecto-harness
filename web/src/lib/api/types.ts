@@ -65,6 +65,9 @@ export interface Child {
 export interface Agent {
   id: string;
   name: string;
+  /** Whether the agent may answer. A disabled one keeps its settings, cannot
+      be selected, and is not offered to the agents that hand out work. */
+  enabled: boolean;
   url: string;
   /** Empty is no key. */
   key: string;
