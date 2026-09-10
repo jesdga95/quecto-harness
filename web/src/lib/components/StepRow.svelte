@@ -11,6 +11,7 @@
   import Robot from "phosphor-svelte/lib/Robot";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
   import Terminal from "phosphor-svelte/lib/Terminal";
+  import WarningCircle from "phosphor-svelte/lib/WarningCircle";
   import FileBlock from "./FileBlock.svelte";
   import TerminalCard from "./TerminalCard.svelte";
   import TodoList from "./TodoList.svelte";
@@ -55,6 +56,7 @@
     if (item.kind === "reasoning") return "Think";
     if (item.kind === "permission") return "Permission";
     if (item.kind === "compaction") return "Compacted";
+    if (item.kind === "error") return "Error";
     if (item.kind !== "tool") return "Step";
     if (item.name === "read_file") return "Read";
     if (item.name === "find") return "Find";
@@ -71,6 +73,7 @@
     if (item.kind === "reasoning") return firstSentence(item.text);
     if (item.kind === "permission") return item.command;
     if (item.kind === "compaction") return `${k(item.before)} to ${k(item.after)}`;
+    if (item.kind === "error") return firstSentence(item.message);
     if (item.kind !== "tool") return "";
     if (item.name === "write_todos") {
       const done = todos.filter((t) => t.status === "done").length;
@@ -126,6 +129,8 @@
       <ShieldCheck />
     {:else if item.kind === "compaction"}
       <ArrowsIn />
+    {:else if item.kind === "error"}
+      <WarningCircle class="text-crit" />
     {:else if item.kind === "tool" && item.name === "read_file"}
       <FileText />
     {:else if item.kind === "tool" && item.name === "find"}
@@ -172,6 +177,8 @@
         <p class="step-text">{item.text}</p>
       {:else if item.kind === "compaction"}
         <p class="step-text">{item.summary}</p>
+      {:else if item.kind === "error"}
+        <p class="step-text">{item.message}</p>
       {:else if item.kind === "permission"}
         <pre class="mono-block">{item.command}</pre>
       {:else if item.kind === "tool" && item.name === "write_todos"}
