@@ -1246,12 +1246,14 @@ func TestStateWithNoAgents(t *testing.T) {
 
 func TestSSEReplayAndResync(t *testing.T) {
 	f := newFixture(t)
+	// Every event here is one the hub passes straight through, so the ring
+	// holds one frame per publish.
 	for i := 0; i < 3; i++ {
-		f.hub.Publish("s1", agent.Event{Type: "delta", Fields: map[string]any{"text": fmt.Sprint(i)}})
+		f.hub.Publish("s1", agent.Event{Type: "status_entry", Fields: map[string]any{"content": fmt.Sprint(i)}})
 	}
 
 	got := f.readStream(t, "/api/events?session=s1&from=1", 2)
-	if len(got) != 2 || got[0]["seq"] != 2.0 || got[1]["text"] != "2" {
+	if len(got) != 2 || got[0]["seq"] != 2.0 || got[1]["content"] != "2" {
 		t.Errorf("replay from ?from= = %v", got)
 	}
 
@@ -1265,7 +1267,7 @@ func TestSSEReplayAndResync(t *testing.T) {
 
 	// Roll the ring past the requested sequence.
 	for i := 0; i < ringSize+10; i++ {
-		f.hub.Publish("s1", agent.Event{Type: "delta", Fields: map[string]any{"text": "x"}})
+		f.hub.Publish("s1", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
 	}
 	got = f.readStream(t, "/api/events?session=s1&from=1", 1)
 	if len(got) != 1 || got[0]["type"] != "resync" {
@@ -1278,7 +1280,7 @@ func TestSlowSubscriberGetsResyncAndStaysAttached(t *testing.T) {
 	ch, cancel, _ := f.hub.Subscribe("s2", 0)
 	defer cancel()
 	for i := 0; i < subscriberQ+50; i++ {
-		f.hub.Publish("s2", agent.Event{Type: "delta", Fields: map[string]any{"text": "x"}})
+		f.hub.Publish("s2", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
 	}
 	select {
 	case fr, open := <-ch:
@@ -1295,6 +1297,71 @@ func TestSlowSubscriberGetsResyncAndStaysAttached(t *testing.T) {
 	case fr := <-ch:
 		t.Errorf("the queue still holds %q, it should have been cleared", fr.Type)
 	default:
+	}
+}
+
+func TestStreamedTextGoesOutAsOneFrame(t *testing.T) {
+	f := newFixture(t)
+	for _, word := range []string{"one ", "two ", "three"} {
+		f.hub.Publish("s4", agent.Event{Type: "delta", Fields: map[string]any{"text": word}})
+	}
+	got := f.readStream(t, "/api/events?session=s4&from=0", 1)
+	if len(got) != 1 || got[0]["text"] != "one two three" {
+		t.Errorf("joined text = %v", got)
+	}
+}
+
+func TestAnEventSendsTheTextWaitingBeforeIt(t *testing.T) {
+	f := newFixture(t)
+	f.hub.Publish("s5", agent.Event{Type: "delta", Fields: map[string]any{"text": "hi"}})
+	f.hub.Publish("s5", agent.Event{Type: "done", Fields: map[string]any{}})
+	got := f.readStream(t, "/api/events?session=s5&from=0", 2)
+	if len(got) != 2 || got[0]["text"] != "hi" || got[1]["type"] != "done" {
+		t.Errorf("order = %v, want the text then done", got)
+	}
+}
+
+func TestThinkingAndTheReplyAreSeparateFrames(t *testing.T) {
+	f := newFixture(t)
+	f.hub.Publish("s6", agent.Event{Type: "reasoning", Fields: map[string]any{"text": "why"}})
+	f.hub.Publish("s6", agent.Event{Type: "delta", Fields: map[string]any{"text": "because"}})
+	got := f.readStream(t, "/api/events?session=s6&from=0", 2)
+	if len(got) != 2 || got[0]["type"] != "reasoning" || got[0]["text"] != "why" {
+		t.Fatalf("first frame = %v, want the thinking on its own", got)
+	}
+	if got[1]["type"] != "delta" || got[1]["text"] != "because" {
+		t.Errorf("second frame = %v, want the reply on its own", got[1])
+	}
+}
+
+// A browser only remembers a frame's id if the field is named the way the
+// specification names it, and an id it does not remember is one it cannot
+// reconnect from.
+func TestAFrameNamesItsIDInLowercase(t *testing.T) {
+	f := newFixture(t)
+	f.hub.Publish("s7", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
+	req := httptest.NewRequest("GET", "/api/events?session=s7&from=0", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	lines := f.readStreamLines(t, req, 1)
+	if len(lines) == 0 || lines[0] != "id: 1" {
+		t.Errorf("the stream opened with %q, want \"id: 1\"", lines)
+	}
+}
+
+// A browser reconnecting on its own resends the URL it was opened with, so the
+// stream would rewind to where that URL was built and send the middle of the
+// turn twice.
+func TestAReconnectResumesFromTheHeaderNotTheStaleURL(t *testing.T) {
+	f := newFixture(t)
+	for i := 0; i < 4; i++ {
+		f.hub.Publish("s8", agent.Event{Type: "status_entry", Fields: map[string]any{"content": fmt.Sprint(i)}})
+	}
+	req := httptest.NewRequest("GET", "/api/events?session=s8&from=1", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Last-Event-ID", "3")
+	got := f.readStreamReq(t, req, 1)
+	if len(got) != 1 || got[0]["seq"] != 4.0 {
+		t.Errorf("replay = %v, want frame 4 alone", got)
 	}
 }
 
@@ -1533,9 +1600,9 @@ func (f *fixture) readStream(t *testing.T, path string, want int) []map[string]a
 	return f.readStreamReq(t, req, want)
 }
 
-// readStreamReq reads the replay an event source receives, then cancels the
-// request so the handler returns.
-func (f *fixture) readStreamReq(t *testing.T, req *http.Request, want int) []map[string]any {
+// readStreamLines reads the stream as it goes on the wire until it has seen
+// want data lines, then cancels the request so the handler returns.
+func (f *fixture) readStreamLines(t *testing.T, req *http.Request, want int) []string {
 	t.Helper()
 	ctx, cancel := context.WithCancel(req.Context())
 	defer cancel()
@@ -1548,10 +1615,26 @@ func (f *fixture) readStreamReq(t *testing.T, req *http.Request, want int) []map
 		close(done)
 	}()
 
-	var out []map[string]any
+	var lines []string
+	seen := 0
 	sc := bufio.NewScanner(pr)
-	for len(out) < want && sc.Scan() {
+	for seen < want && sc.Scan() {
 		line := sc.Text()
+		lines = append(lines, line)
+		if strings.HasPrefix(line, "data: ") {
+			seen++
+		}
+	}
+	cancel()
+	<-done
+	return lines
+}
+
+// readStreamReq reads the replay an event source receives.
+func (f *fixture) readStreamReq(t *testing.T, req *http.Request, want int) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, line := range f.readStreamLines(t, req, want) {
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
@@ -1561,8 +1644,6 @@ func (f *fixture) readStreamReq(t *testing.T, req *http.Request, want int) []map
 		}
 		out = append(out, v)
 	}
-	cancel()
-	<-done
 	return out
 }
 

@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
+	"time"
 
 	"quecto-harness/internal/agent"
 )
@@ -12,6 +14,20 @@ const (
 	subscriberQ  = 256
 	resyncEvType = "resync"
 )
+
+// The events a model streams a token at a time. They are the only ones joined
+// before they go out.
+const (
+	deltaEvType     = "delta"
+	reasoningEvType = "reasoning"
+)
+
+// coalesceWindow is how long a run of streamed text is held before it goes out
+// as one frame. A frame per token is thousands a turn, each costing the browser
+// a redraw of the whole message, so a page that falls behind never catches up.
+// It also keeps the replay ring worth having: a ring of joined text covers half
+// a minute of streaming, where one of tokens covers under a second.
+const coalesceWindow = 50 * time.Millisecond
 
 // frame is one event as it goes on the wire, with the sequence number the hub
 // assigned it.
@@ -34,6 +50,15 @@ type channel struct {
 	base   int64
 	subs   map[int64]*subscriber
 	nextID int64
+	run    *textRun
+}
+
+// textRun is streamed text waiting to go out, with the timer that sends it
+// when nothing follows.
+type textRun struct {
+	kind  string
+	text  strings.Builder
+	timer *time.Timer
 }
 
 type subscriber struct {
@@ -45,15 +70,71 @@ func NewHub() *Hub {
 	return &Hub{sessions: map[string]*channel{}}
 }
 
-// Publish assigns a sequence number, appends to the ring, and sends without
-// blocking. A subscriber that cannot keep up is told to resync rather than
-// disconnected.
+// Publish sends one event. Streamed text is joined into a run and goes out a
+// window later; anything else sends the run waiting before it, so what reaches
+// a browser is in the order it was published.
 func (h *Hub) Publish(sessionID string, ev agent.Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c := h.channelLocked(sessionID)
+	if ev.Type == deltaEvType || ev.Type == reasoningEvType {
+		h.holdLocked(sessionID, c, ev)
+		return
+	}
+	h.sendLocked(c)
+	h.emitLocked(c, ev.Type, ev.Fields)
+}
+
+// holdLocked adds text to the run a session is building, starting one when
+// there is none. Thinking and the reply are separate blocks on the page, so a
+// run holds one kind and a change of kind ends it.
+func (h *Hub) holdLocked(sessionID string, c *channel, ev agent.Event) {
+	if c.run != nil && c.run.kind != ev.Type {
+		h.sendLocked(c)
+	}
+	if c.run == nil {
+		run := &textRun{kind: ev.Type}
+		c.run = run
+		// Timed from the first token rather than the last, so text keeps
+		// arriving while the model is still generating.
+		run.timer = time.AfterFunc(coalesceWindow, func() { h.expire(sessionID, run) })
+	}
+	text, _ := ev.Fields["text"].(string)
+	c.run.text.WriteString(text)
+}
+
+// sendLocked puts the run a session has waiting on the wire.
+func (h *Hub) sendLocked(c *channel) {
+	run := c.run
+	if run == nil {
+		return
+	}
+	run.timer.Stop()
+	c.run = nil
+	if run.text.Len() > 0 {
+		h.emitLocked(c, run.kind, map[string]any{"text": run.text.String()})
+	}
+}
+
+// expire sends a run the window ran out on, which is what ends the last line
+// of a turn when no event follows it. A run already sent is left alone, since
+// the timer can fire while another goroutine holds the lock.
+func (h *Hub) expire(sessionID string, run *textRun) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c, ok := h.sessions[sessionID]
+	if !ok || c.run != run {
+		return
+	}
+	h.sendLocked(c)
+}
+
+// emitLocked assigns a sequence number, appends to the ring, and sends without
+// blocking. A subscriber that cannot keep up is told to resync rather than
+// disconnected.
+func (h *Hub) emitLocked(c *channel, kind string, fields map[string]any) {
 	c.seq++
-	f := frame{Seq: c.seq, Type: ev.Type, Data: encode(ev.Type, c.seq, ev.Fields)}
+	f := frame{Seq: c.seq, Type: kind, Data: encode(kind, c.seq, fields)}
 	c.append(f)
 	for _, s := range c.subs {
 		if s.dropped {
@@ -128,6 +209,12 @@ func (h *Hub) Drop(sessionID string) {
 	c, ok := h.sessions[sessionID]
 	if !ok {
 		return
+	}
+	// Text still waiting has nowhere to go, and its timer would rebuild the
+	// channel this is removing.
+	if c.run != nil {
+		c.run.timer.Stop()
+		c.run = nil
 	}
 	for _, s := range c.subs {
 		close(s.ch)

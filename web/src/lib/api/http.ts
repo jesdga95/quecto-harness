@@ -1133,19 +1133,54 @@ class HttpApi implements HarnessApi {
     let failures = 0;
     const calls = new Map<number, OpenCall>();
 
-    const deliver = (raw: string): void => {
+    // Frames that arrived while the tab was away come off the socket in one
+    // read, and the browser hands them all over in a single task. They are
+    // held here and applied together, so the page redraws once rather than
+    // once per frame.
+    let held: string[] = [];
+    let frame = 0;
+
+    const take = (name: string, raw: string): void => {
+      // A resync supersedes what came before it, since the transcript is
+      // about to be refetched whole.
+      if (name === "resync") held = [];
+      held.push(raw);
+      if (frame === 0) frame = requestAnimationFrame(drain);
+    };
+
+    const drain = (): void => {
+      frame = 0;
+      const batch = held;
+      held = [];
+      for (const raw of batch) {
+        if (!deliver(raw)) return;
+      }
+    };
+
+    /** False once a resync has been asked for, which leaves the rest of the
+        batch to the transcript that replaces it. */
+    const deliver = (raw: string): boolean => {
       let wire: WireEvent;
       try {
         wire = JSON.parse(raw) as WireEvent;
       } catch {
-        return;
+        return true;
       }
       if (typeof wire.seq === "number") seqs.set(session, wire.seq);
       if (wire.type === "resync") {
         void rebuild();
-        return;
+        return false;
       }
       for (const event of mapEvent(wire, calls)) onEvent(event);
+      return true;
+    };
+
+    const stopDrain = (): void => {
+      held = [];
+      if (frame !== 0) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      }
     };
 
     // The replay ring has already passed the point this stream reached, so the
@@ -1153,6 +1188,7 @@ class HttpApi implements HarnessApi {
     const rebuild = async (): Promise<void> => {
       source?.close();
       source = null;
+      stopDrain();
       try {
         const transcript = await this.getSession(session);
         calls.clear();
@@ -1175,9 +1211,9 @@ class HttpApi implements HarnessApi {
         failures = 0;
         onEvent({ type: "connection", connected: true });
       };
-      es.onmessage = (ev: MessageEvent<string>) => deliver(ev.data);
+      es.onmessage = (ev: MessageEvent<string>) => take("", ev.data);
       for (const name of EVENT_NAMES) {
-        es.addEventListener(name, (ev) => deliver((ev as MessageEvent<string>).data));
+        es.addEventListener(name, (ev) => take(name, (ev as MessageEvent<string>).data));
       }
 
       // A transport failure and a server event named error arrive on the same
@@ -1185,7 +1221,7 @@ class HttpApi implements HarnessApi {
       es.addEventListener("error", (ev) => {
         const data = (ev as MessageEvent<unknown>).data;
         if (typeof data === "string") {
-          deliver(data);
+          take("error", data);
           return;
         }
         failures += 1;
@@ -1205,6 +1241,7 @@ class HttpApi implements HarnessApi {
       closed = true;
       source?.close();
       source = null;
+      stopDrain();
     };
   }
 
