@@ -756,6 +756,17 @@
     height: 13px;
   }
 
+  /* The text an opened row shows. Its line breaks are the model's own, and a
+     run of characters with nowhere to break in it wraps rather than widening
+     the page. */
+  .step-text {
+    font-size: 13px;
+    line-height: 1.625;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text-2);
+  }
+
   .tab {
     padding: 14px 2px;
     font-size: 13px;
@@ -1028,6 +1039,7 @@
     margin: 0;
     font-size: 14px;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   .bubble:has(.tiles) .bubble-text {
     padding: 4px 6px 4px;

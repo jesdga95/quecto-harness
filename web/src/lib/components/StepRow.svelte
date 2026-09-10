@@ -169,9 +169,9 @@
   {#if open && expandable}
     <div class="mt-1 mb-2 ml-8 flex flex-col gap-2">
       {#if item.kind === "reasoning"}
-        <p class="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{item.text}</p>
+        <p class="step-text">{item.text}</p>
       {:else if item.kind === "compaction"}
-        <p class="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{item.summary}</p>
+        <p class="step-text">{item.summary}</p>
       {:else if item.kind === "permission"}
         <pre class="mono-block">{item.command}</pre>
       {:else if item.kind === "tool" && item.name === "write_todos"}
@@ -196,14 +196,14 @@
         />
       {:else if item.kind === "tool" && item.name === "run_agent"}
         {#if task}
-          <p class="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{task}</p>
+          <p class="step-text">{task}</p>
         {/if}
         {#if item.output}
-          <p class="text-[13px] text-ink-2">{item.output}</p>
+          <p class="step-text">{item.output}</p>
         {/if}
       {:else if item.kind === "tool" && item.name === "send_message"}
         {#if message}
-          <p class="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{message}</p>
+          <p class="step-text">{message}</p>
         {/if}
         {#if item.output}
           <span class="text-[11.5px] text-muted">{item.output}</span>
