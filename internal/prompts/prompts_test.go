@@ -167,6 +167,19 @@ func TestSystemDoesNotParseAgentNames(t *testing.T) {
 	}
 }
 
+// The renderer for figures and pages is in the UI that shows the person's
+// conversation, so only a session with no launcher is told about it.
+func TestSystemNamesDrawingsOnlyForTheMainAgent(t *testing.T) {
+	main := System(SystemVars{Project: "/src/x", OS: "darwin"})
+	if !strings.Contains(main, "```svg") || !strings.Contains(main, "```html") {
+		t.Errorf("prompt does not name the figure and page fences: %q", main)
+	}
+	child := System(SystemVars{Project: "/src/x", OS: "darwin", Launcher: "sess_aaaaaaaaaaaaaaaa"})
+	if strings.Contains(child, "```svg") || strings.Contains(child, "```html") {
+		t.Errorf("a subagent's prompt names the fences, but its output is not drawn: %q", child)
+	}
+}
+
 // A session that hands work to nobody and was launched by nobody reads the
 // prompt the harness sent before either was possible.
 func TestSystemWithoutAgentsIsUnchanged(t *testing.T) {
