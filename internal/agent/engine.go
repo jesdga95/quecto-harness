@@ -312,13 +312,13 @@ func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 // delivers a message goes through here, so a turn that starts between the
 // caller's check and this one queues the message rather than refusing it.
 func (e *Engine) deliver(s *Session, text string, attachments []store.Attachment) (Sent, error) {
-	return e.deliverFrom(s, "", text, attachments)
+	return e.deliverFrom(s, sender{}, text, attachments)
 }
 
 // deliverFrom is deliver with a sender. The entry keeps the message as it was
-// written; the sender's name is put in front of it where the prompt is built,
-// since that is the only place it means anything.
-func (e *Engine) deliverFrom(s *Session, from, text string, attachments []store.Attachment) (Sent, error) {
+// written; the sender is put in front of it where the prompt is built, since
+// that is the only place it means anything.
+func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments []store.Attachment) (Sent, error) {
 	s.mu.Lock()
 	if s.state != StateIdle {
 		if err := s.queue(from, text, attachments); err != nil {
@@ -334,7 +334,8 @@ func (e *Engine) deliverFrom(s *Session, from, text string, attachments []store.
 	ctx, cancel := context.WithCancel(e.ctx)
 	s.cancel = cancel
 	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text,
-		From: from, Attachments: attachments, InContext: true, Visible: true})
+		From: from.Name, FromSession: from.Session,
+		Attachments: attachments, InContext: true, Visible: true})
 	if s.Title == "" {
 		s.Title = store.Title(text)
 	}
@@ -344,7 +345,7 @@ func (e *Engine) deliverFrom(s *Session, from, text string, attachments []store.
 	// A message from another agent was typed into no composer, so nothing has
 	// drawn it and the turn it starts would answer a message the page cannot
 	// see. One from a person is already on the page it was typed into.
-	if from != "" {
+	if from.Name != "" {
 		e.publishMessage(s, entry)
 	}
 	e.announce(s, StatePreflight)
@@ -363,7 +364,8 @@ func (e *Engine) absorbSteer(s *Session) bool {
 	}
 	s.steer = nil
 	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: held.Text,
-		From: held.From, Attachments: held.Attachments, InContext: true, Visible: true})
+		From: held.From.Name, FromSession: held.From.Session,
+		Attachments: held.Attachments, InContext: true, Visible: true})
 	s.mu.Unlock()
 
 	e.save(s)
@@ -395,7 +397,7 @@ func (e *Engine) flushSteer(s *Session) {
 		return
 	}
 	if !sent.Queued {
-		e.publishMessage(s, store.Entry{Seq: sent.Seq, Content: held.Text, From: held.From,
+		e.publishMessage(s, store.Entry{Seq: sent.Seq, Content: held.Text, From: held.From.Name,
 			Attachments: held.Attachments})
 	}
 }
@@ -405,7 +407,7 @@ func steerFields(held *Steer) map[string]any {
 	if held == nil {
 		return map[string]any{"text": "", "attachments": []map[string]any{}}
 	}
-	return map[string]any{"text": held.Text, "from": held.From,
+	return map[string]any{"text": held.Text, "from": held.From.Name,
 		"attachments": AttachmentFields(held.Attachments)}
 }
 

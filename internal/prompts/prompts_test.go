@@ -113,14 +113,15 @@ func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
 		}
 	}
 
-	child := System(SystemVars{Project: "/src/x", OS: "darwin", CanMessage: true, Launcher: "Planner"})
+	child := System(SystemVars{Project: "/src/x", OS: "darwin", CanMessage: true,
+		Launcher: "sess_aaaaaaaaaaaaaaaa"})
 	for _, name := range []string{"ask_question", "run_agent"} {
 		if strings.Contains(child, name) {
 			t.Errorf("a subagent's prompt names %s, which it was not sent: %q", name, child)
 		}
 	}
-	if !strings.Contains(child, "send_message") || !strings.Contains(child, "Planner") {
-		t.Errorf("a subagent's prompt does not name its launcher or the tool that reaches it: %q", child)
+	if !strings.Contains(child, "send_message") || !strings.Contains(child, "sess_aaaaaaaaaaaaaaaa") {
+		t.Errorf("a subagent's prompt does not give its launcher's handle or the tool that reaches it: %q", child)
 	}
 }
 

@@ -45,6 +45,9 @@ type Entry struct {
 	Edited bool `json:"edited,omitempty"`
 	// From names the agent a message came from. Empty is the person.
 	From string `json:"from,omitempty"`
+	// FromSession is the session it was sent from, which is the handle a reply
+	// is addressed to. Empty is the person.
+	FromSession string `json:"from_session,omitempty"`
 
 	InContext bool           `json:"in_context"`
 	Visible   bool           `json:"visible"`

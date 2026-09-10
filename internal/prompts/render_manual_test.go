@@ -20,6 +20,6 @@ func TestShowSystemPrompt(t *testing.T) {
 	}))
 	t.Log("\n=== a subagent ===\n" + System(SystemVars{
 		Project: "/src/x", OS: "darwin", CanMessage: true,
-		Launcher: "Local llama.cpp", Instructions: "Answer in British English.",
+		Launcher: "sess_aaaaaaaaaaaaaaaa", Instructions: "Answer in British English.",
 	}))
 }

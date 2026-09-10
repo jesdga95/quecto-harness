@@ -558,7 +558,7 @@ func steerJSON(held *agent.Steer) map[string]any {
 	if held == nil {
 		return nil
 	}
-	return map[string]any{"text": held.Text, "from": held.From,
+	return map[string]any{"text": held.Text, "from": held.From.Name,
 		"attachments": agent.AttachmentFields(held.Attachments)}
 }
 

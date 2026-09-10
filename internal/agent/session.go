@@ -143,15 +143,6 @@ func newSession(id, project, agentID, model string) *Session {
 	}
 }
 
-// launcher is the agent that gave a subagent its task, which is the sender of
-// the message the session opens with. The caller holds the lock.
-func (s *Session) launcher() string {
-	if s.Parent == "" || len(s.Entries) == 0 {
-		return ""
-	}
-	return s.Entries[0].From
-}
-
 func fromDoc(d *store.Session) *Session {
 	return &Session{
 		ID: d.ID, Project: d.Project, AgentID: d.Agent, Parent: d.Parent, Model: d.Model,
@@ -200,6 +191,13 @@ func (s *Session) Snapshot() (*store.Session, State, int, llm.Caps) {
 	return s.doc(), s.state, s.computeFill(), s.caps
 }
 
+// sender is who a message is from: the name a person reads, and the session a
+// reply is addressed to. Both empty is a person.
+type sender struct {
+	Name    string
+	Session string
+}
+
 // Steer is a message typed while a turn was running. There is one per
 // session: a second joins the first, since the model reads them as one turn
 // either way.
@@ -209,7 +207,7 @@ type Steer struct {
 	// From is the agent that sent it, empty for the person. Two messages from
 	// different senders join with no sender, since the joined text names each
 	// of them already.
-	From string
+	From sender
 }
 
 // Steer is the message waiting for the running turn, or nil.
@@ -228,13 +226,13 @@ func (s *Session) Steer() *Steer {
 // attachments that would
 // take the joined message over the cap is refused whole, so the queue is
 // never left holding half of what was typed. The caller holds the lock.
-func (s *Session) queue(from, text string, attachments []store.Attachment) error {
+func (s *Session) queue(from sender, text string, attachments []store.Attachment) error {
 	next := &Steer{Text: text, Attachments: attachments, From: from}
 	if s.steer != nil {
 		next.Text = joinMessages(s.steer.Text, text)
 		next.Attachments = append(append([]store.Attachment(nil), s.steer.Attachments...), attachments...)
 		if s.steer.From != from {
-			next.From = ""
+			next.From = sender{}
 		}
 	}
 	if len(next.Attachments) > maxAttachments {
@@ -454,7 +452,7 @@ func userMessage(e store.Entry, images map[string]llm.Part) llm.Message {
 	// role, so the sender is named in the text or the model cannot tell them
 	// apart.
 	if e.From != "" {
-		b.WriteString(prompts.Message(e.From, e.Content))
+		b.WriteString(prompts.Message(e.From, e.FromSession, e.Content))
 	} else {
 		b.WriteString(e.Content)
 	}

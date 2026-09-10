@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"quecto-harness/internal/config"
+	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
 	"quecto-harness/internal/store"
 	"quecto-harness/internal/tools"
@@ -636,7 +637,7 @@ func TestBriefFollowsTheParent(t *testing.T) {
 	child.Parent = "sess_top"
 	child.Entries = []store.Entry{{Kind: "user", From: "Local", Content: "do it"}}
 	b = h.engine.briefFor(child, cfg)
-	if b.offer.Agents || b.offer.Ask || !b.offer.Message || b.launcher != "Local" {
+	if b.offer.Agents || b.offer.Ask || !b.offer.Message || b.launcher != "sess_top" {
 		t.Errorf("a subagent's brief = %+v", b)
 	}
 	if len(tools.Schemas(b.offer)) >= len(tools.Schemas(topBrief().offer)) {
@@ -737,4 +738,82 @@ func TestADisabledAgentTakesNoWork(t *testing.T) {
 	if len(h.engine.liveChildren(s.ID)) != 0 {
 		t.Error("a disabled agent was started anyway")
 	}
+}
+
+// An agent is addressed by session handle. A subagent's prompt gives it its
+// launcher's, and every message carries the handle of whoever sent it.
+func TestAgentsAreAddressedByHandle(t *testing.T) {
+	h, _ := launcher(t)
+	release := h.replay.hold("Beta-30B")
+	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "have the reviewer look at internal/llm", nil)
+	child := childOf(t, h, s)
+	waitIdle(t, s)
+	release()
+	waitForEntryFrom(t, s, "Reviewer")
+	waitIdle(t, s)
+
+	// The subagent was told where to send, and the task it arrived on says who
+	// it came from and where that is.
+	system, task := textsFor(h, "Beta-30B")
+	if !strings.Contains(system, s.ID) {
+		t.Errorf("the subagent's prompt never gave its launcher's handle: %q", system)
+	}
+	if !strings.Contains(task, "Message from Local ("+s.ID+")") {
+		t.Errorf("the task did not carry the sender's handle: %q", task)
+	}
+
+	// The launcher reads the same thing about the agent it started.
+	_, report := textsFor(h, "Alpha-12B")
+	if !strings.Contains(report, "Message from Reviewer ("+child.ID+")") {
+		t.Errorf("the report did not carry the sender's handle: %q", report)
+	}
+}
+
+// A name is not a handle, and the refusal says which handles are.
+func TestSendMessageToANameNamesTheHandles(t *testing.T) {
+	h, _ := launcher(t)
+	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "have the reviewer look at internal/llm", nil)
+	child := childOf(t, h, s)
+	waitIdle(t, s)
+
+	_, err := h.engine.sendMessage(s, llm.ToolCall{
+		Function: llm.FunctionCall{Arguments: `{"to":"Reviewer","text":"one more thing"}`},
+	})
+	if err == nil {
+		t.Fatal("a name was accepted as a handle")
+	}
+	if !strings.Contains(err.Error(), child.ID) {
+		t.Errorf("the refusal = %q, want the handle that would have worked", err)
+	}
+}
+
+// textsFor is the last system prompt and the last message text one model was
+// sent, for a test reading what the model was told.
+func textsFor(h *harness, model string) (system, message string) {
+	for i := 0; i < h.replay.Count(); i++ {
+		body := h.replay.Body(i)
+		if body["model"] != model {
+			continue
+		}
+		msgs, _ := body["messages"].([]any)
+		for _, raw := range msgs {
+			m, _ := raw.(map[string]any)
+			text, _ := m["content"].(string)
+			switch {
+			case m["role"] == "system":
+				system = text
+			case strings.HasPrefix(text, "Message from "):
+				message = text
+			}
+		}
+	}
+	return system, message
 }

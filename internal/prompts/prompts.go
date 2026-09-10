@@ -50,8 +50,8 @@ type SystemVars struct {
 	// model reaches for one it does not have.
 	CanAsk     bool
 	CanMessage bool
-	// Agents are the ones this session may hand work to. Launcher is the agent
-	// that gave this session its task, empty when a person did.
+	// Agents are the ones this session may hand work to. Launcher is the handle
+	// of the session that gave this one its task, empty when a person did.
 	Agents       []AgentBrief
 	Launcher     string
 	Instructions string
@@ -78,9 +78,10 @@ func Compaction(summary string) string {
 // Message is one agent's message to another, as the model is shown it. A
 // message from a person carries no such line, so this is what says which of
 // the two a turn is answering.
-func Message(from, text string) string {
+func Message(from, session, text string) string {
 	var b strings.Builder
-	if err := messageTmpl.Execute(&b, struct{ From, Text string }{from, text}); err != nil {
+	v := struct{ From, Session, Text string }{from, session, text}
+	if err := messageTmpl.Execute(&b, v); err != nil {
 		panic("prompts: render message.md: " + err.Error())
 	}
 	return strings.TrimRight(b.String(), " \t\r\n")

@@ -18,8 +18,8 @@ import (
 const taskTitle = 60
 
 // brief is what the prompt and the request need beyond the agent and the
-// project: which tools were sent, who can take work, and who gave this session
-// its task.
+// project: which tools were sent, who can take work, and the handle of the
+// session that gave this one its task.
 type brief struct {
 	offer    tools.Offer
 	agents   []prompts.AgentBrief
@@ -31,10 +31,10 @@ type brief struct {
 // what it has instead is the launcher waiting on it.
 func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	s.mu.Lock()
-	parent, launcher, mine := s.Parent, s.launcher(), s.AgentID
+	parent, mine := s.Parent, s.AgentID
 	s.mu.Unlock()
 	if parent != "" {
-		return brief{offer: tools.Offer{Message: true}, launcher: launcher}
+		return brief{offer: tools.Offer{Message: true}, launcher: parent}
 	}
 	b := brief{offer: tools.Offer{Ask: true, Message: true}}
 	for _, a := range cfg.Agents {
@@ -155,7 +155,7 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 	e.mu.Unlock()
 	e.save(child)
 
-	if _, err := e.deliverFrom(child, me.Name, task, nil); err != nil {
+	if _, err := e.deliverFrom(child, sender{Name: me.Name, Session: s.ID}, task, nil); err != nil {
 		return tools.Result{}, fmt.Errorf("run_agent: %s", err)
 	}
 	e.publish(s.ID, ev("child", map[string]any{
@@ -198,17 +198,17 @@ func (e *Engine) sendMessage(s *Session, call llm.ToolCall) (tools.Result, error
 
 	target, err := e.Get(to)
 	if err != nil {
-		return tools.Result{}, fmt.Errorf("send_message: %s is not an agent you launched or the one that launched you", args.To)
+		return tools.Result{}, e.unreachable(s, args.To)
 	}
 	target.mu.Lock()
 	reachable := target.ID == parent || target.Parent == s.ID
 	target.mu.Unlock()
 	if !reachable {
-		return tools.Result{}, fmt.Errorf("send_message: %s is not an agent you launched or the one that launched you", args.To)
+		return tools.Result{}, e.unreachable(s, args.To)
 	}
 
 	me, _ := e.cfg.Config().AgentByID(mine)
-	sent, err := e.deliverFrom(target, me.Name, text, nil)
+	sent, err := e.deliverFrom(target, sender{Name: me.Name, Session: s.ID}, text, nil)
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("send_message: %s", err)
 	}
@@ -221,6 +221,28 @@ func (e *Engine) sendMessage(s *Session, call llm.ToolCall) (tools.Result, error
 		return tools.Result{Output: "sent, and it joins the turn already running"}, nil
 	}
 	return tools.Result{Output: "sent"}, nil
+}
+
+// unreachable answers a send_message addressed to something this session
+// cannot reach, naming the handles that would have worked.
+func (e *Engine) unreachable(s *Session, to string) error {
+	s.mu.Lock()
+	parent := s.Parent
+	s.mu.Unlock()
+	var handles []string
+	if parent != "" {
+		handles = append(handles, parent)
+	}
+	for _, c := range e.liveSessions() {
+		if c.Parent == s.ID {
+			handles = append(handles, c.ID)
+		}
+	}
+	if len(handles) == 0 {
+		return fmt.Errorf("send_message: %q is not a handle you can reach: you have launched nobody", to)
+	}
+	return fmt.Errorf("send_message: %q is not a handle you can reach: send to %s",
+		to, strings.Join(handles, " or "))
 }
 
 // report rolls the files a subagent wrote onto its launcher and, when the
@@ -248,7 +270,7 @@ func (e *Engine) report(child *Session) {
 		limit = 16384
 	}
 	text, _ := tools.Truncate(e.answerOf(child), limit)
-	if _, err := e.deliverFrom(parent, from.Name, text, nil); err != nil {
+	if _, err := e.deliverFrom(parent, sender{Name: from.Name, Session: child.ID}, text, nil); err != nil {
 		e.publish(parent.ID, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
 	}
 }

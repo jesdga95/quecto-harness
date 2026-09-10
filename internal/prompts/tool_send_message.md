@@ -1,6 +1,6 @@
 Send one message to the agent at the other end of a run_agent; it joins that agent's current turn, or starts one if idle.
 
-to: the handle run_agent returned, or parent when another agent gave you this task.
+to: a session handle, or parent for the agent that launched you.
 text: the message.
 
 Use to answer a question, add what you left out, or cancel a task.
