@@ -501,9 +501,6 @@ func (e *Engine) startTurn(ctx context.Context, s *Session, cancel context.Cance
 	go func() {
 		defer e.wg.Done()
 		defer cancel()
-		s.mu.Lock()
-		s.spoke = false
-		s.mu.Unlock()
 		e.run(ctx, s)
 		if s.Parent != "" {
 			e.report(s)

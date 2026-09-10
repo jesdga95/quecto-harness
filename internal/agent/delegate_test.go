@@ -228,9 +228,9 @@ func TestChildMessageReachesItsLauncher(t *testing.T) {
 	waitIdle(t, s)
 }
 
-// A subagent that answered with send_message does not have the same answer
-// handed over again when its turn ends.
-func TestASubagentThatSpokeIsNotReportedTwice(t *testing.T) {
+// send_message is for a question or for progress, not for the result, so a
+// turn that used it still reports what it finished with.
+func TestASubagentThatSpokeStillReportsItsAnswer(t *testing.T) {
 	h, _ := launcher(t)
 	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_send_parent.txt", "stream_plain.txt")
@@ -251,11 +251,14 @@ func TestASubagentThatSpokeIsNotReportedTwice(t *testing.T) {
 		}
 	}
 	s.mu.Unlock()
-	if len(said) != 1 {
-		t.Errorf("the launcher was told %d times: %q", len(said), said)
+	if len(said) != 2 {
+		t.Fatalf("the launcher was told %d times, want the message and the answer: %q", len(said), said)
 	}
 	if !strings.Contains(said[0], "which package did you mean") {
-		t.Errorf("the launcher got %q, want what the subagent chose to send", said[0])
+		t.Errorf("the first = %q, want what the subagent chose to send", said[0])
+	}
+	if !strings.Contains(said[1], "has cmd, internal and web") {
+		t.Errorf("the second = %q, want the answer the turn ended on", said[1])
 	}
 }
 

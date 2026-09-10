@@ -2369,16 +2369,15 @@ entry holds the message as it was written and `Entry.From` holds the sender; the
 in front of the text where the prompt is built, since a message from a person and one from
 another agent arrive on the same role and the model has nothing else to tell them apart.
 
-Reporting is the subagent's own call. `send_message` is how it answers, and the harness adds
-nothing on top of one: the same words arriving twice are noise in the launcher's turn. A turn
-that ends without the subagent having said anything hands over its last reply instead,
-truncated through the output limit, so work a launcher asked for does not land nowhere. A run
-that was stopped or failed says so whether or not it spoke. A launcher that has already gone
-idle is woken into a turn by either, which costs tokens nobody typed for and is the direct
-consequence of the launch not blocking.
+A turn hands its last reply to the launcher when it ends, truncated through the output limit,
+so work a launcher asked for does not land nowhere. That reply is the result, and it is
+reported whether or not the turn also used `send_message`: a message carries a question,
+progress or steering mid-task and does not stand in for the answer. A run that was stopped or
+failed says so. A launcher that has already gone idle is woken into a turn by any of these,
+which costs tokens nobody typed for and is the direct consequence of the launch not blocking.
 
-The files a subagent wrote are rolled onto its launcher when it ends, blob and all, spoken or
-silent, since the change panel is not a message. The first-writer-wins rule in
+The files a subagent wrote are rolled onto its launcher when it ends, blob and all, since the
+change panel is not a message. The first-writer-wins rule in
 `recordBaseline` is the merge: a path the launcher wrote first keeps the launcher's older
 copy, which is the state the work started from. Without the roll-up the launcher's change
 panel is empty after work it asked for.

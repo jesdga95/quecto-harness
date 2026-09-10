@@ -212,15 +212,12 @@ func (e *Engine) sendMessage(s *Session, call llm.ToolCall) (tools.Result, error
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("send_message: %s", err)
 	}
-	if target.ID == parent {
-		s.mu.Lock()
-		s.spoke = true
-		s.mu.Unlock()
-	}
+	// A sender with nothing left to do has no way to wait for the answer, so
+	// the result says what ends the wait rather than leaving it to work it out.
 	if sent.Queued {
-		return tools.Result{Output: "sent, and it joins the turn already running"}, nil
+		return tools.Result{Output: "sent, and it joins the turn already running. a reply starts a new turn, so end this one unless you have work left"}, nil
 	}
-	return tools.Result{Output: "sent"}, nil
+	return tools.Result{Output: "sent. a reply starts a new turn, so end this one unless you have work left"}, nil
 }
 
 // unreachable answers a send_message addressed to something this session
@@ -245,24 +242,19 @@ func (e *Engine) unreachable(s *Session, to string) error {
 		to, strings.Join(handles, " or "))
 }
 
-// report rolls the files a subagent wrote onto its launcher and, when the
-// subagent said nothing itself, hands over what it finished with. A subagent
-// that used send_message has already answered, and the same words arriving
-// again are noise in the launcher's turn. A run that ended early is news
-// whether or not it spoke.
+// report rolls the files a subagent wrote onto its launcher and hands over
+// what the turn finished with, which is the subagent's result. send_message
+// carries a question or progress mid-task and does not stand in for that, so
+// a turn that used it reports its answer too.
 func (e *Engine) report(child *Session) {
 	child.mu.Lock()
 	parentID, agentID := child.Parent, child.AgentID
-	spoke, state := child.spoke, child.state
 	child.mu.Unlock()
 	parent, err := e.Get(parentID)
 	if err != nil {
 		return
 	}
 	e.rollUp(child, parent)
-	if spoke && state != StateStopped && state != StateFailed {
-		return
-	}
 
 	from, _ := e.cfg.Config().AgentByID(agentID)
 	limit := e.cfg.Config().OutputLimitBytes

@@ -82,9 +82,6 @@ type Session struct {
 	// prepared reports that the model has been read: its window and its chat
 	// template are known and a request can be shaped for it.
 	prepared bool
-	// spoke reports that this turn sent the launcher a message, which is what
-	// says the subagent has already answered. Cleared as each turn starts.
-	spoke bool
 
 	state   State
 	cancel  context.CancelFunc

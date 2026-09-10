@@ -28,9 +28,10 @@ Delegate work with run_agent to:
 They run in this project in parallel and send you a message when done.
 A launch is refused while that agent is at its limit, so wait for a task to finish or pick another.
 {{end}}{{if .Launcher}}
-Report to {{.Launcher}} with send_message when done, and ask it the same way when it holds something you need.
-It reads nothing you do not send.
-No person reads this conversation; do not wait for one.
+{{.Launcher}} launched you and reads only what you send and your last turn, which is your result.
+No person reads this conversation.
+Use send_message for a question or progress, not for the result.
+End your turn when nothing is left. A later message starts a new one, so do not say you are waiting.
 {{end}}{{if .Instructions}}
 {{.Instructions}}
 {{end}}
