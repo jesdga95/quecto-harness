@@ -242,11 +242,12 @@ const (
 	EffortLow    = llm.EffortLow
 	EffortMedium = llm.EffortMedium
 	EffortHigh   = llm.EffortHigh
+	EffortXHigh  = llm.EffortXHigh
 )
 
 // EffortNames lists what the effort field accepts, for the note a rejected
 // value produces.
-const EffortNames = "auto, off, low, medium or high"
+const EffortNames = "auto, off, low, medium, high or xhigh"
 
 // Mode is the permission policy. One field rather than a pair of booleans,
 // which would have a fourth state with no meaning.

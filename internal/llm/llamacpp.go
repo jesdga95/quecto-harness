@@ -230,8 +230,11 @@ func ctxFromArgs(args []string) int {
 }
 
 // budget is the fallback for a template that cannot take a named effort
-// level. High is -1, which llama.cpp reads as unbounded.
-var budget = map[Effort]int{EffortLow: 2048, EffortMedium: 8192, EffortHigh: -1}
+// level. High and xhigh are both -1, which llama.cpp reads as unbounded:
+// there is nothing above unbounded left to ask such a template for.
+var budget = map[Effort]int{
+	EffortLow: 2048, EffortMedium: 8192, EffortHigh: -1, EffortXHigh: -1,
+}
 
 // applyEffort writes the thinking fields. Omitting the field and setting it
 // to a level the template did not ask for are different requests. A template

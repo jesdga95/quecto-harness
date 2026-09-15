@@ -88,8 +88,9 @@ type FunctionSpec struct {
 }
 
 // Effort is the thinking level. Auto and off are the harness's own; low,
-// medium and high are the names chat templates agree on. It becomes request
-// fields in applyEffort and has no other meaning.
+// medium and high are the names chat templates agree on, and xhigh is the
+// level above them the responses endpoint takes. It becomes request fields in
+// applyEffort and has no other meaning.
 type Effort string
 
 const (
@@ -100,12 +101,16 @@ const (
 	EffortLow    Effort = "low"
 	EffortMedium Effort = "medium"
 	EffortHigh   Effort = "high"
+	// XHigh is above high, and only the responses endpoint defines it. A
+	// server that does not take the name refuses the request, which is the
+	// model server's answer to give.
+	EffortXHigh Effort = "xhigh"
 )
 
-// ValidEffort reports whether s is one of the five levels.
+// ValidEffort reports whether s is one of the six levels.
 func ValidEffort(s string) bool {
 	switch Effort(s) {
-	case EffortAuto, EffortOff, EffortLow, EffortMedium, EffortHigh:
+	case EffortAuto, EffortOff, EffortLow, EffortMedium, EffortHigh, EffortXHigh:
 		return true
 	}
 	return false

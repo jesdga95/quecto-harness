@@ -69,6 +69,8 @@ export function effortLabel(effort: string): string {
       return "Low";
     case "high":
       return "High";
+    case "xhigh":
+      return "Extra high";
     default:
       return "Medium";
   }
@@ -84,6 +86,8 @@ export function effortHint(effort: string): string {
     case "low":
       return "Short thinking";
     case "high":
+      return "Long thinking";
+    case "xhigh":
       return "As much as the model wants";
     default:
       return "A working amount";

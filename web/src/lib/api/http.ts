@@ -298,7 +298,7 @@ const STATUSES: ModelStatus[] = [
   "sleeping",
   "downloading",
 ];
-const EFFORTS: Effort[] = ["auto", "off", "low", "medium", "high"];
+const EFFORTS: Effort[] = ["auto", "off", "low", "medium", "high", "xhigh"];
 const PROTOCOLS: Protocol[] = ["llamacpp", "chat", "responses"];
 const PERM_MODES: PermMode[] = ["ask", "allowlist", "full"];
 

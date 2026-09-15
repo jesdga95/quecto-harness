@@ -309,6 +309,8 @@ func TestLlamaBodyEffort(t *testing.T) {
 		{EffortMedium, unknown, map[string]any{"reasoning_budget": 8192.0}, []string{"reasoning_effort"}},
 		{EffortHigh, known, map[string]any{"reasoning_effort": "high"}, []string{"reasoning_budget"}},
 		{EffortHigh, unknown, map[string]any{"reasoning_budget": -1.0}, []string{"reasoning_effort"}},
+		{EffortXHigh, known, map[string]any{"reasoning_effort": "xhigh"}, []string{"reasoning_budget"}},
+		{EffortXHigh, unknown, map[string]any{"reasoning_budget": -1.0}, []string{"reasoning_effort"}},
 	}
 	for _, tc := range cases {
 		name := fmt.Sprintf("%s/known=%v", tc.effort, tc.caps.Known && tc.caps.ReasoningEffort)

@@ -116,6 +116,7 @@ func TestOpenAIBodyCarriesNoLlamaFields(t *testing.T) {
 		{EffortAuto, nil},
 		{EffortOff, "none"},
 		{EffortHigh, "high"},
+		{EffortXHigh, "xhigh"},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.effort), func(t *testing.T) {

@@ -14,7 +14,7 @@
   } from "../state/app.svelte";
   import { effortHint, effortLabel, k, protocolHint, protocolLabel } from "../format";
 
-  const EFFORTS = (["auto", "off", "low", "medium", "high"] as Effort[]).map((value) => ({
+  const EFFORTS = (["auto", "off", "low", "medium", "high", "xhigh"] as Effort[]).map((value) => ({
     value,
     label: effortLabel(value),
     hint: effortHint(value),

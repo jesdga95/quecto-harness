@@ -201,6 +201,7 @@ func TestResponsesEffort(t *testing.T) {
 		{EffortOff, "none", false},
 		{EffortLow, "low", true},
 		{EffortHigh, "high", true},
+		{EffortXHigh, "xhigh", true},
 	} {
 		got := body(t, ChatRequest{Model: "m", Effort: tc.effort})
 		r, ok := got["reasoning"].(map[string]any)

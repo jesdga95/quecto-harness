@@ -7,7 +7,7 @@ export type ModelStatus =
   | "loaded"
   | "sleeping"
   | "downloading";
-export type Effort = "auto" | "off" | "low" | "medium" | "high";
+export type Effort = "auto" | "off" | "low" | "medium" | "high" | "xhigh";
 
 /** The wire protocol an address speaks. It is named rather than found: two of
     the three answer the same model list at the same address. */
