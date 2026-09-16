@@ -1,7 +1,6 @@
 <script lang="ts">
   import Plus from "phosphor-svelte/lib/Plus";
   import Robot from "phosphor-svelte/lib/Robot";
-  import X from "phosphor-svelte/lib/X";
   import type { Agent, AgentPatch } from "../api";
   import {
     addAgent,
@@ -11,14 +10,13 @@
     saveAgent,
   } from "../state/app.svelte";
   import { confirm } from "./../state/confirm.svelte";
-  import { isTop, pushOverlay } from "../overlay";
   import AgentPanel from "./AgentPanel.svelte";
+  import SplitDialog from "./SplitDialog.svelte";
 
   let { onclose }: { onclose: () => void } = $props();
 
   let chosen = $state("");
   let panel = $state<ReturnType<typeof AgentPanel> | null>(null);
-  let card = $state<HTMLDivElement | null>(null);
   // What is on screen. Edits land here and reach the harness on Save, so a
   // dialog left open changes nothing.
   let draft = $state<Agent | null>(null);
@@ -36,37 +34,6 @@
   $effect(() => {
     if (stored && (draft === null || draft.id !== stored.id)) draft = { ...stored };
   });
-
-  const escape = () => void leave();
-  $effect(() => pushOverlay(escape));
-
-  $effect(() => {
-    const before = document.activeElement as HTMLElement | null;
-    card?.focus();
-    return () => before?.focus();
-  });
-
-  const FOCUSABLE =
-    'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
-
-  // Tab wraps inside the dialog, unless something is open above it: a confirm
-  // draws over this one from outside its markup and has to stay reachable.
-  function trap(event: KeyboardEvent) {
-    if (event.key !== "Tab" || !card || !isTop(escape)) return;
-    const items = [...card.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-      (el) => el.offsetParent !== null,
-    );
-    const first = items[0];
-    const last = items[items.length - 1];
-    if (!first || !last) return;
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
 
   /** Answers whether it is alright to move off what is on screen. */
   async function letGo(): Promise<boolean> {
@@ -138,87 +105,64 @@
   }
 </script>
 
-<div
-  class="fixed inset-0 z-50 grid place-items-center bg-[rgb(15_23_42/0.42)] p-6"
-  role="presentation"
-  onclick={(e) => e.target === e.currentTarget && leave()}
->
-  <div
-    bind:this={card}
-    class="flex max-h-full w-[880px] max-w-full overflow-hidden rounded-2xl bg-surface shadow-[0_24px_60px_rgb(15_23_42/0.28)]"
-    style="height:620px"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Agents"
-    tabindex="-1"
-    onkeydown={trap}
-  >
-    <div class="rail w-[216px] shrink-0">
-      <p class="rail-head">Agents</p>
-
-      <nav class="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
-        {#each app.agents as agent (agent.id)}
-          <button
-            class="rail-row"
-            class:is-active={agent.id === stored?.id}
-            onclick={() => select(agent.id)}
-          >
-            <Robot size={15} class="shrink-0" />
-            <span class="min-w-0 flex-1 truncate" class:opacity-55={!agent.enabled}>
-              {agent.name}
-            </span>
-            {#if !agent.enabled}
-              <span class="shrink-0 text-[11px] text-muted">Disabled</span>
-            {/if}
-          </button>
-        {/each}
-      </nav>
-
-      <button class="rail-add" onclick={create}>
-        <Plus size={14} />
-        New agent
-      </button>
-    </div>
-
-    <div class="relative flex min-w-0 flex-1 flex-col">
-      <button class="icon-btn absolute top-3.5 right-4 z-10" aria-label="Close" onclick={leave}>
-        <X size={16} />
-      </button>
-
-      {#if draft && stored}
-        <header
-          class="shrink-0 border-b border-hair px-6 pt-4 pr-14 pb-3.5"
+<SplitDialog label="Agents" title="Agents" onclose={leave}>
+  {#snippet rail()}
+    <nav class="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
+      {#each app.agents as agent (agent.id)}
+        <button
+          class="rail-row"
+          class:is-active={agent.id === stored?.id}
+          onclick={() => select(agent.id)}
         >
-          <div class="flex min-w-0 flex-col gap-0.5">
-            <h3 class="truncate text-[17px] font-medium">
-              {draft.name || "Unnamed agent"}
-            </h3>
-            <span class="truncate text-[12px] text-muted">
-              {draft.enabled ? "" : "Disabled · "}{draft.model ||
-                "No model chosen"}{draft.url ? ` · ${draft.url}` : ""}
-            </span>
-          </div>
-        </header>
+          <Robot size={15} class="shrink-0" />
+          <span class="min-w-0 flex-1 truncate" class:opacity-55={!agent.enabled}>
+            {agent.name}
+          </span>
+          {#if !agent.enabled}
+            <span class="shrink-0 text-[11px] text-muted">Disabled</span>
+          {/if}
+        </button>
+      {/each}
+    </nav>
 
-        <div class="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-6 pt-4 pb-6">
-          {#key stored.id}
-            <AgentPanel bind:this={panel} agent={draft} onchange={edit} />
-          {/key}
-        </div>
+    <button class="rail-add" onclick={create}>
+      <Plus size={14} />
+      New agent
+    </button>
+  {/snippet}
 
-        <footer
-          class="flex shrink-0 items-center justify-end gap-2.5 border-t border-hair bg-panel px-6 py-3"
-        >
-          <button class="btn btn-danger !border-transparent" onclick={remove}>Delete</button>
-          <button class="btn btn-primary" disabled={!dirty || saving} onclick={save}>
-            {saving ? "Saving" : "Save"}
-          </button>
-        </footer>
-      {:else}
-        <div class="grid flex-1 place-items-center px-6 text-center text-[13px] text-muted">
-          No agents yet. Add one to give the harness something to answer with.
+  {#snippet detail()}
+    {#if draft && stored}
+      <header class="shrink-0 border-b border-hair px-6 pt-4 pr-14 pb-3.5">
+        <div class="flex min-w-0 flex-col gap-0.5">
+          <h3 class="truncate text-[17px] font-medium">
+            {draft.name || "Unnamed agent"}
+          </h3>
+          <span class="truncate text-[12px] text-muted">
+            {draft.enabled ? "" : "Disabled · "}{draft.model ||
+              "No model chosen"}{draft.url ? ` · ${draft.url}` : ""}
+          </span>
         </div>
-      {/if}
-    </div>
-  </div>
-</div>
+      </header>
+
+      <div class="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-6 pt-4 pb-6">
+        {#key stored.id}
+          <AgentPanel bind:this={panel} agent={draft} onchange={edit} />
+        {/key}
+      </div>
+
+      <footer
+        class="flex shrink-0 items-center justify-end gap-2.5 border-t border-hair bg-panel px-6 py-3"
+      >
+        <button class="btn btn-danger !border-transparent" onclick={remove}>Delete</button>
+        <button class="btn btn-primary" disabled={!dirty || saving} onclick={save}>
+          {saving ? "Saving" : "Save"}
+        </button>
+      </footer>
+    {:else}
+      <div class="grid flex-1 place-items-center px-6 text-center text-[13px] text-muted">
+        No agents yet. Add one to give the harness something to answer with.
+      </div>
+    {/if}
+  {/snippet}
+</SplitDialog>

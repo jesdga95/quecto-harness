@@ -34,9 +34,11 @@ func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	parent, mine := s.Parent, s.AgentID
 	s.mu.Unlock()
 	if parent != "" {
-		return brief{offer: tools.Offer{Message: true}, launcher: parent}
+		// A subagent hands work to nobody and asks nobody, but it still
+		// searches: research delegated down is what web_search is for.
+		return brief{offer: tools.Offer{Message: true, Search: cfg.Search.Enabled()}, launcher: parent}
 	}
-	b := brief{offer: tools.Offer{Ask: true, Message: true}}
+	b := brief{offer: tools.Offer{Ask: true, Message: true, Search: cfg.Search.Enabled()}}
 	for _, a := range cfg.Agents {
 		if !a.Enabled {
 			continue

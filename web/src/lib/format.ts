@@ -155,3 +155,23 @@ export function protocolHint(protocol: string): string {
       return "A llama.cpp server, which is also the only one that takes top k and repeat penalty.";
   }
 }
+
+/** The written name of a search provider. */
+export function searchProviderLabel(name: string): string {
+  switch (name) {
+    case "exa":
+      return "Exa";
+    default:
+      return name;
+  }
+}
+
+/** What a search provider is, for the picker that names one. */
+export function searchProviderHint(name: string): string {
+  switch (name) {
+    case "exa":
+      return "Searches the open web. Its address and key are set in the card below.";
+    default:
+      return "Searches the open web.";
+  }
+}

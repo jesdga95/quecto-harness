@@ -143,6 +143,7 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
         item.exitCode = event.exit_code;
         item.truncated = event.truncated;
         item.running = false;
+        if (event.meta) item.meta = event.meta;
       }
       break;
     }

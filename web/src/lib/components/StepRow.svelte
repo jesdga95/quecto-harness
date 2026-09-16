@@ -13,6 +13,7 @@
   import Terminal from "phosphor-svelte/lib/Terminal";
   import WarningCircle from "phosphor-svelte/lib/WarningCircle";
   import FileBlock from "./FileBlock.svelte";
+  import SearchResults from "./SearchResults.svelte";
   import TerminalCard from "./TerminalCard.svelte";
   import TodoList from "./TodoList.svelte";
   import type { Todo, TranscriptItem } from "../api";
@@ -44,12 +45,17 @@
     item.kind === "tool" && typeof item.args.path === "string" ? item.args.path : "",
   );
 
-  // What find was asked for, which is the text unless the call only named files.
+  // What find and web_search were asked for, which is the text unless the
+  // call only named files.
   const query = $derived.by(() => {
-    if (item.kind !== "tool" || item.name !== "find") return "";
-    const { text, name } = item.args;
-    if (typeof text === "string" && text !== "") return text;
-    return typeof name === "string" ? name : "";
+    if (item.kind !== "tool") return "";
+    if (item.name === "find") {
+      const { text, name } = item.args;
+      if (typeof text === "string" && text !== "") return text;
+      return typeof name === "string" ? name : "";
+    }
+    if (item.name === "web_search") return typeof item.args.query === "string" ? item.args.query : "";
+    return "";
   });
 
   const name = $derived.by(() => {
@@ -60,6 +66,7 @@
     if (item.kind !== "tool") return "Step";
     if (item.name === "read_file") return "Read";
     if (item.name === "find") return "Find";
+    if (item.name === "web_search") return "Search";
     if (item.name === "write_file") return "Write";
     if (item.name === "replace_in_file") return "Edit";
     if (item.name === "write_todos") return "Plan";
@@ -79,7 +86,7 @@
       const done = todos.filter((t) => t.status === "done").length;
       return `${done} of ${todos.length} done`;
     }
-    if (item.name === "find") return query;
+    if (item.name === "find" || item.name === "web_search") return query;
     if (item.name === "ask_question") return question.question;
     if (item.name === "run_agent") {
       const to = typeof item.args.agent === "string" ? item.args.agent : "";
@@ -134,6 +141,8 @@
     {:else if item.kind === "tool" && item.name === "read_file"}
       <FileText />
     {:else if item.kind === "tool" && item.name === "find"}
+      <MagnifyingGlass />
+    {:else if item.kind === "tool" && item.name === "web_search"}
       <MagnifyingGlass />
     {:else if item.kind === "tool" && (item.name === "write_file" || item.name === "replace_in_file")}
       <PencilSimple />
@@ -217,6 +226,8 @@
         {/if}
       {:else if item.kind === "tool" && item.name === "read_file" && item.output}
         <FileBlock {path} output={item.output} />
+      {:else if item.kind === "tool" && item.name === "web_search"}
+        <SearchResults item={item} />
       {:else if item.kind === "tool"}
         {#if item.output}
           <pre class="mono-block">{item.output}</pre>

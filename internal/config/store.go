@@ -71,7 +71,9 @@ func (s *Store) Config() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	c := s.cfg
+	c.Projects = append([]string(nil), s.cfg.Projects...)
 	c.Agents = cloneAgents(s.cfg.Agents)
+	c.Search.Accounts = cloneSearchAccounts(s.cfg.Search.Accounts)
 	return c
 }
 
@@ -89,6 +91,7 @@ func (s *Store) Update(fn func(*Config)) (Config, error) {
 	next := s.cfg
 	next.Projects = append([]string(nil), s.cfg.Projects...)
 	next.Agents = cloneAgents(s.cfg.Agents)
+	next.Search.Accounts = cloneSearchAccounts(s.cfg.Search.Accounts)
 	fn(&next)
 	resolved, notes := next.File().Resolve(Defaults())
 	s.cfg = resolved

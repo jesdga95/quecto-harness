@@ -9,13 +9,27 @@
   let prefix = $state(untrack(() => item.prefix));
   let reason = $state("");
   let asking = $state(false);
+
+  // What the card says the call is about. The mono block below shows the
+  // command, the query or the path, which is what the call is of.
+  function cardTitle(tool: string): string {
+    switch (tool) {
+      case "web_search":
+        return "wants to search the web";
+      case "write_file":
+      case "replace_in_file":
+        return "wants to change a file";
+      default:
+        return "wants to run a command";
+    }
+  }
 </script>
 
 <div class="card overflow-hidden">
   <div class="flex items-center gap-2 px-4 pt-3 text-[13px]">
     <ShieldCheck size={15} class="text-accent" />
     <span class="font-medium">
-      {item.agent ? `${item.agent} wants to run a command` : `${item.tool} wants to run a command`}
+      {item.agent ? `${item.agent} ${cardTitle(item.tool)}` : `${item.tool} ${cardTitle(item.tool)}`}
     </span>
     {#if item.agent}
       <span class="text-[12px] text-muted">Working for you</span>
@@ -28,13 +42,15 @@
     <button class="chip chip-brand" onclick={() => decide(item, { decision: "once" })}>
       Allow once
     </button>
-    <button
-      class="chip"
-      onclick={() => decide(item, { decision: "always", prefix: prefix.trim() })}
-    >
-      Allow always
-    </button>
-    <input class="input !w-[180px] !rounded-full" bind:value={prefix} aria-label="Allowed prefix" />
+    {#if item.tool === "run_shell"}
+      <button
+        class="chip"
+        onclick={() => decide(item, { decision: "always", prefix: prefix.trim() })}
+      >
+        Allow always
+      </button>
+      <input class="input !w-[180px] !rounded-full" bind:value={prefix} aria-label="Allowed prefix" />
+    {/if}
     <button
       class="chip chip-plain ml-auto text-muted"
       onclick={() =>
@@ -62,7 +78,9 @@
     </div>
   {/if}
 
-  <p class="px-4 pb-3 text-[11.5px] text-muted">
-    Always adds the prefix to the allowlist for this project
-  </p>
+  {#if item.tool === "run_shell"}
+    <p class="px-4 pb-3 text-[11.5px] text-muted">
+      Always adds the prefix to the allowlist for this project
+    </p>
+  {/if}
 </div>

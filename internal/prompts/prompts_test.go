@@ -9,6 +9,7 @@ func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 	for name, get := range map[string]func() string{
 		"tool_read_file.md":       ToolReadFile,
 		"tool_find.md":            ToolFind,
+		"tool_web_search.md":      ToolWebSearch,
 		"tool_write_file.md":      ToolWriteFile,
 		"tool_replace_in_file.md": ToolReplaceInFile,
 		"tool_run_shell.md":       ToolRunShell,
@@ -60,6 +61,10 @@ func TestToolDescriptionsNameTheirArguments(t *testing.T) {
 	if !strings.Contains(ToolFind(), "text") || !strings.Contains(ToolFind(), "name") || !strings.Contains(ToolFind(), "path") {
 		t.Errorf("find description omits its arguments: %q", ToolFind())
 	}
+	if !strings.Contains(ToolWebSearch(), "query") || !strings.Contains(ToolWebSearch(), "results") ||
+		!strings.Contains(ToolWebSearch(), "full") || !strings.Contains(ToolWebSearch(), "since") {
+		t.Errorf("web_search description omits its arguments: %q", ToolWebSearch())
+	}
 	if !strings.Contains(ToolReplaceInFile(), "old_string") || !strings.Contains(ToolReplaceInFile(), "new_string") {
 		t.Errorf("replace_in_file description omits its arguments: %q", ToolReplaceInFile())
 	}
@@ -105,9 +110,9 @@ func TestSystemDoesNotParseInstructions(t *testing.T) {
 // The prompt names the tools that were sent and no others, or the model
 // reaches for one it does not have.
 func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
-	full := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, CanMessage: true,
+	full := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, CanMessage: true, CanSearch: true,
 		Agents: []AgentBrief{{Name: "Reviewer"}}})
-	for _, name := range []string{"ask_question", "run_agent", "send_message"} {
+	for _, name := range []string{"ask_question", "run_agent", "send_message", "web_search"} {
 		if !strings.Contains(full, name) {
 			t.Errorf("prompt does not name %s: %q", name, full)
 		}
@@ -115,7 +120,7 @@ func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
 
 	child := System(SystemVars{Project: "/src/x", OS: "darwin", CanMessage: true,
 		Launcher: "sess_aaaaaaaaaaaaaaaa"})
-	for _, name := range []string{"ask_question", "run_agent"} {
+	for _, name := range []string{"ask_question", "run_agent", "web_search"} {
 		if strings.Contains(child, name) {
 			t.Errorf("a subagent's prompt names %s, which it was not sent: %q", name, child)
 		}

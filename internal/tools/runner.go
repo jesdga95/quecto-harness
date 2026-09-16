@@ -1,7 +1,7 @@
-// Package tools executes read_file, find, write_file, replace_in_file and
-// run_shell against one project root. It knows nothing about who approved a
-// call; its only policy is the path guard, which is a correctness property of
-// the tool.
+// Package tools executes read_file, find, web_search, write_file,
+// replace_in_file and run_shell. It knows nothing about who approved a call;
+// the path guard is its only policy, and web_search has no path to guard,
+// since it leaves the project rather than reading it.
 package tools
 
 import (
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"quecto-harness/internal/config"
+	"quecto-harness/internal/search"
 )
 
 // Runner executes the file and shell tools against one project root. All paths are
@@ -24,6 +25,15 @@ type Runner struct {
 	OutputLimit int
 	ReadLimit   int
 	ReadLines   int
+
+	// Search is the provider web_search reaches, nil where none is configured.
+	// SearchHits, SearchChars and SearchTimeout are its limits, read from the
+	// same config the offer is computed from, so a tool that is sent and a
+	// tool that is built cannot disagree about them.
+	Search        search.Provider
+	SearchHits    int
+	SearchChars   int
+	SearchTimeout time.Duration
 
 	// Baseline receives each written file as it stood before the write, when
 	// something is keeping them. Nil runs the tools with nothing recorded.
@@ -69,14 +79,23 @@ func NewRunner(root string, cfg config.Config) (*Runner, error) {
 	if shell == "" {
 		shell = "/bin/sh"
 	}
+	searchTimeout := cfg.Search.Timeout
+	if searchTimeout <= 0 {
+		searchTimeout = config.DefaultSearchTimeout
+	}
+	// The ask never exceeds what the output limit can carry: the endpoint
+	// bills what it is asked for, and the result is cut to the limit after.
 	return &Runner{
-		Root:        real,
-		Shell:       shell,
-		Timeout:     timeout,
-		MaxTimeout:  max,
-		OutputLimit: limit,
-		ReadLimit:   64 << 10,
-		ReadLines:   400,
+		Root:          real,
+		Shell:         shell,
+		Timeout:       timeout,
+		MaxTimeout:    max,
+		OutputLimit:   limit,
+		ReadLimit:     64 << 10,
+		ReadLines:     400,
+		SearchHits:    cfg.Search.MaxHits,
+		SearchChars:   min(cfg.Search.MaxChars, limit),
+		SearchTimeout: searchTimeout,
 	}, nil
 }
 

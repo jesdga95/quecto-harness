@@ -13,6 +13,7 @@ import (
 	"quecto-harness/internal/config"
 	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
+	"quecto-harness/internal/search"
 	"quecto-harness/internal/store"
 	"quecto-harness/internal/tools"
 )
@@ -98,7 +99,7 @@ func newHarness(t *testing.T, fixtures ...string) *harness {
 	rec := &recorder{}
 	broker := perms.New(cfg, func(sid string, r perms.Request) { rec.Publish(sid, PermissionEvent(r)) })
 	ctx, cancel := context.WithCancel(context.Background())
-	engine := NewEngine(ctx, cfg, st, blobs, Clients{Pool: llm.NewPool()}, broker, rec)
+	engine := NewEngine(ctx, cfg, st, blobs, Clients{Pool: llm.NewPool()}, search.NewProviders(), broker, rec)
 	// The temporary home goes away when the test ends, so nothing the engine
 	// started may still be writing sessions into it.
 	t.Cleanup(func() {

@@ -17,6 +17,7 @@ type Offer struct {
 	Ask     bool
 	Agents  bool
 	Message bool
+	Search  bool
 }
 
 // Schemas returns the tool definitions in the order the model sees them,
@@ -35,6 +36,10 @@ func Schemas(o Offer) []llm.Tool {
 			}
 		case "send_message":
 			if !o.Message {
+				continue
+			}
+		case "web_search":
+			if !o.Search {
 				continue
 			}
 		}
@@ -70,6 +75,21 @@ func buildSchemas() []llm.Tool {
 					"path":  map[string]any{"type": "string", "description": "Folder or file to search, relative to the project root. Default the whole project."},
 					"regex": map[string]any{"type": "boolean", "description": "Treat text as a regular expression. Default false."},
 				},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llm.FunctionSpec{
+			Name:        "web_search",
+			Description: prompts.ToolWebSearch(),
+			Parameters: mustSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query":   map[string]any{"type": "string", "description": "What to search for, a sentence or a set of terms."},
+					"results": map[string]any{"type": "integer", "description": "How many results to return. Fewer carry more of each page.", "minimum": 1},
+					"full":    map[string]any{"type": "boolean", "description": "The page from the top instead of the parts that answer the query. Default false."},
+					"since":   map[string]any{"type": "string", "description": "Only pages published on or after this date, YYYY-MM-DD."},
+				},
+				"required":             []string{"query"},
 				"additionalProperties": false,
 			}),
 		}},

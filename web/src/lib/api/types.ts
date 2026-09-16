@@ -135,6 +135,45 @@ export interface Config {
   projects: string[];
 }
 
+/** The address and credential of one search provider. */
+export interface SearchAccount {
+  name: string;
+  url: string;
+  /** Empty is no key. */
+  key: string;
+}
+
+/** The search block as the settings dialog draws it. */
+export interface SearchConfig {
+  /** The provider a search goes to. Empty is off: web_search is not offered. */
+  provider: string;
+  /** How many results one search may ask for. */
+  max_hits: number;
+  /** What one search may carry in total, shared across its results rather
+      than allowed to each. */
+  max_chars: number;
+  /** How many seconds a search may take. */
+  timeout_s: number;
+  /** One account per provider, so naming another and coming back does not
+      cost the first one its key. */
+  providers: SearchAccount[];
+  /** Every provider name there is, so the dialog offers a list it did not
+      have to know. */
+  known: string[];
+  /** Whether a turn is offered web_search. */
+  ready: boolean;
+}
+
+/** What a write may carry. A field left out keeps the value it has. */
+export type SearchPatch = Partial<Omit<SearchConfig, "known" | "ready">>;
+
+/** The answer to a key test. A failure is reported here rather than thrown,
+    so a form can draw it. */
+export interface SearchProbe {
+  ok: boolean;
+  error?: string;
+}
+
 /** What the harness is talking to: a llama.cpp router, one llama.cpp server,
     an OpenAI-compatible endpoint, or nothing that answered yet. */
 export type ServerMode = "router" | "single" | "openai" | "responses" | "unknown";
@@ -150,6 +189,7 @@ export interface State {
   modelsError?: string;
   modelsKind?: string;
   config: Config;
+  search: SearchConfig;
   agents: Agent[];
   projects: Project[];
   /** What the active agent's address holds. */
@@ -186,6 +226,9 @@ export type HarnessEvent =
       output: string;
       exit_code: number | null;
       truncated: boolean;
+      /** What the tool reports that its result does not say, such as the
+          hits of a search. */
+      meta?: Record<string, unknown> | null;
     }
   | {
       type: "permission";
@@ -271,6 +314,9 @@ export type TranscriptItem =
       /** Set on a run_agent call: the subagent it started and where that
           subagent has got to. */
       child?: { session: string; agent: string; status: TurnStatus };
+      /** What the tool reports that its result does not say, such as the
+          hits of a search. */
+      meta?: Record<string, unknown> | null;
     }
   | {
       kind: "permission";
@@ -441,6 +487,11 @@ export interface HarnessApi {
   decide(permissionId: string, decision: PermissionDecision): Promise<void>;
   answer(questionId: string, answer: Answer): Promise<void>;
   updateConfig(patch: Partial<Config>): Promise<Config>;
+  /** Saves the search block and answers with the resolved one. */
+  updateSearch(patch: SearchPatch): Promise<SearchConfig>;
+  /** Runs one cheap billed request against an address and key that may not be
+      saved yet. A failure is reported in the answer, not thrown. */
+  probeSearch(at: { provider: string; url: string; key: string }): Promise<SearchProbe>;
   listAllowlist(project: string): Promise<string[]>;
   removeAllowed(project: string, prefix: string): Promise<string[]>;
   /** Subscribes to the session stream. The returned function closes it. */

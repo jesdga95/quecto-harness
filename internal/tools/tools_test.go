@@ -370,9 +370,9 @@ func TestLooksBinary(t *testing.T) {
 }
 
 func TestSchemasMatchTheDescriptions(t *testing.T) {
-	s := Schemas(Offer{Ask: true, Agents: true, Message: true})
-	names := []string{"read_file", "find", "write_file", "replace_in_file", "write_todos",
-		"ask_question", "run_agent", "send_message", "run_shell"}
+	s := Schemas(Offer{Ask: true, Agents: true, Message: true, Search: true})
+	names := []string{"read_file", "find", "web_search", "write_file", "replace_in_file",
+		"write_todos", "ask_question", "run_agent", "send_message", "run_shell"}
 	if len(s) != len(names) {
 		t.Fatalf("got %d schemas, want %d", len(s), len(names))
 	}
@@ -871,6 +871,7 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 		"ask_question": {Ask: true},
 		"run_agent":    {Agents: true},
 		"send_message": {Message: true},
+		"web_search":   {Search: true},
 	}
 
 	none := names(Offer{})
@@ -892,7 +893,7 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 		}
 	}
 
-	all := names(Offer{Ask: true, Agents: true, Message: true})
+	all := names(Offer{Ask: true, Agents: true, Message: true, Search: true})
 	if len(all) != len(base)+len(optional) {
 		t.Errorf("every offer sent %v", all)
 	}

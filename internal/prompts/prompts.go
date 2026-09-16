@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md tool_read_file.md tool_find.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md tool_ask_question.md tool_run_agent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md
+//go:embed system.md tool_read_file.md tool_find.md tool_web_search.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md tool_ask_question.md tool_run_agent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md
 var files embed.FS
 
 var (
@@ -45,11 +45,12 @@ type AgentBrief struct {
 type SystemVars struct {
 	Project string
 	OS      string
-	// CanAsk and CanMessage say whether ask_question and send_message are in
-	// this turn's request. The prompt names the tools that were sent, or the
-	// model reaches for one it does not have.
+	// CanAsk, CanMessage and CanSearch say whether ask_question, send_message
+	// and web_search are in this turn's request. The prompt names the tools
+	// that were sent, or the model reaches for one it does not have.
 	CanAsk     bool
 	CanMessage bool
+	CanSearch  bool
 	// Agents are the ones this session may hand work to. Launcher is the handle
 	// of the session that gave this one its task, empty when a person did.
 	Agents       []AgentBrief
@@ -108,6 +109,7 @@ func Image(path string) string {
 
 func ToolReadFile() string      { return mustRead("tool_read_file.md") }
 func ToolFind() string          { return mustRead("tool_find.md") }
+func ToolWebSearch() string     { return mustRead("tool_web_search.md") }
 func ToolWriteFile() string     { return mustRead("tool_write_file.md") }
 func ToolReplaceInFile() string { return mustRead("tool_replace_in_file.md") }
 func ToolRunShell() string      { return mustRead("tool_run_shell.md") }

@@ -19,6 +19,9 @@ import type {
   Project,
   Sent,
   Protocol,
+  SearchConfig,
+  SearchPatch,
+  SearchProbe,
   ServerMode,
   Session,
   State,
@@ -108,10 +111,27 @@ interface WireProbe {
   models_kind?: string;
 }
 
+interface WireSearchAccount {
+  name?: string;
+  url?: string;
+  key?: string;
+}
+
+interface WireSearch {
+  provider?: string;
+  max_hits?: number;
+  max_chars?: number;
+  timeout_s?: number;
+  providers?: WireSearchAccount[];
+  known?: string[];
+  ready?: boolean;
+}
+
 interface WireState {
   mode?: string;
   agents?: WireAgent[];
   config?: WireConfig;
+  search?: WireSearch;
   projects?: string[];
   models?: WireModel[];
   detect_error?: string;
@@ -232,6 +252,7 @@ interface WireEvent {
   call_id?: string;
   content?: string;
   attachments?: WireAttachment[];
+  meta?: Record<string, unknown> | null;
   prompt_tokens?: number;
   completion_tokens?: number;
   cached_tokens?: number;
@@ -569,6 +590,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
       card.truncated = e.truncated ?? false;
       card.running = false;
       card.child = toChildRef(e.meta);
+      card.meta = e.meta ?? null;
       return;
     }
     items.push({
@@ -581,6 +603,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
       truncated: e.truncated ?? false,
       running: false,
       child: toChildRef(e.meta),
+      meta: e.meta ?? null,
     });
     return;
   }
@@ -644,6 +667,22 @@ function toConfig(c: WireConfig): Config {
     command_timeout_s: c.command_timeout_s ?? 120,
     output_limit_bytes: c.output_limit_bytes ?? 16384,
     projects: projectPaths.slice(),
+  };
+}
+
+function toSearch(s: WireSearch): SearchConfig {
+  return {
+    provider: s.provider ?? "",
+    max_hits: s.max_hits ?? 10,
+    max_chars: s.max_chars ?? 4000,
+    timeout_s: s.timeout_s ?? 20,
+    providers: (s.providers ?? []).map((a) => ({
+      name: a.name ?? "",
+      url: a.url ?? "",
+      key: a.key ?? "",
+    })),
+    known: s.known ?? [],
+    ready: s.ready ?? false,
   };
 }
 
@@ -829,6 +868,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           output: ev.output ?? "",
           exit_code: ev.exit_code ?? null,
           truncated: ev.truncated ?? false,
+          meta: ev.meta ?? null,
         },
       ];
     }
@@ -961,6 +1001,7 @@ class HttpApi implements HarnessApi {
       modelsError: wire.models_error ?? "",
       modelsKind: wire.models_kind ?? "",
       config: toConfig(wire.config ?? {}),
+      search: toSearch(wire.search ?? {}),
       agents: (wire.agents ?? []).map(toAgent),
       projects: toProjects(projectPaths),
       models: (wire.models ?? []).map(toModel),
@@ -1073,6 +1114,16 @@ class HttpApi implements HarnessApi {
     const { projects: _drop, ...body } = patch;
     const wire = await call<WireConfig>("/config", "PUT", body);
     return toConfig(wire);
+  }
+
+  async updateSearch(patch: SearchPatch): Promise<SearchConfig> {
+    const wire = await call<{ search?: WireSearch }>("/search", "PUT", patch);
+    return toSearch(wire.search ?? {});
+  }
+
+  async probeSearch(at: { provider: string; url: string; key: string }): Promise<SearchProbe> {
+    const wire = await call<{ ok?: boolean; error?: string }>("/search/probe", "POST", at);
+    return { ok: wire.ok ?? false, error: wire.error ?? "" };
   }
 
   async listAgents(): Promise<Agent[]> {

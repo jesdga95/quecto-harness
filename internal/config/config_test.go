@@ -630,3 +630,142 @@ func TestAddProject(t *testing.T) {
 		t.Errorf("remove left %v (%v)", cfg.Projects, err)
 	}
 }
+
+func TestSearchDefaults(t *testing.T) {
+	d := Defaults()
+	if d.Search.Provider != "" || d.Search.MaxHits != DefaultSearchMaxHits ||
+		d.Search.MaxChars != DefaultSearchMaxChars || d.Search.Timeout != DefaultSearchTimeout {
+		t.Errorf("search defaults = %+v", d.Search)
+	}
+	if len(d.Search.Accounts) != 1 || d.Search.Accounts[0].Name != "exa" ||
+		d.Search.Accounts[0].URL != "https://api.exa.ai" || d.Search.Accounts[0].Key != "" {
+		t.Errorf("search accounts = %+v", d.Search.Accounts)
+	}
+	if d.Search.Enabled() {
+		t.Error("search is on before a provider is named")
+	}
+}
+
+func TestResolveSearchClamps(t *testing.T) {
+	d := Defaults()
+	cases := []struct {
+		name string
+		file *FileSearch
+		want func(Config) bool
+		says string
+	}{
+		{"provider", &FileSearch{Provider: ptr("nope")},
+			func(c Config) bool { return c.Search.Provider == "" }, "provider"},
+		{"max_hits", &FileSearch{MaxHits: ptr(26)},
+			func(c Config) bool { return c.Search.MaxHits == DefaultSearchMaxHits }, "max_hits"},
+		{"max_hits_low", &FileSearch{MaxHits: ptr(0)},
+			func(c Config) bool { return c.Search.MaxHits == DefaultSearchMaxHits }, "max_hits"},
+		{"max_chars", &FileSearch{MaxChars: ptr(100)},
+			func(c Config) bool { return c.Search.MaxChars == DefaultSearchMaxChars }, "max_chars"},
+		{"timeout", &FileSearch{TimeoutS: ptr(121)},
+			func(c Config) bool { return c.Search.Timeout == DefaultSearchTimeout }, "timeout_s"},
+		{"url", &FileSearch{Providers: []FileSearchAccount{{Name: ptr("exa"), URL: ptr("ftp://x")}}},
+			func(c Config) bool { return c.Search.Accounts[0].URL == "https://api.exa.ai" }, "address"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, notes := File{Search: tc.file}.Resolve(d)
+			if !tc.want(c) {
+				t.Errorf("value was not clamped: %+v", c.Search)
+			}
+			if len(notes) != 1 || !strings.Contains(notes[0], tc.says) {
+				t.Errorf("notes = %v, want one mentioning %q", notes, tc.says)
+			}
+		})
+	}
+}
+
+// A provider a build never wrote gets its account added on the next write,
+// which is how a second provider arrives without a migration.
+func TestResolveSearchBackfillsEveryProvider(t *testing.T) {
+	d := Defaults()
+	c, notes := File{Search: &FileSearch{
+		Providers: []FileSearchAccount{{Name: ptr("nope"), URL: ptr("https://example.org")}},
+	}}.Resolve(d)
+	if len(notes) != 1 || !strings.Contains(notes[0], "dropped") {
+		t.Errorf("notes = %v, want the unknown account dropped once", notes)
+	}
+	if len(c.Search.Accounts) != 1 || c.Search.Accounts[0].Name != "exa" ||
+		c.Search.Accounts[0].URL != "https://api.exa.ai" {
+		t.Errorf("accounts = %+v, want exa backfilled at its default", c.Search.Accounts)
+	}
+}
+
+// A named provider keeps its key through a round trip, and naming it is what
+// turns the tool on: no provider is off, a provider with no key is off, a key
+// is on.
+func TestSearchRoundTripKeepsTheKey(t *testing.T) {
+	d := Defaults()
+	c, notes := File{Search: &FileSearch{
+		Provider:  ptr("exa"),
+		MaxHits:   ptr(5),
+		MaxChars:  ptr(8000),
+		TimeoutS:  ptr(30),
+		Providers: []FileSearchAccount{{Name: ptr("exa"), URL: ptr("https://api.exa.ai"), Key: ptr("sk-exa")}},
+	}}.Resolve(d)
+	if len(notes) != 0 {
+		t.Fatalf("notes = %v", notes)
+	}
+	if !c.Search.Enabled() {
+		t.Errorf("search is not on with a named provider and a key: %+v", c.Search)
+	}
+	a, ok := c.Search.Account()
+	if !ok || a.Key != "sk-exa" || a.URL != "https://api.exa.ai" {
+		t.Errorf("account = %+v (%v)", a, ok)
+	}
+
+	raw, err := json.Marshal(c.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var written struct {
+		Search struct {
+			Provider  string `json:"provider"`
+			MaxHits   int    `json:"max_hits"`
+			MaxChars  int    `json:"max_chars"`
+			TimeoutS  int    `json:"timeout_s"`
+			Providers []struct {
+				Name string `json:"name"`
+				URL  string `json:"url"`
+				Key  string `json:"key"`
+			} `json:"providers"`
+		} `json:"search"`
+	}
+	if err := json.Unmarshal(raw, &written); err != nil {
+		t.Fatal(err)
+	}
+	if written.Search.Provider != "exa" || written.Search.MaxHits != 5 ||
+		written.Search.MaxChars != 8000 || written.Search.TimeoutS != 30 {
+		t.Errorf("written = %+v", written.Search)
+	}
+	if len(written.Search.Providers) != 1 || written.Search.Providers[0].Key != "sk-exa" {
+		t.Errorf("written providers = %+v, want the key kept", written.Search.Providers)
+	}
+
+	// Reading the written block back keeps everything, key included.
+	back, notes := c.File().Resolve(d)
+	acc, ok := back.Search.Account()
+	if len(notes) != 0 || !back.Search.Enabled() || !ok || acc.Key != "sk-exa" {
+		t.Errorf("read back %+v with notes %v", back.Search, notes)
+	}
+}
+
+func TestSearchEnabledNeedsAKey(t *testing.T) {
+	d := Defaults()
+	c, _ := File{Search: &FileSearch{Provider: ptr("exa")}}.Resolve(d)
+	if c.Search.Enabled() {
+		t.Error("a named provider with an empty key is not on")
+	}
+	c2, _ := File{Search: &FileSearch{
+		Provider:  ptr("exa"),
+		Providers: []FileSearchAccount{{Name: ptr("exa"), Key: ptr("k")}},
+	}}.Resolve(d)
+	if !c2.Search.Enabled() {
+		t.Error("a named provider with a key is on")
+	}
+}

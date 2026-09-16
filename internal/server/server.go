@@ -17,6 +17,7 @@ import (
 	"quecto-harness/internal/config"
 	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
+	"quecto-harness/internal/search"
 	"quecto-harness/internal/store"
 	"quecto-harness/internal/web"
 )
@@ -32,14 +33,15 @@ const (
 )
 
 type Server struct {
-	cfg     *config.Store
-	store   *store.Sessions
-	files   *store.Files
-	uploads *store.Uploads
-	engine  *agent.Engine
-	perms   *perms.Broker
-	pool    *llm.Pool
-	hub     *Hub
+	cfg      *config.Store
+	store    *store.Sessions
+	files    *store.Files
+	uploads  *store.Uploads
+	engine   *agent.Engine
+	perms    *perms.Broker
+	pool     *llm.Pool
+	searches *search.Providers
+	hub      *Hub
 
 	token   string
 	listen  string
@@ -63,10 +65,11 @@ type probe struct {
 }
 
 func New(cfg *config.Store, st *store.Sessions, files *store.Files, uploads *store.Uploads,
-	engine *agent.Engine, pb *perms.Broker, pool *llm.Pool, hub *Hub,
+	engine *agent.Engine, pb *perms.Broker, pool *llm.Pool, searches *search.Providers, hub *Hub,
 	token, listen, version string) *Server {
 	return &Server{
-		cfg: cfg, store: st, files: files, uploads: uploads, engine: engine, perms: pb, pool: pool, hub: hub,
+		cfg: cfg, store: st, files: files, uploads: uploads, engine: engine, perms: pb,
+		pool: pool, searches: searches, hub: hub,
 		token: token, listen: listen, version: version, ui: web.Handler(),
 		probes: map[string]*probe{},
 	}
@@ -126,6 +129,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/permissions/{id}", s.postPermission)
 	mux.HandleFunc("POST /api/questions/{id}", s.postQuestion)
 	mux.HandleFunc("PUT /api/config", s.putConfig)
+	mux.HandleFunc("PUT /api/search", s.putSearch)
+	mux.HandleFunc("POST /api/search/probe", s.probeSearch)
 	mux.HandleFunc("GET /api/events", s.getEvents)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "No such endpoint: check the path")

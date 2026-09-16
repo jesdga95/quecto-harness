@@ -15,6 +15,9 @@ import type {
   Probe,
   Protocol,
   Project,
+  SearchConfig,
+  SearchPatch,
+  SearchProbe,
   ServerMode,
   Session,
   Steer,
@@ -33,6 +36,7 @@ export const app = $state({
   ready: false,
   mode: "router" as ServerMode,
   config: null as Config | null,
+  search: null as SearchConfig | null,
   agents: [] as Agent[],
   // Whether the agents dialog is open. It is reached from the composer, four
   // components down, so the flag lives here rather than being threaded.
@@ -118,6 +122,7 @@ export async function refreshState(): Promise<boolean> {
   app.modelsError = state.modelsError ?? "";
   app.modelsKind = state.modelsKind ?? "";
   app.config = state.config;
+  app.search = state.search;
   app.agents = state.agents;
   app.projects = state.projects;
   app.models = state.models;
@@ -510,10 +515,29 @@ export function probeAgent(
   return guard(() => api.probeAgent(at, refresh));
 }
 
-export async function saveConfig(patch: Partial<Config>): Promise<void> {
+/** Saves one field of the config. True once the harness has answered, which
+    is what tells a dialog the write landed rather than merely went out. */
+export async function saveConfig(patch: Partial<Config>): Promise<boolean> {
   const config = await guard(() => api.updateConfig(patch));
-  if (!config) return;
+  if (!config) return false;
   app.config = config;
+  return true;
+}
+
+/** Saves the search block. The answer is the resolved block, which is what the
+    dialog compares its draft against from then on. */
+export async function saveSearch(patch: SearchPatch): Promise<boolean> {
+  const search = await guard(() => api.updateSearch(patch));
+  if (!search) return false;
+  app.search = search;
+  return true;
+}
+
+/** Runs the Test key button. A key that does not work is answered on 200 and
+    read in the form. A request the endpoint refuses is a 400, which guard
+    raises as the app banner on top of the form's nothing-came-back line. */
+export function probeSearch(at: { provider: string; url: string; key: string }): Promise<SearchProbe | null> {
+  return guard(() => api.probeSearch(at));
 }
 
 /** The steps a sampling slider moves through. Null is the first of them: the
@@ -590,11 +614,17 @@ const FULL_AUTO_WARNING = {
   confirmLabel: "Turn on full auto",
 };
 
+/** The warning every picker of full auto asks, from the composer chip and the
+    settings dialog alike. Answered no, the choice does not land. */
+export function confirmFullAuto(): Promise<boolean> {
+  return confirm(FULL_AUTO_WARNING);
+}
+
 /** Switches the permission policy. Nothing is written and nothing is sent
     until the full auto dialog is answered. */
 export async function setPermMode(mode: PermMode): Promise<void> {
   if (mode === permMode()) return;
-  if (mode === "full" && !(await confirm(FULL_AUTO_WARNING))) return;
+  if (mode === "full" && !(await confirmFullAuto())) return;
   if (app.config) app.config.permissions = mode;
   void guard(() => api.updateConfig({ permissions: mode }));
 }

@@ -405,7 +405,7 @@ func (s *Session) imageRefs() []string {
 func (s *Session) systemMessage(a config.Agent, osName string, b brief) llm.Message {
 	content := prompts.System(prompts.SystemVars{
 		Project: s.Project, OS: osName,
-		CanAsk: b.offer.Ask, CanMessage: b.offer.Message,
+		CanAsk: b.offer.Ask, CanMessage: b.offer.Message, CanSearch: b.offer.Search,
 		Agents: b.agents, Launcher: b.launcher,
 		Instructions: a.Instructions,
 	})

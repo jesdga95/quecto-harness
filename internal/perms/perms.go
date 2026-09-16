@@ -122,6 +122,14 @@ func (b *Broker) Evaluate(project, tool, command string, mode config.Mode) Actio
 			return ActionAllow
 		}
 		return ActionPrompt
+	case "web_search":
+		// The query leaves the machine and the call is billed, so it is shown
+		// before it is sent. The allowlist holds shell prefixes and has nothing
+		// to say about a query, so allowlist mode allows it outright.
+		if auto {
+			return ActionAllow
+		}
+		return ActionPrompt
 	case "run_shell":
 		if !auto {
 			return ActionPrompt

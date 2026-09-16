@@ -21,6 +21,7 @@ import (
 	"quecto-harness/internal/config"
 	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
+	"quecto-harness/internal/search"
 	"quecto-harness/internal/store"
 	"quecto-harness/internal/tools"
 )
@@ -184,10 +185,11 @@ func newFixture(t *testing.T) *fixture {
 	f.agent = ag.ID
 
 	pool := llm.NewPool()
+	searches := search.NewProviders()
 	hub := NewHub()
 	broker := perms.New(cfg, func(sid string, r perms.Request) { hub.Publish(sid, agent.PermissionEvent(r)) })
 	ctx, cancel := context.WithCancel(context.Background())
-	engine := agent.NewEngine(ctx, cfg, sessions, blobs, agent.Clients{Pool: pool}, broker, hub)
+	engine := agent.NewEngine(ctx, cfg, sessions, blobs, agent.Clients{Pool: pool}, searches, broker, hub)
 	// The temporary home goes away when the test ends, so nothing the engine
 	// started may still be writing sessions into it.
 	t.Cleanup(func() {
@@ -195,7 +197,7 @@ func newFixture(t *testing.T) *fixture {
 		engine.Wait(5 * time.Second)
 	})
 
-	srv := New(cfg, sessions, blobs, pastes, engine, broker, pool, hub, testToken, "127.0.0.1:7331", "0.1.0-test")
+	srv := New(cfg, sessions, blobs, pastes, engine, broker, pool, searches, hub, testToken, "127.0.0.1:7331", "0.1.0-test")
 	f.srv, f.handler, f.hub, f.engine, f.perms = srv, srv.Handler(), hub, engine, broker
 	f.files = blobs
 	return f
@@ -841,6 +843,37 @@ func TestPermissionRoute(t *testing.T) {
 	w = f.do(t, "POST", "/api/permissions/perm_x", map[string]string{"decision": "nonsense"})
 	if w.Code != 400 {
 		t.Errorf("bad decision = %d", w.Code)
+	}
+}
+
+// The allowlist rule a card keeps is a shell rule, so the decision is refused
+// for every other tool before the prefix is checked.
+func TestPermissionAlwaysIsShellOnly(t *testing.T) {
+	f := newFixture(t)
+	go f.perms.Ask(context.Background(), perms.Request{
+		ID: "perm_search000", SessionID: "s1", Project: f.project,
+		Tool: "web_search", Command: "rm -rf node_modules alternatives",
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := f.perms.Lookup("perm_search000"); ok {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	w := f.do(t, "POST", "/api/permissions/perm_search000",
+		map[string]string{"decision": "always", "prefix": "rm -rf"})
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "shell commands only") {
+		t.Errorf("always on a search card = %d %s, want the refusal", w.Code, w.Body.String())
+	}
+	if _, ok := f.cfg.AllowMatch(f.project, "rm -rf"); ok {
+		t.Error("a search card stored a shell rule")
+	}
+
+	w = f.do(t, "POST", "/api/permissions/perm_search000", map[string]string{"decision": "once"})
+	if w.Code != 200 {
+		t.Errorf("allow once = %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -1861,5 +1894,160 @@ func TestSubagentSessionsAreNotListed(t *testing.T) {
 	}
 	if one["state"] != "idle" {
 		t.Errorf("state = %v, want idle for a run nothing is running", one["state"])
+	}
+}
+
+func searchFixture(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "search", "testdata", name))
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", name, err)
+	}
+	return string(b)
+}
+
+// The state read carries the whole block, so the settings dialog makes no
+// extra fetch, and known is the list the dialog did not have to know.
+func TestStateCarriesTheSearchBlock(t *testing.T) {
+	f := newFixture(t)
+	body := decode(t, f.do(t, "GET", "/api/state", nil))
+	s, _ := body["search"].(map[string]any)
+	if s == nil {
+		t.Fatalf("state has no search block")
+	}
+	if s["provider"] != "" || s["ready"] != false {
+		t.Errorf("search = %v, want off by default", s)
+	}
+	if s["max_hits"] != 10.0 || s["max_chars"] != 4000.0 || s["timeout_s"] != 20.0 {
+		t.Errorf("limits = %v, want the defaults", s)
+	}
+	known, _ := s["known"].([]any)
+	if len(known) != 1 || known[0] != "exa" {
+		t.Errorf("known = %v", known)
+	}
+	providers, _ := s["providers"].([]any)
+	if len(providers) != 1 {
+		t.Fatalf("providers = %v", providers)
+	}
+	p, _ := providers[0].(map[string]any)
+	if p["name"] != "exa" || p["url"] != "https://api.exa.ai" || p["key"] != "" {
+		t.Errorf("provider = %v, want exa at its default with no key", p)
+	}
+}
+
+func TestPutSearchRoundTrip(t *testing.T) {
+	f := newFixture(t)
+	w := f.do(t, "PUT", "/api/search", map[string]any{
+		"provider": "exa", "max_hits": 5, "max_chars": 8000, "timeout_s": 30,
+		"providers": []map[string]any{{"name": "exa", "url": "https://api.exa.ai", "key": "sk-exa-test"}},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	s, _ := decode(t, w)["search"].(map[string]any)
+	if s["provider"] != "exa" || s["ready"] != true || s["max_hits"] != 5.0 || s["timeout_s"] != 30.0 {
+		t.Errorf("search = %v", s)
+	}
+	acc, ok := f.cfg.Config().Search.Account()
+	if !ok || acc.Key != "sk-exa-test" {
+		t.Errorf("account = %+v (%v), want the saved key", acc, ok)
+	}
+	if !f.cfg.Config().Search.Enabled() {
+		t.Error("search is not offered after saving a key")
+	}
+
+	// Naming the provider off keeps the account and its key: what the dialog
+	// sends is every account, the untouched ones unchanged.
+	w = f.do(t, "PUT", "/api/search", map[string]any{
+		"provider":  "",
+		"providers": []map[string]any{{"name": "exa", "url": "https://api.exa.ai", "key": "sk-exa-test"}},
+	})
+	s, _ = decode(t, w)["search"].(map[string]any)
+	if s["provider"] != "" || s["ready"] != false {
+		t.Errorf("search = %v, want off with the account kept", s)
+	}
+	providers, _ := s["providers"].([]any)
+	p, _ := providers[0].(map[string]any)
+	if p["key"] != "sk-exa-test" {
+		t.Errorf("key = %v, want it kept while the provider is off", p["key"])
+	}
+}
+
+func TestPutSearchRefusals(t *testing.T) {
+	f := newFixture(t)
+	cases := []struct {
+		body map[string]any
+		says string
+	}{
+		{map[string]any{"provider": "nope"}, "Provider \"nope\" is not in the list of allowed providers: leave it empty to turn search off"},
+		{map[string]any{"max_hits": 0}, "Results is outside 1 to 25"},
+		{map[string]any{"max_hits": 26}, "Results is outside 1 to 25"},
+		{map[string]any{"max_chars": 100}, "Characters is outside 500 to 100000"},
+		{map[string]any{"max_chars": 200000}, "Characters is outside 500 to 100000"},
+		{map[string]any{"timeout_s": 0}, "Timeout is outside 1 to 120 seconds"},
+		{map[string]any{"providers": []map[string]any{{"name": "exa", "url": "ftp://x"}}},
+			"Address \"ftp://x\" is not an http or https URL with a host"},
+	}
+	for _, tc := range cases {
+		w := f.do(t, "PUT", "/api/search", tc.body)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%v: status = %d, want 400", tc.body, w.Code)
+			continue
+		}
+		if got := decode(t, w)["error"]; got != tc.says {
+			t.Errorf("%v: error = %v, want %q", tc.body, got, tc.says)
+		}
+	}
+	if f.cfg.Config().Search.Enabled() {
+		t.Error("a refused write changed the block")
+	}
+}
+
+// The probe spends one billed request when the button is pressed and draws a
+// failure inside the form rather than as a status.
+func TestProbeSearch(t *testing.T) {
+	f := newFixture(t)
+
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search" {
+			t.Errorf("path = %q, want /search", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer sk-exa-test" {
+			t.Errorf("authorization = %q, want the key as a bearer token", r.Header.Get("Authorization"))
+		}
+		w.Write([]byte(searchFixture(t, "exa-check.json")))
+	}))
+	t.Cleanup(good.Close)
+
+	w := f.do(t, "POST", "/api/search/probe",
+		map[string]any{"provider": "exa", "url": good.URL, "key": "sk-exa-test"})
+	body := decode(t, w)
+	if w.Code != http.StatusOK || body["ok"] != true {
+		t.Errorf("probe = %d %v, want 200 with ok", w.Code, body)
+	}
+
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(searchFixture(t, "exa-401.json")))
+	}))
+	t.Cleanup(bad.Close)
+	w = f.do(t, "POST", "/api/search/probe",
+		map[string]any{"provider": "exa", "url": bad.URL, "key": "sk-wrong"})
+	body = decode(t, w)
+	if w.Code != http.StatusOK || body["ok"] != false {
+		t.Errorf("a refused probe = %d %v, want 200 with ok false", w.Code, body)
+	}
+	if err, _ := body["error"].(string); !strings.Contains(err, "Invalid API key") {
+		t.Errorf("error = %v, want the endpoint's own sentence", body["error"])
+	}
+
+	if w := f.do(t, "POST", "/api/search/probe", map[string]any{"provider": "", "key": "k"}); w.Code != http.StatusBadRequest {
+		t.Errorf("no provider: status = %d, want 400", w.Code)
+	}
+	if w := f.do(t, "POST", "/api/search/probe", map[string]any{"provider": "nope", "key": "k"}); w.Code != http.StatusBadRequest {
+		t.Errorf("unknown provider: status = %d, want 400", w.Code)
+	}
+	if w := f.do(t, "POST", "/api/search/probe", map[string]any{"provider": "exa", "url": "ftp://x", "key": "k"}); w.Code != http.StatusBadRequest {
+		t.Errorf("bad address: status = %d, want 400", w.Code)
 	}
 }

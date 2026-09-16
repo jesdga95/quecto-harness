@@ -14,6 +14,9 @@ import type {
   Probe,
   Protocol,
   Project,
+  SearchConfig,
+  SearchPatch,
+  SearchProbe,
   Sent,
   Session,
   State,
@@ -294,6 +297,18 @@ export class MockApi implements HarnessApi {
     ],
   };
 
+  // Off by default, the way a fresh config starts: the account is there with
+  // an empty key, and web_search is not offered until one is typed.
+  private search: SearchConfig = {
+    provider: "",
+    max_hits: 10,
+    max_chars: 4000,
+    timeout_s: 20,
+    providers: [{ name: "exa", url: "https://api.exa.ai", key: "" }],
+    known: ["exa"],
+    ready: false,
+  };
+
   private agents: Agent[] = AGENTS.map((a) => ({ ...a }));
   private models: Model[] = MODELS.map((m) => ({ ...m }));
   private sessions: Session[] = [];
@@ -334,6 +349,7 @@ export class MockApi implements HarnessApi {
       modelsError: probe.modelsError,
       modelsKind: probe.modelsKind,
       config: { ...this.config },
+      search: { ...this.search, providers: this.search.providers.map((p) => ({ ...p })) },
       agents: this.agents.map((a) => ({ ...a })),
       projects: this.config.projects.map((p) => ({ path: p, name: baseName(p) })),
       models: probe.models.map((m) => ({ ...m })),
@@ -577,6 +593,38 @@ export class MockApi implements HarnessApi {
     await this.tick(160);
     this.config = { ...this.config, ...patch };
     return { ...this.config };
+  }
+
+  async updateSearch(patch: SearchPatch): Promise<SearchConfig> {
+    await this.tick(160);
+    if (patch.provider !== undefined && patch.provider !== "" && !this.search.known.includes(patch.provider)) {
+      throw new Error(
+        `Provider "${patch.provider}" is not in the list of allowed providers: leave it empty to turn search off`,
+      );
+    }
+    this.search = {
+      ...this.search,
+      ...patch,
+      providers: (patch.providers ?? this.search.providers).map((p) => ({ ...p })),
+    };
+    this.search.ready =
+      this.search.provider !== "" &&
+      (this.search.providers.find((p) => p.name === this.search.provider)?.key ?? "") !== "";
+    return { ...this.search, providers: this.search.providers.map((p) => ({ ...p })) };
+  }
+
+  async probeSearch(at: { provider: string; url: string; key: string }): Promise<SearchProbe> {
+    await this.tick(600);
+    if (!this.search.known.includes(at.provider)) {
+      throw new Error(`Provider "${at.provider}" is not in the list of allowed providers`);
+    }
+    if (at.url.trim() !== "" && !/^https?:\/\/\S+\.\S+/.test(at.url.trim())) {
+      throw new Error(`Address "${at.url}" is not an http or https URL with a host`);
+    }
+    if (at.key === "") {
+      return { ok: false, error: "The key was not sent: an unauthenticated request gets a price, not an answer." };
+    }
+    return { ok: true };
   }
 
   async listAllowlist(project: string): Promise<string[]> {

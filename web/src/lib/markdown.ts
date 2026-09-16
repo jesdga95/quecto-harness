@@ -41,7 +41,7 @@ interface Formula {
 
 // Only http, https and mailto survive, plus links relative to this page.
 // Everything else, javascript: and data: included, loses its href.
-function safeUrl(raw: string | null | undefined): string | null {
+export function safeUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const url = raw.replace(/[\u0000-\u0020\u007f]/g, "");
   if (url === "" || url.startsWith("//")) return null;

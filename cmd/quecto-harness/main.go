@@ -24,6 +24,7 @@ import (
 	"quecto-harness/internal/config"
 	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
+	"quecto-harness/internal/search"
 	"quecto-harness/internal/server"
 	"quecto-harness/internal/service"
 	"quecto-harness/internal/store"
@@ -160,12 +161,13 @@ func serve(argv []string) error {
 	defer stop()
 
 	pool := llm.NewPool()
+	searches := search.NewProviders()
 	hub := server.NewHub()
 	broker := perms.New(cfg, func(sessionID string, r perms.Request) {
 		hub.Publish(sessionID, agent.PermissionEvent(r))
 	})
-	engine := agent.NewEngine(ctx, cfg, sessions, blobs, agent.Clients{Pool: pool}, broker, hub)
-	srv := server.New(cfg, sessions, blobs, pastes, engine, broker, pool, hub, token, listen, version)
+	engine := agent.NewEngine(ctx, cfg, sessions, blobs, agent.Clients{Pool: pool}, searches, broker, hub)
+	srv := server.New(cfg, sessions, blobs, pastes, engine, broker, pool, searches, hub, token, listen, version)
 
 	go srv.Detect(ctx)
 

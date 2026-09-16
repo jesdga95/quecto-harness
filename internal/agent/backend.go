@@ -5,6 +5,7 @@ import (
 
 	"quecto-harness/internal/config"
 	"quecto-harness/internal/llm"
+	"quecto-harness/internal/search"
 )
 
 // Backend is the model server, as much of it as a session needs. The engine
@@ -32,3 +33,10 @@ type Backends interface {
 type Clients struct{ Pool *llm.Pool }
 
 func (c Clients) For(a config.Agent) Backend { return c.Pool.Get(a.URL, a.Key, a.Protocol) }
+
+// Searches is the provider one configuration names, reached the way Backends
+// is: through an interface so a test can pass a fake. search.Providers
+// satisfies it.
+type Searches interface {
+	For(n search.Name, baseURL, apiKey string) (search.Provider, error)
+}

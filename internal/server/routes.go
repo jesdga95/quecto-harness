@@ -238,6 +238,7 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		"detect_kind":  string(llm.Kind(infoErr)),
 		"config":       toConfigJSON(cfg),
 		"config_notes": notes,
+		"search":       toSearchJSON(cfg.Search),
 		"projects":     projects,
 		"models":       toModelJSON(models),
 		"models_error": errText(modelsErr),
@@ -655,6 +656,11 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if kind == perms.DecideAlways {
+		if req.Tool != "run_shell" {
+			writeError(w, http.StatusBadRequest,
+				"Allow always applies to shell commands only: choose allow once")
+			return
+		}
 		prefix := config.NormaliseCommand(body.Prefix)
 		command := config.NormaliseCommand(req.Command)
 		if prefix == "" || !strings.HasPrefix(command, prefix) {

@@ -54,6 +54,7 @@ type Engine struct {
 	store    *store.Sessions
 	files    *store.Files
 	backends Backends
+	searches Searches
 	perms    *perms.Broker
 	asks     *asker
 	hub      Publisher
@@ -67,9 +68,10 @@ type Engine struct {
 }
 
 func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files *store.Files,
-	backends Backends, pb *perms.Broker, hub Publisher) *Engine {
+	backends Backends, searches Searches, pb *perms.Broker, hub Publisher) *Engine {
 	return &Engine{
-		cfg: cfg, store: st, files: files, backends: backends, perms: pb, asks: newAsker(), hub: hub,
+		cfg: cfg, store: st, files: files, backends: backends, searches: searches,
+		perms: pb, asks: newAsker(), hub: hub,
 		ctx: ctx, os: runtime.GOOS, live: map[string]*Session{},
 	}
 }
@@ -1087,6 +1089,16 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		return
 	}
 	runner.Baseline = func(sn tools.Snapshot) { e.recordBaseline(s, sn) }
+	// The provider and the offer both read the same config, so a tool that is
+	// sent and a tool that is built cannot disagree within the turn. A
+	// provider that fails to build leaves Search nil, and the tool answers
+	// with its not-configured sentence rather than failing the turn.
+	if cfg.Search.Enabled() {
+		acc, _ := cfg.Search.Account()
+		if p, err := e.searches.For(acc.Name, acc.URL, acc.Key); err == nil {
+			runner.Search = p
+		}
+	}
 
 	// The tool call budget for this turn. Zero is no budget at all, so the
 	// only thing that ends a runaway turn is the Stop button.
@@ -1228,6 +1240,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			e.publish(s.ID, ev("tool_output", map[string]any{
 				"index": i, "id": call.ID, "name": call.Function.Name,
 				"output": entry.Content, "exit_code": entry.ExitCode, "truncated": entry.Truncated,
+				"meta": entry.Meta,
 			}))
 			if ctx.Err() != nil {
 				e.markStopped(s)
@@ -1399,6 +1412,8 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 			res, err = runner.ReadFile(ctx, args)
 		case "find":
 			res, err = runner.Find(ctx, args)
+		case "web_search":
+			res, err = runner.WebSearch(ctx, args)
 		case "write_file":
 			res, err = runner.WriteFile(ctx, args)
 		case "replace_in_file":
@@ -1414,7 +1429,7 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 		case "send_message":
 			res, err = e.sendMessage(s, call)
 		default:
-			err = fmt.Errorf("no tool named %s: use read_file, find, write_file, replace_in_file, run_shell, write_todos, ask_question, run_agent or send_message", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read_file, find, web_search, write_file, replace_in_file, run_shell, write_todos, ask_question, run_agent or send_message", call.Function.Name)
 		}
 		if err != nil {
 			content = err.Error()
@@ -1487,14 +1502,20 @@ func baselineState(snapshot string) string {
 }
 
 // argSummary pulls the command and the path out of the raw arguments for the
-// permission card, tolerating arguments the model malformed.
+// permission card, tolerating arguments the model malformed. The card shows
+// what the call is about, and for a search that is the query, which the card
+// reads as the command.
 func argSummary(call llm.ToolCall) (command, path string) {
 	var args struct {
 		Command string `json:"command"`
 		Path    string `json:"path"`
+		Query   string `json:"query"`
 	}
 	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 		return "", ""
+	}
+	if args.Command == "" {
+		return args.Query, args.Path
 	}
 	return args.Command, args.Path
 }

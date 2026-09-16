@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"quecto-harness/internal/llm"
+	"quecto-harness/internal/search"
 )
 
 // File mirrors config.json. A nil field is absent and takes the default,
@@ -28,6 +29,7 @@ type File struct {
 	CommandTimeoutS  *int        `json:"command_timeout_s,omitempty"`
 	OutputLimitBytes *int        `json:"output_limit_bytes,omitempty"`
 	MaxToolCalls     *int        `json:"max_tool_calls,omitempty"`
+	Search           *FileSearch `json:"search,omitempty"`
 	Projects         []string    `json:"projects"`
 }
 
@@ -54,6 +56,23 @@ type FileAgent struct {
 	Instructions      *string  `json:"instructions,omitempty"`
 }
 
+// FileSearch mirrors the search block.
+type FileSearch struct {
+	Provider *string `json:"provider,omitempty"`
+	MaxHits  *int    `json:"max_hits,omitempty"`
+	MaxChars *int    `json:"max_chars,omitempty"`
+	TimeoutS *int    `json:"timeout_s,omitempty"`
+	// No omitempty, matching Agents: a saved file names every provider.
+	Providers []FileSearchAccount `json:"providers"`
+}
+
+// FileSearchAccount mirrors one provider's address and credential.
+type FileSearchAccount struct {
+	Name *string `json:"name,omitempty"`
+	URL  *string `json:"url,omitempty"`
+	Key  *string `json:"key,omitempty"`
+}
+
 // Config is the resolved configuration. Every field is usable as it stands.
 type Config struct {
 	Listen string
@@ -69,7 +88,79 @@ type Config struct {
 	// MaxToolCalls bounds the tool calls one turn may make. Zero is no bound,
 	// which leaves the Stop button as the only thing that ends a runaway turn.
 	MaxToolCalls int
+	Search       Search
 	Projects     []string
+}
+
+// Search is where a web search goes. Provider names the service; empty is
+// off. Every provider keeps its own account, so naming another and coming
+// back does not cost the first one's key.
+type Search struct {
+	Provider SearchProvider
+	MaxHits  int
+	MaxChars int
+	Timeout  time.Duration
+	Accounts []SearchAccount
+}
+
+// SearchAccount is one provider's address and credential.
+type SearchAccount struct {
+	Name SearchProvider
+	URL  string
+	Key  string
+}
+
+// SearchProvider names the service a search goes to.
+type SearchProvider = search.Name
+
+// Account is the account the named provider uses. The second result is false
+// when the provider names no account, which resolution leaves only for an
+// empty provider.
+func (s Search) Account() (SearchAccount, bool) {
+	if s.Provider == "" {
+		return SearchAccount{}, false
+	}
+	for _, a := range s.Accounts {
+		if a.Name == s.Provider {
+			return a, true
+		}
+	}
+	return SearchAccount{}, false
+}
+
+// Enabled reports whether a turn is offered web_search: a known provider is
+// named and its account holds a key. Without a key the endpoint answers every
+// request with a price, so an offered tool would only fail.
+func (s Search) Enabled() bool {
+	if s.Provider == "" || !search.ValidName(string(s.Provider)) {
+		return false
+	}
+	a, ok := s.Account()
+	return ok && a.Key != ""
+}
+
+// What search starts at and resolves within. Ten is the default because it is
+// what Exa charges one request for: past it each result is billed on its own,
+// so asking for fewer costs the same and returns less.
+const (
+	DefaultSearchMaxHits  = 10
+	MaxSearchMaxHits      = 25
+	DefaultSearchMaxChars = 4000
+	MaxSearchMaxChars     = 100000
+	MinSearchMaxChars     = 500
+	DefaultSearchTimeout  = 20 * time.Second
+	MaxSearchTimeoutS     = 120
+)
+
+// defaultSearchAccounts is one account per provider, at its default address,
+// so a first run writes a block that shows what search would cost before it
+// is on.
+func defaultSearchAccounts() []SearchAccount {
+	out := make([]SearchAccount, 0, len(search.Names))
+	for _, n := range search.Names {
+		out = append(out, SearchAccount{Name: n, URL: search.DefaultURL(n)})
+	}
+	return out
 }
 
 // Agent is one model server the harness can answer with: where it is, what key
@@ -282,7 +373,13 @@ func Defaults() Config {
 		CommandTimeout:   120 * time.Second,
 		OutputLimitBytes: 16384,
 		MaxToolCalls:     50,
-		Projects:         nil,
+		Search: Search{
+			MaxHits:  DefaultSearchMaxHits,
+			MaxChars: DefaultSearchMaxChars,
+			Timeout:  DefaultSearchTimeout,
+			Accounts: defaultSearchAccounts(),
+		},
+		Projects: nil,
 	}
 }
 
@@ -370,6 +467,7 @@ func (f File) Resolve(d Config) (Config, []string) {
 			note("max_tool_calls " + strconv.Itoa(*f.MaxToolCalls) + " is outside 0 to 1000, using 50")
 		}
 	}
+	c.Search = resolveSearch(f.Search, d.Search, note)
 	if f.Projects != nil {
 		seen := map[string]bool{}
 		var keep []string
@@ -399,6 +497,20 @@ func (c Config) File() File {
 	shell := c.Shell
 	timeout, limit := int(c.CommandTimeout/time.Second), c.OutputLimitBytes
 	maxCalls, agent := c.MaxToolCalls, c.AgentID
+	sProvider, sMaxHits, sMaxChars := string(c.Search.Provider), c.Search.MaxHits, c.Search.MaxChars
+	sTimeout := int(c.Search.Timeout / time.Second)
+	sAccounts := make([]FileSearchAccount, 0, len(c.Search.Accounts))
+	for _, a := range c.Search.Accounts {
+		name, url, key := string(a.Name), a.URL, a.Key
+		sAccounts = append(sAccounts, FileSearchAccount{Name: &name, URL: &url, Key: &key})
+	}
+	block := FileSearch{
+		Provider:  &sProvider,
+		MaxHits:   &sMaxHits,
+		MaxChars:  &sMaxChars,
+		TimeoutS:  &sTimeout,
+		Providers: sAccounts,
+	}
 	projects := c.Projects
 	if projects == nil {
 		projects = []string{}
@@ -442,6 +554,7 @@ func (c Config) File() File {
 		CommandTimeoutS:  &timeout,
 		OutputLimitBytes: &limit,
 		MaxToolCalls:     &maxCalls,
+		Search:           &block,
 		Projects:         projects,
 	}
 }
@@ -573,6 +686,92 @@ func resolveAgents(in []FileAgent, note func(string)) []Agent {
 	return out
 }
 
+// resolveSearch folds the search block over the defaults. A bad value falls
+// back and produces one note, and every provider keeps an account: a missing
+// one is added with its default address and no key, so a file written before
+// a provider existed gains its row on the next write.
+func resolveSearch(f *FileSearch, d Search, note func(string)) Search {
+	c := d
+	if f == nil {
+		return c
+	}
+	if f.Provider != nil {
+		// Empty is off, not a bad value: the block stays in the file so the
+		// accounts keep their keys.
+		if *f.Provider == "" {
+			c.Provider = ""
+		} else if search.ValidName(*f.Provider) {
+			c.Provider = search.Name(*f.Provider)
+		} else {
+			note("provider " + strconv.Quote(*f.Provider) + " is not in the list of allowed providers, leaving search off")
+			c.Provider = ""
+		}
+	}
+	if f.MaxHits != nil {
+		if *f.MaxHits >= 1 && *f.MaxHits <= MaxSearchMaxHits {
+			c.MaxHits = *f.MaxHits
+		} else {
+			note("max_hits " + strconv.Itoa(*f.MaxHits) + " is outside 1 to " + strconv.Itoa(MaxSearchMaxHits) + ", using " + strconv.Itoa(DefaultSearchMaxHits))
+			c.MaxHits = d.MaxHits
+		}
+	}
+	if f.MaxChars != nil {
+		if *f.MaxChars >= MinSearchMaxChars && *f.MaxChars <= MaxSearchMaxChars {
+			c.MaxChars = *f.MaxChars
+		} else {
+			note("max_chars " + strconv.Itoa(*f.MaxChars) + " is outside " + strconv.Itoa(MinSearchMaxChars) + " to " + strconv.Itoa(MaxSearchMaxChars) + ", using " + strconv.Itoa(DefaultSearchMaxChars))
+			c.MaxChars = d.MaxChars
+		}
+	}
+	if f.TimeoutS != nil {
+		if *f.TimeoutS >= 1 && *f.TimeoutS <= MaxSearchTimeoutS {
+			c.Timeout = time.Duration(*f.TimeoutS) * time.Second
+		} else {
+			note("timeout_s " + strconv.Itoa(*f.TimeoutS) + " is outside 1 to " + strconv.Itoa(MaxSearchTimeoutS) + ", using " + strconv.Itoa(int(DefaultSearchTimeout/time.Second)))
+			c.Timeout = d.Timeout
+		}
+	}
+
+	accounts := make([]SearchAccount, 0, len(f.Providers))
+	seen := map[string]bool{}
+	for _, fa := range f.Providers {
+		name := ""
+		if fa.Name != nil {
+			name = *fa.Name
+		}
+		if !search.ValidName(name) {
+			note("search account " + strconv.Quote(name) + " is not in the list of allowed providers, dropped")
+			continue
+		}
+		if seen[name] {
+			note("search account " + strconv.Quote(name) + " appears twice, keeping the first")
+			continue
+		}
+		seen[name] = true
+		n := search.Name(name)
+		a := SearchAccount{Name: n, URL: search.DefaultURL(n)}
+		// An empty address is the default, not a bad value.
+		if fa.URL != nil && strings.TrimSpace(*fa.URL) != "" {
+			if v, ok := ValidAddress(*fa.URL); ok {
+				a.URL = v
+			} else {
+				note("search account " + strconv.Quote(name) + " address " + strconv.Quote(*fa.URL) + " is not an http or https URL with a host, using " + a.URL)
+			}
+		}
+		if fa.Key != nil {
+			a.Key = *fa.Key
+		}
+		accounts = append(accounts, a)
+	}
+	for _, n := range search.Names {
+		if !seen[string(n)] {
+			accounts = append(accounts, SearchAccount{Name: n, URL: search.DefaultURL(n)})
+		}
+	}
+	c.Accounts = accounts
+	return c
+}
+
 var idEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
 
 // NewAgentID mints an id for an agent. It is minted rather than taken from the
@@ -582,6 +781,15 @@ func NewAgentID() string {
 	b := make([]byte, 10)
 	rand.Read(b)
 	return "agt_" + idEncoding.EncodeToString(b)[:16]
+}
+
+// cloneSearchAccounts copies the list, so a mutator that writes into one
+// account cannot write through into the config it came from.
+func cloneSearchAccounts(in []SearchAccount) []SearchAccount {
+	if in == nil {
+		return nil
+	}
+	return append([]SearchAccount(nil), in...)
 }
 
 // clonei copies an int behind a pointer, for the same reason clonef does.
