@@ -680,6 +680,96 @@ func TestChatCanceledClosesTheConnection(t *testing.T) {
 	}
 }
 
+// stallServer writes the frames it is given and then holds the connection
+// open writing nothing, which is a model server that stopped rather than one
+// that closed.
+func stallServer(t *testing.T, frames []string, hold time.Duration) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		f := w.(http.Flusher)
+		// A real server sends its headers before it starts work, which is what
+		// puts the wait on the idle deadline rather than on the header timeout.
+		f.Flush()
+		for _, fr := range frames {
+			fmt.Fprint(w, fr+"\n\n")
+			f.Flush()
+		}
+		select {
+		case <-r.Context().Done():
+		case <-time.After(hold):
+		}
+	}))
+}
+
+// shortIdle brings the stream deadlines within a test's patience.
+func shortIdle(t *testing.T, first, rest time.Duration) {
+	t.Helper()
+	wasFirst, wasRest := streamFirstEvent, streamIdle
+	streamFirstEvent, streamIdle = first, rest
+	t.Cleanup(func() { streamFirstEvent, streamIdle = wasFirst, wasRest })
+}
+
+func TestChatStallsBeforeTheFirstEvent(t *testing.T) {
+	shortIdle(t, 250*time.Millisecond, time.Minute)
+	srv := stallServer(t, nil, 10*time.Second)
+	defer srv.Close()
+
+	start := time.Now()
+	_, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), nil)
+	if Kind(err) != KindStalled {
+		t.Fatalf("kind = %q, err = %v", Kind(err), err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("gave up after %v, want about the deadline", took)
+	}
+}
+
+func TestChatStallsMidStreamAndKeepsWhatArrived(t *testing.T) {
+	shortIdle(t, time.Minute, 250*time.Millisecond)
+	srv := stallServer(t, []string{`data: {"choices":[{"delta":{"content":"Hel"}}]}`}, 10*time.Second)
+	defer srv.Close()
+
+	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), nil)
+	if Kind(err) != KindStalled {
+		t.Fatalf("kind = %q, err = %v", Kind(err), err)
+	}
+	if res.Content != "Hel" {
+		t.Errorf("content = %q, want what arrived before the stall", res.Content)
+	}
+	// A turn that reads a stall as a cancellation ends quietly, leaving the
+	// reader with no reason for a reply that stopped.
+	if errors.Is(err, context.Canceled) {
+		t.Error("the stall reads as a cancellation")
+	}
+}
+
+func TestChatSteadyStreamOutlastsTheIdleLimit(t *testing.T) {
+	shortIdle(t, time.Minute, 300*time.Millisecond)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		f := w.(http.Flusher)
+		for range 6 {
+			fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"a"}}]}`+"\n\n")
+			f.Flush()
+			time.Sleep(100 * time.Millisecond)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		f.Flush()
+	}))
+	defer srv.Close()
+
+	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), nil)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if res.Content != "aaaaaa" {
+		t.Errorf("content = %q, want every chunk", res.Content)
+	}
+}
+
 func TestChatCallbackErrorAborts(t *testing.T) {
 	srv := sseServer(t, []string{
 		`data: {"choices":[{"delta":{"content":"a"}}]}`,

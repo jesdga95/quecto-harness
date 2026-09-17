@@ -9,11 +9,21 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
 // maxFrameBytes caps one SSE event payload. A larger frame is dropped and the
 // parser resynchronises at the next blank line.
 const maxFrameBytes = 1 << 20
+
+// How long a reply may go silent before it is abandoned. The first gap covers
+// prompt processing, which sends nothing; later gaps fall between tokens,
+// where silence is a dead connection rather than a server still working.
+var (
+	streamFirstEvent = 5 * time.Minute
+	streamIdle       = 90 * time.Second
+)
 
 type EventKind int
 
@@ -83,7 +93,12 @@ type sink interface {
 // is called synchronously from the read loop, in stream order; returning an
 // error from it aborts the request.
 func (c *Client) stream(ctx context.Context, path string, body []byte, model string, st sink, on func(Event) error) (Result, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
+	// The request takes a context of its own so the idle deadline can end it
+	// without the caller's context having been cancelled.
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return Result{}, classify("chat", c.BaseURL, model, 0, "", err)
 	}
@@ -101,11 +116,72 @@ func (c *Client) stream(ctx context.Context, path string, body []byte, model str
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 		return Result{}, classify("chat", c.BaseURL, model, resp.StatusCode, string(raw), nil)
 	}
-	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return c.readWhole(resp.Body, st, on)
+
+	idle := newIdleReader(resp.Body, streamFirstEvent, streamIdle, cancel)
+	defer idle.stop()
+
+	var res Result
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		res, err = c.readStream(ctx, idle, st, on)
+	} else {
+		res, err = c.readWhole(idle, st, on)
 	}
-	return c.readStream(ctx, resp.Body, st, on)
+	// A read that ended while the caller is still waiting ended on the idle
+	// deadline, which reads as a cancellation everywhere below this point.
+	if err != nil && ctx.Err() == nil {
+		if waited, quiet := idle.stalled(); quiet {
+			return res, stalledError("chat", waited)
+		}
+	}
+	return res, err
 }
+
+// idleReader ends a reply that stops arriving. The deadline is reset by every
+// read that returns bytes, and drops to rest once the first ones have, so a
+// long wait before the reply starts does not license one in the middle of it.
+type idleReader struct {
+	r    io.Reader
+	rest time.Duration
+
+	mu    sync.Mutex
+	limit time.Duration
+	quiet bool
+	timer *time.Timer
+}
+
+func newIdleReader(r io.Reader, first, rest time.Duration, onIdle func()) *idleReader {
+	ir := &idleReader{r: r, rest: rest, limit: first}
+	ir.timer = time.AfterFunc(first, func() {
+		ir.mu.Lock()
+		ir.quiet = true
+		ir.mu.Unlock()
+		onIdle()
+	})
+	return ir
+}
+
+func (ir *idleReader) Read(p []byte) (int, error) {
+	n, err := ir.r.Read(p)
+	if n > 0 {
+		ir.mu.Lock()
+		if !ir.quiet {
+			ir.limit = ir.rest
+			ir.timer.Reset(ir.rest)
+		}
+		ir.mu.Unlock()
+	}
+	return n, err
+}
+
+// stalled reports that the deadline passed with nothing arriving, and how
+// long that deadline was.
+func (ir *idleReader) stalled() (time.Duration, bool) {
+	ir.mu.Lock()
+	defer ir.mu.Unlock()
+	return ir.limit, ir.quiet
+}
+
+func (ir *idleReader) stop() { ir.timer.Stop() }
 
 // readWhole handles a server that ignored stream:true and answered with one
 // object, converting it into the same event sequence.

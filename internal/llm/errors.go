@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type ErrKind string
@@ -22,6 +23,7 @@ const (
 	KindUpstream     ErrKind = "upstream"
 	KindMalformed    ErrKind = "malformed"
 	KindCanceled     ErrKind = "canceled"
+	KindStalled      ErrKind = "stalled"
 )
 
 // Error is every failure this package returns. Status is 0 when no response
@@ -138,6 +140,14 @@ func isUnreachable(err error) bool {
 func earlyCloseError(op string) *Error {
 	return &Error{Kind: KindUpstream, Op: op,
 		Message: "The model server closed the stream early: send the message again"}
+}
+
+// stalledError ends a reply that stopped arriving. It wraps nothing, since a
+// stall is a failure of the server and a cancellation is not.
+func stalledError(op string, waited time.Duration) *Error {
+	return &Error{Kind: KindStalled, Op: op,
+		Message: fmt.Sprintf("The model server stopped sending for %d seconds: send the message again",
+			int(waited/time.Second))}
 }
 
 func malformedError(op string, dropped int) *Error {
