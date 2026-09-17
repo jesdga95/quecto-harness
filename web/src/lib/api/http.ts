@@ -242,6 +242,7 @@ interface WireEvent {
   args?: string;
   output?: string;
   exit_code?: number | null;
+  timeout_s?: number | null;
   truncated?: boolean;
   decision?: string;
   reason?: string;
@@ -810,6 +811,7 @@ const EVENT_NAMES = [
   "delta",
   "reasoning",
   "tool_call",
+  "tool_start",
   "tool_output",
   "permission",
   "permission_done",
@@ -855,6 +857,19 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       const args = parseArgs(open.args);
       if (args) out.push({ type: "tool_args", id: open.id, name: open.name, args });
       return out;
+    }
+
+    case "tool_start": {
+      const index = ev.index ?? 0;
+      const open = calls.get(index);
+      return [
+        {
+          type: "tool_start",
+          id: open?.id ?? ev.id ?? `call_${index}`,
+          name: ev.name ?? open?.name ?? "tool",
+          timeout_s: ev.timeout_s ?? null,
+        },
+      ];
     }
 
     case "tool_output": {

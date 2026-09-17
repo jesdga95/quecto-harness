@@ -17,7 +17,7 @@
   import TerminalCard from "./TerminalCard.svelte";
   import TodoList from "./TodoList.svelte";
   import type { Todo, TranscriptItem } from "../api";
-  import { describeCommand, firstSentence, k } from "../format";
+  import { clockLabel, describeCommand, firstSentence, k } from "../format";
   import { asked } from "../question";
 
   let { item }: { item: TranscriptItem } = $props();
@@ -123,6 +123,26 @@
   // row is marked on an exact match and a typed answer marks nothing.
   const chosen = $derived(new Set(item.kind === "tool" ? item.output.split(", ") : []));
 
+  // A command says how long it has been going against the limit it was given,
+  // since a slow run and a stuck one look the same without them. A run under
+  // five seconds says nothing once it is over.
+  let now = $state(Date.now());
+  $effect(() => {
+    if (item.kind !== "tool" || !item.running || item.startedAt === undefined) return;
+    const tick = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(tick);
+  });
+
+  const clock = $derived.by(() => {
+    if (item.kind !== "tool" || item.name !== "run_shell") return "";
+    if (!item.running) {
+      return item.ranMs !== undefined && item.ranMs >= 5000 ? clockLabel(item.ranMs / 1000) : "";
+    }
+    if (item.startedAt === undefined) return "";
+    const on = clockLabel((now - item.startedAt) / 1000);
+    return item.timeoutS ? `${on} of ${clockLabel(item.timeoutS)}` : on;
+  });
+
   const isPath = $derived(item.kind === "tool" && item.name !== "find" && path !== "");
   // A compaction with no summary is a divider and nothing more.
   const expandable = $derived(item.kind !== "compaction" || item.summary !== "");
@@ -167,6 +187,9 @@
     {/if}
     {#if item.kind === "tool" && item.exitCode !== null && item.exitCode !== 0}
       <span class="text-[12px] text-crit">Exit {item.exitCode}</span>
+    {/if}
+    {#if clock}
+      <span class="text-[12px] text-muted">{clock}</span>
     {/if}
     {#if child && child.status !== "idle"}
       <span class="text-[12px] text-muted">{child.status}</span>

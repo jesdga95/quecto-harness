@@ -23,19 +23,7 @@ func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, err
 		return Result{}, errors.New("run_shell needs a command")
 	}
 
-	timeout := r.Timeout
-	if args.TimeoutS != nil {
-		requested := time.Duration(*args.TimeoutS) * time.Second
-		switch {
-		case requested < time.Second:
-			timeout = time.Second
-		case requested > r.MaxTimeout:
-			timeout = r.MaxTimeout
-		default:
-			timeout = requested
-		}
-	}
-
+	timeout := r.shellTimeout(args)
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -95,6 +83,33 @@ func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, err
 		Truncated: truncated,
 		Bytes:     buf.Total(),
 	}, nil
+}
+
+// ShellTimeout is how long the call in raw would be given. Arguments that do
+// not decode take the default, which is what running them does.
+func (r *Runner) ShellTimeout(raw json.RawMessage) time.Duration {
+	var args RunShellArgs
+	if decodeArgs(raw, &args) != nil {
+		return r.Timeout
+	}
+	return r.shellTimeout(args)
+}
+
+// shellTimeout clamps what the call asked for between a second and MaxTimeout.
+// A call that names nothing takes the configured default.
+func (r *Runner) shellTimeout(args RunShellArgs) time.Duration {
+	if args.TimeoutS == nil {
+		return r.Timeout
+	}
+	requested := time.Duration(*args.TimeoutS) * time.Second
+	switch {
+	case requested < time.Second:
+		return time.Second
+	case requested > r.MaxTimeout:
+		return r.MaxTimeout
+	default:
+		return requested
+	}
 }
 
 // signalName reports which signal killed the process, or "unknown" when the

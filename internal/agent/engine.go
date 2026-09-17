@@ -1235,6 +1235,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				return
 			}
 			e.setState(s, StateExecuting)
+			if decision.Kind != perms.DecideDeny {
+				e.publishStarted(s, runner, call, i)
+			}
 			entry := e.execute(ctx, s, runner, call, decision, record, i)
 			e.save(s)
 			e.publish(s.ID, ev("tool_output", map[string]any{
@@ -1389,6 +1392,18 @@ func (e *Engine) publishDecided(s *Session, r *store.PermissionRecord) {
 	}
 	e.publish(s.ID, ev("permission_done", map[string]any{
 		"id": r.ID, "decision": r.Decision, "prefix": r.Prefix, "reason": r.Reason}))
+}
+
+// publishStarted marks the moment a call begins running. A shell call carries
+// the deadline it was given, since a command that is slow and one that is
+// stuck look alike until the limit is on screen.
+func (e *Engine) publishStarted(s *Session, runner *tools.Runner, call llm.ToolCall, index int) {
+	fields := map[string]any{"index": index, "id": call.ID, "name": call.Function.Name}
+	if call.Function.Name == "run_shell" {
+		timeout := runner.ShellTimeout(json.RawMessage(call.Function.Arguments))
+		fields["timeout_s"] = int(timeout / time.Second)
+	}
+	e.publish(s.ID, ev("tool_start", fields))
 }
 
 // execute runs the tool or writes the denial, and appends the tool entry that

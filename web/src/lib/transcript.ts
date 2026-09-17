@@ -129,6 +129,21 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
       }
       break;
     }
+    case "tool_start": {
+      // A renamed collision keeps the original id as its prefix, and the card
+      // being filled is always the most recent one, so the search runs backwards.
+      const item = [...items]
+        .reverse()
+        .find(
+          (i) =>
+            i.kind === "tool" && (i.id === event.id || i.id.startsWith(`${event.id}#`)),
+        );
+      if (item && item.kind === "tool") {
+        item.startedAt = Date.now();
+        item.timeoutS = event.timeout_s;
+      }
+      break;
+    }
     case "tool_output": {
       // A renamed collision keeps the original id as its prefix, and the card
       // being filled is always the most recent one, so the search runs backwards.
@@ -143,6 +158,7 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
         item.exitCode = event.exit_code;
         item.truncated = event.truncated;
         item.running = false;
+        if (item.startedAt !== undefined) item.ranMs = Date.now() - item.startedAt;
         if (event.meta) item.meta = event.meta;
       }
       break;

@@ -438,6 +438,42 @@ func TestToolCallEventsCarryTheIndex(t *testing.T) {
 	}
 }
 
+// The deadline is published before the command starts, since a long command
+// and a stuck one are the same row until the limit is on screen.
+func TestToolStartCarriesTheShellDeadline(t *testing.T) {
+	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "list", nil)
+	id := waitForCard(t, h, s.ID)
+	h.broker.Resolve(id, perms.Decision{Kind: perms.DecideOnce})
+	waitIdle(t, s)
+
+	started := h.rec.ofType("tool_start")
+	if len(started) != 1 {
+		t.Fatalf("tool_start events = %d, want one", len(started))
+	}
+	if got := started[0].Fields["name"]; got != "run_shell" {
+		t.Errorf("name = %v, want the call that started", got)
+	}
+	if got := started[0].Fields["timeout_s"]; got != 120 {
+		t.Errorf("timeout_s = %v, want the configured default", got)
+	}
+}
+
+// A denied call never runs, so nothing says it started.
+func TestDeniedToolNeverStarts(t *testing.T) {
+	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "list", nil)
+	id := waitForCard(t, h, s.ID)
+	h.broker.Resolve(id, perms.Decision{Kind: perms.DecideDeny, Reason: "not this one"})
+	waitIdle(t, s)
+
+	if n := len(h.rec.ofType("tool_start")); n != 0 {
+		t.Errorf("tool_start events = %d, want none", n)
+	}
+}
+
 func TestTwoToolCallsAreSequential(t *testing.T) {
 	h := newHarness(t, "stream_two_tools.txt", "stream_plain.txt")
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeAllowlist })

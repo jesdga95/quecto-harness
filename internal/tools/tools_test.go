@@ -297,10 +297,28 @@ func TestRunShellStopped(t *testing.T) {
 	}
 }
 
+// The clamp is what the command runs under and what the turn publishes before
+// it starts, so the two cannot disagree about how long a call has.
 func TestRunShellTimeoutIsClamped(t *testing.T) {
 	r := testRoot(t, t.TempDir())
 	if r.MaxTimeout != 600*time.Second {
 		t.Errorf("MaxTimeout = %v, want the 600s floor", r.MaxTimeout)
+	}
+	cases := []struct {
+		args string
+		want time.Duration
+	}{
+		{`{"command":"true"}`, 5 * time.Second},
+		{`{"command":"true","timeout_s":60}`, 60 * time.Second},
+		{`{"command":"true","timeout_s":100000}`, 600 * time.Second},
+		{`{"command":"true","timeout_s":0}`, time.Second},
+		{`{"command":"true","timeout_s":-5}`, time.Second},
+		{`not json`, 5 * time.Second},
+	}
+	for _, c := range cases {
+		if got := r.ShellTimeout(json.RawMessage(c.args)); got != c.want {
+			t.Errorf("ShellTimeout(%s) = %v, want %v", c.args, got, c.want)
+		}
 	}
 	if _, err := r.RunShell(context.Background(), json.RawMessage(`{"command":"true","timeout_s":100000}`)); err != nil {
 		t.Fatal(err)

@@ -18,6 +18,16 @@ export function duration(ms: number): string {
   return `${Math.floor(secs / 60)}m ${Math.round(secs % 60)}s`;
 }
 
+/** How long a command has been running, or was given, at the resolution a
+    ticking clock can hold still. */
+export function clockLabel(seconds: number): string {
+  const whole = Math.max(0, Math.round(seconds));
+  if (whole < 60) return `${whole}s`;
+  const mins = Math.floor(whole / 60);
+  const rest = whole % 60;
+  return rest === 0 ? `${mins}m` : `${mins}m ${rest}s`;
+}
+
 export function level(ratio: number): "ok" | "warn" | "crit" {
   if (ratio >= 0.8) return "crit";
   if (ratio >= 0.6) return "warn";

@@ -220,6 +220,9 @@ export type HarnessEvent =
   | { type: "tool_call"; id: string; name: string; args: Record<string, unknown> }
   /** Arguments stream in after the call opens, so they land in a second event. */
   | { type: "tool_args"; id: string; name: string; args: Record<string, unknown> }
+  /** The call left the permission card and began running. timeout_s is the
+      deadline a shell command was given, and is null for every other tool. */
+  | { type: "tool_start"; id: string; name: string; timeout_s: number | null }
   | {
       type: "tool_output";
       id: string;
@@ -308,6 +311,12 @@ export type TranscriptItem =
       exitCode: number | null;
       truncated: boolean;
       running: boolean;
+      /** When the call began running, and the seconds a shell command was
+          given. A reloaded transcript has neither. */
+      startedAt?: number;
+      timeoutS?: number | null;
+      /** How long the call took, once it is over. */
+      ranMs?: number;
       /** Set on an ask_question call that is still waiting, and is the id its
           answer is posted to. */
       askId?: string;

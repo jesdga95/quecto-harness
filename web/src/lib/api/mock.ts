@@ -852,6 +852,12 @@ export class MockApi implements HarnessApi {
 
       if (allowed) {
         this.emit(session, { type: "status", status: "running" });
+        this.send(session, t, {
+          type: "tool_start",
+          id: callId,
+          name: script.tool,
+          timeout_s: script.tool === "run_shell" ? 600 : null,
+        });
         await this.sleep(900, turn);
         this.send(session, t, {
           type: "tool_output",
