@@ -35,6 +35,10 @@ type replay struct {
 	Titles   []map[string]any
 	Queries  []string
 	Loads    []string
+	// Order records what the server was asked for, in the order it was
+	// asked, so a test can assert that a side request did not land between
+	// two of a turn's own requests.
+	Order []string
 }
 
 func newReplay(t *testing.T, fixtures ...string) *replay {
@@ -142,6 +146,7 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 	if body["max_tokens"] == float64(1) {
 		r.mu.Lock()
 		r.Probes = append(r.Probes, body)
+		r.Order = append(r.Order, "probe")
 		r.mu.Unlock()
 		name := "probe_system.txt"
 		if _, ok := body["tools"]; ok {
@@ -158,6 +163,7 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 		if _, hasTools := body["tools"]; !hasTools {
 			r.mu.Lock()
 			r.Titles = append(r.Titles, body)
+			r.Order = append(r.Order, "title")
 			r.mu.Unlock()
 			r.stream(w, frames(r.t, "stream_title.txt"))
 			return
@@ -174,6 +180,7 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 
 	r.mu.Lock()
 	r.Requests = append(r.Requests, body)
+	r.Order = append(r.Order, "chat")
 	script := []string(nil)
 	// A model with a queue of its own answers from it, so two agents talking
 	// at once never take each other's script.

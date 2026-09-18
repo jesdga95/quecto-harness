@@ -915,9 +915,13 @@ func (e *Engine) turnCaps(s *Session) llm.Caps {
 // is the system cost and the difference is the schema cost. Everything else in
 // the context is then the remainder of a real usage report.
 //
-// It runs after a turn has streamed rather than beside the preparation, so a
-// session that is ready to type into is not waiting on a measurement.
-func (e *Engine) probeContextBase(s *Session, a config.Agent, b brief) {
+// It runs before a turn's first request rather than after its last, since the
+// model server holds one prompt at a time and a measurement sent after the
+// last request would evict the conversation a queued message or the next turn
+// is about to read. It is measured at most once per model and system size, and
+// that once is a turn whose first request is a full prefill either way, so the
+// wait it adds costs no cache.
+func (e *Engine) probeContextBase(ctx context.Context, s *Session, a config.Agent, b brief) {
 	s.mu.Lock()
 	caps := s.caps
 	system := s.systemMessage(a, e.os, b)
@@ -927,44 +931,44 @@ func (e *Engine) probeContextBase(s *Session, a config.Agent, b brief) {
 		return
 	}
 	chars := len(system.Content)
-	// Counted like a turn, so a shutdown waits for the write it ends in
-	// rather than racing it.
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
-		ctx, cancel := context.WithTimeout(e.ctx, 60*time.Second)
-		defer cancel()
-		count := func(schemas []llm.Tool) (int, bool) {
-			res, err := e.backends.For(a).Chat(ctx, llm.ChatRequest{
-				Model: a.Model, Messages: []llm.Message{system}, Tools: schemas,
-				Effort: llm.EffortOff, Caps: caps, MaxTokens: 1}, nil)
-			if err != nil || res.Usage == nil || res.Usage.PromptTokens <= 0 {
-				return 0, false
-			}
-			return res.Usage.PromptTokens, true
+	// The turn has no deadline of its own, so the measurement carries one.
+	mctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	count := func(schemas []llm.Tool) (int, bool) {
+		res, err := e.backends.For(a).Chat(mctx, llm.ChatRequest{
+			Model: a.Model, Messages: []llm.Message{system}, Tools: schemas,
+			Effort: llm.EffortOff, Caps: caps, MaxTokens: 1}, nil)
+		if err != nil || res.Usage == nil || res.Usage.PromptTokens <= 0 {
+			return 0, false
 		}
-		bare, okBare := count(nil)
-		armed, okArmed := count(tools.Schemas(b.offer))
+		return res.Usage.PromptTokens, true
+	}
+	bare, okBare := count(nil)
+	armed, okArmed := count(tools.Schemas(b.offer))
 
-		s.mu.Lock()
+	s.mu.Lock()
+	// One attempt is enough: a server that will not answer the measurement is
+	// not asked again every turn. A turn stopped part way through carries no
+	// answer either way, so the next one asks.
+	if ctx.Err() == nil {
 		s.baseProbed = true
-		stale := s.Model != a.Model || s.sysChars != chars
-		measured := okBare && okArmed && armed >= bare && !stale
-		if measured {
-			s.ContextBase = &store.ContextBase{Model: a.Model, Chars: chars, System: bare, Tools: armed - bare}
-			// The turn that triggered the probe already reported its usage, so
-			// it is attributed here rather than a turn later.
-			if s.LastUsage != nil && s.lastSentTools {
-				s.LastToolTokens = s.ContextBase.Tools
-			}
+	}
+	stale := s.Model != a.Model || s.sysChars != chars
+	measured := okBare && okArmed && armed >= bare && !stale
+	if measured {
+		s.ContextBase = &store.ContextBase{Model: a.Model, Chars: chars, System: bare, Tools: armed - bare}
+		// The last usage report carries the same fixed parts, so the schema
+		// cost is attributed to it rather than left for the next turn.
+		if s.LastUsage != nil && s.lastSentTools {
+			s.LastToolTokens = s.ContextBase.Tools
 		}
-		s.mu.Unlock()
-		if !measured {
-			return
-		}
-		e.save(s)
-		e.publishUsage(s)
-	}()
+	}
+	s.mu.Unlock()
+	if !measured {
+		return
+	}
+	e.save(s)
+	e.publishUsage(s)
 }
 
 // fail ends the turn on the stream. The message is not kept: it says what went
@@ -1083,6 +1087,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	if s.Parent == "" {
 		e.titleSession(ctx, s, back, a, caps)
 	}
+	// The measurement runs before the first request, so it evicts nothing the
+	// turn is about to read.
+	e.probeContextBase(ctx, s, a, b)
 	runner, rerr := tools.NewRunner(s.Project, cfg)
 	if rerr != nil {
 		e.fail(s, rerr)
@@ -1200,7 +1207,6 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			s.lastUsageEntry = len(s.Entries) - 1
 			s.mu.Unlock()
 			e.save(s)
-			e.probeContextBase(s, a, b)
 			e.publishUsage(s)
 			// A message that landed while the model was answering makes this
 			// the middle of the turn rather than the end of it.

@@ -138,14 +138,26 @@ func newFixture(t *testing.T) *fixture {
 		case "/v1/chat/completions":
 			w.Header().Set("Content-Type", "text/event-stream")
 			flusher, _ := w.(http.Flusher)
-			// The naming request stands on its own: one message and no
-			// schemas. It answers here so it does not take the frames a test
-			// queued for a turn.
+			// The measurement and the naming request are answered here, so
+			// neither takes the frames a test queued for a turn.
 			var body struct {
-				Messages []json.RawMessage `json:"messages"`
-				Tools    []json.RawMessage `json:"tools"`
+				Messages  []json.RawMessage `json:"messages"`
+				Tools     []json.RawMessage `json:"tools"`
+				MaxTokens int               `json:"max_tokens"`
 			}
 			json.NewDecoder(r.Body).Decode(&body)
+			// A completion capped at one token is the context measurement,
+			// which reads the usage report and nothing else.
+			if body.MaxTokens == 1 {
+				fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"."},"finish_reason":"length"}]}`+"\n\n")
+				fmt.Fprint(w, `data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":1,"total_tokens":21}}`+"\n\n")
+				fmt.Fprint(w, "data: [DONE]\n\n")
+				if flusher != nil {
+					flusher.Flush()
+				}
+				return
+			}
+			// The naming request stands on its own: one message and no schemas.
 			if len(body.Messages) == 1 && len(body.Tools) == 0 {
 				fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"A name"},"finish_reason":"stop"}]}`+"\n\n")
 				fmt.Fprint(w, "data: [DONE]\n\n")
