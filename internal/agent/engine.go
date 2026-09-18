@@ -109,6 +109,16 @@ func noAgent(cfg config.Config) error {
 	return ErrNoAgent
 }
 
+// today is the calendar day the prompt runs on, in the host's zone. It is
+// read per request but changes at most once a day, so the system message it
+// opens stays token for token across the day and the prefill cache of a
+// running conversation survives it. The time of day is left to run_shell,
+// since anything finer would put a new token at the front of every request
+// and re-prefill the whole conversation each turn.
+func (e *Engine) today() string {
+	return time.Now().Format("2006-01-02")
+}
+
 // messages builds the prompt for a session. The image bytes are read between
 // the two locks, so nothing does file IO while the session is held.
 func (e *Engine) messages(s *Session, a config.Agent, b brief) []llm.Message {
@@ -129,7 +139,7 @@ func (e *Engine) messages(s *Session, a config.Agent, b brief) []llm.Message {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.contextMessages(a, e.os, b, images)
+	return s.contextMessages(a, e.os, e.today(), b, images)
 }
 
 // mimeOf reads the type back off the bytes, so the data URI says what the
@@ -924,7 +934,7 @@ func (e *Engine) turnCaps(s *Session) llm.Caps {
 func (e *Engine) probeContextBase(ctx context.Context, s *Session, a config.Agent, b brief) {
 	s.mu.Lock()
 	caps := s.caps
-	system := s.systemMessage(a, e.os, b)
+	system := s.systemMessage(a, e.os, e.today(), b)
 	done := s.baseProbed || s.ContextBase.Fits(a.Model, s.sysChars)
 	s.mu.Unlock()
 	if a.Model == "" || done {

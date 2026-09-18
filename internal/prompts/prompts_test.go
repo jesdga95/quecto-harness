@@ -36,9 +36,9 @@ func TestTitleCarriesTheMessage(t *testing.T) {
 	}
 }
 
-func TestSystemSubstitutesBothFields(t *testing.T) {
-	got := System(SystemVars{Project: "/Users/user/src/x", OS: "darwin"})
-	if !strings.Contains(got, "/Users/user/src/x") || !strings.Contains(got, "darwin") {
+func TestSystemSubstitutesItsFields(t *testing.T) {
+	got := System(SystemVars{Project: "/Users/user/src/x", OS: "darwin", Date: "2026-02-06"})
+	if !strings.Contains(got, "/Users/user/src/x") || !strings.Contains(got, "darwin") || !strings.Contains(got, "Today's date is 2026-02-06.") {
 		t.Errorf("system prompt did not substitute: %q", got)
 	}
 	if strings.Contains(got, "{{") {
@@ -48,6 +48,24 @@ func TestSystemSubstitutesBothFields(t *testing.T) {
 		if !strings.Contains(got, tool) {
 			t.Errorf("system prompt does not name %s", tool)
 		}
+	}
+}
+
+// The date is the one value in the prompt the clock moves, so where it lands
+// is where a prefill cache is won or lost. At the day's granularity it moves
+// at most once a day, and it must move on the first line and nowhere else: a
+// running conversation keeps the same first tokens for a whole day, and a
+// mid-day change would put a new token before the cached prefix and re-prefill
+// every conversation at once.
+func TestSystemCarriesTheDayOnTheFirstLine(t *testing.T) {
+	without := System(SystemVars{Project: "/src/x", OS: "darwin"})
+	if strings.Contains(without, "date") {
+		t.Errorf("a prompt with no date names one: %q", without)
+	}
+	with := System(SystemVars{Project: "/src/x", OS: "darwin", Date: "2026-02-06"})
+	want := strings.Replace(without, "on darwin.", "on darwin. Today's date is 2026-02-06.", 1)
+	if with != want {
+		t.Errorf("the date moved more than the first line:\n%q\nwant\n%q", with, want)
 	}
 }
 
@@ -104,6 +122,17 @@ func TestSystemDoesNotParseInstructions(t *testing.T) {
 	got := System(SystemVars{Project: "/src/x", OS: "darwin", Instructions: "Work in {{.Project}} and {{if"})
 	if !strings.Contains(got, "{{.Project}} and {{if") {
 		t.Errorf("instructions were not passed through verbatim: %q", got)
+	}
+}
+
+// The model's knowledge of the world ends where its training did, so the
+// prompt says what may have changed since is checked with a tool rather than
+// answered from memory. The line names no tool: a subagent that was not sent
+// web_search must still read it, and read it without the promise of one.
+func TestSystemSaysItsKnowledgeIsStale(t *testing.T) {
+	got := System(SystemVars{Project: "/src/x", OS: "darwin"})
+	if !strings.Contains(got, "goes stale") || !strings.Contains(got, "verify it with a tool") {
+		t.Errorf("prompt does not say its knowledge is stale and what to do about it: %q", got)
 	}
 }
 

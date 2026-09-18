@@ -402,9 +402,9 @@ func (s *Session) imageRefs() []string {
 // systemMessage is the system prompt as this agent renders it. Everything that
 // sends one goes through here, so a turn, a compaction and the measurement of
 // the fixed context all carry the same text. The caller holds the lock.
-func (s *Session) systemMessage(a config.Agent, osName string, b brief) llm.Message {
+func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) llm.Message {
 	content := prompts.System(prompts.SystemVars{
-		Project: s.Project, OS: osName,
+		Project: s.Project, OS: osName, Date: date,
 		CanAsk: b.offer.Ask, CanMessage: b.offer.Message, CanSearch: b.offer.Search,
 		Agents: b.agents, Launcher: b.launcher,
 		Instructions: a.Instructions,
@@ -416,8 +416,8 @@ func (s *Session) systemMessage(a config.Agent, osName string, b brief) llm.Mess
 // contextMessages is the system prompt followed by every in-context entry,
 // with the invariants the wire format requires repaired. images maps a file
 // id to the part built from it.
-func (s *Session) contextMessages(a config.Agent, osName string, b brief, images map[string]llm.Part) []llm.Message {
-	msgs := []llm.Message{s.systemMessage(a, osName, b)}
+func (s *Session) contextMessages(a config.Agent, osName, date string, b brief, images map[string]llm.Part) []llm.Message {
+	msgs := []llm.Message{s.systemMessage(a, osName, date, b)}
 	for i := 0; i < len(s.Entries); i++ {
 		e := s.Entries[i]
 		if !e.InContext {

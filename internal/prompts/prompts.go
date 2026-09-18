@@ -45,6 +45,15 @@ type AgentBrief struct {
 type SystemVars struct {
 	Project string
 	OS      string
+	// Date is the calendar day the session runs on, YYYY-MM-DD in the host's
+	// zone. It is the one value the clock moves, and at the day's granularity
+	// it moves at most once a day: a running conversation keeps the same first
+	// tokens for a whole day, so the prefill cache of it survives. Anything
+	// finer would put a new token at the front of every request and re-prefill
+	// the whole conversation each turn, so the time of day is left to
+	// run_shell. Empty leaves the line out, which is the prompt the harness
+	// sent before the date was possible.
+	Date string
 	// CanAsk, CanMessage and CanSearch say whether ask_question, send_message
 	// and web_search are in this turn's request. The prompt names the tools
 	// that were sent, or the model reaches for one it does not have.

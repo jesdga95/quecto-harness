@@ -818,7 +818,7 @@ func TestCompactionRewritesInContextOnly(t *testing.T) {
 	// The entry keeps the summary alone; the framing is added to the message
 	// built from it, so the transcript can show the summary as it was written.
 	s.mu.Lock()
-	msgs := s.contextMessages(config.Agent{}, "darwin", topBrief(), nil)
+	msgs := s.contextMessages(config.Agent{}, "darwin", "", topBrief(), nil)
 	s.mu.Unlock()
 	sent := msgs[len(msgs)-1]
 	if sent.Role != "user" || !strings.HasPrefix(sent.Content, "Summary of earlier work:") ||
@@ -1111,7 +1111,7 @@ func TestUnansweredToolCallIsRepaired(t *testing.T) {
 	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
 		ToolCalls: []llm.ToolCall{{ID: "call_x", Type: "function",
 			Function: llm.FunctionCall{Name: "run_shell", Arguments: `{"command":"ls"}`}}}})
-	msgs := s.contextMessages(config.Agent{}, "darwin", topBrief(), nil)
+	msgs := s.contextMessages(config.Agent{}, "darwin", "", topBrief(), nil)
 	s.mu.Unlock()
 
 	last := msgs[len(msgs)-1]
@@ -1632,7 +1632,7 @@ func TestContextBaseIsRemeasuredWhenInstructionsChange(t *testing.T) {
 	h := newHarness(t)
 	s := h.session(t)
 	s.mu.Lock()
-	system := s.systemMessage(h.agent, "darwin", topBrief())
+	system := s.systemMessage(h.agent, "darwin", "2026-02-06", topBrief())
 	s.ContextBase = &store.ContextBase{Model: "Alpha-12B", Chars: len(system.Content), System: 154, Tools: 1026}
 	s.LastUsage = &llm.Usage{PromptTokens: 2000, CompletionTokens: 10}
 	fits := s.ContextBase.Fits(s.Model, s.sysChars)
@@ -1643,7 +1643,7 @@ func TestContextBaseIsRemeasuredWhenInstructionsChange(t *testing.T) {
 
 	edited := h.setAgent(t, func(a *config.Agent) { a.Instructions = "Answer in Latin." })
 	s.mu.Lock()
-	s.systemMessage(edited, "darwin", topBrief())
+	s.systemMessage(edited, "darwin", "2026-02-06", topBrief())
 	still := s.ContextBase.Fits(s.Model, s.sysChars)
 	s.mu.Unlock()
 	if still {
