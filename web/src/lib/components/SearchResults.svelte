@@ -27,7 +27,6 @@
       }))
       .filter((h) => h.url !== null || h.title !== "");
   });
-  const cost = $derived(typeof item.meta?.cost_usd === "number" ? (item.meta?.cost_usd as number) : 0);
   const dropped = $derived(typeof item.meta?.dropped === "number" ? (item.meta?.dropped as number) : 0);
 
   function host(url: string | null): string {
@@ -77,12 +76,9 @@
   <pre class="mono-block">{item.output}</pre>
 {/if}
 
-{#if dropped > 0 || cost > 0}
+{#if dropped > 0}
   <span class="text-[11.5px] text-muted">
-    {#if dropped > 0}
-      {dropped} {dropped === 1 ? "result" : "results"} came back with no address and were dropped.
-    {/if}
-    {#if cost > 0}Cost ${cost.toFixed(3)}{/if}
+    {dropped} {dropped === 1 ? "result" : "results"} came back with no address and were dropped.
   </span>
 {/if}
 

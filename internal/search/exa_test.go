@@ -114,10 +114,6 @@ func TestExaDecodesTheCapturedSearch(t *testing.T) {
 		!strings.Contains(res.Hits[0].Body, "abnormal state") {
 		t.Errorf("body = %q, want the excerpt with its gap intact", res.Hits[0].Body)
 	}
-	// What the search cost, as the endpoint reported it.
-	if res.CostUSD != 0.007 {
-		t.Errorf("CostUSD = %v, want 0.007 from the response", res.CostUSD)
-	}
 }
 
 // Full pages are the other mode, for a page whose relevant part cannot be
@@ -258,21 +254,6 @@ func TestExaJoinsSeparateExcerpts(t *testing.T) {
 	}
 	if got, want := res.Hits[0].Body, "first span\n...\nsecond span"; got != want {
 		t.Errorf("body = %q, want %q", got, want)
-	}
-}
-
-// An endpoint that says nothing about cost is not a free one, so nothing is
-// reported.
-func TestExaLeavesAnUnstatedCostUnstated(t *testing.T) {
-	e := newEndpoint(t, `{"results":[{"url":"https://example.org/a","highlights":["x"]}]}`,
-		http.StatusOK)
-
-	res, err := e.provider().Search(context.Background(), Query{Text: "q", Hits: 1})
-	if err != nil {
-		t.Fatalf("search: %v", err)
-	}
-	if res.CostUSD != 0 {
-		t.Errorf("CostUSD = %v, want nothing reported", res.CostUSD)
 	}
 }
 

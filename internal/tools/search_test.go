@@ -259,7 +259,6 @@ func TestWebSearchRefusals(t *testing.T) {
 // session file a second time.
 func TestWebSearchMeta(t *testing.T) {
 	res := twoHitResults()
-	res.CostUSD = 0.007
 	fs := &fakeSearch{results: res}
 
 	out, err := searchRunner(fs).WebSearch(context.Background(),
@@ -273,7 +272,7 @@ func TestWebSearchMeta(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"provider":"exa"`, `"query":"go errors"`, `"mode":"excerpts"`,
-		`"chars":4000`, `"cost_usd":0.007`, `"since":"2024-01-01"`,
+		`"chars":4000`, `"since":"2024-01-01"`,
 		`"url":"https://go.dev/blog/go1.13-errors"`,
 		`"published":"2024-05-24T00:00:00.000Z"`,
 	} {
@@ -294,7 +293,7 @@ func TestWebSearchMeta(t *testing.T) {
 		t.Fatalf("web search: %v", err)
 	}
 	meta2, _ := json.Marshal(out2.Meta)
-	for _, absent := range []string{"cost_usd", "since", "dropped"} {
+	for _, absent := range []string{"since", "dropped"} {
 		if strings.Contains(string(meta2), absent) {
 			t.Errorf("meta = %s, reports %s with nothing to say", meta2, absent)
 		}

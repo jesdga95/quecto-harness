@@ -81,17 +81,13 @@ type Hit struct {
 	Published string
 }
 
-// Results is what one query returned, and what it cost to get.
+// Results is what one query returned.
 type Results struct {
 	Hits []Hit
 	Mode string
 
 	// Chars is the budget the search was asked to keep to.
 	Chars int
-
-	// CostUSD is what the endpoint charged, as it reported it. Absent where
-	// it said nothing, rather than reported as free.
-	CostUSD float64
 
 	// Dropped counts hits that came back with nothing to identify them.
 	// They are counted rather than hidden, since a search that mostly

@@ -86,9 +86,6 @@ func (r *Runner) WebSearch(ctx context.Context, raw json.RawMessage) (Result, er
 	}
 	// Reported only when there is something to report, so the transcript does
 	// not carry a zero that reads as a fact.
-	if res.CostUSD > 0 {
-		meta["cost_usd"] = res.CostUSD
-	}
 	if res.Dropped > 0 {
 		meta["dropped"] = res.Dropped
 	}

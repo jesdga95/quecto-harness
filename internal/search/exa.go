@@ -49,9 +49,6 @@ func (e *exa) Search(ctx context.Context, q Query) (*Results, error) {
 	}
 
 	out := &Results{Mode: mode, Chars: q.Chars}
-	if decoded.CostDollars != nil {
-		out.CostUSD = decoded.CostDollars.Total
-	}
 
 	// A hit with no url cannot be cited or fetched again, so it is not a
 	// hit. Absent and empty are the same answer here, which is why neither
@@ -209,14 +206,7 @@ type apiBounded struct {
 }
 
 type apiResponse struct {
-	Results     []apiHit `json:"results"`
-	CostDollars *apiCost `json:"costDollars"`
-}
-
-// A pointer, so an endpoint that says nothing about cost is not recorded as
-// free.
-type apiCost struct {
-	Total float64 `json:"total"`
+	Results []apiHit `json:"results"`
 }
 
 type apiHit struct {
