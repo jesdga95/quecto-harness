@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -545,6 +546,101 @@ func TestProjectRoutes(t *testing.T) {
 	if len(projects) != 1 {
 		t.Errorf("after delete = %v", projects)
 	}
+}
+
+// TestProjectReorderRoute asserts that a whole new order is stored and that an
+// order the project list does not hold is refused.
+func TestProjectReorderRoute(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	if w := f.do(t, "POST", "/api/projects", map[string]string{"path": dir}); w.Code != http.StatusOK {
+		t.Fatalf("add project = %d %s", w.Code, w.Body.String())
+	}
+
+	if w := f.do(t, "PUT", "/api/projects", map[string]any{"paths": []string{real}}); w.Code != http.StatusBadRequest {
+		t.Errorf("an incomplete order = %d, want 400", w.Code)
+	}
+	if w := f.do(t, "PUT", "/api/projects", map[string]any{"paths": []string{real, real}}); w.Code != http.StatusBadRequest {
+		t.Errorf("a repeated path = %d, want 400", w.Code)
+	}
+
+	w := f.do(t, "PUT", "/api/projects", map[string]any{"paths": []string{real, f.project}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("reorder = %d %s", w.Code, w.Body.String())
+	}
+	if got := stringList(t, w, "projects"); !slices.Equal(got, []string{real, f.project}) {
+		t.Errorf("projects = %v, want the new order", got)
+	}
+
+	// What a page reads at startup holds the order, which is all the sidebar
+	// asks of the state.
+	state := f.do(t, "GET", "/api/state", nil)
+	if got := stringList(t, state, "projects"); !slices.Equal(got, []string{real, f.project}) {
+		t.Errorf("state projects = %v", got)
+	}
+}
+
+// TestSessionReorderRoute asserts that a saved order is what the listing comes
+// out in, and that an order the project does not hold is refused.
+func TestSessionReorderRoute(t *testing.T) {
+	f := newFixture(t)
+	a := f.newSession(t)
+	b := f.newSession(t)
+	c := f.newSession(t)
+
+	list := f.do(t, "GET", "/api/sessions?project="+f.project, nil)
+	if got := sessionIDs(t, list); !slices.Equal(got, []string{c, b, a}) {
+		t.Fatalf("sessions = %v, want newest first", got)
+	}
+
+	if w := f.do(t, "PUT", "/api/sessions/order",
+		map[string]any{"project": f.project, "ids": []string{a, b}}); w.Code != http.StatusBadRequest {
+		t.Errorf("an incomplete order = %d, want 400", w.Code)
+	}
+	if w := f.do(t, "PUT", "/api/sessions/order",
+		map[string]any{"project": "/no/such/project", "ids": []string{}}); w.Code != http.StatusBadRequest {
+		t.Errorf("a project with no conversations = %d, want 400", w.Code)
+	}
+
+	w := f.do(t, "PUT", "/api/sessions/order", map[string]any{"project": f.project, "ids": []string{b, c, a}})
+	if w.Code != http.StatusOK {
+		t.Fatalf("reorder = %d %s", w.Code, w.Body.String())
+	}
+	if got := sessionIDs(t, w); !slices.Equal(got, []string{b, c, a}) {
+		t.Errorf("the answer = %v, want the new order", got)
+	}
+	list = f.do(t, "GET", "/api/sessions?project="+f.project, nil)
+	if got := sessionIDs(t, list); !slices.Equal(got, []string{b, c, a}) {
+		t.Errorf("the listing = %v, want the saved order", got)
+	}
+}
+
+// stringList is one named list of strings out of a JSON answer.
+func stringList(t *testing.T, w *httptest.ResponseRecorder, name string) []string {
+	t.Helper()
+	v, _ := decode(t, w)[name].([]any)
+	out := make([]string, 0, len(v))
+	for _, s := range v {
+		if str, ok := s.(string); ok {
+			out = append(out, str)
+		}
+	}
+	return out
+}
+
+// sessionIDs is the id of every row of a sessions answer.
+func sessionIDs(t *testing.T, w *httptest.ResponseRecorder) []string {
+	t.Helper()
+	rows, _ := decode(t, w)["sessions"].([]any)
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		m, _ := row.(map[string]any)
+		if id, _ := m["id"].(string); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func TestAllowlistRoutes(t *testing.T) {

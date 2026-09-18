@@ -159,6 +159,10 @@ type Sessions struct {
 	mu    sync.RWMutex
 	index map[string]Summary
 	locks map[string]*sync.Mutex
+	// order is the saved manual order, per project, of that project's
+	// sessions. It lives beside the files rather than in them, since a
+	// reorder changes nothing but the listing.
+	order map[string][]string
 }
 
 var (
@@ -197,11 +201,30 @@ func Open(dir string) (*Sessions, error) {
 		}
 		s.index[sess.ID] = summarise(&sess, int64(len(raw)))
 	}
+	s.order = readOrder(filepath.Join(dir, "order.json"))
 	return s, nil
 }
 
+// readOrder answers nil when the file is absent, the way a project with no
+// saved order reads as newest first, and logs a file that does not parse
+// rather than failing the open.
+func readOrder(path string) map[string][]string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var m map[string][]string
+	if err := json.Unmarshal(raw, &m); err != nil {
+		log.Printf("sessions/order.json: %v: the saved order is ignored", err)
+		return nil
+	}
+	return m
+}
+
 // List returns the sessions of one project, or every session when project is
-// empty, newest first.
+// empty. A project with a saved order comes out in that order, and a session
+// the order does not name yet comes after, newest first; the rest are newest
+// first throughout.
 func (s *Sessions) List(project string) []Summary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -214,13 +237,84 @@ func (s *Sessions) List(project string) []Summary {
 			out = append(out, v)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Updated.Equal(out[j].Updated) {
-			return out[i].ID < out[j].ID
+	position := map[string]int{}
+	for i, id := range s.order[project] {
+		if _, ok := position[id]; !ok {
+			position[id] = i
 		}
-		return out[i].Updated.After(out[j].Updated)
-	})
+	}
+	if len(position) > 0 {
+		sort.SliceStable(out, func(i, j int) bool {
+			pi, oki := position[out[i].ID]
+			pj, okj := position[out[j].ID]
+			switch {
+			case oki && okj:
+				return pi < pj
+			case oki:
+				return true
+			case okj:
+				return false
+			}
+			return newerFirst(out[i], out[j])
+		})
+	} else {
+		sort.Slice(out, func(i, j int) bool { return newerFirst(out[i], out[j]) })
+	}
 	return out
+}
+
+// newerFirst is the default listing order, newest session first.
+func newerFirst(a, b Summary) bool {
+	if a.Updated.Equal(b.Updated) {
+		return a.ID < b.ID
+	}
+	return a.Updated.After(b.Updated)
+}
+
+// Reorder stores the order one project's sessions come out of List in. The
+// ids must name every top-level session of the project exactly once, so a
+// list read before a change cannot drop one.
+func (s *Sessions) Reorder(project string, ids []string) error {
+	s.mu.RLock()
+	total := 0
+	for _, v := range s.index {
+		if v.Project == project && v.Parent == "" {
+			total++
+		}
+	}
+	if total == 0 {
+		s.mu.RUnlock()
+		return errors.New("The project has no conversations: there is nothing to order")
+	}
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		v, ok := s.index[id]
+		if !ok || v.Project != project || v.Parent != "" || seen[id] {
+			s.mu.RUnlock()
+			return fmt.Errorf("The order names %q, which is not a conversation of the project: refetch the list and try again", id)
+		}
+		seen[id] = true
+	}
+	s.mu.RUnlock()
+	if len(seen) != total {
+		return errors.New("The order does not name every conversation of the project: refetch the list and try again")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.order == nil {
+		s.order = map[string][]string{}
+	}
+	s.order[project] = append([]string(nil), ids...)
+	return s.writeOrder()
+}
+
+// writeOrder stores the saved orders. The caller holds the lock.
+func (s *Sessions) writeOrder() error {
+	data, err := json.Marshal(s.order)
+	if err != nil {
+		return err
+	}
+	return config.WriteAtomic(filepath.Join(s.dir, "order.json"), append(data, '\n'), 0o600)
 }
 
 // Children returns the subagent runs one session launched, newest first. List

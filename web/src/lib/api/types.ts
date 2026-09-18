@@ -475,8 +475,15 @@ export interface HarnessApi {
   pasteFile(name: string, data: string): Promise<string>;
   addProject(path: string): Promise<Project[]>;
   removeProject(path: string): Promise<Project[]>;
+  /** Sets the order of the project list. It must name every project exactly
+      once, since the harness stores the list it is given. */
+  reorderProjects(paths: string[]): Promise<Project[]>;
   listSessions(project: string): Promise<Session[]>;
   createSession(project: string): Promise<Session>;
+  /** Sets the order one project's sessions are listed in. It must name every
+      conversation of the project exactly once, and answers with the list as
+      it now stands. */
+  reorderSessions(project: string, ids: string[]): Promise<Session[]>;
   /** Points an idle session at another model, keeping its history. */
   getSession(id: string): Promise<Transcript>;
   /** Every file the session wrote, against the copy kept before its first

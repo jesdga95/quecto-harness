@@ -272,6 +272,27 @@ export async function removeProject(path: string): Promise<void> {
   await loadSessions();
 }
 
+/** Moves a project to where a drop put it. The whole order goes to the
+    harness, which checks it names every project once, and the row is put back
+    where it was when the harness refuses. */
+export async function reorderProjects(ordered: Project[]): Promise<void> {
+  const before = app.projects;
+  app.projects = ordered;
+  const saved = await guard(() => api.reorderProjects(ordered.map((p) => p.path)));
+  if (saved) app.projects = saved;
+  else app.projects = before;
+}
+
+/** Moves one conversation inside its project, the same way. A conversation
+    does not move to another project, so the order stays within one. */
+export async function reorderSessions(project: string, ordered: Session[]): Promise<void> {
+  const before = app.sessions[project] ?? [];
+  app.sessions[project] = ordered;
+  const saved = await guard(() => api.reorderSessions(project, ordered.map((s) => s.id)));
+  if (saved) app.sessions[project] = saved;
+  else app.sessions[project] = before;
+}
+
 export async function renameSession(id: string, title: string): Promise<void> {
   if ((await guard(() => api.renameSession(id, title))) === null) return;
   await loadSessions();

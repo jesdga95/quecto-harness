@@ -18,6 +18,8 @@
     removeProject,
     deleteSession,
     renameSession,
+    reorderProjects,
+    reorderSessions,
   } from "../state/app.svelte";
   import { since } from "../format";
 
@@ -27,6 +29,95 @@
   let query = $state("");
   let renaming = $state("");
   let draft = $state("");
+
+  // What a drag carries. A conversation moves inside its project only, so its
+  // project rides along; a project moves in the project list.
+  type Drag =
+    | { kind: "project"; id: string }
+    | { kind: "session"; id: string; project: string };
+
+  let drag = $state<Drag | null>(null);
+  // The row a drop would land against, and which of its edges it takes.
+  let over = $state<{ target: Drag; before: boolean } | null>(null);
+
+  // A query narrows the lists, and the order of a narrow list is not the
+  // order of the whole one, so rows only carry while the lists stand whole.
+  const canDrag = $derived(query.trim() === "");
+
+  function startDrag(e: DragEvent, d: Drag): void {
+    if (!canDrag) return;
+    drag = d;
+    // Firefox will not begin a drag without payload text.
+    e.dataTransfer?.setData("text/plain", d.id);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  }
+
+  function passOverRow(e: DragEvent, target: Drag): void {
+    if (!drag || drag.kind !== target.kind) return;
+    if (drag.kind === "session" && target.kind === "session" && drag.project !== target.project)
+      return;
+    if (drag.id === target.id) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const before = e.clientY < rect.top + rect.height / 2;
+    if (!over || over.target.id !== target.id || over.before !== before) {
+      over = { target, before };
+    }
+  }
+
+  function leaveRow(e: DragEvent, id: string): void {
+    if (!drag) return;
+    const el = e.currentTarget as HTMLElement;
+    const to = e.relatedTarget as Node | null;
+    // Crossing into a child of the same row is not leaving it.
+    if (to && el.contains(to)) return;
+    if (over?.target.id === id) over = null;
+  }
+
+  function endDrag(): void {
+    drag = null;
+    over = null;
+  }
+
+  // A drop anywhere in the list is allowed, so a release in the gap between
+  // rows lands at the edge the indicator last showed.
+  function navDragOver(e: DragEvent): void {
+    if (drag) e.preventDefault();
+  }
+
+  function drop(e: DragEvent): void {
+    e.preventDefault();
+    const from = drag;
+    const place = over;
+    drag = null;
+    over = null;
+    if (!from || !place || from.kind !== place.target.kind) return;
+
+    if (from.kind === "project" && place.target.kind === "project") {
+      const moved = app.projects.find((p) => p.path === from.id);
+      if (!moved) return;
+      const list = app.projects.filter((p) => p.path !== from.id);
+      const at = list.findIndex((p) => p.path === place.target.id);
+      if (at === -1) return;
+      list.splice(at + (place.before ? 0 : 1), 0, moved);
+      if (list.every((p, i) => app.projects[i]?.path === p.path)) return;
+      void reorderProjects(list);
+      return;
+    }
+
+    if (from.kind !== "session" || place.target.kind !== "session") return;
+    const all = sessionsOf(from.project);
+    const moved = all.find((s) => s.id === from.id);
+    const target = all.find((s) => s.id === place.target.id);
+    if (!moved || !target) return;
+    const list = all.filter((s) => s.id !== from.id);
+    const at = list.findIndex((s) => s.id === place.target.id);
+    if (at === -1) return;
+    list.splice(at + (place.before ? 0 : 1), 0, moved);
+    if (list.every((s, i) => all[i]?.id === s.id)) return;
+    void reorderSessions(from.project, list);
+  }
 
   function sessions(path: string) {
     const list = sessionsOf(path);
@@ -86,10 +177,27 @@
       </div>
     {/if}
 
-    <nav class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+    <!-- The top padding lets the drop line above the first row stay inside
+         the scroll box, which would otherwise clip it. -->
+    <nav
+      class="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-3"
+      ondragover={navDragOver}
+      ondrop={drop}
+    >
       {#each projects() as project (project.path)}
-        <div class="row-wrap">
-          <button class="side-row" onclick={() => selectProject(project.path)}>
+        <div class="row-wrap" class:is-draggable={canDrag} class:is-dragging={drag?.id === project.path}>
+          {#if canDrag && over && over.target.id === project.path && over.before}
+            <div class="drop-line is-top"></div>
+          {/if}
+          <button
+            class="side-row"
+            draggable={canDrag}
+            ondragstart={(e) => startDrag(e, { kind: "project", id: project.path })}
+            ondragover={(e) => passOverRow(e, { kind: "project", id: project.path })}
+            ondragleave={(e) => leaveRow(e, project.path)}
+            ondragend={endDrag}
+            onclick={() => selectProject(project.path)}
+          >
             <Folder />
             <span
               class="min-w-0 flex-1 truncate"
@@ -117,6 +225,9 @@
               }}
             />
           </div>
+          {#if canDrag && over && over.target.id === project.path && !over.before}
+            <div class="drop-line is-bottom"></div>
+          {/if}
         </div>
 
         <div class="mb-3 pl-3">
@@ -136,10 +247,18 @@
                 aria-label="Session name"
               />
             {:else}
-              <div class="row-wrap">
+              <div class="row-wrap" class:is-draggable={canDrag} class:is-dragging={drag?.id === session.id}>
+                {#if canDrag && over && over.target.id === session.id && over.before}
+                  <div class="drop-line is-top"></div>
+                {/if}
                 <button
                   class="side-row"
                   class:is-active={session.id === app.sessionId}
+                  draggable={canDrag}
+                  ondragstart={(e) => startDrag(e, { kind: "session", id: session.id, project: project.path })}
+                  ondragover={(e) => passOverRow(e, { kind: "session", id: session.id, project: project.path })}
+                  ondragleave={(e) => leaveRow(e, session.id)}
+                  ondragend={endDrag}
                   onclick={() => selectSession(session.id)}
                 >
                   <span class="min-w-0 flex-1 truncate">{session.title}</span>
@@ -161,6 +280,9 @@
                     }}
                   />
                 </div>
+                {#if canDrag && over && over.target.id === session.id && !over.before}
+                  <div class="drop-line is-bottom"></div>
+                {/if}
               </div>
             {/if}
           {/each}

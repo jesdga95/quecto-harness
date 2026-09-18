@@ -1050,6 +1050,10 @@ class HttpApi implements HarnessApi {
     return this.setProjects(await call("/projects", "POST", { path }));
   }
 
+  async reorderProjects(paths: string[]): Promise<Project[]> {
+    return this.setProjects(await call("/projects", "PUT", { paths }));
+  }
+
   async removeProject(path: string): Promise<Project[]> {
     return this.setProjects(await call("/projects", "DELETE", { path }));
   }
@@ -1058,6 +1062,16 @@ class HttpApi implements HarnessApi {
     const wire = await call<{ sessions?: WireSummary[] }>(
       `/sessions?project=${encodeURIComponent(project)}`,
     );
+    const list = (wire.sessions ?? []).map(toSession);
+    for (const s of list) summaries.set(s.id, s);
+    return list;
+  }
+
+  async reorderSessions(project: string, ids: string[]): Promise<Session[]> {
+    const wire = await call<{ sessions?: WireSummary[] }>("/sessions/order", "PUT", {
+      project,
+      ids,
+    });
     const list = (wire.sessions ?? []).map(toSession);
     for (const s of list) summaries.set(s.id, s);
     return list;

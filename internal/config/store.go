@@ -274,6 +274,38 @@ func (s *Store) RemoveProject(path string) (Config, error) {
 	})
 }
 
+// ReorderProjects sets the order of the project list. The paths must name
+// every project exactly once, so a list read before an add or remove cannot
+// silently drop one.
+func (s *Store) ReorderProjects(paths []string) (Config, error) {
+	s.mu.RLock()
+	current := append([]string(nil), s.cfg.Projects...)
+	s.mu.RUnlock()
+	if !sameSet(paths, current) {
+		return s.Config(), errors.New("The order does not name every project exactly once: refetch the list and try again")
+	}
+	return s.Update(func(c *Config) { c.Projects = append([]string(nil), paths...) })
+}
+
+// sameSet reports whether the two lists hold the same strings the same number
+// of times, in any order.
+func sameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	count := map[string]int{}
+	for _, p := range a {
+		count[p]++
+	}
+	for _, p := range b {
+		count[p]--
+		if count[p] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // HasProject reports whether path is one of the configured project roots.
 func (s *Store) HasProject(path string) bool {
 	s.mu.RLock()

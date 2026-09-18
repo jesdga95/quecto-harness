@@ -1016,6 +1016,33 @@
     color: var(--muted);
   }
 
+  /* A row that can be carried asks for the grab, the row being carried fades,
+     and a line shows where a drop will land. */
+  .row-wrap.is-draggable .side-row {
+    cursor: grab;
+  }
+  .row-wrap.is-dragging {
+    opacity: 0.4;
+  }
+  .row-wrap.is-dragging .side-row {
+    cursor: grabbing;
+  }
+  .drop-line {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--accent);
+    pointer-events: none;
+  }
+  .drop-line.is-top {
+    top: -2px;
+  }
+  .drop-line.is-bottom {
+    bottom: -2px;
+  }
+
   /* What the user sent: the message and everything attached to it, in one
      shape. An attachment sits inside the bubble, above the text it came with. */
   .bubble {
