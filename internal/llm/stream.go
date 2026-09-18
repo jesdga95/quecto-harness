@@ -66,6 +66,22 @@ type Result struct {
 	Dropped      int
 }
 
+// toolCallMarkers open the tool call syntaxes a model writes when the server
+// parsed none out of the text. The list is fixed, so a syntax not named here
+// reads as ordinary content rather than being guessed at.
+var toolCallMarkers = []string{"<tool_call>", "<function=", "[TOOL_CALLS]", "<|python_tag|>"}
+
+// UnparsedToolCall reports whether text carries a tool call the server left in
+// the content. A turn that ends on one ended on a failure, not on an answer.
+func UnparsedToolCall(text string) bool {
+	for _, m := range toolCallMarkers {
+		if strings.Contains(text, m) {
+			return true
+		}
+	}
+	return false
+}
+
 // partial accumulates one tool call across fragments. Builds resend the id
 // and the name inconsistently, so both are accumulated defensively.
 type partial struct {
@@ -451,13 +467,12 @@ func (s *streamState) applyToolCall(tc deltaToolCall, on func(Event) error) erro
 		ID: p.id.String(), Name: p.name.String(), Arguments: args})
 }
 
-// appendOnce skips a fragment the builder already ends with, which is how a
-// build that resends the whole id on every fragment is handled.
+// appendOnce skips a fragment that repeats the whole of what is there, which
+// is how a build that resends the id or the name on every fragment is handled.
+// A piece of a name often occurs in the part already assembled, so anything
+// short of the whole is appended.
 func appendOnce(b *strings.Builder, s string) {
-	if s == "" {
-		return
-	}
-	if strings.Contains(b.String(), s) {
+	if s == "" || b.String() == s {
 		return
 	}
 	b.WriteString(s)

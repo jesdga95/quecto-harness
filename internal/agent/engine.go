@@ -1213,11 +1213,17 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		if len(res.ToolCalls) == 0 || spent {
 			s.mu.Lock()
 			s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant",
-				Content: res.Content, Reasoning: res.Reasoning, InContext: true, Visible: true})
+				Content: res.Content, Reasoning: res.Reasoning,
+				Meta: outcomeMeta(res), InContext: true, Visible: true})
 			s.lastUsageEntry = len(s.Entries) - 1
 			s.mu.Unlock()
 			e.save(s)
 			e.publishUsage(s)
+			// A turn the model meant to continue reads as a finished one, so
+			// the transcript says the call was never run.
+			if !spent && llm.UnparsedToolCall(res.Content) {
+				e.noteUnparsed(s)
+			}
 			// A message that landed while the model was answering makes this
 			// the middle of the turn rather than the end of it.
 			if e.absorbSteer(s) {
@@ -1236,7 +1242,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		s.mu.Lock()
 		s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant",
 			Content: res.Content, Reasoning: res.Reasoning, ToolCalls: res.ToolCalls,
-			InContext: true, Visible: true})
+			Meta: outcomeMeta(res), InContext: true, Visible: true})
 		s.lastUsageEntry = len(s.Entries) - 1
 		s.mu.Unlock()
 		e.save(s)
@@ -1268,6 +1274,34 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		}
 	}
 
+}
+
+// outcomeMeta is what an assistant entry keeps about the request behind it:
+// how the model stopped, and how many frames were lost reading it. Neither
+// survives the stream, and a session read back is all that is left.
+func outcomeMeta(res llm.Result) map[string]any {
+	m := map[string]any{}
+	if res.FinishReason != "" {
+		m["finish_reason"] = res.FinishReason
+	}
+	if res.Dropped > 0 {
+		m["dropped"] = res.Dropped
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
+// noteUnparsed records that the answer carries a tool call the server left in
+// the text, which the reader would otherwise take for the end of the work.
+func (e *Engine) noteUnparsed(s *Session) {
+	text := "The answer carries a tool call the model server did not parse: nothing was run and the turn ended"
+	s.mu.Lock()
+	entry := s.appendEntry(store.Entry{Kind: "status", Content: text, InContext: false, Visible: true})
+	s.mu.Unlock()
+	e.save(s)
+	e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
 }
 
 // noteLimit records that the budget ran out, so the transcript says why the

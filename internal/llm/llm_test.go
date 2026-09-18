@@ -481,6 +481,52 @@ func TestChatToolCallWithoutIndexOrID(t *testing.T) {
 	}
 }
 
+// A name arrives in pieces, and a piece often occurs in the part already
+// assembled. Only a fragment repeating the whole of it is a resend.
+func TestChatToolCallNameInPieces(t *testing.T) {
+	res, _, err := chatFrames(t, []string{
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"replace_in_f"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"i"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"le","arguments":"{}"}}]}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	})
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if len(res.ToolCalls) != 1 {
+		t.Fatalf("tool calls = %+v", res.ToolCalls)
+	}
+	// The id repeats whole on every fragment and is not doubled; the name does
+	// not and is assembled from all three.
+	if got := res.ToolCalls[0].ID; got != "call_a" {
+		t.Errorf("id = %q, want call_a", got)
+	}
+	if got := res.ToolCalls[0].Function.Name; got != "replace_in_file" {
+		t.Errorf("name = %q, want replace_in_file", got)
+	}
+}
+
+func TestUnparsedToolCall(t *testing.T) {
+	carries := []string{
+		"Now the tests:\n\n<tool_call>\n<function=replace_in_file>\n</function>\n</tool_call>",
+		"<function=read_file>",
+		"[TOOL_CALLS]",
+		"<|python_tag|>",
+	}
+	for _, s := range carries {
+		if !UnparsedToolCall(s) {
+			t.Errorf("a tool call read as content: %q", s)
+		}
+	}
+	plain := []string{"", "The repository has cmd, internal and web.", "Use <b>bold</b> here."}
+	for _, s := range plain {
+		if UnparsedToolCall(s) {
+			t.Errorf("an answer read as a tool call: %q", s)
+		}
+	}
+}
+
 func TestChatTwoToolCalls(t *testing.T) {
 	res, _, err := chatFrames(t, []string{
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read_file","arguments":"{\"path\""}}]}}]}`,

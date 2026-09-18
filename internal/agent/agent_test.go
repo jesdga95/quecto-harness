@@ -278,6 +278,41 @@ func TestTurnCostIsRecordedOnTheEntryThatEndedIt(t *testing.T) {
 	}
 }
 
+// A tool call the server left in the text ends the turn the way an answer
+// does, so the transcript says the call was never run.
+func TestAnUnparsedToolCallIsNoted(t *testing.T) {
+	h := newHarness(t, "stream_leaked_tool_call.txt")
+	s := h.session(t)
+	if _, err := h.engine.Send(s.ID, "write the tests", nil); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	last := doc.Entries[len(doc.Entries)-1]
+	if last.Kind != "status" || !strings.Contains(last.Content, "did not parse") {
+		t.Fatalf("last entry = %+v, want a status naming the unparsed call", last)
+	}
+	if last.InContext {
+		t.Error("the note was sent back to the model")
+	}
+	if notes := h.rec.ofType("status_entry"); len(notes) != 1 {
+		t.Errorf("status_entry events = %d, want 1", len(notes))
+	}
+}
+
+// An answer that carries no tool call syntax is left alone.
+func TestAPlainAnswerIsNotNoted(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "what is here", nil)
+	waitIdle(t, s)
+
+	if notes := h.rec.ofType("status_entry"); len(notes) != 0 {
+		t.Errorf("status_entry events = %d, want none", len(notes))
+	}
+}
+
 // preserve_reasoning decides whether earlier thinking goes back, on every
 // protocol rather than only the one with a template argument for it.
 func TestPreserveReasoningDecidesWhatGoesBack(t *testing.T) {
@@ -308,6 +343,24 @@ func TestPreserveReasoningDecidesWhatGoesBack(t *testing.T) {
 				t.Errorf("reasoning_content sent = %v, want %v", sent, keep)
 			}
 		})
+	}
+}
+
+// How the model stopped and what was lost reading it are gone from the stream
+// by the time a session is read back, so the entry keeps both.
+func TestOutcomeLandsOnTheEntry(t *testing.T) {
+	h := newHarness(t, "stream_malformed.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "go", nil)
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	last := doc.Entries[len(doc.Entries)-1]
+	if last.Meta["finish_reason"] != "stop" {
+		t.Errorf("finish_reason = %v, want stop", last.Meta["finish_reason"])
+	}
+	if last.Meta["dropped"] != 2 {
+		t.Errorf("dropped = %v, want 2", last.Meta["dropped"])
 	}
 }
 
