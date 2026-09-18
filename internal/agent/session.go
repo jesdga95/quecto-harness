@@ -429,8 +429,14 @@ func (s *Session) contextMessages(a config.Agent, osName, date string, b brief, 
 		case "compaction":
 			msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(e.Content)})
 		case "assistant":
+			// Thinking from an earlier turn goes back only when the agent asks
+			// for it, whatever the protocol does with the field afterwards.
+			reasoning := ""
+			if a.PreserveReasoning {
+				reasoning = e.Reasoning
+			}
 			msgs = append(msgs, llm.Message{Role: "assistant", Content: e.Content,
-				ReasoningContent: e.Reasoning, ToolCalls: e.ToolCalls})
+				ReasoningContent: reasoning, ToolCalls: e.ToolCalls})
 			msgs = append(msgs, repairToolResults(s.Entries, i, e.ToolCalls)...)
 		case "tool":
 			// Tool results are emitted beside their assistant, so a tool

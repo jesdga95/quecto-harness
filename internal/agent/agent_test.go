@@ -278,6 +278,39 @@ func TestTurnCostIsRecordedOnTheEntryThatEndedIt(t *testing.T) {
 	}
 }
 
+// preserve_reasoning decides whether earlier thinking goes back, on every
+// protocol rather than only the one with a template argument for it.
+func TestPreserveReasoningDecidesWhatGoesBack(t *testing.T) {
+	for _, keep := range []bool{true, false} {
+		name := "off"
+		if keep {
+			name = "on"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
+			s := h.session(t)
+			h.setAgent(t, func(a *config.Agent) { a.PreserveReasoning = keep })
+			h.engine.Send(s.ID, "list the files here", nil)
+
+			id := waitForCard(t, h, s.ID)
+			if err := h.broker.Resolve(id, perms.Decision{Kind: perms.DecideOnce}); err != nil {
+				t.Fatal(err)
+			}
+			waitIdle(t, s)
+
+			// The second request is the first one with an assistant turn
+			// behind it, and that turn did its thinking aloud.
+			raw, err := json.Marshal(h.replay.Body(1)["messages"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sent := strings.Contains(string(raw), "reasoning_content"); sent != keep {
+				t.Errorf("reasoning_content sent = %v, want %v", sent, keep)
+			}
+		})
+	}
+}
+
 // A turn the user stopped has no assistant entry to carry the cost, and the
 // done event that ends it reports none.
 func TestStoppedTurnReportsNoCost(t *testing.T) {
