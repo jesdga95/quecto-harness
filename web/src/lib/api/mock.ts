@@ -1256,6 +1256,42 @@ function delegationEvents(child: string): HarnessEvent[] {
   ];
 }
 
+// What the search tool handed back, in the shape it writes: a numbered block
+// a result, the address on a line of its own, and the passages under it.
+const searched = [
+  '3 results for "server sent events fan out one channel per client go".',
+  "",
+  "1. Using Server-Sent Events",
+  "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events",
+  "published 2025-04-11T00:00:00.000Z",
+  "",
+  "A server-sent event is when a web page automatically gets updates from a " +
+    "server. Unlike WebSockets, server-sent events are unidirectional: data " +
+    "messages are delivered in one direction, from the server to the client.",
+  "...",
+  "Each connection is its own request, so a server holding several of them " +
+    "holds several writers. Nothing in the protocol joins two connections, and " +
+    "a server that keeps one queue for all of them delivers each message once.",
+  "",
+  "2. http package - net/http - Go Packages",
+  "https://pkg.go.dev/net/http",
+  "",
+  "The Flusher interface is implemented by ResponseWriters that allow an " +
+    "HTTP handler to flush buffered data to the client. The default " +
+    "ResponseWriter implementation supports Flusher, but ResponseWriter " +
+    "wrappers may not.",
+  "",
+  "3. Go by Example: Channel Synchronization",
+  "https://gobyexample.com/channel-synchronization",
+  "published 2019-08-02T00:00:00.000Z",
+  "",
+  "We can use channels to synchronize execution across goroutines. A receive " +
+    "on an unbuffered channel blocks until a send is ready, which is what makes " +
+    "a single reader the only reader.",
+  "",
+  "1 further result had no address and was dropped.",
+].join("\n");
+
 // Long enough that the row cuts it, so the expanded card is the only place the
 // whole message is readable.
 const sent =
@@ -1328,6 +1364,7 @@ function title(text: string): string {
 // anything is clicked.
 function seededEvents(): HarnessEvent[] {
   const call = nextId("t");
+  const search = nextId("t");
   return [
     {
       type: "reasoning",
@@ -1335,6 +1372,43 @@ function seededEvents(): HarnessEvent[] {
         "Two tabs means two subscribers on one channel. If the hub writes to a " +
         "single channel only one reader wins, so the second tab misses events. " +
         "Check how the hub registers clients.",
+    },
+    {
+      type: "tool_call",
+      id: search,
+      name: "web_search",
+      args: { query: "server sent events fan out one channel per client go" },
+    },
+    {
+      type: "tool_output",
+      id: search,
+      output: searched,
+      exit_code: null,
+      truncated: false,
+      meta: {
+        provider: "exa",
+        query: "server sent events fan out one channel per client go",
+        mode: "excerpts",
+        chars: 4000,
+        dropped: 1,
+        hits: [
+          {
+            title: "Using Server-Sent Events",
+            url: "https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events",
+            published: "2025-04-11T00:00:00.000Z",
+          },
+          {
+            title: "http package - net/http - Go Packages",
+            url: "https://pkg.go.dev/net/http",
+            published: "",
+          },
+          {
+            title: "Go by Example: Channel Synchronization",
+            url: "https://gobyexample.com/channel-synchronization",
+            published: "2019-08-02T00:00:00.000Z",
+          },
+        ],
+      },
     },
     {
       type: "delta",

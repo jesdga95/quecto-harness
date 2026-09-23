@@ -1,87 +1,59 @@
 <script lang="ts">
   import type { TranscriptItem } from "../api";
-  import { safeUrl } from "../markdown";
+  import { searchProviderLabel } from "../format";
+  import { hits } from "../search";
+  import SearchHit from "./SearchHit.svelte";
 
   let { item }: { item: Extract<TranscriptItem, { kind: "tool" }> } = $props();
 
-  interface Hit {
-    title: string;
-    url: string | null;
-    published: string;
-  }
+  let raw = $state(false);
 
-  // The meta carries where the pages are; the bodies are in the result below,
-  // so the list links rather than repeating them. The endpoint address is
-  // user-configurable, so a hit's url goes through the same gate as a link
-  // the model wrote, and a hit whose url does not pass it is named rather
-  // than linked.
-  const hits = $derived.by<Hit[]>(() => {
-    const raw = item.meta?.hits;
-    if (!Array.isArray(raw)) return [];
-    return raw
-      .filter((h): h is Record<string, unknown> => typeof h === "object" && h !== null)
-      .map((h) => ({
-        title: typeof h.title === "string" ? h.title : "",
-        url: safeUrl(typeof h.url === "string" ? h.url : ""),
-        published: typeof h.published === "string" ? h.published : "",
-      }))
-      .filter((h) => h.url !== null || h.title !== "");
+  const found = $derived(hits(item.meta, item.output));
+
+  const provider = $derived.by(() => {
+    const name = item.meta?.provider;
+    return typeof name === "string" ? searchProviderLabel(name) : "";
   });
-  const dropped = $derived(typeof item.meta?.dropped === "number" ? (item.meta?.dropped as number) : 0);
-
-  function host(url: string | null): string {
-    if (!url) return "";
-    try {
-      return new URL(url).host;
-    } catch {
-      return url;
-    }
-  }
-
-  // The endpoint dates are full timestamps; a row wants the day.
-  function day(iso: string): string {
-    return iso.length > 10 ? iso.slice(0, 10) : iso;
-  }
+  const dropped = $derived.by(() => {
+    const n = item.meta?.dropped;
+    return typeof n === "number" ? n : 0;
+  });
+  const count = $derived(`${found.length} ${found.length === 1 ? "result" : "results"}`);
 </script>
 
-{#if hits.length > 0}
-  <ul class="flex flex-col gap-2">
-    {#each hits as hit, i (i)}
-      <li class="flex flex-col gap-0.5">
-        {#if hit.url !== null}
-          <a
-            class="text-[13px] font-medium text-accent hover:underline"
-            href={hit.url}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {hit.title || host(hit.url)}
-          </a>
-        {:else}
-          <span class="text-[13px] font-medium text-accent">{hit.title}</span>
-        {/if}
-        <span class="text-[12px] text-muted">
-          {#if hit.url === null && hit.published !== ""}
-            {day(hit.published)}
-          {:else}
-            {host(hit.url)}{hit.published ? ` · ${day(hit.published)}` : ""}
-          {/if}
-        </span>
-      </li>
+{#if found.length > 0}
+  <div class="hits">
+    <div class="hits-meta">
+      {#if provider !== ""}
+        <span>{provider}</span>
+        <span class="hits-dot">&middot;</span>
+      {/if}
+      <span>{count}</span>
+    </div>
+
+    {#each found as hit, i (i)}
+      <SearchHit {hit} index={i} />
     {/each}
-  </ul>
-{/if}
 
-{#if item.output}
+    <div class="hits-foot">
+      {#if dropped > 0}
+        <span class="hits-note">
+          {dropped} {dropped === 1 ? "result" : "results"} came back with no address and were dropped.
+        </span>
+      {/if}
+      {#if item.truncated}
+        <span class="hits-note">Truncated, head and tail kept</span>
+      {/if}
+      <button class="hit-more" onclick={() => (raw = !raw)}>
+        {raw ? "Hide what the model read" : "What the model read"}
+      </button>
+    </div>
+
+    {#if raw}
+      <pre class="mono-block">{item.output}</pre>
+    {/if}
+  </div>
+{:else if item.output}
+  <!-- A search that found nothing, or one that failed, is its own sentence. -->
   <pre class="mono-block">{item.output}</pre>
-{/if}
-
-{#if dropped > 0}
-  <span class="text-[11.5px] text-muted">
-    {dropped} {dropped === 1 ? "result" : "results"} came back with no address and were dropped.
-  </span>
-{/if}
-
-{#if item.truncated}
-  <span class="text-[11.5px] text-muted">Truncated, head and tail kept</span>
 {/if}
