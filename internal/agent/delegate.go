@@ -31,14 +31,14 @@ type brief struct {
 // what it has instead is the launcher waiting on it.
 func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	s.mu.Lock()
-	parent, mine := s.Parent, s.AgentID
+	parent, mine, mode := s.Parent, s.AgentID, s.Mode
 	s.mu.Unlock()
 	if parent != "" {
 		// A subagent hands work to nobody and asks nobody, but it still
 		// searches: research delegated down is what web_search is for.
-		return brief{offer: tools.Offer{Message: true, Search: cfg.Search.Enabled()}, launcher: parent}
+		return brief{offer: tools.Offer{Mode: mode, Message: true, Search: cfg.Search.Enabled()}, launcher: parent}
 	}
-	b := brief{offer: tools.Offer{Ask: true, Message: true, Search: cfg.Search.Enabled()}}
+	b := brief{offer: tools.Offer{Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}}
 	for _, a := range cfg.Agents {
 		if !a.Enabled || a.MainOnly {
 			continue
@@ -140,7 +140,7 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 	}
 
 	s.mu.Lock()
-	mine, project := s.AgentID, s.Project
+	mine, project, mode := s.AgentID, s.Project, s.Mode
 	s.mu.Unlock()
 	me, _ := cfg.AgentByID(mine)
 	// The limit belongs to the agent being asked, not to the one asking: what
@@ -153,6 +153,9 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 
 	child := newSession(store.NewID(), project, target.ID, target.Model)
 	child.Parent = s.ID
+	// A subagent works in the mode of the session that launched it, so a
+	// planner's researcher changes no files either.
+	child.Mode = mode
 	child.Title = store.Title(cut(task, taskTitle))
 	child.Named = true
 	e.mu.Lock()

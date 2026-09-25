@@ -388,7 +388,7 @@ func TestLooksBinary(t *testing.T) {
 }
 
 func TestSchemasMatchTheDescriptions(t *testing.T) {
-	s := Schemas(Offer{Ask: true, Agents: true, Message: true, Search: true})
+	s := Schemas(Offer{Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true})
 	names := []string{"read_file", "find", "web_search", "write_file", "replace_in_file",
 		"write_todos", "ask_question", "run_agent", "send_message", "run_shell"}
 	if len(s) != len(names) {
@@ -886,13 +886,13 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 	}
 	base := []string{"read_file", "find", "write_file", "replace_in_file", "write_todos", "run_shell"}
 	optional := map[string]Offer{
-		"ask_question": {Ask: true},
-		"run_agent":    {Agents: true},
-		"send_message": {Message: true},
-		"web_search":   {Search: true},
+		"ask_question": {Mode: config.WorkExecute, Ask: true},
+		"run_agent":    {Mode: config.WorkExecute, Agents: true},
+		"send_message": {Mode: config.WorkExecute, Message: true},
+		"web_search":   {Mode: config.WorkExecute, Search: true},
 	}
 
-	none := names(Offer{})
+	none := names(Offer{Mode: config.WorkExecute})
 	if len(none) != len(base) {
 		t.Errorf("an empty offer sent %v, want %v", none, base)
 	}
@@ -911,7 +911,7 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 		}
 	}
 
-	all := names(Offer{Ask: true, Agents: true, Message: true, Search: true})
+	all := names(Offer{Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true})
 	if len(all) != len(base)+len(optional) {
 		t.Errorf("every offer sent %v", all)
 	}
@@ -929,4 +929,34 @@ func indexOf(in []string, want string) int {
 		}
 	}
 	return -1
+}
+
+// Plan mode sends no tool that writes a file, and is the only mode that sends
+// submit_plan. A tool the offer leaves out is still in its mode, so a call to
+// it is refused by the tool rather than by the mode.
+func TestSchemasFollowTheMode(t *testing.T) {
+	every := Offer{Ask: true, Agents: true, Message: true, Search: true}
+	plan, exec := every, every
+	plan.Mode, exec.Mode = config.WorkPlan, config.WorkExecute
+
+	got := Names(plan)
+	want := []string{"read_file", "find", "web_search", "ask_question", "submit_plan",
+		"run_agent", "send_message", "run_shell"}
+	if !slices.Equal(got, want) {
+		t.Errorf("plan sent %v, want %v", got, want)
+	}
+	for _, name := range []string{"write_file", "replace_in_file", "write_todos"} {
+		if plan.InMode(name) {
+			t.Errorf("plan mode holds %s", name)
+		}
+	}
+	if slices.Contains(Names(exec), "submit_plan") {
+		t.Error("execute mode sent submit_plan")
+	}
+	if !(Offer{Mode: config.WorkExecute}).InMode("run_agent") {
+		t.Error("run_agent left the mode when the offer left it out")
+	}
+	if len(Names(Offer{})) != 0 {
+		t.Error("an offer with no mode sent tools")
+	}
 }

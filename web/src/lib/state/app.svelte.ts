@@ -25,8 +25,9 @@ import type {
   TranscriptItem,
   TurnStatus,
   Usage,
+  WorkMode,
 } from "../api";
-import { applyEvent, outcomeLabel, pushUser } from "../transcript";
+import { applyEvent, nextId, outcomeLabel, pushUser } from "../transcript";
 import { artifactsOf, type Artifact } from "../artifacts";
 import { confirm } from "./confirm.svelte";
 
@@ -54,6 +55,9 @@ export const app = $state({
   // A message typed while the turn runs, waiting for it to pick it up.
   steer: null as Steer | null,
   todos: [] as Todo[],
+  // The mode the next turn runs in. With no session open it is held here and
+  // sent with the message that creates one.
+  workMode: "execute" as WorkMode,
   changes: { files: [], added: 0, removed: 0 } as Changes,
   // The panel in the column beside the transcript. There is room for one.
   dock: "" as Dock,
@@ -206,6 +210,7 @@ function clearSession(): void {
   app.items = [];
   app.todos = [];
   app.steer = null;
+  app.workMode = "execute";
   app.status = "idle";
   app.awaitingModel = false;
   app.changes = { files: [], added: 0, removed: 0 };
@@ -235,6 +240,7 @@ export async function selectSession(id: string): Promise<void> {
   app.usage = t.usage;
   app.todos = t.todos;
   app.steer = t.steer;
+  app.workMode = t.mode;
   // A session opened while its turn runs is running, and the snapshot is the
   // only thing that says so. A model being read and a compaction both draw
   // nothing until they land, so the wait is taken from the status.
@@ -380,15 +386,17 @@ export async function send(text: string, files: string[] = []): Promise<void> {
     if (queued) app.steer = queued.steer;
     return;
   }
+  const divider = modeChange();
+  if (divider) app.items.push(divider);
   pushUser(app.items, message, attached);
   // The first status event is a round trip away, and the wait starts now.
   app.awaitingModel = true;
   // The harness reads the attachments, so a file it refuses refuses the whole
   // message. The bubble comes back off the transcript when that happens.
   const item = app.items[app.items.length - 1];
-  const sent = await guard(() => api.sendMessage(app.sessionId, message, files));
+  const sent = await guard(() => api.sendMessage(app.sessionId, message, files, app.workMode));
   if (sent === null) {
-    app.items = app.items.filter((i) => i.id !== item?.id);
+    app.items = app.items.filter((i) => i.id !== item?.id && i.id !== divider?.id);
     // A refused first message leaves the session it created behind, and the
     // list is where it shows.
     await loadSessions();
@@ -397,7 +405,7 @@ export async function send(text: string, files: string[] = []): Promise<void> {
   // A turn that started between the check and the call takes the message as a
   // queued one, so the bubble it was drawn as comes back off the transcript.
   if (sent.queued) {
-    app.items = app.items.filter((i) => i.id !== item?.id);
+    app.items = app.items.filter((i) => i.id !== item?.id && i.id !== divider?.id);
     app.steer = sent.steer;
     return;
   }
@@ -409,6 +417,23 @@ export async function send(text: string, files: string[] = []): Promise<void> {
     if (sent.files.length > 0) item.files = sent.files;
   }
   await loadSessions();
+}
+
+/** The divider a message sent now needs, when the mode moved since the last
+    one. A session that has only ever executed draws none. */
+function modeChange(): TranscriptItem | null {
+  let last: WorkMode = "execute";
+  for (const item of app.items) if (item.kind === "mode") last = item.mode;
+  if (app.workMode === last) return null;
+  return { kind: "mode", id: nextId("m"), mode: app.workMode, kickoff: false, title: "" };
+}
+
+/** Sets the mode of the next turn. A turn already running keeps its own. */
+export async function setWorkMode(mode: WorkMode): Promise<void> {
+  const before = app.workMode;
+  app.workMode = mode;
+  if (!app.sessionId) return;
+  if ((await guard(() => api.setMode(app.sessionId, mode))) === null) app.workMode = before;
 }
 
 /** The last message the user sent, which is the only one an edit can replace. */
@@ -831,6 +856,7 @@ function onEvent(event: HarnessEvent): void {
     app.items = event.transcript.items;
     app.usage = event.transcript.usage;
     app.todos = event.transcript.todos;
+    app.workMode = event.transcript.mode;
     app.steer = event.transcript.steer;
     app.status = event.transcript.status;
     app.awaitingModel = WAITING.has(event.transcript.status);
@@ -854,6 +880,22 @@ function onEvent(event: HarnessEvent): void {
 
   if (event.type === "todos") {
     app.todos = event.todos;
+    return;
+  }
+
+  // An approved plan starts its execution in the same turn, and the message
+  // that starts it is drawn as the divider.
+  if (event.type === "mode") {
+    app.workMode = event.mode;
+    if (event.kickoff) {
+      app.items.push({
+        kind: "mode",
+        id: nextId("m"),
+        mode: event.mode,
+        kickoff: true,
+        title: event.title,
+      });
+    }
     return;
   }
 
@@ -896,7 +938,7 @@ function onEvent(event: HarnessEvent): void {
 
   applyEvent(app.items, event);
 
-  if (event.type === "delta") announceArtifacts();
+  if (event.type === "delta" || event.type === "tool_args") announceArtifacts();
 
   // The event carries an id rather than a name, so the card it filled is what
   // names it. A write moves the list by definition. A command can create,
@@ -974,7 +1016,11 @@ export function blockingPermission(): TranscriptItem | undefined {
     the card answerable, so a row without one blocks nothing. */
 export function pendingQuestion(): TranscriptItem | undefined {
   return app.items.find(
-    (i) => i.kind === "tool" && i.name === "ask_question" && i.running && i.askId !== undefined,
+    (i) =>
+      i.kind === "tool" &&
+      (i.name === "ask_question" || i.name === "submit_plan") &&
+      i.running &&
+      i.askId !== undefined,
   );
 }
 

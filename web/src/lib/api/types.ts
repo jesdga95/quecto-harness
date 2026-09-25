@@ -199,6 +199,10 @@ export interface State {
   models: Model[];
 }
 
+/** What a session is doing: planning a change or carrying one out. Each sends
+    its own system prompt and its own tools. */
+export type WorkMode = "plan" | "execute";
+
 /** One step of the plan the model keeps with write_todos. */
 export interface Todo {
   text: string;
@@ -259,6 +263,9 @@ export type HarnessEvent =
       breakdown?: Breakdown;
     }
   | { type: "status"; status: TurnStatus }
+  /** The session's mode changed. kickoff marks the switch an approved plan
+      made, which also starts the work. */
+  | { type: "mode"; mode: WorkMode; kickoff: boolean; seq: number; title: string }
   /** A line the harness writes into the transcript, such as a model change. */
   | { type: "status_entry"; text: string }
   /** The model named the session after its first turn. */
@@ -342,6 +349,9 @@ export type TranscriptItem =
       agent: string;
     }
   | { kind: "compaction"; id: string; before: number; after: number; summary: string }
+  /** Where the conversation moved to another mode. kickoff is an approved
+      plan starting its execution, and title is that plan's. */
+  | { kind: "mode"; id: string; mode: WorkMode; kickoff: boolean; title: string }
   | { kind: "status"; id: string; text: string }
   | { kind: "error"; id: string; message: string };
 
@@ -449,6 +459,8 @@ export interface Transcript {
   status: TurnStatus;
   /** The message waiting for a turn that is still running. */
   steer: Steer | null;
+  /** The mode the next turn runs in. */
+  mode: WorkMode;
 }
 
 export type EventHandler = (event: HarnessEvent) => void;
@@ -497,7 +509,8 @@ export interface HarnessApi {
   /** Files are read by the harness and inlined into the message. What comes
       back is the attachments as it stored them, ids included, and the
       sequence number the message was stored under. */
-  sendMessage(id: string, text: string, files?: string[]): Promise<Sent>;
+  sendMessage(id: string, text: string, files?: string[], mode?: WorkMode): Promise<Sent>;
+  setMode(id: string, mode: WorkMode): Promise<void>;
   /** Runs the last message again, with text in place of the words it was sent
       with. The reply to it is discarded. */
   resend(id: string, seq: number, text?: string): Promise<void>;

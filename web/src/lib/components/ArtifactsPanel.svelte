@@ -7,6 +7,8 @@
   import DownloadSimple from "phosphor-svelte/lib/DownloadSimple";
   import Eye from "phosphor-svelte/lib/Eye";
   import FileCode from "phosphor-svelte/lib/FileCode";
+  import ListChecks from "phosphor-svelte/lib/ListChecks";
+  import Prose from "./Prose.svelte";
   import PenNib from "phosphor-svelte/lib/PenNib";
   import CaretDown from "phosphor-svelte/lib/CaretDown";
   import X from "phosphor-svelte/lib/X";
@@ -56,7 +58,13 @@
   function download() {
     if (!shown) return;
     const type =
-      shown.kind === "svg" ? "image/svg+xml" : shown.kind === "page" ? "text/html" : "text/plain";
+      shown.kind === "svg"
+        ? "image/svg+xml"
+        : shown.kind === "page"
+          ? "text/html"
+          : shown.kind === "plan"
+            ? "text/markdown"
+            : "text/plain";
     const blob = new Blob([shown.source], { type });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -95,7 +103,9 @@
                   showArtifact(artifact.id);
                 }}
               >
-                {#if artifact.kind === "svg"}
+                {#if artifact.kind === "plan"}
+                  <ListChecks size={15} class="shrink-0" />
+                {:else if artifact.kind === "svg"}
                   <PenNib size={15} class="shrink-0" />
                 {:else if artifact.kind === "page"}
                   <Browser size={15} class="shrink-0" />
@@ -160,6 +170,10 @@
           <div class="artifact-source-scroll" bind:this={sourceBox}>
             <pre><code>{@html markup}</code></pre>
           </div>
+        </div>
+      {:else if shown.kind === "plan"}
+        <div class="artifact-plan">
+          <Prose text={shown.source} />
         </div>
       {:else if shown.kind === "svg"}
         {#key shown.id}

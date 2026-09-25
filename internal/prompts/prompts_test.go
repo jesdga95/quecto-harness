@@ -37,7 +37,7 @@ func TestTitleCarriesTheMessage(t *testing.T) {
 }
 
 func TestSystemSubstitutesItsFields(t *testing.T) {
-	got := System(SystemVars{Project: "/Users/user/src/x", OS: "darwin", Date: "2026-02-06"})
+	got := System(SystemVars{Project: "/Users/user/src/x", OS: "darwin", Date: "2026-02-06", Tools: execTools})
 	if !strings.Contains(got, "/Users/user/src/x") || !strings.Contains(got, "darwin") || !strings.Contains(got, "Today's date is 2026-02-06.") {
 		t.Errorf("system prompt did not substitute: %q", got)
 	}
@@ -93,8 +93,8 @@ func TestToolDescriptionsNameTheirArguments(t *testing.T) {
 }
 
 func TestSystemAppendsInstructions(t *testing.T) {
-	base := System(SystemVars{Project: "/src/x", OS: "darwin"})
-	got := System(SystemVars{Project: "/src/x", OS: "darwin", Instructions: "Review Go, do not write it."})
+	base := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools})
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools, Instructions: "Review Go, do not write it."})
 
 	if !strings.HasPrefix(got, base) {
 		t.Fatalf("instructions did not follow the built-in prompt: %q", got)
@@ -140,7 +140,8 @@ func TestSystemSaysItsKnowledgeIsStale(t *testing.T) {
 // reaches for one it does not have.
 func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
 	full := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, CanMessage: true, CanSearch: true,
-		Agents: []AgentBrief{{Name: "Reviewer"}}})
+		Agents: []AgentBrief{{Name: "Reviewer"}},
+		Tools:  append(append([]string(nil), execTools...), "web_search", "ask_question", "run_agent", "send_message")})
 	for _, name := range []string{"ask_question", "run_agent", "send_message", "web_search"} {
 		if !strings.Contains(full, name) {
 			t.Errorf("prompt does not name %s: %q", name, full)
@@ -148,7 +149,7 @@ func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
 	}
 
 	child := System(SystemVars{Project: "/src/x", OS: "darwin", CanMessage: true,
-		Launcher: "sess_aaaaaaaaaaaaaaaa"})
+		Launcher: "sess_aaaaaaaaaaaaaaaa", Tools: append(append([]string(nil), execTools...), "send_message")})
 	for _, name := range []string{"ask_question", "run_agent", "web_search"} {
 		if strings.Contains(child, name) {
 			t.Errorf("a subagent's prompt names %s, which it was not sent: %q", name, child)
@@ -235,5 +236,54 @@ func TestSystemWithoutAgentsIsUnchanged(t *testing.T) {
 	got := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, Agents: nil, Launcher: ""})
 	if got != base {
 		t.Errorf("empty agents changed the prompt:\n%q\nwant\n%q", got, base)
+	}
+}
+
+// execTools is the list an execute turn with nothing optional sends.
+var execTools = []string{"read_file", "find", "write_file", "replace_in_file", "write_todos", "run_shell"}
+
+// Plan mode's body replaces execute's under the same head, and names
+// submit_plan only when it was sent.
+func TestSystemRendersThePlanBody(t *testing.T) {
+	exec := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools})
+	plan := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, Mode: "plan",
+		Tools: []string{"read_file", "find", "ask_question", "submit_plan", "run_shell"}})
+	head := "Use find, not a shell command, to locate files and lines."
+	if !strings.Contains(exec, head) || !strings.Contains(plan, head) {
+		t.Fatal("the shared head is missing from a mode")
+	}
+	if !strings.Contains(plan, "plan mode") || !strings.Contains(plan, "submit_plan") {
+		t.Errorf("the plan body is missing: %q", plan)
+	}
+	if strings.Contains(plan, "replace_in_file edits part of a file") {
+		t.Errorf("plan mode carries execute's body: %q", plan)
+	}
+	child := System(SystemVars{Project: "/src/x", OS: "darwin", Mode: "plan",
+		Launcher: "sess_aaaaaaaaaaaaaaaa", Tools: []string{"read_file", "find", "run_shell"}})
+	if strings.Contains(child, "submit_plan") {
+		t.Errorf("a subagent in plan mode is told to submit a plan: %q", child)
+	}
+}
+
+// An approved plan is carried in execute's prompt, and only there.
+func TestSystemCarriesTheApprovedPlan(t *testing.T) {
+	plan := Plan(PlanVars{Title: "Sort the list", Goal: "Newest first.",
+		Files: []string{"list.go: reverse the sort"}, Steps: []string{"Reverse it", "Test it"},
+		Check: "go test ./...", Open: []string{"Ties?"}})
+	for _, want := range []string{"Plan: Sort the list", "Goal: Newest first.", "- list.go: reverse the sort",
+		"- Reverse it\n- Test it", "Check: go test ./...", "- Ties?"} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("the plan does not carry %q:\n%s", want, plan)
+		}
+	}
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools, Plan: plan})
+	if !strings.Contains(got, "The user approved this plan.") || !strings.Contains(got, plan) {
+		t.Errorf("execute did not carry the plan: %q", got)
+	}
+	if strings.Contains(System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools}), "approved") {
+		t.Error("a prompt with no plan speaks of one")
+	}
+	if got := PlanApproved("Sort the list"); !strings.Contains(got, `"Sort the list"`) {
+		t.Errorf("the kickoff message = %q", got)
 	}
 }

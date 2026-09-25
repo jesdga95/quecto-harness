@@ -14,6 +14,7 @@ import (
 	"quecto-harness/internal/llm"
 	"quecto-harness/internal/prompts"
 	"quecto-harness/internal/store"
+	"quecto-harness/internal/tools"
 )
 
 type State string
@@ -42,8 +43,14 @@ type Session struct {
 	// Parent names the session that launched this one. A session with one is
 	// a subagent run: it stays on its own agent, is offered a different set of
 	// tools, and reports to its launcher when a turn of it ends.
-	Parent  string
-	Model   string
+	Parent string
+	Model  string
+	// Mode is the work mode the next turn runs in. A turn reads it once, at
+	// its start, and holds it for the turn.
+	Mode config.WorkMode
+	// Plan is the last plan the user approved, which execute mode carries in
+	// its system prompt.
+	Plan    *store.Plan
 	Created time.Time
 	Updated time.Time
 	Title   string
@@ -82,6 +89,9 @@ type Session struct {
 	// prepared reports that the model has been read: its window and its chat
 	// template are known and a request can be shaped for it.
 	prepared bool
+	// approved is a plan the user approved during the running turn, which the
+	// turn switches to execute mode on once its tool calls are answered.
+	approved *store.Plan
 
 	state   State
 	cancel  context.CancelFunc
@@ -135,7 +145,7 @@ func newSession(id, project, agentID, model string) *Session {
 	now := time.Now().UTC()
 	return &Session{
 		ID: id, Project: project, AgentID: agentID, Model: model,
-		Created: now, Updated: now,
+		Mode: config.WorkExecute, Created: now, Updated: now,
 		state: StateIdle, lastUsageEntry: -1,
 	}
 }
@@ -143,6 +153,7 @@ func newSession(id, project, agentID, model string) *Session {
 func fromDoc(d *store.Session) *Session {
 	return &Session{
 		ID: d.ID, Project: d.Project, AgentID: d.Agent, Parent: d.Parent, Model: d.Model,
+		Mode: d.Mode, Plan: d.Plan,
 		Created: d.Created, Updated: d.Updated, Title: d.Title, Named: d.Named,
 		Entries:        append([]store.Entry(nil), d.Entries...),
 		NCtx:           d.NCtx,
@@ -164,7 +175,7 @@ func fromDoc(d *store.Session) *Session {
 func (s *Session) doc() *store.Session {
 	return &store.Session{
 		ID: s.ID, Project: s.Project, Agent: s.AgentID, Parent: s.Parent,
-		Model: s.Model, Title: s.Title, Named: s.Named,
+		Model: s.Model, Mode: s.Mode, Plan: s.Plan, Title: s.Title, Named: s.Named,
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, LastUsage: s.LastUsage,
@@ -344,6 +355,15 @@ func (s *Session) restoreContext() {
 // beyond the entries themselves. The caller holds the lock.
 func (s *Session) restoreTodos() {
 	for i := len(s.Entries) - 1; i >= 0; i-- {
+		if s.Entries[i].Kind == "tool" && s.Entries[i].ToolName == "submit_plan" && s.Entries[i].Meta["approved"] == true {
+			if args, ok := s.argumentsOf(i, s.Entries[i].ToolCallID); ok {
+				if plan, err := parsePlan(args); err == nil {
+					s.Todos = seedTodos(plan)
+					return
+				}
+			}
+			continue
+		}
 		if s.Entries[i].Kind != "tool" || s.Entries[i].ToolName != "write_todos" {
 			continue
 		}
@@ -403,11 +423,16 @@ func (s *Session) imageRefs() []string {
 // sends one goes through here, so a turn, a compaction and the measurement of
 // the fixed context all carry the same text. The caller holds the lock.
 func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) llm.Message {
+	plan := ""
+	if b.offer.Mode == config.WorkExecute && s.Plan != nil {
+		plan = renderPlan(*s.Plan)
+	}
 	content := prompts.System(prompts.SystemVars{
 		Project: s.Project, OS: osName, Date: date,
 		CanAsk: b.offer.Ask, CanMessage: b.offer.Message, CanSearch: b.offer.Search,
 		Agents: b.agents, Launcher: b.launcher,
 		Instructions: a.Instructions,
+		Mode:         string(b.offer.Mode), Tools: tools.Names(b.offer), Plan: plan,
 	})
 	s.sysChars = len(content)
 	return llm.Message{Role: "system", Content: content}

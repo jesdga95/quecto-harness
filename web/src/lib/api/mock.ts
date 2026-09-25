@@ -24,6 +24,7 @@ import type {
   Transcript,
   TranscriptItem,
   Usage,
+  WorkMode,
 } from "./types";
 import { applyEvent, nextId, outcomeLabel, pushUser } from "../transcript";
 import { answerText, type Asked } from "../question";
@@ -611,7 +612,14 @@ export class MockApi implements HarnessApi {
       // A session the mock is not running keeps the status it was seeded with,
       // so a subagent left part way through still reads as working.
       status: run ? (run.compacting ? "compacting" : "streaming") : t.status,
+      mode: t.mode,
     };
+  }
+
+  async setMode(id: string, mode: WorkMode): Promise<void> {
+    await this.tick();
+    const t = this.transcripts.get(id);
+    if (t) t.mode = mode;
   }
 
   async getChanges(id: string): Promise<Changes> {
@@ -720,6 +728,7 @@ export class MockApi implements HarnessApi {
       todos: [],
       steer: null,
       status: "idle",
+      mode: "execute",
     });
     return { ...session };
   }
@@ -828,9 +837,15 @@ export class MockApi implements HarnessApi {
     };
   }
 
-  async sendMessage(session: string, text: string, files: string[] = []): Promise<Sent> {
+  async sendMessage(
+    session: string,
+    text: string,
+    files: string[] = [],
+    mode?: WorkMode,
+  ): Promise<Sent> {
     const t = this.transcripts.get(session);
     if (!t) return { queued: false, seq: 0, files: [], steer: null };
+    if (mode) t.mode = mode;
     const attached: Attached[] = files.map((path) => ({
       path,
       kind: /\.(png|jpe?g|gif|webp)$/i.test(path) ? "image" : "text",
@@ -1266,6 +1281,7 @@ export class MockApi implements HarnessApi {
       todos: [],
       steer: null,
       status: "running",
+      mode: "execute",
     });
 
     const workerItems: TranscriptItem[] = [];
@@ -1279,6 +1295,7 @@ export class MockApi implements HarnessApi {
       todos: [],
       steer: null,
       status: "idle",
+      mode: "execute",
     });
 
     const items: TranscriptItem[] = [];
@@ -1303,6 +1320,7 @@ export class MockApi implements HarnessApi {
       todos: MOCK_TODOS.map((todo) => ({ ...todo })),
       steer: null,
       status: "idle",
+      mode: "execute",
     });
     for (const s of [second, third]) {
       this.transcripts.set(s.id, {
@@ -1312,6 +1330,7 @@ export class MockApi implements HarnessApi {
         todos: [],
         steer: null,
         status: "idle",
+        mode: "execute",
       });
     }
   }

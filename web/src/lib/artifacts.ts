@@ -5,12 +5,13 @@
 import type { TranscriptItem } from "./api";
 import { blocksOf, type Block } from "./markdown";
 import { titleOf } from "./markup";
+import { planMarkdown, planned } from "./plan";
 
 export interface Artifact {
   /** The reply's item id and the block's place in that reply. */
   id: string;
   itemId: string;
-  kind: "svg" | "page" | "file";
+  kind: "svg" | "page" | "file" | "plan";
   /** The file name the fence gave, or empty. */
   name: string;
   source: string;
@@ -47,6 +48,24 @@ export function artifactsOf(items: TranscriptItem[]): Artifact[] {
   const out: Artifact[] = [];
   const seen = new Map<string, number>();
   for (const item of items) {
+    // A plan arrives as the arguments of its call rather than as text in a
+    // reply, and each revision is a version of its own.
+    if (item.kind === "tool" && item.name === "submit_plan") {
+      const plan = planned(item.args);
+      const base = plan.title || "Plan";
+      const n = (seen.get(base) ?? 0) + 1;
+      seen.set(base, n);
+      out.push({
+        id: artifactId(item.id, 0),
+        itemId: item.id,
+        kind: "plan",
+        name: "plan.md",
+        source: planMarkdown(plan),
+        complete: plan.steps.length > 0,
+        title: n > 1 ? `${base} v${n}` : base,
+      });
+      continue;
+    }
     if (item.kind !== "assistant") continue;
     for (const block of blocksOfItem(item.id, item.text)) {
       const base = baseTitle(block);

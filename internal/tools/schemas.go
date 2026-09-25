@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 
+	"quecto-harness/internal/config"
 	"quecto-harness/internal/llm"
 	"quecto-harness/internal/prompts"
 )
@@ -11,13 +12,23 @@ import (
 // re-encoding them.
 var schemas = buildSchemas()
 
-// Offer says which of the tools a session may not have belong in this turn's
-// request. The rest are sent to every session.
+// Offer says which tools belong in this turn's request: the mode's own list,
+// less the ones this session is not offered.
 type Offer struct {
+	Mode    config.WorkMode
 	Ask     bool
 	Agents  bool
 	Message bool
 	Search  bool
+}
+
+// modeTools is the fixed list each mode may send. Plan holds no tool that
+// writes a file, and submit_plan is sent in plan mode alone.
+var modeTools = map[config.WorkMode][]string{
+	config.WorkPlan: {"read_file", "find", "web_search", "ask_question",
+		"run_agent", "send_message", "submit_plan", "run_shell"},
+	config.WorkExecute: {"read_file", "find", "web_search", "write_file", "replace_in_file",
+		"write_todos", "ask_question", "run_agent", "send_message", "run_shell"},
 }
 
 // Schemas returns the tool definitions in the order the model sees them,
@@ -25,27 +36,59 @@ type Offer struct {
 func Schemas(o Offer) []llm.Tool {
 	out := make([]llm.Tool, 0, len(schemas))
 	for _, t := range schemas {
-		switch t.Function.Name {
-		case "ask_question":
-			if !o.Ask {
-				continue
-			}
-		case "run_agent":
-			if !o.Agents {
-				continue
-			}
-		case "send_message":
-			if !o.Message {
-				continue
-			}
-		case "web_search":
-			if !o.Search {
-				continue
-			}
+		if o.Sends(t.Function.Name) {
+			out = append(out, t)
 		}
-		out = append(out, t)
 	}
 	return out
+}
+
+// Names lists the tools Schemas returns, in the same order.
+func Names(o Offer) []string {
+	var out []string
+	for _, t := range Schemas(o) {
+		out = append(out, t.Function.Name)
+	}
+	return out
+}
+
+// Known reports whether a tool of that name exists in any mode.
+func Known(name string) bool {
+	for _, t := range schemas {
+		if t.Function.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// InMode reports whether the offer's mode sends a tool at all, whatever the
+// session is offered. A call to a tool outside it is not run.
+func (o Offer) InMode(name string) bool {
+	for _, n := range modeTools[o.Mode] {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Sends reports whether a tool is in this turn's request.
+func (o Offer) Sends(name string) bool {
+	if !o.InMode(name) {
+		return false
+	}
+	switch name {
+	case "ask_question", "submit_plan":
+		return o.Ask
+	case "run_agent":
+		return o.Agents
+	case "send_message":
+		return o.Message
+	case "web_search":
+		return o.Search
+	}
+	return true
 }
 
 func buildSchemas() []llm.Tool {
@@ -169,6 +212,36 @@ func buildSchemas() []llm.Tool {
 					"multi_select": map[string]any{"type": "boolean", "description": "Allow more than one option to be chosen. Default false."},
 				},
 				"required":             []string{"question", "options"},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llm.FunctionSpec{
+			Name:        "submit_plan",
+			Description: prompts.ToolSubmitPlan(),
+			Parameters: mustSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"title": map[string]any{"type": "string", "description": "The change, in a few words."},
+					"goal":  map[string]any{"type": "string", "description": "What the change is for and the approach taken."},
+					"files": map[string]any{
+						"type":        "array",
+						"description": "Each file to change, with the functions or sections in it and what changes there.",
+						"items":       map[string]any{"type": "string"},
+					},
+					"steps": map[string]any{
+						"type":        "array",
+						"description": "The work in order, one line each, naming its files.",
+						"items":       map[string]any{"type": "string"},
+						"minItems":    1,
+					},
+					"check": map[string]any{"type": "string", "description": "The tests to add or change, the commands to run, and what to look at by hand."},
+					"open": map[string]any{
+						"type":        "array",
+						"description": "What is still undecided. Empty when nothing is.",
+						"items":       map[string]any{"type": "string"},
+					},
+				},
+				"required":             []string{"title", "steps"},
 				"additionalProperties": false,
 			}),
 		}},

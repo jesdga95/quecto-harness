@@ -1,0 +1,223 @@
+package agent
+
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"quecto-harness/internal/config"
+	"quecto-harness/internal/prompts"
+	"quecto-harness/internal/tools"
+)
+
+// sentTools names the tools a request carried.
+func sentTools(body map[string]any) []string {
+	var out []string
+	list, _ := body["tools"].([]any)
+	for _, t := range list {
+		fn, _ := t.(map[string]any)["function"].(map[string]any)
+		name, _ := fn["name"].(string)
+		out = append(out, name)
+	}
+	return out
+}
+
+// systemOf is the system message a request carried.
+func systemOf(body map[string]any) string {
+	msgs, _ := body["messages"].([]any)
+	if len(msgs) == 0 {
+		return ""
+	}
+	first, _ := msgs[0].(map[string]any)
+	text, _ := first["content"].(string)
+	return text
+}
+
+// waitForNewQuestion blocks until the turn waits on a question other than the
+// one already answered.
+func waitForNewQuestion(t *testing.T, h *harness, sessionID, answered string) Question {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if q := h.engine.PendingQuestion(sessionID); q != nil && q.ID != answered {
+			return *q
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("no new question was asked")
+	return Question{}
+}
+
+// A plan turn is sent plan's prompt and tools, is told what to change, submits
+// again, and is approved. The same turn then carries on as execute, with the
+// plan in its prompt and its steps as the todo list.
+func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
+	h := newHarness(t, "stream_submit_plan.txt", "stream_submit_plan.txt", "stream_plain.txt")
+	s := h.session(t)
+	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.Send(s.ID, "cache the list", nil)
+
+	first := waitForQuestion(t, h, s.ID)
+	if first.Text != "Cache the list" || len(first.Options) != 2 {
+		t.Fatalf("plan card = %+v", first)
+	}
+	body := h.replay.Body(0)
+	got := sentTools(body)
+	if !slices.Contains(got, "submit_plan") || slices.Contains(got, "write_file") || slices.Contains(got, "replace_in_file") {
+		t.Errorf("plan turn sent %v", got)
+	}
+	if !strings.Contains(systemOf(body), "plan mode") {
+		t.Errorf("plan turn's system message = %q", systemOf(body))
+	}
+
+	if err := h.engine.Answer(first.ID, Answer{Options: []int{1}, Text: "add a test"}); err != nil {
+		t.Fatal(err)
+	}
+	second := waitForNewQuestion(t, h, s.ID, first.ID)
+	if err := h.engine.Answer(second.ID, Answer{Options: []int{0}}); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	var results []string
+	for _, e := range doc.Entries {
+		if e.Kind == "tool" && e.ToolName == "submit_plan" {
+			results = append(results, e.Content)
+		}
+	}
+	if !slices.Equal(results, []string{"not approved: add a test", "approved"}) {
+		t.Errorf("submit_plan results = %q", results)
+	}
+	if doc.Mode != config.WorkExecute {
+		t.Errorf("mode after approval = %q, want execute", doc.Mode)
+	}
+	if doc.Plan == nil || doc.Plan.Title != "Cache the list" || len(doc.Plan.Steps) != 2 {
+		t.Fatalf("stored plan = %+v", doc.Plan)
+	}
+	if len(doc.Todos) != 2 || doc.Todos[0].Status != "doing" || doc.Todos[1].Text != "Test it" {
+		t.Errorf("todos = %+v, want the steps with the first in hand", doc.Todos)
+	}
+
+	var kickoff bool
+	for _, e := range doc.Entries {
+		if e.Kind == "user" && e.Meta["kickoff"] == true {
+			kickoff = true
+			if e.Content != prompts.PlanApproved("Cache the list") || e.Meta["mode"] != "execute" {
+				t.Errorf("kickoff entry = %+v", e)
+			}
+		}
+	}
+	if !kickoff {
+		t.Error("no entry started the execution")
+	}
+	kickoffs := 0
+	for _, ev := range h.rec.ofType("mode") {
+		if ev.Fields["kickoff"] == true {
+			kickoffs++
+		}
+	}
+	if kickoffs != 1 {
+		t.Errorf("kickoff mode events = %d, want the one the approval published", kickoffs)
+	}
+
+	if h.replay.Count() != 3 {
+		t.Fatalf("requests = %d, want two plan requests and one execute", h.replay.Count())
+	}
+	exec := h.replay.Body(2)
+	got = sentTools(exec)
+	if slices.Contains(got, "submit_plan") || !slices.Contains(got, "write_file") {
+		t.Errorf("execute request sent %v", got)
+	}
+	if sys := systemOf(exec); !strings.Contains(sys, "The user approved this plan.") || !strings.Contains(sys, "Plan: Cache the list") {
+		t.Errorf("execute system message = %q", sys)
+	}
+}
+
+// A plan turn has no write tools, and a call to one it copied from the
+// history is answered and not run.
+func TestPlanModeAnswersAWriteItDidNotSend(t *testing.T) {
+	h := newHarness(t, "stream_write.txt", "stream_plain.txt")
+	s := h.session(t)
+	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.Send(s.ID, "write it", nil)
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	result := toolResult(t, doc, "write_file")
+	if result.Content != "write_file is not available in plan mode" {
+		t.Errorf("tool result = %q", result.Content)
+	}
+	if result.Permission != nil {
+		t.Errorf("a call outside the mode reached the permission policy: %+v", result.Permission)
+	}
+	if _, err := os.Stat(filepath.Join(h.project, "out.txt")); !os.IsNotExist(err) {
+		t.Errorf("the file was written: %v", err)
+	}
+}
+
+// A mode the person picks starts new work, so the approved plan goes, and
+// the fixed context is measured again for the new prompt.
+func TestSetModeDropsThePlanAndRefusesAnUnknownMode(t *testing.T) {
+	h := newHarness(t)
+	s := h.session(t)
+	if err := h.engine.SetMode(s.ID, config.WorkMode("design")); err != ErrBadMode {
+		t.Errorf("an unknown mode = %v, want ErrBadMode", err)
+	}
+	if s.WorkMode() != config.WorkExecute {
+		t.Errorf("a new session is in %q, want execute", s.WorkMode())
+	}
+
+	plan, err := parsePlan([]byte(`{"title":"T","steps":["one"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.Plan, s.baseProbed = &plan, true
+	s.mu.Unlock()
+
+	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Plan != nil || s.baseProbed {
+		t.Errorf("after a switch plan = %+v, probed = %v", s.Plan, s.baseProbed)
+	}
+}
+
+func TestParsePlanRefusesWhatCannotBeCarriedOut(t *testing.T) {
+	for _, raw := range []string{``, `{`, `{"steps":["one"]}`, `{"title":"T","steps":[" ",""]}`} {
+		if _, err := parsePlan([]byte(raw)); err == nil {
+			t.Errorf("parsePlan(%q) took it", raw)
+		}
+	}
+	p, err := parsePlan([]byte(`{"title":" T ","steps":[" one ",""],"open":[""],"extra":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Title != "T" || !slices.Equal(p.Steps, []string{"one"}) || p.Open != nil {
+		t.Errorf("plan = %+v", p)
+	}
+}
+
+// A subagent works in the mode of the session that launched it, and is never
+// sent submit_plan: its result goes to the launcher.
+func TestASubagentKeepsItsLaunchersMode(t *testing.T) {
+	h, _ := launcher(t)
+	child := newSession("sess_kid", h.project, h.agent.ID, "Alpha-12B")
+	child.Parent = "sess_top"
+	child.Mode = config.WorkPlan
+	b := h.engine.briefFor(child, h.cfg.Config())
+	names := tools.Names(b.offer)
+	if b.offer.Mode != config.WorkPlan || slices.Contains(names, "submit_plan") || slices.Contains(names, "write_file") {
+		t.Errorf("a planning subagent was sent %v in %q", names, b.offer.Mode)
+	}
+}

@@ -87,6 +87,17 @@ type Todo struct {
 	Status string `json:"status"`
 }
 
+// Plan is a plan the user approved. Execute mode carries it in its system
+// prompt, and its steps are what the todo list started from.
+type Plan struct {
+	Title string   `json:"title"`
+	Goal  string   `json:"goal,omitempty"`
+	Files []string `json:"files,omitempty"`
+	Steps []string `json:"steps"`
+	Check string   `json:"check,omitempty"`
+	Open  []string `json:"open,omitempty"`
+}
+
 // Session is the on-disk document. The system prompt is not in it: it is
 // regenerated on every request, so editing the prompt reaches old sessions.
 type Session struct {
@@ -99,7 +110,11 @@ type Session struct {
 	// Empty is a conversation somebody started.
 	Parent string `json:"parent,omitempty"`
 	Model  string `json:"model"`
-	Title  string `json:"title"`
+	// Mode is the work mode the next turn runs in.
+	Mode config.WorkMode `json:"mode"`
+	// Plan is the last plan the user approved, or nil.
+	Plan  *Plan  `json:"plan,omitempty"`
+	Title string `json:"title"`
 	// Named is set when the user typed the title. Nothing overwrites it.
 	Named       bool       `json:"named"`
 	Created     time.Time  `json:"created"`

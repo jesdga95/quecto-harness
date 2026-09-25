@@ -357,6 +357,24 @@ const (
 	ModeFull Mode = "full"
 )
 
+// WorkMode is what a session is doing: planning a change or carrying one out.
+// Each sends its own system prompt and its own tools.
+type WorkMode string
+
+const (
+	WorkPlan    WorkMode = "plan"
+	WorkExecute WorkMode = "execute"
+)
+
+// ValidWorkMode reports whether s is one of the work modes.
+func ValidWorkMode(s string) bool {
+	switch WorkMode(s) {
+	case WorkPlan, WorkExecute:
+		return true
+	}
+	return false
+}
+
 // ValidMode reports whether s is one of the three policies.
 func ValidMode(s string) bool {
 	switch Mode(s) {

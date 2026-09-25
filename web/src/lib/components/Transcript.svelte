@@ -8,6 +8,7 @@
   import CopyButton from "./CopyButton.svelte";
   import PermissionCard from "./PermissionCard.svelte";
   import Prose from "./Prose.svelte";
+  import PlanCard from "./PlanCard.svelte";
   import QuestionCard from "./QuestionCard.svelte";
   import StepRow from "./StepRow.svelte";
   import type { Attached, TranscriptItem } from "../api";
@@ -255,6 +256,16 @@
               </div>
             {/if}
           </div>
+        {:else if item.kind === "mode"}
+          <div class="mode-divider">
+            {#if item.kickoff}
+              <span><b>Plan approved</b>{item.title ? `: ${item.title}` : ""}. Execute mode</span>
+            {:else if item.mode === "plan"}
+              <span><b>Plan mode</b>. Files are read only</span>
+            {:else}
+              <span><b>Execute mode</b>. Files can change</span>
+            {/if}
+          </div>
         {:else if item.kind === "status"}
           <div class="flex items-center gap-2 px-2 py-1 text-[13px] text-muted">
             <ArrowsLeftRight size={15} class="shrink-0" />
@@ -272,6 +283,10 @@
         {:else if item.kind === "tool" && item.name === "ask_question" && item.running && item.askId}
           <div class="my-2">
             <QuestionCard {item} />
+          </div>
+        {:else if item.kind === "tool" && item.name === "submit_plan" && item.running && item.askId}
+          <div class="my-2">
+            <PlanCard {item} />
           </div>
         {:else}
           <StepRow {item} />

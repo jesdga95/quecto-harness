@@ -3,6 +3,7 @@
   import ArrowUp from "phosphor-svelte/lib/ArrowUp";
   import Square from "phosphor-svelte/lib/Square";
   import AgentChip from "./AgentChip.svelte";
+  import ModeChip from "./ModeChip.svelte";
   import PermissionChip from "./PermissionChip.svelte";
   import X from "phosphor-svelte/lib/X";
   import {
@@ -17,6 +18,9 @@
   import { fileKind, fileName } from "../format";
 
   let { placeholder }: { placeholder: string } = $props();
+
+  // Each mode asks for something different, so the empty field says what.
+  const modeHint = $derived(app.workMode === "plan" ? "Describe the change to plan" : placeholder);
 
   let text = $state("");
   let files = $state<string[]>([]);
@@ -151,10 +155,10 @@
       class="textarea"
       rows="1"
       placeholder={asking
-        ? "Answer the question first"
+        ? "Answer the card above first"
         : blocked
           ? "Answer the permission card first"
-          : placeholder}
+          : modeHint}
       bind:value={text}
       {onkeydown}
       {onpaste}
@@ -163,6 +167,7 @@
 
     <div class="mt-2 flex items-center gap-2">
       <AddMenu up onattach={attach} canAttach={!disabled && files.length < maxFiles} />
+      <ModeChip />
       <PermissionChip />
 
       <div class="ml-auto flex items-center gap-2">

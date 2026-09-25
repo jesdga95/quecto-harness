@@ -9,11 +9,17 @@ import (
 	"text/template"
 )
 
-//go:embed system.md tool_read_file.md tool_find.md tool_web_search.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md tool_ask_question.md tool_run_agent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md
+//go:embed system.md system_plan.md system_execute.md plan.md plan_approved.md tool_submit_plan.md tool_read_file.md tool_find.md tool_web_search.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md tool_ask_question.md tool_run_agent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md
 var files embed.FS
 
 var (
-	systemTmpl     = template.Must(template.New("system").Parse(mustRead("system.md")))
+	systemTmpl = template.Must(template.New("system").Parse(mustRead("system.md")))
+	bodyTmpls  = map[string]*template.Template{
+		"plan":    template.Must(template.New("plan").Parse(mustRead("system_plan.md"))),
+		"execute": template.Must(template.New("execute").Parse(mustRead("system_execute.md"))),
+	}
+	planTmpl       = template.Must(template.New("plan").Parse(mustRead("plan.md")))
+	approvedTmpl   = template.Must(template.New("approved").Parse(mustRead("plan_approved.md")))
 	compactionTmpl = template.Must(template.New("compaction").Parse(mustRead("compaction.md")))
 	attachmentTmpl = template.Must(template.New("attachment").Parse(mustRead("attachment.md")))
 	imageTmpl      = template.Must(template.New("image").Parse(mustRead("image.md")))
@@ -65,12 +71,62 @@ type SystemVars struct {
 	Agents       []AgentBrief
 	Launcher     string
 	Instructions string
+	// Mode picks the body: plan or execute. Anything else is execute.
+	Mode string
+	// Tools names the tools this turn's request carries, in the order sent.
+	Tools []string
+	// Plan is an approved plan as Plan renders it, for execute mode. Empty is
+	// none.
+	Plan string
 }
 
+// System renders the shared head around the body for the session's mode. The
+// body is rendered first and inserted as a value.
 func System(v SystemVars) string {
+	body, ok := bodyTmpls[v.Mode]
+	if !ok {
+		body = bodyTmpls["execute"]
+	}
+	var bb strings.Builder
+	if err := body.Execute(&bb, v); err != nil {
+		panic("prompts: render the " + v.Mode + " body: " + err.Error())
+	}
+	head := struct {
+		SystemVars
+		Tools string
+		Body  string
+	}{v, strings.Join(v.Tools, ", "), strings.TrimRight(bb.String(), " \t\r\n")}
 	var b strings.Builder
-	if err := systemTmpl.Execute(&b, v); err != nil {
+	if err := systemTmpl.Execute(&b, head); err != nil {
 		panic("prompts: render system.md: " + err.Error())
+	}
+	return strings.TrimRight(b.String(), " \t\r\n")
+}
+
+// PlanVars is a plan as the model is shown it.
+type PlanVars struct {
+	Title string
+	Goal  string
+	Files []string
+	Steps []string
+	Check string
+	Open  []string
+}
+
+// Plan renders an approved plan for the execute prompt.
+func Plan(v PlanVars) string {
+	var b strings.Builder
+	if err := planTmpl.Execute(&b, v); err != nil {
+		panic("prompts: render plan.md: " + err.Error())
+	}
+	return strings.TrimRight(b.String(), " \t\r\n")
+}
+
+// PlanApproved is the message that starts the turn carrying out a plan.
+func PlanApproved(title string) string {
+	var b strings.Builder
+	if err := approvedTmpl.Execute(&b, struct{ Title string }{title}); err != nil {
+		panic("prompts: render plan_approved.md: " + err.Error())
 	}
 	return strings.TrimRight(b.String(), " \t\r\n")
 }
@@ -126,6 +182,7 @@ func ToolWriteTodos() string    { return mustRead("tool_write_todos.md") }
 func ToolAskQuestion() string   { return mustRead("tool_ask_question.md") }
 func ToolRunAgent() string      { return mustRead("tool_run_agent.md") }
 func ToolSendMessage() string   { return mustRead("tool_send_message.md") }
+func ToolSubmitPlan() string    { return mustRead("tool_submit_plan.md") }
 func Compact() string           { return mustRead("compact.md") }
 
 // Title asks for a name for the task the opening message describes. It carries

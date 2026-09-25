@@ -32,6 +32,7 @@ import type {
   TurnCost,
   TurnStatus,
   Usage,
+  WorkMode,
 } from "./types";
 
 const BASE = "/api";
@@ -222,6 +223,7 @@ interface WireSnapshot {
   parent?: string;
   children?: { id?: string; title?: string; agent?: string; state?: string }[] | null;
   steer?: WireSteer | null;
+  mode?: string;
   last_seq?: number;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
   breakdown?: { system?: number; tools?: number; messages?: number } | null;
@@ -270,6 +272,8 @@ interface WireEvent {
   ms?: number;
   tok_per_s?: number;
   requests?: number;
+  mode?: string;
+  kickoff?: boolean;
 }
 
 // transport
@@ -727,10 +731,37 @@ function toSteer(wire: WireSteer | null | undefined): Steer | null {
   return { text: wire.text ?? "", from: wire.from ?? "", files: toAttached(wire.attachments) };
 }
 
+function toWorkMode(value: unknown): WorkMode {
+  return value === "plan" ? value : "execute";
+}
+
+/** A divider where the mode changes, before the message sent in the new one.
+    A session that never left execute draws none. The message an approved
+    plan starts is drawn as its divider rather than as a bubble. */
+function modeDivider(items: TranscriptItem[], e: WireEntry, last: WorkMode | null): WorkMode | null {
+  if (e.kind !== "user") return last;
+  const mode = toWorkMode(e.meta?.mode);
+  const seq = e.seq ?? items.length;
+  if (e.meta?.kickoff === true) {
+    const title = /"(.*)"/.exec(e.content ?? "")?.[1] ?? "";
+    items.push({ kind: "mode", id: `m${seq}`, mode, kickoff: true, title });
+    return mode;
+  }
+  if (mode !== (last ?? "execute")) {
+    items.push({ kind: "mode", id: `m${seq}`, mode, kickoff: false, title: "" });
+  }
+  return mode;
+}
+
 function toTranscript(snap: WireSnapshot): Transcript {
   const entries = (snap.entries ?? []).filter((e) => e.visible !== false);
   const items: TranscriptItem[] = [];
-  for (const entry of entries) addEntry(items, entry);
+  let lastMode: WorkMode | null = null;
+  for (const entry of entries) {
+    lastMode = modeDivider(items, entry, lastMode);
+    if (entry.kind === "user" && entry.meta?.kickoff === true) continue;
+    addEntry(items, entry);
+  }
 
   // An unanswered request has no entry of its own yet, so the card that blocks
   // the composer has to be restored from the pending list.
@@ -746,7 +777,10 @@ function toTranscript(snap: WireSnapshot): Transcript {
   if (asked?.id) {
     const row = [...items]
       .reverse()
-      .find((i) => i.kind === "tool" && i.name === "ask_question" && i.running);
+      .find(
+        (i) =>
+          i.kind === "tool" && (i.name === "ask_question" || i.name === "submit_plan") && i.running,
+      );
     if (row?.kind === "tool") row.askId = asked.id;
   }
 
@@ -793,6 +827,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
     todos: toTodos(snap.todos),
     steer: toSteer(snap.steer),
     status: toStatus(snap.state),
+    mode: toWorkMode(snap.mode),
   };
 }
 
@@ -810,6 +845,7 @@ interface OpenCall {
 // transport failure arrives on the same listener.
 const EVENT_NAMES = [
   "status",
+  "mode",
   "delta",
   "reasoning",
   "tool_call",
@@ -838,6 +874,17 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
   switch (ev.type) {
     case "status":
       return [{ type: "status", status: toStatus(ev.state) }];
+
+    case "mode":
+      return [
+        {
+          type: "mode",
+          mode: toWorkMode(ev.mode),
+          kickoff: ev.kickoff === true,
+          seq: ev.seq ?? 0,
+          title: ev.title ?? "",
+        },
+      ];
 
     case "delta":
       return [{ type: "delta", text: ev.text ?? "" }];
@@ -1102,16 +1149,20 @@ class HttpApi implements HarnessApi {
     if (known) summaries.set(id, { ...known, title });
   }
 
+  async setMode(id: string, mode: WorkMode): Promise<void> {
+    await call<unknown>(`/sessions/${encodeURIComponent(id)}/mode`, "PUT", { mode });
+  }
+
   async deleteSession(id: string): Promise<void> {
     await call<unknown>(`/sessions/${encodeURIComponent(id)}`, "DELETE");
     summaries.delete(id);
   }
 
-  async sendMessage(id: string, text: string, files: string[] = []): Promise<Sent> {
+  async sendMessage(id: string, text: string, files: string[] = [], mode?: WorkMode): Promise<Sent> {
     const wire = await call<WireSent>(
       `/sessions/${encodeURIComponent(id)}/message`,
       "POST",
-      { text, attachments: files },
+      { text, attachments: files, mode },
     );
     if (wire.queued) {
       return { queued: true, seq: 0, files: [], steer: toSteer(wire.steer) };

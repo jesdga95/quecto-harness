@@ -1768,5 +1768,5 @@ func TestForgetDropsWhatWasReadFromAnAgent(t *testing.T) {
 // That agent's own turn takes its only slot, so there is nobody to hand work
 // to and run_agent is not sent.
 func topBrief() brief {
-	return brief{offer: tools.Offer{Ask: true, Message: true}}
+	return brief{offer: tools.Offer{Mode: config.WorkExecute, Ask: true, Message: true}}
 }

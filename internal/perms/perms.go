@@ -109,12 +109,12 @@ func (b *Broker) Evaluate(project, tool, command string, mode config.Mode) Actio
 	}
 	auto := mode == config.ModeAllowlist
 	switch tool {
-	case "read_file", "find", "write_todos", "ask_question", "run_agent", "send_message":
+	case "read_file", "find", "write_todos", "ask_question", "submit_plan", "run_agent", "send_message":
 		// find reads inside the project and nothing else, on the same guard
 		// read_file uses. write_todos changes the session's own plan and
 		// touches nothing on the machine, so there is nothing to decide.
-		// ask_question puts its own card to the user, and a card in front of
-		// it would ask twice. run_agent and send_message touch nothing on the
+		// ask_question and submit_plan put their own card to the user, and a
+		// card in front of either would ask twice. run_agent and send_message touch nothing on the
 		// machine; what the agent they reach then does draws its own card.
 		return ActionAllow
 	case "write_file", "replace_in_file":

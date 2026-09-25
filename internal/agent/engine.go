@@ -347,7 +347,8 @@ func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments [
 	s.cancel = cancel
 	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text,
 		From: from.Name, FromSession: from.Session,
-		Attachments: attachments, InContext: true, Visible: true})
+		Attachments: attachments, InContext: true, Visible: true,
+		Meta: map[string]any{"mode": string(s.Mode)}})
 	if s.Title == "" {
 		s.Title = store.Title(text)
 	}
@@ -377,7 +378,8 @@ func (e *Engine) absorbSteer(s *Session) bool {
 	s.steer = nil
 	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: held.Text,
 		From: held.From.Name, FromSession: held.From.Session,
-		Attachments: held.Attachments, InContext: true, Visible: true})
+		Attachments: held.Attachments, InContext: true, Visible: true,
+		Meta: map[string]any{"mode": string(s.Mode)}})
 	s.mu.Unlock()
 
 	e.save(s)
@@ -1250,6 +1252,15 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 
 		for i, call := range res.ToolCalls {
 			calls++
+			if tools.Known(call.Function.Name) && !b.offer.InMode(call.Function.Name) {
+				entry := e.unavailable(s, call, b.offer.Mode)
+				e.save(s)
+				e.publish(s.ID, ev("tool_output", map[string]any{
+					"index": i, "id": call.ID, "name": call.Function.Name,
+					"output": entry.Content, "exit_code": nil, "truncated": false,
+				}))
+				continue
+			}
 			e.setState(s, StateDeciding)
 			decision, record, stopped := e.decide(ctx, s, cfg, a, call)
 			if stopped {
@@ -1271,6 +1282,15 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				e.markStopped(s)
 				return
 			}
+		}
+
+		// An approved plan turns the rest of this turn into its execution: the
+		// next request carries execute's prompt and tools, and the budget
+		// starts again for the work the plan describes.
+		if e.takeApproval(s) {
+			b = e.briefFor(s, cfg)
+			calls = 0
+			e.probeContextBase(ctx, s, a, b)
 		}
 	}
 
@@ -1392,11 +1412,12 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 	command, path := argSummary(call)
 	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
 
-	if e.perms.Evaluate(s.Project, tool, command, cfg.Mode) == perms.ActionAllow {
+	policy := cfg.Mode
+	if e.perms.Evaluate(s.Project, tool, command, policy) == perms.ActionAllow {
 		// A call skips the card two ways, and the record keeps them apart.
 		// "auto" is a policy that allowed this call, "full" is no policy.
 		record.Decision = "auto"
-		if cfg.Mode == config.ModeFull {
+		if policy == config.ModeFull {
 			record.Decision = "full"
 		}
 		return perms.Decision{Kind: perms.DecideOnce}, record, false
@@ -1493,8 +1514,10 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 			res, err = e.runAgent(s, call)
 		case "send_message":
 			res, err = e.sendMessage(s, call)
+		case "submit_plan":
+			res, err = e.submitPlan(ctx, s, call)
 		default:
-			err = fmt.Errorf("no tool named %s: use read_file, find, web_search, write_file, replace_in_file, run_shell, write_todos, ask_question, run_agent or send_message", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read_file, find, web_search, write_file, replace_in_file, run_shell, write_todos, ask_question, submit_plan, run_agent or send_message", call.Function.Name)
 		}
 		if err != nil {
 			content = err.Error()
