@@ -243,7 +243,8 @@ too late to be picked up starts a turn of its own.
   permission card drawn in the launcher's conversation, rolls its file writes up onto the
   launcher, and is stopped and deleted with it. An agent's `concurrency` bounds how many
   sessions it answers at once, and one with no room left is left off the list the prompt
-  offers.
+  offers. An agent flagged `main_only` is left off that list and refused by `run_agent`,
+  but can still be selected and launch others.
 
 ## 9. internal/store
 

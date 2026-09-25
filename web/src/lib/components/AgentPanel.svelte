@@ -263,6 +263,23 @@
         onchange={(e) => onchange({ enabled: e.currentTarget.checked })}
       />
     </label>
+
+    <div class="my-3 h-px w-full bg-hair"></div>
+
+    <label class="flex cursor-pointer items-center justify-between gap-6">
+      <span class="flex min-w-0 flex-col gap-0.5">
+        <span class="text-[13px]">Main agent only</span>
+        <span class="text-[12px] text-muted">
+          It answers when selected, but other agents cannot hand it work.
+        </span>
+      </span>
+      <input
+        class="switch"
+        type="checkbox"
+        checked={agent.main_only}
+        onchange={(e) => onchange({ main_only: e.currentTarget.checked })}
+      />
+    </label>
   </div>
 
   <div class="field-card">

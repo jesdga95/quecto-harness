@@ -10,6 +10,7 @@
     id: "",
     name: "",
     enabled: true,
+    main_only: false,
     url: "",
     key: "",
     protocol: "llamacpp",

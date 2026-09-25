@@ -68,6 +68,9 @@ export interface Agent {
   /** Whether the agent may answer. A disabled one keeps its settings, cannot
       be selected, and is not offered to the agents that hand out work. */
   enabled: boolean;
+  /** Whether the agent answers only as the selected agent. It is not offered
+      to the agents that hand out work, and run_agent refuses it. */
+  main_only: boolean;
   url: string;
   /** Empty is no key. */
   key: string;

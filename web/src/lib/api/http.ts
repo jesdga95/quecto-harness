@@ -76,6 +76,7 @@ interface WireAgent {
   id?: string;
   name?: string;
   enabled?: boolean;
+  main_only?: boolean;
   url?: string;
   key?: string;
   protocol?: string;
@@ -368,6 +369,7 @@ function toAgent(a: WireAgent): Agent {
     id: a.id ?? "",
     name: a.name || "Agent",
     enabled: a.enabled ?? true,
+    main_only: a.main_only ?? false,
     url: a.url ?? "",
     key: a.key ?? "",
     protocol: toProtocol(a.protocol),

@@ -38,6 +38,7 @@ type FileAgent struct {
 	ID                *string  `json:"id,omitempty"`
 	Name              *string  `json:"name,omitempty"`
 	Enabled           *bool    `json:"enabled,omitempty"`
+	MainOnly          *bool    `json:"main_only,omitempty"`
 	URL               *string  `json:"url,omitempty"`
 	Key               *string  `json:"key,omitempty"`
 	Protocol          *string  `json:"protocol,omitempty"`
@@ -173,8 +174,11 @@ type Agent struct {
 	// address, key and settings, cannot be selected, and is not named to the
 	// agents that hand out work.
 	Enabled bool
-	URL     string
-	Key     string
+	// MainOnly is whether the agent answers only as the selected agent. It is
+	// not named to the agents that hand out work, and run_agent refuses it.
+	MainOnly bool
+	URL      string
+	Key      string
 	// Protocol is what the address speaks. It is named rather than found:
 	// two of the three answer the same model list at the same address.
 	Protocol          Protocol
@@ -518,7 +522,7 @@ func (c Config) File() File {
 	agents := make([]FileAgent, 0, len(c.Agents))
 	for _, a := range c.Agents {
 		id, name, url, key := a.ID, a.Name, a.URL, a.Key
-		enabled := a.Enabled
+		enabled, mainOnly := a.Enabled, a.MainOnly
 		protocol, model, effort := string(a.Protocol), a.Model, string(a.Effort)
 		preserve, instructions := a.PreserveReasoning, a.Instructions
 		concurrency, description := a.Concurrency, a.Description
@@ -526,6 +530,7 @@ func (c Config) File() File {
 			ID:                &id,
 			Name:              &name,
 			Enabled:           &enabled,
+			MainOnly:          &mainOnly,
 			URL:               &url,
 			Key:               &key,
 			Protocol:          &protocol,
@@ -591,6 +596,9 @@ func resolveAgents(in []FileAgent, note func(string)) []Agent {
 		}
 		if f.Enabled != nil {
 			a.Enabled = *f.Enabled
+		}
+		if f.MainOnly != nil {
+			a.MainOnly = *f.MainOnly
 		}
 		// A blank address is an agent still being filled in, not a bad value.
 		if f.URL != nil && strings.TrimSpace(*f.URL) != "" {

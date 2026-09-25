@@ -292,6 +292,31 @@ func TestAgentWithoutConcurrencyWorksAlone(t *testing.T) {
 	}
 }
 
+// main_only answers only as the selected agent. Absent takes false, and a
+// true one is written out and read back.
+func TestMainOnlyIsWrittenAndReadBack(t *testing.T) {
+	c, notes := oneAgent(FileAgent{}).Resolve(Defaults())
+	if len(notes) != 0 || c.Agents[0].MainOnly {
+		t.Fatalf("an absent main_only = %+v, notes %v, want false and none", c.Agents[0], notes)
+	}
+	c.Agents[0].MainOnly = true
+	raw, err := json.Marshal(c.File())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"main_only":true`) {
+		t.Errorf("saved file omits a true main_only: %s", raw)
+	}
+	var back File
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	out, notes := back.Resolve(Defaults())
+	if len(notes) != 0 || !out.Agents[0].MainOnly {
+		t.Errorf("second resolve = %+v, notes %v, want the flag kept", out.Agents[0], notes)
+	}
+}
+
 func TestAgentIDIsMinted(t *testing.T) {
 	c, notes := File{Agents: []FileAgent{{Name: ptr("Local")}}}.Resolve(Defaults())
 	if len(c.Agents) != 1 || !strings.HasPrefix(c.Agents[0].ID, "agt_") {

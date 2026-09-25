@@ -1,6 +1,7 @@
 <script lang="ts">
   import Plus from "phosphor-svelte/lib/Plus";
   import Robot from "phosphor-svelte/lib/Robot";
+  import User from "phosphor-svelte/lib/User";
   import type { Agent, AgentPatch } from "../api";
   import {
     addAgent,
@@ -137,12 +138,18 @@
           class:is-active={agent.id === stored?.id}
           onclick={() => select(agent.id)}
         >
-          <Robot size={15} class="shrink-0" />
           <span class="min-w-0 flex-1 truncate" class:opacity-55={!agent.enabled}>
             {agent.name}
           </span>
           {#if !agent.enabled}
             <span class="shrink-0 text-[11px] text-muted">Disabled</span>
+          {:else}
+            <!-- Every agent answers the person; the robot adds that it also
+                 takes delegated work, so the pair is what a main-only row lacks. -->
+            <span class="flex shrink-0 items-center gap-1 text-muted">
+              <User size={13} />
+              {#if !agent.main_only}<Robot size={13} />{/if}
+            </span>
           {/if}
         </button>
       {/each}
@@ -162,7 +169,7 @@
             {draft.name || "Unnamed agent"}
           </h3>
           <span class="truncate text-[12px] text-muted">
-            {draft.enabled ? "" : "Disabled · "}{draft.model ||
+            {draft.enabled ? "" : "Disabled · "}{draft.main_only ? "Main only · " : ""}{draft.model ||
               "No model chosen"}{draft.url ? ` · ${draft.url}` : ""}
           </span>
         </div>

@@ -891,6 +891,31 @@ func TestPutAgentSetsAndClearsSampling(t *testing.T) {
 
 // A window nothing reported is unknown, and the agent's override fills it in
 // for the session that answers with that agent.
+// The main_only flag is applied on a write and comes back in the agent JSON.
+func TestPutAgentMainOnly(t *testing.T) {
+	f := newFixture(t)
+	res := f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"main_only": true})
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
+	}
+	a, _ := f.cfg.Config().AgentByID(f.agent)
+	if !a.MainOnly {
+		t.Error("main_only was not applied")
+	}
+	if got := f.saved(t, res)["main_only"]; got != true {
+		t.Errorf("the reply said main_only = %v, want true", got)
+	}
+	// A body that leaves the flag out keeps it.
+	res = f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"description": "Main work."})
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
+	}
+	a, _ = f.cfg.Config().AgentByID(f.agent)
+	if !a.MainOnly {
+		t.Errorf("main_only moved to %v on a body that left it out", a.MainOnly)
+	}
+}
+
 func TestSnapshotWindowComesFromTheAgent(t *testing.T) {
 	f := newFixture(t)
 	id := f.newSession(t)

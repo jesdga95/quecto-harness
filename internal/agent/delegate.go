@@ -40,7 +40,7 @@ func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	}
 	b := brief{offer: tools.Offer{Ask: true, Message: true, Search: cfg.Search.Enabled()}}
 	for _, a := range cfg.Agents {
-		if !a.Enabled {
+		if !a.Enabled || a.MainOnly {
 			continue
 		}
 		// This turn is already one of its own agent's tasks, so a launch onto
@@ -131,6 +131,9 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 	target, err := findAgent(cfg, args.Agent)
 	if err != nil {
 		return tools.Result{}, err
+	}
+	if target.MainOnly {
+		return tools.Result{}, fmt.Errorf("run_agent: %s takes no delegated work, pick another agent", target.Name)
 	}
 	if err := usable(target); err != nil {
 		return tools.Result{}, fmt.Errorf("run_agent: %s is not ready: %s", target.Name, err)
@@ -345,7 +348,8 @@ func (e *Engine) rollUp(child, parent *Session) {
 
 // findAgent matches an agent by name, which is what the model was given. An
 // disabled agent is not there to match, since it is not in the list
-// the prompt named either.
+// the prompt named either. A main-only one still matches, so a call can be
+// refused by name, but it stays out of the names a misspelled call is told.
 func findAgent(cfg config.Config, name string) (config.Agent, error) {
 	want := strings.TrimSpace(name)
 	var names []string
@@ -356,7 +360,9 @@ func findAgent(cfg config.Config, name string) (config.Agent, error) {
 		if strings.EqualFold(a.Name, want) {
 			return a, nil
 		}
-		names = append(names, a.Name)
+		if !a.MainOnly {
+			names = append(names, a.Name)
+		}
 	}
 	if len(names) == 0 {
 		return config.Agent{}, errors.New("run_agent: there are no agents to run this")

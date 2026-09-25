@@ -16,6 +16,7 @@ import (
 type agentBody struct {
 	Name              *string        `json:"name"`
 	Enabled           *bool          `json:"enabled"`
+	MainOnly          *bool          `json:"main_only"`
 	URL               *string        `json:"url"`
 	Key               *string        `json:"key"`
 	Protocol          *string        `json:"protocol"`
@@ -84,6 +85,9 @@ func (b agentBody) apply(a *config.Agent) {
 	}
 	if b.Enabled != nil {
 		a.Enabled = *b.Enabled
+	}
+	if b.MainOnly != nil {
+		a.MainOnly = *b.MainOnly
 	}
 	if b.URL != nil {
 		a.URL = strings.TrimRight(strings.TrimSpace(*b.URL), "/")
