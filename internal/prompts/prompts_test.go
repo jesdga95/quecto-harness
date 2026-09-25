@@ -208,6 +208,14 @@ func TestSystemNamesDrawingsOnlyForTheMainAgent(t *testing.T) {
 	if !strings.Contains(main, "```svg") || !strings.Contains(main, "```html") {
 		t.Errorf("prompt does not name the figure and page fences: %q", main)
 	}
+	// A prototype is better seen than read, so the prompt says which fence
+	// presents one, and that it stays in the reply.
+	if !strings.Contains(main, "prototype") {
+		t.Errorf("prompt does not say a prototype goes in a page: %q", main)
+	}
+	if !strings.Contains(main, "not saved to a file") {
+		t.Errorf("prompt does not say a page is not a file: %q", main)
+	}
 	child := System(SystemVars{Project: "/src/x", OS: "darwin", Launcher: "sess_aaaaaaaaaaaaaaaa"})
 	if strings.Contains(child, "```svg") || strings.Contains(child, "```html") {
 		t.Errorf("a subagent's prompt names the fences, but its output is not drawn: %q", child)

@@ -21,8 +21,12 @@ A ```svg fence is drawn as a figure, and a ```html fence that holds a whole
 document, with a doctype or html tag, runs as a page: inline scripts and
 styles, no network. Fragments stay code in both, so open the fence only with
 complete markup. Reach for the figure when a picture says it better than
-prose: a layout, a sequence, a state machine, a before and after. A figure
-takes no script, link, image or animation, and it needs a viewBox.
+prose: a layout, a sequence, a state machine, a before and after. Reach for
+the page to present something interactive: when asked to show, preview or
+prototype a UI or a behavior, build it as a page, not as code to look at. A
+figure takes no script, link, image or animation, and it needs a viewBox, so
+an interactive preview is a page. A page exists in the reply it is in, so it
+is sent, not saved to a file, unless asked to.
 {{end}}
 {{if .Agents}}
 Delegate work with run_agent to:
