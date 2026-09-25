@@ -9,7 +9,7 @@
 {#if total > 0}
   <button
     class="chip chip-plain"
-    class:chip-solid={app.runsOpen}
+    class:chip-solid={app.dock === "runs"}
     onclick={toggleRuns}
     title="Agents working for this session"
   >

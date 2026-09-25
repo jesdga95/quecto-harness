@@ -239,7 +239,7 @@
           </div>
         {:else if item.kind === "assistant"}
           <div class="my-2">
-            <Prose text={item.text} streaming={item.streaming} />
+            <Prose text={item.text} streaming={item.streaming} itemId={item.id} />
             <!-- The cost arrives when the turn ends, so it is also what says
                  this block is the end of one rather than a fragment between
                  two tool calls. -->

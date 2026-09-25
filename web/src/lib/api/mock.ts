@@ -186,6 +186,58 @@ const LONG_OUTPUT = [
   "internal/tools/shell.go:30: declared and not used: cancel",
 ].join("\n");
 
+const MOCK_DRAWING = [
+  "```svg",
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 180">',
+  "<title>Hub fan out</title>",
+  '<rect x="20" y="70" width="100" height="40" rx="8" fill="#dff3f0" stroke="#0f766e"/>',
+  '<text x="70" y="95" text-anchor="middle" font-family="sans-serif" font-size="13">Publish</text>',
+  '<rect x="290" y="20" width="110" height="36" rx="8" fill="#f1f5f9" stroke="#64748b"/>',
+  '<text x="345" y="43" text-anchor="middle" font-family="sans-serif" font-size="13">Tab one</text>',
+  '<rect x="290" y="72" width="110" height="36" rx="8" fill="#f1f5f9" stroke="#64748b"/>',
+  '<text x="345" y="95" text-anchor="middle" font-family="sans-serif" font-size="13">Tab two</text>',
+  '<rect x="290" y="124" width="110" height="36" rx="8" fill="#f1f5f9" stroke="#64748b"/>',
+  '<text x="345" y="147" text-anchor="middle" font-family="sans-serif" font-size="13">Tab three</text>',
+  '<path d="M120 90 L290 38 M120 90 L290 90 M120 90 L290 142" stroke="#0f766e" stroke-width="2" fill="none"/>',
+  "</svg>",
+  "```",
+].join("\n");
+
+function mockPage(title: string, label: string): string {
+  return [
+    "```html",
+    "<!doctype html>",
+    '<html lang="en">',
+    "<head>",
+    `<title>${title}</title>`,
+    "<style>",
+    "body { font-family: sans-serif; margin: 24px; color: #0f172a; }",
+    "button { padding: 8px 14px; border-radius: 8px; border: 1px solid #0f766e; background: #dff3f0; }",
+    "ul { padding-left: 18px; }",
+    "</style>",
+    "</head>",
+    "<body>",
+    `<h1>${title}</h1>`,
+    "<p>Each click publishes one event to three tabs.</p>",
+    `<button id="go">${label}</button>`,
+    '<button id="leave">Leave the page</button>',
+    '<ul id="log"><li>Waiting for a click</li></ul>',
+    "<script>",
+    'const log = document.getElementById("log");',
+    "let n = 0;",
+    'document.getElementById("go").onclick = () => {',
+    "  n += 1;",
+    '  log.innerHTML = ["one", "two", "three"].map((t) => `<li>Tab ${t} got event ${n}</li>`).join("");',
+    "};",
+    'document.getElementById("leave").onclick = () => { location.href = "https://example.com"; };',
+    'document.body.insertAdjacentHTML("beforeend", "<p>Script ran.</p>");',
+    "</script>",
+    "</body>",
+    "</html>",
+    "```",
+  ].join("\n");
+}
+
 const SCRIPT: ScriptedTurn[] = [
   {
     reasoning:
@@ -267,6 +319,37 @@ const SCRIPT: ScriptedTurn[] = [
       "```\nok  quecto-harness/internal/llm  0.412s\n```\n\n" +
       "Nothing else in the tree touches it.",
     denied: "Not run. The change is unverified until those tests go through.",
+  },
+  {
+    reasoning:
+      "The user wants to see the hub rather than read about it. A drawing for " +
+      "the fan out, then a page they can click.",
+    preface: "Checking the hub file is where I think it is.\n\n",
+    tool: "run_shell",
+    args: { command: "ls internal/server", timeout_s: 120 },
+    command: "ls internal/server",
+    output: ["events.go", "hub.go", "routes.go", "server.go"].join("\n"),
+    exit: 0,
+    truncated: false,
+    reply:
+      "Here is how an event reaches every tab.\n\n" +
+      MOCK_DRAWING +
+      "\n\nAnd a page to try it:\n\n" +
+      mockPage("Hub playground", "Publish") +
+      "\n\nThe same page with a second button:\n\n" +
+      mockPage("Hub playground", "Publish twice") +
+      "\n\nThe last button tries to leave the page, which the panel stops. " +
+      "The handler on its own:\n\n" +
+      "```go internal/server/hub.go\n" +
+      "func (h *Hub) Publish(e Event) {\n" +
+      "\th.mu.Lock()\n" +
+      "\tdefer h.mu.Unlock()\n" +
+      "\tfor sub := range h.subs[e.Session] {\n" +
+      "\t\tsub <- e\n" +
+      "\t}\n" +
+      "}\n" +
+      "```",
+    denied: "No listing then. I can still draw the hub from what I read earlier.",
   },
 ];
 

@@ -17,6 +17,11 @@
 .prose > *:last-child {
   margin-bottom: 0;
 }
+/* An artifact card that ends a reply keeps its space, so it does not sit on
+   whatever follows. */
+.prose > .artifact-card:last-child {
+  margin-bottom: 16px;
+}
 
 .prose h1,
 .prose h2,
@@ -223,55 +228,4 @@
   margin-left: 3px;
   vertical-align: -0.13em;
   background: var(--accent);
-}
-
-/* A drawing is coloured for paper, so it gets paper rather than the theme
-   background. */
-.md-svg {
-  width: fit-content;
-  max-width: 100%;
-  margin: 0 auto 12px;
-  padding: 10px;
-  border: 1px solid var(--hair);
-  border-radius: 12px;
-  background: #ffffff;
-}
-
-/* A page the model printed, running in a frame with no origin and no route
-   out. It carries no chrome of its own, so it reads as part of the reply. The
-   button that swaps it for its source appears on hover, and the source view
-   reuses the code block. */
-.md-page {
-  position: relative;
-  margin: 0 0 12px;
-  max-width: 100%;
-  border-radius: 12px;
-  overflow: hidden;
-  background: #ffffff;
-}
-.md-page-code {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  opacity: 0;
-  background: var(--surface);
-  box-shadow: 0 1px 4px rgb(15 23 42 / 0.12);
-  transition: opacity 90ms ease;
-}
-.md-page:hover .md-page-code,
-.md-page-code:focus-visible {
-  opacity: 1;
-}
-.md-page iframe {
-  display: block;
-  width: 100%;
-  border: 0;
-  background: #ffffff;
-}
-.prose .md-page .md-code {
-  margin: 0;
-  border: 0;
-  border-radius: 0;
-  max-height: 420px;
-  overflow-y: auto;
 }

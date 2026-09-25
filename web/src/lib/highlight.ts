@@ -181,6 +181,14 @@ export function guess(code: string): string | null {
   }
 }
 
+/** Marked-up source of a file the model presented, coloured by its name, or
+    as markup when it has none. An unknown extension is guessed at. */
+export function sourceHtml(text: string, name: string): string {
+  const language = name ? languageOfPath(name) : "xml";
+  const marked = language ? highlight(text, language) : guess(text);
+  return marked ?? escapeHtml(text);
+}
+
 /** Marked-up code, falling back to escaped text, for the views that render
     code outside markdown. */
 export function codeHtml(text: string, language: string): string {

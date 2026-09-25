@@ -4,10 +4,10 @@
 // leaves out script, foreignObject, a, image, feImage and the animation
 // elements.
 
+import { lastTagEnd } from "./markup";
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LIMIT = 256 * 1024;
-const MAX_WIDTH = 620;
-const MAX_HEIGHT = 500;
 
 const ELEMENTS = new Set(
   `svg g defs symbol use switch title desc style path rect circle ellipse line polyline
@@ -17,28 +17,6 @@ const ELEMENTS = new Set(
    feFuncG feFuncR feGaussianBlur feMerge feMergeNode feMorphology feOffset fePointLight
    feSpecularLighting feSpotLight feTile feTurbulence`.split(/\s+/),
 );
-
-// Index just past the last complete tag. A quote counts only inside a tag, so
-// an apostrophe in a label does not swallow the rest of the drawing.
-function lastTagEnd(source: string): number {
-  let end = 0;
-  let quote = "";
-  let tag = false;
-  for (let i = 0; i < source.length; i += 1) {
-    const char = source[i]!;
-    if (quote) {
-      if (char === quote) quote = "";
-    } else if (tag && (char === '"' || char === "'")) {
-      quote = char;
-    } else if (char === "<") {
-      tag = true;
-    } else if (char === ">" && tag) {
-      tag = false;
-      end = i + 1;
-    }
-  }
-  return end;
-}
 
 // A reference survives only when it points inside the drawing, so nothing is
 // fetched from wherever the model named.
@@ -76,9 +54,9 @@ export function drawing(source: string): SVGSVGElement | null {
   if (!root) return null;
   clean(root);
 
-  // A drawing is scaled to its own box, so a width the model chose cannot
-  // stretch the column and the card ends where the drawing does. Without a box
-  // there is nothing to scale.
+  // A drawing fills the box it is mounted in, scaled by its own viewBox, so a
+  // width the model chose cannot overflow it. Without a box there is nothing
+  // to scale.
   const width = Number.parseFloat(root.getAttribute("width") ?? "");
   const height = Number.parseFloat(root.getAttribute("height") ?? "");
   if (!root.hasAttribute("viewBox") && width > 0 && height > 0) {
@@ -91,14 +69,8 @@ export function drawing(source: string): SVGSVGElement | null {
   const [boxWidth, boxHeight] = [box[2] ?? 0, box[3] ?? 0];
   if (!(boxWidth > 0) || !(boxHeight > 0)) return null;
 
-  const scale = Math.min(MAX_WIDTH / boxWidth, MAX_HEIGHT / boxHeight);
   root.removeAttribute("width");
   root.removeAttribute("height");
-  root.setAttribute(
-    "style",
-    `display:block;width:${Math.round(boxWidth * scale)}px;max-width:100%;` +
-      `height:auto;aspect-ratio:${boxWidth}/${boxHeight}`,
-  );
-
+  root.setAttribute("style", "display:block;width:100%;height:100%");
   return document.importNode(root, true);
 }

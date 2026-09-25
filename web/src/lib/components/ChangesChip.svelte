@@ -8,7 +8,7 @@
 {#if count > 0}
   <button
     class="chip chip-plain"
-    class:chip-solid={app.changesOpen}
+    class:chip-solid={app.dock === "changes"}
     onclick={toggleChanges}
     title="Files this session changed"
   >

@@ -2,8 +2,8 @@
 // half written. Every branch either escapes what it emits or builds the markup
 // itself, so the result is safe to hand to {@html}. An unclosed fence, a lone
 // dollar or a table missing its body stays literal text and never throws. A
-// drawing and a page are handed back as their source, for the caller to mount
-// as an element.
+// drawing, a page and a named file are handed back as their source, for the
+// caller to show as an artifact.
 
 import { Marked, type RendererObject } from "marked";
 import katex from "katex";
@@ -28,9 +28,15 @@ const DRAW_CLOSE = "\uE003";
 const DRAW_RE = /\uE002(\d+)\uE003/g;
 const LONE_DRAW_RE = /<p>\s*\uE002(\d+)\uE003\s*<\/p>/g;
 
-interface Block {
-  kind: "svg" | "page";
+/** A drawing, page or named file in a reply. Name is the file name the fence
+    gave, or empty. Index counts blocks in order within the reply, and complete
+    says its fence or closing tag has arrived. */
+export interface Block {
+  kind: "svg" | "page" | "file";
+  name: string;
   source: string;
+  complete: boolean;
+  index: number;
 }
 
 interface Formula {
@@ -84,21 +90,51 @@ function fenceEnd(source: string, open: number, char: string, size: number): num
   return source.length;
 }
 
+// Where a page's markup starts, past whitespace and comments.
+function pageHead(body: string): string {
+  return body.replace(/^(\s|<!--[\s\S]*?-->)*/, "").slice(0, 16).toLowerCase();
+}
+
+// A fence whose info string is a file name, extension included, holds that
+// whole file. The name may follow a language, or be joined to one by a colon.
+function fenceFile(info: string): string {
+  const words = info.trim().split(/[\s:]+/).slice(0, 2);
+  for (const word of words) {
+    if (/^[\w./-]{0,120}[\w-]\.[a-z0-9]{1,10}$/i.test(word) && !word.includes("..")) return word;
+  }
+  return "";
+}
+
 // What a fence is shown as rather than as its text, or null for a fence that
-// stays code. A drawing is taken as it streams. A page has to be complete,
-// since its script would run again on every token, and a fragment of markup is
-// something to read rather than something to run.
-function fenceBlock(source: string, open: number, end: number, size: number): Block | null {
+// stays code. All are taken as they stream. A page is a whole document, so an
+// unnamed fragment of markup stays something to read, and a body too short to
+// tell stays code until it can be told. A named file is a file whatever it is.
+function fenceBlock(
+  source: string,
+  open: number,
+  end: number,
+  size: number,
+): Omit<Block, "index"> | null {
   const nl = source.indexOf("\n", open);
   if (nl < 0 || nl >= end) return null;
-  const info = fenceLanguage(source.slice(open + size, nl)).toLowerCase();
-  if (info !== "svg" && info !== "html") return null;
+  const infoRaw = source.slice(open + size, nl);
+  const name = fenceFile(infoRaw);
+  const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
+  const info = name ? ext : fenceLanguage(infoRaw).toLowerCase();
 
   const raw = source.slice(nl + 1, end);
   const body = raw.replace(CLOSE_RE, "");
-  if (info === "svg") return { kind: "svg", source: body };
-  const whole = body !== raw && /<!doctype html|<html[\s>]/i.test(body);
-  return whole ? { kind: "page", source: body } : null;
+  const complete = body !== raw;
+  if (info === "svg") return { kind: "svg", name, source: body, complete };
+  if (info === "html" || info === "htm") {
+    if (/^(<!doctype html|<html[\s>])/.test(pageHead(body))) {
+      return { kind: "page", name, source: body, complete };
+    }
+    // A named page shows as its source until it is known to be a document.
+    if (name && pageHead(body).length >= 14) return { kind: "file", name, source: body, complete };
+    return null;
+  }
+  return name ? { kind: "file", name, source: body, complete } : null;
 }
 
 // Index just past the backtick run that closes a code span, or -1 while the
@@ -170,8 +206,8 @@ function extract(source: string): {
 
   // Blank lines around the slot keep it a block of its own, since a single
   // newline is a line break in this dialect.
-  const figure = (block: Block): string => {
-    blocks.push(block);
+  const figure = (block: Omit<Block, "index">): string => {
+    blocks.push({ ...block, index: blocks.length });
     return `\n\n${DRAW_OPEN}${blocks.length - 1}${DRAW_CLOSE}\n\n`;
   };
 
@@ -196,7 +232,7 @@ function extract(source: string): {
     if (lineStart && char === "<" && /^<svg[\s>]/i.test(src.slice(i, i + 5))) {
       const close = /<\/svg\s*>/i.exec(src.slice(i));
       const end = close ? i + close.index + close[0].length : src.length;
-      out += figure({ kind: "svg", source: src.slice(i, end) });
+      out += figure({ kind: "svg", name: "", source: src.slice(i, end), complete: close !== null });
       i = end;
       continue;
     }
@@ -360,7 +396,7 @@ function fillMath(html: string, formulas: Formula[]): string {
   return unwrapped.replace(SLOT_RE, (_, index: string) => renderMath(formulas[Number(index)]));
 }
 
-/** A run of markup, or a drawing or page for the caller to mount. */
+/** A run of markup, or a drawing, page or file for the caller to show. */
 export type Segment = { kind: "html"; html: string } | Block;
 
 // Only a slot standing alone as a paragraph becomes an element. Anywhere else,
@@ -383,6 +419,16 @@ function split(html: string, blocks: Block[]): Segment[] {
   const rest = html.slice(at);
   if (rest.trim() || parts.length === 0) parts.push({ kind: "html", html: asText(rest, blocks) });
   return parts;
+}
+
+/** The drawings, pages and files in a reply, without rendering the rest. */
+export function blocksOf(source: string): Block[] {
+  if (!source) return [];
+  try {
+    return extract(source).blocks;
+  } catch {
+    return [];
+  }
 }
 
 export function render(source: string): Segment[] {

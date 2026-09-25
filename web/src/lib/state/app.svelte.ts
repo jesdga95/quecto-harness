@@ -27,6 +27,7 @@ import type {
   Usage,
 } from "../api";
 import { applyEvent, outcomeLabel, pushUser } from "../transcript";
+import { artifactsOf, type Artifact } from "../artifacts";
 import { confirm } from "./confirm.svelte";
 
 // Every screen reads this one object. It holds what the server would hold plus
@@ -54,16 +55,24 @@ export const app = $state({
   steer: null as Steer | null,
   todos: [] as Todo[],
   changes: { files: [], added: 0, removed: 0 } as Changes,
-  changesOpen: false,
+  // The panel in the column beside the transcript. There is room for one.
+  dock: "" as Dock,
   // The subagent runs this session launched, newest first, with what each is
   // doing now. The chip counts them and the panel lists them.
   runs: [] as Child[],
-  runsOpen: false,
   // The run the panel is showing and the steps it has taken. They are fetched
   // when a run is opened, so a panel nobody opened costs no request and holds
   // no stream.
   runId: "",
   runItems: [] as TranscriptItem[],
+  // The artifact the panel shows. Pinned means the reader chose it, and the
+  // panel stops moving to each new one. Dismissed means the panel was closed
+  // during this turn, so a new artifact does not open it again. Wide hides
+  // the transcript.
+  artifactId: "",
+  artifactPinned: false,
+  artifactsDismissed: false,
+  artifactsWide: false,
   usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: 0 } as Usage,
   status: "idle" as TurnStatus,
   // The model has been asked and nothing has come back yet. True from the
@@ -82,6 +91,24 @@ export const app = $state({
   modelsError: "",
   modelsKind: "",
 });
+
+export type Dock = "" | "changes" | "runs" | "artifacts";
+
+// The artifacts are read from the transcript, so they follow it without being
+// kept in step by hand.
+const artifactList = $derived(artifactsOf(app.items));
+
+export function artifacts(): Artifact[] {
+  return artifactList;
+}
+
+// Artifacts already on screen when a session was opened or resynced. Only one
+// that appears after that, in a live stream, opens the panel.
+let announced = new Set<string>();
+
+function markAnnounced(): void {
+  announced = new Set(artifactsOf(app.items).map((a) => a.id));
+}
 
 let unsubscribe: (() => void) | null = null;
 // The stream of the run the panel is showing. One at a time: a reader follows
@@ -182,9 +209,9 @@ function clearSession(): void {
   app.status = "idle";
   app.awaitingModel = false;
   app.changes = { files: [], added: 0, removed: 0 };
-  app.changesOpen = false;
-  closeRuns();
+  closeDock();
   app.runs = [];
+  resetArtifacts();
   // Nothing is known about the next session's context until its model has
   // been read, and a zero window draws no chip.
   app.usage = { prompt_tokens: 0, completion_tokens: 0, n_ctx: 0 };
@@ -216,8 +243,12 @@ export async function selectSession(id: string): Promise<void> {
   app.changes = { files: [], added: 0, removed: 0 };
   // A reloaded page reads which subagents are still working from the snapshot,
   // since their state only reaches the launcher's stream when it changes.
+  // The change panel stays open across sessions; the others show this one's.
   closeRuns();
+  if (app.dock === "artifacts") app.dock = "";
   app.runs = t.session.children;
+  resetArtifacts();
+  markAnnounced();
   unsubscribe = api.events(id, onEvent);
   void loadChanges();
 }
@@ -664,32 +695,85 @@ export async function loadChanges(): Promise<void> {
   }
 }
 
-/** Opens the change panel, closing the agents panel. The two share the column
-    beside the transcript, which is too narrow for both. */
+/** Puts a panel in the column beside the transcript, replacing the one there.
+    Leaving the agents panel drops the stream it was following. */
+function openDock(dock: Dock): void {
+  if (app.dock === "runs" && dock !== "runs") closeRuns();
+  if (dock !== "artifacts") app.artifactsWide = false;
+  app.dock = dock;
+}
+
+/** Empties the column. Closing the artifacts panel while a turn runs keeps it
+    closed until the next turn. */
+export function closeDock(): void {
+  if (app.dock === "artifacts" && app.status !== "idle") app.artifactsDismissed = true;
+  openDock("");
+}
+
 export function toggleChanges(): void {
-  app.changesOpen = !app.changesOpen;
-  if (app.changesOpen) closeRuns();
+  if (app.dock === "changes") closeDock();
+  else openDock("changes");
 }
 
 export function toggleRuns(): void {
-  if (app.runsOpen) {
-    closeRuns();
+  if (app.dock === "runs") {
+    closeDock();
     return;
   }
-  app.changesOpen = false;
-  app.runsOpen = true;
+  openDock("runs");
   // The one still working is what a reader opening the panel came for.
   const first = app.runs.find((r) => r.status !== "idle") ?? app.runs[0];
   if (first) void openRun(first.id);
 }
 
-/** Closes the agents panel and drops the stream it was following. */
-export function closeRuns(): void {
+/** Drops the run the agents panel was following, and the panel with it. */
+function closeRuns(): void {
   runStream?.();
   runStream = null;
-  app.runsOpen = false;
   app.runId = "";
   app.runItems = [];
+  if (app.dock === "runs") app.dock = "";
+}
+
+export function toggleArtifacts(): void {
+  if (app.dock === "artifacts") {
+    closeDock();
+    return;
+  }
+  app.artifactsDismissed = false;
+  openDock("artifacts");
+}
+
+/** Shows one artifact in the panel. Choosing the newest goes back to following
+    whatever comes next. */
+export function showArtifact(id: string): void {
+  app.artifactId = id;
+  app.artifactPinned = artifactList.at(-1)?.id !== id;
+  app.artifactsDismissed = false;
+  openDock("artifacts");
+}
+
+export function toggleArtifactsWide(): void {
+  app.artifactsWide = !app.artifactsWide;
+}
+
+function resetArtifacts(): void {
+  app.artifactId = "";
+  app.artifactPinned = false;
+  app.artifactsDismissed = false;
+  app.artifactsWide = false;
+  announced = new Set();
+}
+
+/** Opens the panel on an artifact the stream has just started, unless the
+    reader closed it this turn or chose another one to look at. */
+function announceArtifacts(): void {
+  for (const artifact of artifactsOf(app.items)) {
+    if (announced.has(artifact.id)) continue;
+    announced.add(artifact.id);
+    if (!app.artifactPinned) app.artifactId = artifact.id;
+    if (!app.artifactsDismissed && app.dock !== "artifacts") openDock("artifacts");
+  }
 }
 
 /** Shows one subagent run in the panel: its steps as they stand, and its
@@ -750,6 +834,7 @@ function onEvent(event: HarnessEvent): void {
     app.steer = event.transcript.steer;
     app.status = event.transcript.status;
     app.awaitingModel = WAITING.has(event.transcript.status);
+    markAnnounced();
     return;
   }
 
@@ -811,6 +896,8 @@ function onEvent(event: HarnessEvent): void {
 
   applyEvent(app.items, event);
 
+  if (event.type === "delta") announceArtifacts();
+
   // The event carries an id rather than a name, so the card it filled is what
   // names it. A write moves the list by definition. A command can create,
   // change or delete anything, but only a path some write already kept a copy
@@ -849,6 +936,7 @@ function onEvent(event: HarnessEvent): void {
 
   if (event.type === "status") {
     const settled = app.status === "loading" && event.status !== "loading";
+    if (app.status === "idle" && event.status !== "idle") app.artifactsDismissed = false;
     app.status = event.status;
     if (ASKED.has(event.status)) app.awaitingModel = true;
     if (event.status === "idle") app.awaitingModel = false;

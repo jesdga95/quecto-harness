@@ -1332,6 +1332,171 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
+  /* The artifacts dock needs room for a page, so it takes a share of the
+     window rather than the fixed width of the other docks. Full hides the
+     transcript and takes all of it. */
+  .dock-wide {
+    width: clamp(460px, 45vw, 960px);
+  }
+  .dock-full {
+    width: auto;
+    flex: 1;
+    border-left: 0;
+  }
+  /* The panel's title, which opens the list of artifacts when there are
+     several. */
+  .artifact-pick {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    max-width: 100%;
+    margin-left: -8px;
+    padding: 5px 8px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .popover-item.is-on {
+    background: var(--surface-2);
+    font-weight: 500;
+  }
+  .artifact-pick:hover,
+  .artifact-pick.is-open {
+    background: var(--surface-2);
+  }
+  .artifact-body {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+  /* Drawings and pages are coloured for paper, so they get paper rather than
+     the theme background. */
+  .artifact-paper {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    background: #ffffff;
+  }
+  .artifact-svg {
+    position: absolute;
+    inset: 20px;
+  }
+  .artifact-frame {
+    display: block;
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    border: 0;
+    background: #ffffff;
+  }
+  .artifact-wait {
+    padding: 20px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .artifact-note {
+    flex: none;
+    padding: 10px 16px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .artifact-source {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    margin: 0 10px 10px;
+    border: 1px solid var(--hair);
+    border-radius: 12px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+  .artifact-source-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+  .artifact-source pre {
+    margin: 0;
+    padding: 11px 13px;
+  }
+  .artifact-source code {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--text-2);
+    white-space: pre;
+  }
+  /* Actions on the thing shown rather than on the panel, kept in its corner. */
+  .artifact-tools {
+    position: absolute;
+    top: 8px;
+    right: 14px;
+    z-index: 1;
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 10px;
+    border: 1px solid var(--hair);
+    background: var(--surface);
+  }
+  /* Where a drawing or page sits in a reply. It opens the artifact beside the
+     transcript. */
+  .artifact-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    margin: 16px 0;
+    padding: 14px 16px 14px 14px;
+    border: 1px solid var(--hair);
+    border-radius: 14px;
+    background: var(--surface);
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background 90ms ease,
+      border-color 90ms ease;
+  }
+  .artifact-card:hover {
+    background: var(--surface-2);
+    border-color: var(--border-2);
+  }
+  .artifact-card.is-on {
+    border-color: var(--accent);
+  }
+  .artifact-card-icon {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    flex: none;
+    border-radius: 10px;
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+  .artifact-card-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+  .artifact-card-open {
+    padding: 4px 11px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-2);
+  }
+  .artifact-card.is-on .artifact-card-open {
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
   /* Pulled right, so the icon rather than its hit area lines up with the edge. */
   .changes-copy {
     margin-right: -4px;
