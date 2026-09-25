@@ -91,17 +91,40 @@
     }
   }
 
+  /** Copies what the saved record holds, under a name nothing else has. The
+      id is left out, so the harness mints one, and the selection is left
+      alone: a copy is not what answers next. */
+  async function clone() {
+    if (!stored) return;
+    if (!(await letGo())) return;
+    const { id, name, ...rest } = stored;
+    void id;
+    // Case-insensitive, the way the harness compares names.
+    const taken = (candidate: string) =>
+      app.agents.some((a) => a.name.toLowerCase() === candidate.toLowerCase());
+    let cloneName = `${name} copy`;
+    for (let n = 2; taken(cloneName); n++) cloneName = `${name} copy ${n}`;
+    const made = await addAgent({ ...rest, name: cloneName });
+    if (made) {
+      draft = null;
+      chosen = made.id;
+    }
+  }
+
   async function remove() {
     if (!stored) return;
-    const next = app.agents.find((a) => a.id !== stored.id && a.enabled);
+    // The record that goes, named before anything moves the view: stored is a
+    // derived, and clearing chosen would make it fall to the active agent.
+    const gone = stored;
+    const next = app.agents.find((a) => a.id !== gone.id && a.enabled);
     const body =
-      stored.id === active && next
+      gone.id === active && next
         ? `It is the agent answering now, and ${next.name} takes over. Its address, key and settings are removed.`
         : "Its address, key and settings are removed. Sessions it ran are left alone.";
-    if (!(await confirm({ title: `Delete ${stored.name}?`, body, confirmLabel: "Delete" }))) return;
+    if (!(await confirm({ title: `Delete ${gone.name}?`, body, confirmLabel: "Delete" }))) return;
     draft = null;
     chosen = "";
-    await removeAgent(stored.id);
+    await removeAgent(gone.id);
   }
 </script>
 
@@ -155,6 +178,7 @@
         class="flex shrink-0 items-center justify-end gap-2.5 border-t border-hair bg-panel px-6 py-3"
       >
         <button class="btn btn-danger !border-transparent" onclick={remove}>Delete</button>
+        <button class="btn btn-ghost !border-transparent" onclick={clone}>Clone</button>
         <button class="btn btn-primary" disabled={!dirty || saving} onclick={save}>
           {saving ? "Saving" : "Save"}
         </button>
