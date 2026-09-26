@@ -18,6 +18,9 @@ A launch is refused while that agent is at its limit, so wait for a task to fini
 No person reads this conversation.
 Use send_message for a question or progress, not for the result.
 End your turn when nothing is left. A later message starts a new one, so do not say you are waiting.
+{{end}}{{if .Rules}}
+Rules for this project, from {{.RulesName}} at its root:
+{{.Rules}}
 {{end}}{{if .Instructions}}
 {{.Instructions}}
 {{end}}

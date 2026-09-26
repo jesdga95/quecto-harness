@@ -984,6 +984,9 @@
   .part-system {
     opacity: 0.4;
   }
+  .part-rules {
+    opacity: 0.55;
+  }
   .part-tools {
     opacity: 0.68;
   }

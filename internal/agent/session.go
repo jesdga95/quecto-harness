@@ -82,9 +82,16 @@ type Session struct {
 	// lastSentTools reports whether the request behind LastUsage carried the
 	// tool schemas. A turn that spent its call budget sends none.
 	lastSentTools bool
-	// baseProbed stops the measurement being retried every turn against a
-	// server that will not answer it.
-	baseProbed bool
+	// baseProbedModel and baseProbedChars name the model and the system
+	// message size the measurement was last asked against. The same pair is
+	// not asked again, so a server that will not answer is not retried every
+	// turn, while a prompt that has since changed is measured again.
+	baseProbedModel string
+	baseProbedChars int
+	// rulesNote is the last warning that the project's rules are not in the
+	// prompt, so a file that is still too large is not named again on every
+	// turn. It is not in the document: a restart re-warns once.
+	rulesNote string
 	// sysChars is the size of the system message last rendered for this
 	// session, which is what says whether a stored measurement still holds.
 	sysChars int
@@ -123,7 +130,7 @@ func (s *Session) forgetModel() {
 	s.NCtx, s.NCtxSource = 0, ""
 	s.caps = llm.Caps{}
 	s.prepared = false
-	s.baseProbed = false
+	s.baseProbedModel = ""
 }
 
 // forget marks the session deleted, so nothing still running writes it back.
@@ -431,6 +438,7 @@ func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) ll
 		Project: s.Project, OS: osName, Date: date,
 		CanAsk: b.offer.Ask, CanMessage: b.offer.Message, CanSearch: b.offer.Search,
 		Agents: b.agents, Launcher: b.launcher,
+		Rules: b.rules, RulesName: b.rulesName,
 		Instructions: a.Instructions,
 		Mode:         string(b.offer.Mode), Tools: tools.Names(b.offer), Plan: plan,
 	})
@@ -563,11 +571,12 @@ func (s *Session) window(a config.Agent) (int, string) {
 	return a.Window(s.NCtx, s.NCtxSource)
 }
 
-// Breakdown splits the context into the three parts a reader can act on. It
+// Breakdown splits the context into the four parts a reader can act on. It
 // is reported only from a measured base and a real usage report, so a session
 // with either missing shows no breakdown rather than a guess.
 type Breakdown struct {
 	System   int `json:"system"`
+	Rules    int `json:"rules"`
 	Tools    int `json:"tools"`
 	Messages int `json:"messages"`
 }
@@ -586,8 +595,8 @@ func (s *Session) breakdown() *Breakdown {
 	if s.LastUsage == nil || !s.ContextBase.Fits(s.Model, s.sysChars) {
 		return nil
 	}
-	b := Breakdown{System: s.ContextBase.System, Tools: s.LastToolTokens}
-	b.Messages = s.LastUsage.PromptTokens + s.LastUsage.CompletionTokens - b.System - b.Tools
+	b := Breakdown{System: s.ContextBase.System, Rules: s.ContextBase.Rules, Tools: s.LastToolTokens}
+	b.Messages = s.LastUsage.PromptTokens + s.LastUsage.CompletionTokens - b.System - b.Rules - b.Tools
 	if b.Messages < 0 {
 		return nil
 	}

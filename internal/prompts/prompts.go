@@ -52,10 +52,10 @@ type AgentBrief struct {
 	Role string
 }
 
-// SystemVars are the values system.md takes. Instructions is the agent's own
-// text, which follows the built-in prompt in the same message. Every string
-// here is inserted as a value and never parsed, so a template action inside
-// one is text.
+// SystemVars are the values system.md takes. Rules are the project's, and
+// Instructions is the agent's own text, which follow the built-in prompt in
+// the same message. Every string here is inserted as a value and never
+// parsed, so a template action inside one is text.
 type SystemVars struct {
 	Project string
 	OS      string
@@ -79,6 +79,12 @@ type SystemVars struct {
 	Agents       []AgentBrief
 	Launcher     string
 	Instructions string
+	// Rules is the project's rules file as the harness read it this turn, and
+	// RulesName the file's name as it stands on disk, which the label names.
+	// Empty Rules omits the section, which is the prompt before the file was
+	// possible.
+	Rules     string
+	RulesName string
 	// Mode picks the body: plan or execute. Anything else is execute.
 	Mode string
 	// Tools names the tools this turn's request carries, in the order sent.
@@ -89,8 +95,10 @@ type SystemVars struct {
 }
 
 // System renders the shared head around the body for the session's mode. The
-// body is rendered first and inserted as a value.
+// body is rendered first and inserted as a value. Rules are trimmed, so a
+// file of whitespace alone leaves the prompt the one sent without it.
 func System(v SystemVars) string {
+	v.Rules = strings.TrimSpace(v.Rules)
 	body, ok := bodyTmpls[v.Mode]
 	if !ok {
 		body = bodyTmpls["execute"]

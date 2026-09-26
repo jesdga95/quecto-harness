@@ -142,14 +142,15 @@ type Session struct {
 	Entries   []Entry    `json:"entries"`
 }
 
-// ContextBase is the token cost of the two parts of a prompt that never
-// change: the system message and the tool schemas. Model and Chars say what
-// was measured, since a different tokenizer or a different system message
-// makes the numbers something else.
+// ContextBase is the token cost of the three parts of a prompt that never
+// change: the system message, the project's rules inside it and the tool
+// schemas. Model and Chars say what was measured, since a different
+// tokenizer or a different system message makes the numbers something else.
 type ContextBase struct {
 	Model  string `json:"model"`
 	Chars  int    `json:"chars"`
 	System int    `json:"system"`
+	Rules  int    `json:"rules"`
 	Tools  int    `json:"tools"`
 }
 

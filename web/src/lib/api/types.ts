@@ -427,10 +427,11 @@ export interface Changes {
   removed: number;
 }
 
-/** The three parts of the context, each measured rather than estimated. It is
+/** The four parts of the context, each measured rather than estimated. It is
  *  absent until the fixed parts have been measured against the model. */
 export interface Breakdown {
   system: number;
+  rules: number;
   tools: number;
   messages: number;
 }

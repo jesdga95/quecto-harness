@@ -125,6 +125,41 @@ func TestSystemDoesNotParseInstructions(t *testing.T) {
 	}
 }
 
+// The rules are the project's own text, so the label names the file as it
+// stands on disk and the content arrives verbatim, before the agent's
+// instructions, which stay last.
+func TestSystemCarriesProjectRules(t *testing.T) {
+	base := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools})
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools,
+		Rules: "Answer in Latin.\nWork in {{.Project}} and {{if", RulesName: "agents.md",
+		Instructions: "Review Go, do not write it."})
+
+	if !strings.Contains(got, "Rules for this project, from agents.md at its root:") {
+		t.Errorf("the label does not name the file as found: %q", got)
+	}
+	if !strings.Contains(got, "Answer in Latin.\nWork in {{.Project}} and {{if") {
+		t.Errorf("the rules were not passed through verbatim: %q", got)
+	}
+	if !strings.HasPrefix(got, base) {
+		t.Fatalf("the rules did not follow the built-in prompt: %q", got)
+	}
+	if !strings.HasSuffix(got, "Review Go, do not write it.") {
+		t.Errorf("instructions are not last: %q", got)
+	}
+	if strings.Index(got, "Answer in Latin.") > strings.Index(got, "Review Go, do not write it.") {
+		t.Errorf("the rules land after the instructions: %q", got)
+	}
+}
+
+func TestSystemWithoutRulesIsUnchanged(t *testing.T) {
+	base := System(SystemVars{Project: "/src/x", OS: "darwin"})
+	for _, in := range []string{"", "   ", "\n\t\n"} {
+		if got := System(SystemVars{Project: "/src/x", OS: "darwin", Rules: in, RulesName: "AGENTS.md"}); got != base {
+			t.Errorf("rules %q changed the prompt:\n%q\nwant\n%q", in, got, base)
+		}
+	}
+}
+
 // The model's knowledge of the world ends where its training did, so the
 // prompt says what may have changed since is checked with a tool rather than
 // answered from memory. The line names no tool: a subagent that was not sent

@@ -67,6 +67,7 @@
           <div class="ctxparts" class:is-warn={tone === "warn"} class:is-crit={tone === "crit"}>
             <div class="ctxsplit mt-2">
               <span class="part-system" style="width:{share(parts.system)}%"></span>
+              <span class="part-rules" style="width:{share(parts.rules)}%"></span>
               <span class="part-tools" style="width:{share(parts.tools)}%"></span>
               <span style="width:{share(parts.messages)}%"></span>
             </div>
@@ -77,6 +78,12 @@
                   <span class="ctxdot part-system"></span> System prompt
                 </dt>
                 <dd class="num">{k(parts.system)}</dd>
+              </div>
+              <div class="flex items-center justify-between">
+                <dt class="flex items-center gap-1.5 text-muted" title="AGENTS.md in the project root">
+                  <span class="ctxdot part-rules"></span> Agents
+                </dt>
+                <dd class="num">{k(parts.rules)}</dd>
               </div>
               <div class="flex items-center justify-between">
                 <dt class="flex items-center gap-1.5 text-muted">

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"quecto-harness/internal/config"
@@ -17,28 +19,91 @@ import (
 // the task rather than asked of the model.
 const taskTitle = 60
 
+// rulesFile is the project's own rules. It is read once per turn and carried
+// in the system prompt, which is what makes its cost a fixed part of every
+// request rather than a file the model has to go find.
+const rulesFile = "AGENTS.md"
+
 // brief is what the prompt and the request need beyond the agent and the
-// project: which tools were sent, who can take work, and the handle of the
-// session that gave this one its task.
+// project: which tools were sent, who can take work, the handle of the
+// session that gave this one its task, and the project's rules as this turn
+// read them.
 type brief struct {
 	offer    tools.Offer
 	agents   []prompts.AgentBrief
 	launcher string
+	// rules is the content of the project's rules file and rulesName the
+	// file's name as it stands on disk. Both empty is a project with none.
+	rules     string
+	rulesName string
+}
+
+// findRulesFile names the rules file in a project root, exact case first and
+// then any casing of it, so a file a person named agents.md is read on a
+// case-sensitive filesystem as well.
+func findRulesFile(project string) (string, error) {
+	entries, err := os.ReadDir(project)
+	if err != nil {
+		return "", err
+	}
+	var folded string
+	for _, d := range entries {
+		if !d.Type().IsRegular() {
+			continue
+		}
+		if d.Name() == rulesFile {
+			return d.Name(), nil
+		}
+		if folded == "" && strings.EqualFold(d.Name(), rulesFile) {
+			folded = d.Name()
+		}
+	}
+	return folded, nil
+}
+
+// readRules reads the project's rules file, in any casing. A file over the
+// attachment cap is skipped whole with a note saying so, and a read error is
+// the same: the turn runs without the rules rather than failing over them,
+// and the model can still read the file itself.
+func readRules(project string) (content, name, note string) {
+	name, err := findRulesFile(project)
+	if err != nil || name == "" {
+		return "", "", ""
+	}
+	info, err := os.Stat(filepath.Join(project, name))
+	if err != nil || info.Size() == 0 {
+		return "", "", ""
+	}
+	if info.Size() > tools.MaxAttachment {
+		return "", name, fmt.Sprintf("%s is %d kb, the limit is %d kb: it is not in the prompt",
+			name, info.Size()/1024, tools.MaxAttachment/1024)
+	}
+	raw, err := os.ReadFile(filepath.Join(project, name))
+	if err != nil {
+		return "", name, fmt.Sprintf("%s could not be read: check the permissions on the file", name)
+	}
+	return string(raw), name, ""
 }
 
 // briefFor reads what a session may do this turn. A subagent hands work to
 // nobody and asks nobody, so it is offered neither run_agent nor ask_question;
-// what it has instead is the launcher waiting on it.
+// what it has instead is the launcher waiting on it. The rules file is read
+// outside the lock, like the image bytes a message carries.
 func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	s.mu.Lock()
-	parent, mine, mode := s.Parent, s.AgentID, s.Mode
+	parent, mine, mode, project := s.Parent, s.AgentID, s.Mode, s.Project
 	s.mu.Unlock()
+	rules, rulesName, note := readRules(project)
+	e.showRulesNote(s, note)
+	b := brief{rules: rules, rulesName: rulesName}
 	if parent != "" {
 		// A subagent hands work to nobody and asks nobody, but it still
 		// searches: research delegated down is what web_search is for.
-		return brief{offer: tools.Offer{Mode: mode, Message: true, Search: cfg.Search.Enabled()}, launcher: parent}
+		b.offer = tools.Offer{Mode: mode, Message: true, Search: cfg.Search.Enabled()}
+		b.launcher = parent
+		return b
 	}
-	b := brief{offer: tools.Offer{Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}}
+	b.offer = tools.Offer{Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}
 	for _, a := range cfg.Agents {
 		if !a.Enabled || a.MainOnly {
 			continue
@@ -58,6 +123,28 @@ func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	}
 	b.offer.Agents = len(b.agents) > 0
 	return b
+}
+
+// showRulesNote records that the project's rules are not in the prompt, so
+// the transcript says why. A note already shown is not repeated, and a file
+// that fits again warns nothing.
+func (e *Engine) showRulesNote(s *Session, note string) {
+	s.mu.Lock()
+	if note == s.rulesNote {
+		s.mu.Unlock()
+		return
+	}
+	s.rulesNote = note
+	var entry store.Entry
+	if note != "" {
+		entry = s.appendEntry(store.Entry{Kind: "status", Content: note, InContext: false, Visible: true})
+	}
+	s.mu.Unlock()
+	if note == "" {
+		return
+	}
+	e.save(s)
+	e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
 }
 
 // role is what the delegation list says an agent is for: its description, or

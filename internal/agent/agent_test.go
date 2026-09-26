@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -1734,6 +1735,213 @@ func TestContextBaseIsRemeasuredWhenInstructionsChange(t *testing.T) {
 	s.mu.Unlock()
 	if still {
 		t.Error("a base measured against the old system message was kept")
+	}
+}
+
+// rulesMarker is the line the project-rules tests write into the file, which
+// is what the replay's probe branch looks for to pick its fixture.
+const rulesMarker = "Never use tabs."
+
+func TestProjectRulesReachTheRequest(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	if err := os.WriteFile(filepath.Join(h.project, "AGENTS.md"), []byte(rulesMarker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := h.session(t)
+	h.engine.Send(s.ID, "what is in this project", nil)
+	waitIdle(t, s)
+	waitForProbes(t, h, 3)
+
+	msgs, _ := h.replay.Body(0)["messages"].([]any)
+	first, _ := msgs[0].(map[string]any)
+	system, _ := first["content"].(string)
+	if !strings.Contains(system, "Rules for this project, from AGENTS.md at its root:\n"+rulesMarker) {
+		t.Errorf("the first request does not carry the rules under their label: %q", system)
+	}
+
+	// The three measurements, in order, differ only in what the system
+	// message carries: nothing, the rules, the rules and the schemas.
+	pick := func(i int, wantRules, wantTools bool) {
+		t.Helper()
+		p := h.replay.Probes[i]
+		if _, hasTools := p["tools"]; hasTools != wantTools {
+			t.Errorf("measurement %d carries tools = %v", i, hasTools)
+		}
+		msgs, _ := p["messages"].([]any)
+		m, _ := msgs[0].(map[string]any)
+		content, _ := m["content"].(string)
+		if strings.Contains(content, rulesMarker) != wantRules {
+			t.Errorf("measurement %d carries the rules = %v", i, wantRules)
+		}
+	}
+	h.replay.mu.Lock()
+	defer h.replay.mu.Unlock()
+	pick(0, false, false)
+	pick(1, true, false)
+	pick(2, true, true)
+}
+
+// A file that grows between turns is a different prompt, so the measurement
+// is retaken rather than a stale number standing.
+func TestProjectRulesRemeasuredWhenTheFileGrows(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
+	if err := os.WriteFile(filepath.Join(h.project, "AGENTS.md"), []byte(rulesMarker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := h.session(t)
+	h.engine.Send(s.ID, "one", nil)
+	waitIdle(t, s)
+	waitForProbes(t, h, 3)
+
+	if err := os.WriteFile(filepath.Join(h.project, "AGENTS.md"), []byte(rulesMarker+"\nAnd never use semicolons."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.Send(s.ID, "two", nil)
+	waitIdle(t, s)
+	waitForProbes(t, h, 6)
+
+	h.replay.mu.Lock()
+	mid, _ := h.replay.Probes[4]["messages"].([]any)
+	m, _ := mid[0].(map[string]any)
+	content, _ := m["content"].(string)
+	h.replay.mu.Unlock()
+	if !strings.Contains(content, rulesMarker) {
+		t.Error("the remeasurement's middle prompt carries no rules")
+	}
+	if parts := s.Breakdown(); parts == nil {
+		t.Error("no breakdown after the remeasurement")
+	}
+}
+
+// A file a person named agents.md is read as well, and the label names it as
+// it stands on disk.
+func TestProjectRulesReadCaseInsensitive(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	if err := os.WriteFile(filepath.Join(h.project, "agents.md"), []byte(rulesMarker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := h.session(t)
+	h.engine.Send(s.ID, "hello", nil)
+	waitIdle(t, s)
+
+	msgs, _ := h.replay.Body(0)["messages"].([]any)
+	first, _ := msgs[0].(map[string]any)
+	system, _ := first["content"].(string)
+	if !strings.Contains(system, rulesMarker) {
+		t.Errorf("a lowercase agents.md was not read: %q", system)
+	}
+	if !strings.Contains(system, "Rules for this project, from agents.md at its root:") {
+		t.Errorf("the label does not name the file as found: %q", system)
+	}
+}
+
+func TestContextBreakdownIncludesProjectRules(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	if err := os.WriteFile(filepath.Join(h.project, "AGENTS.md"), []byte(rulesMarker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := h.session(t)
+	h.engine.Send(s.ID, "what is in this project", nil)
+	waitIdle(t, s)
+	waitForProbes(t, h, 3)
+
+	var parts *Breakdown
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if parts = s.Breakdown(); parts != nil {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if parts == nil {
+		t.Fatal("no breakdown after the parts were measured")
+	}
+	// The fixtures report 20 tokens for the prompt without the rules, 30 with
+	// them and 35 with the schemas as well, so the rules cost 10 and the
+	// schemas 5.
+	if parts.System != 20 || parts.Rules != 10 || parts.Tools != 5 {
+		t.Errorf("system/rules/tools = %d/%d/%d, want 20/10/5", parts.System, parts.Rules, parts.Tools)
+	}
+	// The turn reported 44 prompt and 48 completion tokens.
+	if want := 44 + 48 - 20 - 10 - 5; parts.Messages != want {
+		t.Errorf("messages = %d, want %d", parts.Messages, want)
+	}
+}
+
+func TestProjectRulesOverTheLimitAreNotInjected(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
+	big := bytes.Repeat([]byte("x "), (tools.MaxAttachment+2048)/2)
+	if err := os.WriteFile(filepath.Join(h.project, "AGENTS.md"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := h.session(t)
+	h.engine.Send(s.ID, "what is in this project", nil)
+	waitIdle(t, s)
+	waitForProbes(t, h, 2)
+
+	want := "AGENTS.md is 258 kb, the limit is 256 kb: it is not in the prompt"
+	msgs, _ := h.replay.Body(0)["messages"].([]any)
+	first, _ := msgs[0].(map[string]any)
+	system, _ := first["content"].(string)
+	if strings.Contains(system, "Rules for this project") {
+		t.Error("an over-limit file was injected into the prompt")
+	}
+	h.engine.Send(s.ID, "and again", nil)
+	waitIdle(t, s)
+
+	h.replay.mu.Lock()
+	probes := len(h.replay.Probes)
+	h.replay.mu.Unlock()
+	if probes != 2 {
+		t.Errorf("the fixed parts were measured %d times, want two: no rules to measure a third", probes)
+	}
+	doc, _, _, _ := s.Snapshot()
+	notes := 0
+	for _, e := range doc.Entries {
+		if e.Kind != "status" {
+			continue
+		}
+		if e.Content == want {
+			notes++
+			continue
+		}
+		if strings.Contains(e.Content, "AGENTS.md") {
+			t.Errorf("unexpected rules note: %q", e.Content)
+		}
+	}
+	if notes != 1 {
+		t.Errorf("the over-limit note was drawn %d times over two turns, want once", notes)
+	}
+	if parts := s.Breakdown(); parts == nil || parts.Rules != 0 {
+		t.Errorf("breakdown = %+v, want the rules to cost nothing", parts)
+	}
+}
+
+// A measurement is only true for the text it was taken against, so growing the
+// rules file of a project a session is already in throws it away.
+func TestContextBaseIsRemeasuredWhenRulesChange(t *testing.T) {
+	h := newHarness(t)
+	s := h.session(t)
+	withRules := topBrief()
+	withRules.rules, withRules.rulesName = rulesMarker, "AGENTS.md"
+	s.mu.Lock()
+	system := s.systemMessage(h.agent, "darwin", "2026-02-06", withRules)
+	s.ContextBase = &store.ContextBase{Model: "Alpha-12B", Chars: len(system.Content), System: 154, Rules: 10, Tools: 1026}
+	s.LastUsage = &llm.Usage{PromptTokens: 2000, CompletionTokens: 10}
+	fits := s.ContextBase.Fits(s.Model, s.sysChars)
+	s.mu.Unlock()
+	if !fits {
+		t.Fatal("the base did not fit the text it was measured against")
+	}
+
+	grown := topBrief()
+	grown.rules, grown.rulesName = rulesMarker+"\nAnd never use semicolons.", "AGENTS.md"
+	s.mu.Lock()
+	s.systemMessage(h.agent, "darwin", "2026-02-06", grown)
+	still := s.ContextBase.Fits(s.Model, s.sysChars)
+	s.mu.Unlock()
+	if still {
+		t.Error("a base measured against the old rules was kept")
 	}
 }
 

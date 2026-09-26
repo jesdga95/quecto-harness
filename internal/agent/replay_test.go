@@ -142,7 +142,8 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 
 	// A completion capped at one token is a context measurement, not a turn.
 	// It answers from its own fixture so the queued scripts stay lined up with
-	// the turns the test is about.
+	// the turns the test is about. The fixture carries the token count of the
+	// prompt it names: schemas, the project's rules, or neither.
 	if body["max_tokens"] == float64(1) {
 		r.mu.Lock()
 		r.Probes = append(r.Probes, body)
@@ -151,6 +152,12 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 		name := "probe_system.txt"
 		if _, ok := body["tools"]; ok {
 			name = "probe_tools.txt"
+		} else if msgs, _ := body["messages"].([]any); len(msgs) == 1 {
+			if m, _ := msgs[0].(map[string]any); m["role"] == "system" {
+				if c, _ := m["content"].(string); strings.Contains(c, rulesMarker) {
+					name = "probe_rules.txt"
+				}
+			}
 		}
 		r.stream(w, frames(r.t, name))
 		return

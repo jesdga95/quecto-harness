@@ -228,7 +228,7 @@ interface WireSnapshot {
   draft?: unknown;
   last_seq?: number;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
-  breakdown?: { system?: number; tools?: number; messages?: number } | null;
+  breakdown?: { system?: number; rules?: number; tools?: number; messages?: number } | null;
 }
 
 interface WireEvent {
@@ -269,7 +269,7 @@ interface WireEvent {
   title?: string;
   todos?: { text?: string; status?: string }[] | null;
   message?: string;
-  breakdown?: { system?: number; tools?: number; messages?: number } | null;
+  breakdown?: { system?: number; rules?: number; tools?: number; messages?: number } | null;
   tokens?: number;
   ms?: number;
   tok_per_s?: number;
@@ -458,17 +458,22 @@ function toTodos(wire: { text?: string; status?: string }[] | null | undefined):
     }));
 }
 
-/** The split is dropped unless all three parts are present, since a partial
+/** The split is dropped unless all four parts are present, since a partial
  *  one would read as a measurement it is not. */
 function toBreakdown(
-  wire: { system?: number; tools?: number; messages?: number } | null | undefined,
+  wire: { system?: number; rules?: number; tools?: number; messages?: number } | null | undefined,
 ): Breakdown | undefined {
   if (!wire) return undefined;
-  const { system, tools, messages } = wire;
-  if (typeof system !== "number" || typeof tools !== "number" || typeof messages !== "number") {
+  const { system, rules, tools, messages } = wire;
+  if (
+    typeof system !== "number" ||
+    typeof rules !== "number" ||
+    typeof tools !== "number" ||
+    typeof messages !== "number"
+  ) {
     return undefined;
   }
-  return { system, tools, messages };
+  return { system, rules, tools, messages };
 }
 
 function count(value: unknown): number {

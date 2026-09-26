@@ -188,7 +188,7 @@ func TestSetModeDropsThePlanAndRefusesAnUnknownMode(t *testing.T) {
 
 	plan := store.Plan{Title: "T", Steps: []string{"one"}}
 	s.mu.Lock()
-	s.Plan, s.Draft, s.baseProbed = &plan, &plan, true
+	s.Plan, s.Draft, s.baseProbedModel = &plan, &plan, "Alpha-12B"
 	s.mu.Unlock()
 
 	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
@@ -196,8 +196,8 @@ func TestSetModeDropsThePlanAndRefusesAnUnknownMode(t *testing.T) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.Plan != nil || s.Draft != nil || s.baseProbed {
-		t.Errorf("after a switch plan = %+v, draft = %+v, probed = %v", s.Plan, s.Draft, s.baseProbed)
+	if s.Plan != nil || s.Draft != nil || s.baseProbedModel != "" {
+		t.Errorf("after a switch plan = %+v, draft = %+v, probed = %q", s.Plan, s.Draft, s.baseProbedModel)
 	}
 }
 
