@@ -1514,10 +1514,12 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 			res, err = e.runAgent(s, call)
 		case "send_message":
 			res, err = e.sendMessage(s, call)
+		case "write_plan":
+			res, err = e.writePlan(s, args)
 		case "submit_plan":
 			res, err = e.submitPlan(ctx, s, call)
 		default:
-			err = fmt.Errorf("no tool named %s: use read_file, find, web_search, write_file, replace_in_file, run_shell, write_todos, ask_question, submit_plan, run_agent or send_message", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read_file, find, web_search, write_file, replace_in_file, run_shell, write_todos, ask_question, write_plan, submit_plan, run_agent or send_message", call.Function.Name)
 		}
 		if err != nil {
 			content = err.Error()

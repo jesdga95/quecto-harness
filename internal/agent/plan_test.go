@@ -10,6 +10,7 @@ import (
 
 	"quecto-harness/internal/config"
 	"quecto-harness/internal/prompts"
+	"quecto-harness/internal/store"
 	"quecto-harness/internal/tools"
 )
 
@@ -51,11 +52,13 @@ func waitForNewQuestion(t *testing.T, h *harness, sessionID, answered string) Qu
 	return Question{}
 }
 
-// A plan turn is sent plan's prompt and tools, is told what to change, submits
-// again, and is approved. The same turn then carries on as execute, with the
-// plan in its prompt and its steps as the todo list.
+// A plan turn is sent plan's prompt and tools, writes the draft, submits it,
+// is told what to change, rewrites and submits again, and is approved. The
+// same turn then carries on as execute, with the plan in its prompt and its
+// steps as the todo list.
 func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
-	h := newHarness(t, "stream_submit_plan.txt", "stream_submit_plan.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_write_plan.txt", "stream_submit_plan.txt",
+		"stream_write_plan.txt", "stream_submit_plan.txt", "stream_plain.txt")
 	s := h.session(t)
 	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
 		t.Fatal(err)
@@ -68,7 +71,8 @@ func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
 	}
 	body := h.replay.Body(0)
 	got := sentTools(body)
-	if !slices.Contains(got, "submit_plan") || slices.Contains(got, "write_file") || slices.Contains(got, "replace_in_file") {
+	if !slices.Contains(got, "submit_plan") || !slices.Contains(got, "write_plan") ||
+		slices.Contains(got, "write_file") || slices.Contains(got, "replace_in_file") {
 		t.Errorf("plan turn sent %v", got)
 	}
 	if !strings.Contains(systemOf(body), "plan mode") {
@@ -126,15 +130,22 @@ func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
 		t.Errorf("kickoff mode events = %d, want the one the approval published", kickoffs)
 	}
 
-	if h.replay.Count() != 3 {
-		t.Fatalf("requests = %d, want two plan requests and one execute", h.replay.Count())
+	if doc.Draft == nil || doc.Draft.Migration != "None" {
+		t.Errorf("the draft did not stay after approval: %+v", doc.Draft)
 	}
-	exec := h.replay.Body(2)
+	if n := len(h.rec.ofType("plan_draft")); n != 2 {
+		t.Errorf("plan_draft events = %d, want one per write_plan", n)
+	}
+	if h.replay.Count() != 5 {
+		t.Fatalf("requests = %d, want four plan requests and one execute", h.replay.Count())
+	}
+	exec := h.replay.Body(4)
 	got = sentTools(exec)
 	if slices.Contains(got, "submit_plan") || !slices.Contains(got, "write_file") {
 		t.Errorf("execute request sent %v", got)
 	}
-	if sys := systemOf(exec); !strings.Contains(sys, "The user approved this plan.") || !strings.Contains(sys, "Plan: Cache the list") {
+	if sys := systemOf(exec); !strings.Contains(sys, "The user approved this plan.") ||
+		!strings.Contains(sys, "Plan: Cache the list") || !strings.Contains(sys, "Migration: None") {
 		t.Errorf("execute system message = %q", sys)
 	}
 }
@@ -175,12 +186,9 @@ func TestSetModeDropsThePlanAndRefusesAnUnknownMode(t *testing.T) {
 		t.Errorf("a new session is in %q, want execute", s.WorkMode())
 	}
 
-	plan, err := parsePlan([]byte(`{"title":"T","steps":["one"]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	plan := store.Plan{Title: "T", Steps: []string{"one"}}
 	s.mu.Lock()
-	s.Plan, s.baseProbed = &plan, true
+	s.Plan, s.Draft, s.baseProbed = &plan, &plan, true
 	s.mu.Unlock()
 
 	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
@@ -188,23 +196,63 @@ func TestSetModeDropsThePlanAndRefusesAnUnknownMode(t *testing.T) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.Plan != nil || s.baseProbed {
-		t.Errorf("after a switch plan = %+v, probed = %v", s.Plan, s.baseProbed)
+	if s.Plan != nil || s.Draft != nil || s.baseProbed {
+		t.Errorf("after a switch plan = %+v, draft = %+v, probed = %v", s.Plan, s.Draft, s.baseProbed)
 	}
 }
 
-func TestParsePlanRefusesWhatCannotBeCarriedOut(t *testing.T) {
-	for _, raw := range []string{``, `{`, `{"steps":["one"]}`, `{"title":"T","steps":[" ",""]}`} {
-		if _, err := parsePlan([]byte(raw)); err == nil {
-			t.Errorf("parsePlan(%q) took it", raw)
-		}
+// write_plan replaces the sections it sends and keeps the rest, and names
+// what is still missing.
+func TestWritePlanMergesSections(t *testing.T) {
+	h := newHarness(t)
+	s := h.session(t)
+	if _, err := h.engine.writePlan(s, []byte(`{}`)); err == nil {
+		t.Error("a call with no section was taken")
 	}
-	p, err := parsePlan([]byte(`{"title":" T ","steps":[" one ",""],"open":[""],"extra":1}`))
+	res, err := h.engine.writePlan(s, []byte(`{"title":" T ","steps":[" one ",""],"extra":1}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Title != "T" || !slices.Equal(p.Steps, []string{"one"}) || p.Open != nil {
-		t.Errorf("plan = %+v", p)
+	if !strings.Contains(res.Output, "wrote title, steps") || !strings.Contains(res.Output, "still empty: goal, code, tests, validation, migration, risks") {
+		t.Errorf("result = %q", res.Output)
+	}
+	res, err = h.engine.writePlan(s, []byte(`{"goal":"g","code":["c"],"tests":["t"],"validation":["v"],"migration":"None","risks":["r"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "call submit_plan") {
+		t.Errorf("a complete draft said %q", res.Output)
+	}
+	s.mu.Lock()
+	d := *s.Draft
+	s.mu.Unlock()
+	if d.Title != "T" || !slices.Equal(d.Steps, []string{"one"}) || d.Goal != "g" {
+		t.Errorf("draft = %+v", d)
+	}
+	if _, err := parseDraft([]byte(`{`)); err == nil {
+		t.Error("broken JSON was taken")
+	}
+}
+
+// submit_plan puts nothing on a card until every required section is written.
+func TestSubmitPlanRefusesAnIncompleteDraft(t *testing.T) {
+	h := newHarness(t, "stream_submit_plan.txt", "stream_plain.txt")
+	s := h.session(t)
+	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.Send(s.ID, "plan it", nil)
+	waitIdle(t, s)
+	doc, _, _, _ := s.Snapshot()
+	if got := toolResult(t, doc, "submit_plan").Content; !strings.Contains(got, "there is no draft") {
+		t.Errorf("submit with no draft = %q", got)
+	}
+	if missing(store.Plan{Title: "T", Goal: "g", Code: []string{"c"}, Tests: []string{"t"},
+		Validation: []string{"v"}, Migration: "None", Risks: []string{"r"}, Steps: []string{"s"}}) != nil {
+		t.Error("a plan with every required section is missing one")
+	}
+	if got := missing(store.Plan{Title: "T"}); !slices.Equal(got, []string{"goal", "code", "tests", "validation", "migration", "risks", "steps"}) {
+		t.Errorf("missing = %v", got)
 	}
 }
 
@@ -217,7 +265,8 @@ func TestASubagentKeepsItsLaunchersMode(t *testing.T) {
 	child.Mode = config.WorkPlan
 	b := h.engine.briefFor(child, h.cfg.Config())
 	names := tools.Names(b.offer)
-	if b.offer.Mode != config.WorkPlan || slices.Contains(names, "submit_plan") || slices.Contains(names, "write_file") {
+	if b.offer.Mode != config.WorkPlan || slices.Contains(names, "submit_plan") ||
+		slices.Contains(names, "write_plan") || slices.Contains(names, "write_file") {
 		t.Errorf("a planning subagent was sent %v in %q", names, b.offer.Mode)
 	}
 }

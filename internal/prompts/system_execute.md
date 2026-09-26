@@ -7,8 +7,7 @@ When done, stop and summarize in two sentences.
 {{if not .Launcher}}
 When asked to show, draw, preview or prototype something, put it in your reply,
 not in write_file: it opens beside the conversation.
-- A ```svg fence draws a figure. It needs a viewBox and takes no script or image.
-- A ```html fence with a whole document runs as a page: inline scripts and styles, no network.
+{{template "fences"}}
 - Any other whole file goes in a fence labelled with its name, as ```name.ext.
 Use write_file only for a file the project needs or the user asked to save.
 To change what you showed, send it again whole.

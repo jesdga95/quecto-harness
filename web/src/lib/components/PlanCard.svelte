@@ -1,13 +1,12 @@
 <script lang="ts">
   import ListChecks from "phosphor-svelte/lib/ListChecks";
   import type { TranscriptItem } from "../api";
-  import { planned } from "../plan";
-  import { artifactId } from "../artifacts";
-  import { answer, showArtifact } from "../state/app.svelte";
+  import { PLAN_ID } from "../artifacts";
+  import { answer, app, showArtifact } from "../state/app.svelte";
 
   let { item }: { item: Extract<TranscriptItem, { kind: "tool" }> } = $props();
 
-  const plan = $derived(planned(item.args));
+  const plan = $derived(app.draft);
   // Keep planning opens a field for what to change, which is what the model
   // is handed back.
   let revising = $state(false);
@@ -30,14 +29,16 @@
 <div class="card plan-card overflow-hidden">
   <div class="flex items-center gap-2 px-4 pt-3 text-[13px]">
     <ListChecks size={15} class="text-accent" />
-    <span class="font-medium">{plan.title || "Plan"}</span>
-    <span class="ml-auto text-[12px] text-muted">
-      {plan.steps.length}
-      {plan.steps.length === 1 ? "step" : "steps"}
-    </span>
+    <span class="font-medium">{plan?.title || "Plan"}</span>
+    {#if plan}
+      <span class="ml-auto text-[12px] text-muted">
+        {plan.steps.length}
+        {plan.steps.length === 1 ? "step" : "steps"}
+      </span>
+    {/if}
   </div>
 
-  {#if plan.goal}
+  {#if plan?.goal}
     <p class="px-4 pt-2 text-[13px] text-ink-2">{plan.goal}</p>
   {/if}
 
@@ -57,7 +58,7 @@
     {:else}
       <button class="chip chip-brand" onclick={approve}>Approve and execute</button>
       <button class="chip" onclick={() => (revising = true)}>Keep planning</button>
-      <button class="chip chip-plain ml-auto" onclick={() => showArtifact(artifactId(item.id, 0))}>
+      <button class="chip chip-plain ml-auto" onclick={() => showArtifact(PLAN_ID)}>
         Open plan
       </button>
     {/if}

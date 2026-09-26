@@ -87,15 +87,19 @@ type Todo struct {
 	Status string `json:"status"`
 }
 
-// Plan is a plan the user approved. Execute mode carries it in its system
-// prompt, and its steps are what the todo list started from.
+// Plan is a plan in its sections. Plan mode writes it as a draft, and once
+// approved execute mode carries it in its system prompt and its steps are what
+// the todo list started from.
 type Plan struct {
-	Title string   `json:"title"`
-	Goal  string   `json:"goal,omitempty"`
-	Files []string `json:"files,omitempty"`
-	Steps []string `json:"steps"`
-	Check string   `json:"check,omitempty"`
-	Open  []string `json:"open,omitempty"`
+	Title      string   `json:"title"`
+	Goal       string   `json:"goal"`
+	Code       []string `json:"code"`
+	Tests      []string `json:"tests"`
+	Validation []string `json:"validation"`
+	Migration  string   `json:"migration"`
+	Risks      []string `json:"risks"`
+	Steps      []string `json:"steps"`
+	Open       []string `json:"open"`
 }
 
 // Session is the on-disk document. The system prompt is not in it: it is
@@ -113,7 +117,10 @@ type Session struct {
 	// Mode is the work mode the next turn runs in.
 	Mode config.WorkMode `json:"mode"`
 	// Plan is the last plan the user approved, or nil.
-	Plan  *Plan  `json:"plan,omitempty"`
+	Plan *Plan `json:"plan,omitempty"`
+	// Draft is the plan being written in plan mode, or nil. It stays after
+	// approval, so the panel still shows the plan being carried out.
+	Draft *Plan  `json:"draft,omitempty"`
 	Title string `json:"title"`
 	// Named is set when the user typed the title. Nothing overwrites it.
 	Named       bool       `json:"named"`

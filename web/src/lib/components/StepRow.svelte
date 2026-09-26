@@ -19,7 +19,8 @@
   import type { Todo, TranscriptItem } from "../api";
   import { clockLabel, describeCommand, firstSentence, k } from "../format";
   import { asked } from "../question";
-  import { planned } from "../plan";
+  import { sectionsOf } from "../plan";
+  import { app } from "../state/app.svelte";
 
   let { item }: { item: TranscriptItem } = $props();
   let open = $state(false);
@@ -73,6 +74,7 @@
     if (item.name === "write_todos") return "Plan";
     if (item.name === "ask_question") return "Question";
     if (item.name === "submit_plan") return "Plan";
+    if (item.name === "write_plan") return "Draft";
     if (item.name === "run_agent") return "Agent";
     if (item.name === "send_message") return "Message";
     return "Shell";
@@ -90,7 +92,8 @@
     }
     if (item.name === "find" || item.name === "web_search") return query;
     if (item.name === "ask_question") return question.question;
-    if (item.name === "submit_plan") return plan.title;
+    if (item.name === "submit_plan") return app.draft?.title ?? "";
+    if (item.name === "write_plan") return sectionsOf(item.args).join(", ");
     if (item.name === "run_agent") {
       const to = typeof item.args.agent === "string" ? item.args.agent : "";
       return to === "" ? task : `${to}: ${task}`;
@@ -120,10 +123,6 @@
     item.kind === "tool" && item.name === "ask_question"
       ? asked(item.args)
       : { question: "", options: [], multi: false },
-  );
-
-  const plan = $derived(
-    item.kind === "tool" && item.name === "submit_plan" ? planned(item.args) : planned({}),
   );
 
   // The result is the labels that were chosen, or words nobody offered, so a
@@ -173,7 +172,7 @@
       <MagnifyingGlass />
     {:else if item.kind === "tool" && (item.name === "write_file" || item.name === "replace_in_file")}
       <PencilSimple />
-    {:else if item.kind === "tool" && (item.name === "write_todos" || item.name === "submit_plan")}
+    {:else if item.kind === "tool" && (item.name === "write_todos" || item.name === "submit_plan" || item.name === "write_plan")}
       <ListChecks />
     {:else if item.kind === "tool" && item.name === "ask_question"}
       <Question />
@@ -239,16 +238,10 @@
           <p class="text-[13px] text-ink-2">Answered {item.output}</p>
         {/if}
       {:else if item.kind === "tool" && item.name === "submit_plan"}
-        {#if plan.goal}
-          <p class="step-text">{plan.goal}</p>
-        {/if}
-        <ol class="flex list-decimal flex-col gap-0.5 pl-5 text-[13px] text-ink-2">
-          {#each plan.steps as step, i (i)}
-            <li>{step}</li>
-          {/each}
-        </ol>
         {#if item.output.startsWith("not approved: ")}
           <p class="text-[13px] text-ink-2">Asked for: {item.output.slice(14)}</p>
+        {:else if item.output}
+          <p class="step-text">{item.output}</p>
         {/if}
       {:else if item.kind === "tool" && item.name === "run_shell"}
         <TerminalCard

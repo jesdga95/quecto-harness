@@ -40,6 +40,7 @@ func (e *Engine) SetMode(id string, mode config.WorkMode) error {
 	if changed {
 		s.Mode = mode
 		s.Plan = nil
+		s.Draft = nil
 		// The system prompt and the tools are the mode's own, so what was
 		// measured for the last one says nothing about this one.
 		s.baseProbed = false
@@ -60,39 +61,90 @@ func (s *Session) WorkMode() config.WorkMode {
 	return s.Mode
 }
 
-func parsePlan(raw json.RawMessage) (store.Plan, error) {
-	var args struct {
-		Title string   `json:"title"`
-		Goal  string   `json:"goal"`
-		Files []string `json:"files"`
-		Steps []string `json:"steps"`
-		Check string   `json:"check"`
-		Open  []string `json:"open"`
-	}
+// draftPatch is a write_plan call: the sections it sends, each nil when it
+// was left out, so a section left out keeps what the draft holds.
+type draftPatch struct {
+	Title      *string   `json:"title"`
+	Goal       *string   `json:"goal"`
+	Code       *[]string `json:"code"`
+	Tests      *[]string `json:"tests"`
+	Validation *[]string `json:"validation"`
+	Migration  *string   `json:"migration"`
+	Risks      *[]string `json:"risks"`
+	Steps      *[]string `json:"steps"`
+	Open       *[]string `json:"open"`
+}
+
+func parseDraft(raw json.RawMessage) (draftPatch, error) {
+	var p draftPatch
 	if len(raw) == 0 {
-		return store.Plan{}, errors.New("submit_plan: the arguments were empty")
+		return p, errors.New("write_plan: the arguments were empty")
 	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return store.Plan{}, fmt.Errorf("submit_plan: the arguments are not valid JSON: %s", err)
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return p, fmt.Errorf("write_plan: the arguments are not valid JSON: %s", err)
 	}
-	p := store.Plan{
-		Title: strings.TrimSpace(args.Title),
-		Goal:  strings.TrimSpace(args.Goal),
-		Files: trimAll(args.Files),
-		Steps: trimAll(args.Steps),
-		Check: strings.TrimSpace(args.Check),
-		Open:  trimAll(args.Open),
-	}
-	if p.Title == "" {
-		return store.Plan{}, errors.New("submit_plan: title is empty, name the change")
-	}
-	if len(p.Steps) == 0 {
-		return store.Plan{}, errors.New("submit_plan: steps is empty")
-	}
-	if len(p.Steps) > maxTodos {
-		return store.Plan{}, fmt.Errorf("submit_plan: %d steps, keep the plan under %d", len(p.Steps), maxTodos)
+	if p.Steps != nil && len(trimAll(*p.Steps)) > maxTodos {
+		return p, fmt.Errorf("write_plan: %d steps, keep the plan under %d", len(trimAll(*p.Steps)), maxTodos)
 	}
 	return p, nil
+}
+
+// merge writes the sections a patch sent over the draft and reports which
+// they were.
+func (p draftPatch) merge(d *store.Plan) []string {
+	var wrote []string
+	text := func(name string, from *string, to *string) {
+		if from != nil {
+			*to = strings.TrimSpace(*from)
+			wrote = append(wrote, name)
+		}
+	}
+	list := func(name string, from *[]string, to *[]string) {
+		if from != nil {
+			*to = trimAll(*from)
+			wrote = append(wrote, name)
+		}
+	}
+	text("title", p.Title, &d.Title)
+	text("goal", p.Goal, &d.Goal)
+	list("code", p.Code, &d.Code)
+	list("tests", p.Tests, &d.Tests)
+	list("validation", p.Validation, &d.Validation)
+	text("migration", p.Migration, &d.Migration)
+	list("risks", p.Risks, &d.Risks)
+	list("steps", p.Steps, &d.Steps)
+	list("open", p.Open, &d.Open)
+	return wrote
+}
+
+// missing names the required sections a draft has left empty. Open is the one
+// section a finished plan may leave empty.
+func missing(d store.Plan) []string {
+	var out []string
+	if d.Title == "" {
+		out = append(out, "title")
+	}
+	if d.Goal == "" {
+		out = append(out, "goal")
+	}
+	for _, sec := range []struct {
+		name string
+		list []string
+	}{{"code", d.Code}, {"tests", d.Tests}, {"validation", d.Validation}} {
+		if len(sec.list) == 0 {
+			out = append(out, sec.name)
+		}
+	}
+	if d.Migration == "" {
+		out = append(out, "migration")
+	}
+	if len(d.Risks) == 0 {
+		out = append(out, "risks")
+	}
+	if len(d.Steps) == 0 {
+		out = append(out, "steps")
+	}
+	return out
 }
 
 func trimAll(in []string) []string {
@@ -103,6 +155,34 @@ func trimAll(in []string) []string {
 		}
 	}
 	return out
+}
+
+// writePlan merges sections into the session's draft and publishes it, so
+// the panel follows the plan as it is written.
+func (e *Engine) writePlan(s *Session, raw json.RawMessage) (tools.Result, error) {
+	patch, err := parseDraft(raw)
+	if err != nil {
+		return tools.Result{}, err
+	}
+	s.mu.Lock()
+	if s.Draft == nil {
+		s.Draft = &store.Plan{}
+	}
+	wrote := patch.merge(s.Draft)
+	draft := *s.Draft
+	s.mu.Unlock()
+
+	e.publish(s.ID, ev("plan_draft", map[string]any{"plan": draft}))
+	if len(wrote) == 0 {
+		return tools.Result{}, errors.New("write_plan: no section was sent")
+	}
+	out := "wrote " + strings.Join(wrote, ", ")
+	if left := missing(draft); len(left) > 0 {
+		out += ". still empty: " + strings.Join(left, ", ")
+	} else {
+		out += ". every required section is written: call submit_plan"
+	}
+	return tools.Result{Output: out}, nil
 }
 
 // seedTodos is the todo list an approved plan starts, with its first step in
@@ -120,17 +200,27 @@ func seedTodos(p store.Plan) []store.Todo {
 }
 
 func renderPlan(p store.Plan) string {
-	return prompts.Plan(prompts.PlanVars{Title: p.Title, Goal: p.Goal, Files: p.Files,
-		Steps: p.Steps, Check: p.Check, Open: p.Open})
+	return prompts.Plan(prompts.PlanVars{Title: p.Title, Goal: p.Goal, Code: p.Code,
+		Tests: p.Tests, Validation: p.Validation, Migration: p.Migration, Risks: p.Risks,
+		Steps: p.Steps, Open: p.Open})
 }
 
-// submitPlan puts the plan to the user on a card and blocks the turn until it
+// submitPlan puts the draft to the user on a card and blocks the turn until it
 // is answered. An approval is held on the session, and the turn switches to
 // execute once the rest of this reply's calls are answered.
 func (e *Engine) submitPlan(ctx context.Context, s *Session, call llm.ToolCall) (tools.Result, error) {
-	plan, err := parsePlan(json.RawMessage(call.Function.Arguments))
-	if err != nil {
-		return tools.Result{}, err
+	s.mu.Lock()
+	var plan store.Plan
+	drafted := s.Draft != nil
+	if drafted {
+		plan = *s.Draft
+	}
+	s.mu.Unlock()
+	if !drafted {
+		return tools.Result{}, errors.New("submit_plan: there is no draft: write the plan with write_plan first")
+	}
+	if left := missing(plan); len(left) > 0 {
+		return tools.Result{}, fmt.Errorf("submit_plan: the plan has no %s: write them with write_plan", strings.Join(left, ", "))
 	}
 	q := Question{
 		ID: newQuestionID(), SessionID: s.ID, CallID: call.ID, Text: plan.Title,

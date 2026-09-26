@@ -940,7 +940,7 @@ func TestSchemasFollowTheMode(t *testing.T) {
 	plan.Mode, exec.Mode = config.WorkPlan, config.WorkExecute
 
 	got := Names(plan)
-	want := []string{"read_file", "find", "web_search", "ask_question", "submit_plan",
+	want := []string{"read_file", "find", "web_search", "ask_question", "write_plan", "submit_plan",
 		"run_agent", "send_message", "run_shell"}
 	if !slices.Equal(got, want) {
 		t.Errorf("plan sent %v, want %v", got, want)
@@ -950,8 +950,10 @@ func TestSchemasFollowTheMode(t *testing.T) {
 			t.Errorf("plan mode holds %s", name)
 		}
 	}
-	if slices.Contains(Names(exec), "submit_plan") {
-		t.Error("execute mode sent submit_plan")
+	for _, name := range []string{"write_plan", "submit_plan"} {
+		if slices.Contains(Names(exec), name) {
+			t.Errorf("execute mode sent %s", name)
+		}
 	}
 	if !(Offer{Mode: config.WorkExecute}).InMode("run_agent") {
 		t.Error("run_agent left the mode when the offer left it out")

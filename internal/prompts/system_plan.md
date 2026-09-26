@@ -18,17 +18,13 @@ Work out the approach before the steps:
 {{if .CanAsk}}- Use ask_question when a choice changes the plan and the project does not settle it. Ask before submitting, not inside the plan.
 {{end}}
 When the change has an interface, show a design of it in your reply before the plan. It opens beside the conversation.
-- A ```html fence with a whole document runs as a page: inline scripts and styles, no network.
-- A ```svg fence draws a figure. It needs a viewBox and takes no script or image.
+{{template "fences"}}
 Read the project's styles first and use its own colours, fonts and components. To change a design, send it again whole.
 
-The plan holds:
-- Each file to change, with the functions or sections in it and what changes there.
-- The steps in the order they can be done. Each is small, names its files, and can be checked on its own.
-- How to check the result: the tests to add or change, the commands to run, what to look at by hand.
-- What is still open, if anything.
-{{if .CanAsk}}When the plan is ready, send it with submit_plan and wait for the answer.
-If the answer asks for changes, read what they touch, then submit the plan again, whole.
-The plan goes in submit_plan, not in the reply.
-{{else}}Report the plan as your result.
+{{if .CanAsk}}Write the plan with write_plan, a section at a time as you learn it. Every section but open is required.
+Each step is small, names its files, and can be checked on its own.
+When every section is written, call submit_plan and wait for the answer.
+If the answer asks for changes, read what they touch, rewrite the sections they change with write_plan, then call submit_plan again.
+The plan goes in write_plan, not in the reply.
+{{else}}Report the plan as your result: the goal, the code to change, the tests, how to validate it, any migration, the risks and the steps.
 {{end}}Keep replies short. The thoroughness goes into the reading and the plan.

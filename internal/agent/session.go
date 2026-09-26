@@ -50,7 +50,9 @@ type Session struct {
 	Mode config.WorkMode
 	// Plan is the last plan the user approved, which execute mode carries in
 	// its system prompt.
-	Plan    *store.Plan
+	Plan *store.Plan
+	// Draft is the plan being written in plan mode.
+	Draft   *store.Plan
 	Created time.Time
 	Updated time.Time
 	Title   string
@@ -153,7 +155,7 @@ func newSession(id, project, agentID, model string) *Session {
 func fromDoc(d *store.Session) *Session {
 	return &Session{
 		ID: d.ID, Project: d.Project, AgentID: d.Agent, Parent: d.Parent, Model: d.Model,
-		Mode: d.Mode, Plan: d.Plan,
+		Mode: d.Mode, Plan: d.Plan, Draft: d.Draft,
 		Created: d.Created, Updated: d.Updated, Title: d.Title, Named: d.Named,
 		Entries:        append([]store.Entry(nil), d.Entries...),
 		NCtx:           d.NCtx,
@@ -175,7 +177,7 @@ func fromDoc(d *store.Session) *Session {
 func (s *Session) doc() *store.Session {
 	return &store.Session{
 		ID: s.ID, Project: s.Project, Agent: s.AgentID, Parent: s.Parent,
-		Model: s.Model, Mode: s.Mode, Plan: s.Plan, Title: s.Title, Named: s.Named,
+		Model: s.Model, Mode: s.Mode, Plan: s.Plan, Draft: s.Draft, Title: s.Title, Named: s.Named,
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, LastUsage: s.LastUsage,
@@ -356,11 +358,9 @@ func (s *Session) restoreContext() {
 func (s *Session) restoreTodos() {
 	for i := len(s.Entries) - 1; i >= 0; i-- {
 		if s.Entries[i].Kind == "tool" && s.Entries[i].ToolName == "submit_plan" && s.Entries[i].Meta["approved"] == true {
-			if args, ok := s.argumentsOf(i, s.Entries[i].ToolCallID); ok {
-				if plan, err := parsePlan(args); err == nil {
-					s.Todos = seedTodos(plan)
-					return
-				}
+			if s.Plan != nil {
+				s.Todos = seedTodos(*s.Plan)
+				return
 			}
 			continue
 		}

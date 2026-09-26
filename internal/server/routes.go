@@ -476,7 +476,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	}
 	body := map[string]any{
 		"id": doc.ID, "project": doc.Project, "model": doc.Model, "parent": doc.Parent,
-		"mode": string(doc.Mode), "plan": doc.Plan,
+		"mode": string(doc.Mode), "plan": doc.Plan, "draft": doc.Draft,
 		// A subagent run is reachable only from the transcript that launched
 		// it, so a launcher carries the list of what it launched.
 		"children": s.children(doc.ID),

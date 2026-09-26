@@ -1,11 +1,14 @@
-/** A plan as the card and the answered row read it, out of the arguments of
-    the submit_plan call. Every field is optional on the wire. */
-export interface Planned {
+/** A plan in its sections, as the draft and the card read it. Every field is
+    optional on the wire. */
+export interface Plan {
   title: string;
   goal: string;
-  files: string[];
+  code: string[];
+  tests: string[];
+  validation: string[];
+  migration: string;
+  risks: string[];
   steps: string[];
-  check: string;
   open: string[];
 }
 
@@ -18,25 +21,41 @@ function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-export function planned(args: Record<string, unknown>): Planned {
+export function toPlan(wire: unknown): Plan | null {
+  if (typeof wire !== "object" || wire === null) return null;
+  const w = wire as Record<string, unknown>;
   return {
-    title: text(args.title),
-    goal: text(args.goal),
-    files: strings(args.files),
-    steps: strings(args.steps),
-    check: text(args.check),
-    open: strings(args.open),
+    title: text(w.title),
+    goal: text(w.goal),
+    code: strings(w.code),
+    tests: strings(w.tests),
+    validation: strings(w.validation),
+    migration: text(w.migration),
+    risks: strings(w.risks),
+    steps: strings(w.steps),
+    open: strings(w.open),
   };
 }
 
+/** The sections a write_plan call sent, in the order the plan holds them. */
+export function sectionsOf(args: Record<string, unknown>): string[] {
+  const order = ["title", "goal", "code", "tests", "validation", "migration", "risks", "steps", "open"];
+  return order.filter((k) => k in args);
+}
+
 /** The plan as a markdown document, which is how the panel shows it. The
-    title is left out: the panel's header already carries it. */
-export function planMarkdown(p: Planned): string {
+    title is left out: the panel's header already carries it. A section not
+    written yet is left out too. */
+export function planMarkdown(p: Plan): string {
   const out: string[] = [];
-  if (p.goal) out.push(p.goal);
-  if (p.files.length > 0) out.push("## Files", p.files.map((f) => `- ${f}`).join("\n"));
+  const list = (items: string[]) => items.map((i) => `- ${i}`).join("\n");
+  if (p.goal) out.push("## Goal", p.goal);
+  if (p.code.length > 0) out.push("## Code", list(p.code));
+  if (p.tests.length > 0) out.push("## Tests", list(p.tests));
+  if (p.validation.length > 0) out.push("## Validation", list(p.validation));
+  if (p.migration) out.push("## Migration", p.migration);
+  if (p.risks.length > 0) out.push("## Risks", list(p.risks));
   if (p.steps.length > 0) out.push("## Steps", p.steps.map((s, i) => `${i + 1}. ${s}`).join("\n"));
-  if (p.check) out.push("## Check", p.check);
-  if (p.open.length > 0) out.push("## Open", p.open.map((q) => `- ${q}`).join("\n"));
+  if (p.open.length > 0) out.push("## Open", list(p.open));
   return out.join("\n\n") + "\n";
 }

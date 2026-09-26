@@ -23,10 +23,10 @@ type Offer struct {
 }
 
 // modeTools is the fixed list each mode may send. Plan holds no tool that
-// writes a file, and submit_plan is sent in plan mode alone.
+// writes a file, and write_plan and submit_plan are sent in plan mode alone.
 var modeTools = map[config.WorkMode][]string{
 	config.WorkPlan: {"read_file", "find", "web_search", "ask_question",
-		"run_agent", "send_message", "submit_plan", "run_shell"},
+		"run_agent", "send_message", "write_plan", "submit_plan", "run_shell"},
 	config.WorkExecute: {"read_file", "find", "web_search", "write_file", "replace_in_file",
 		"write_todos", "ask_question", "run_agent", "send_message", "run_shell"},
 }
@@ -79,7 +79,7 @@ func (o Offer) Sends(name string) bool {
 		return false
 	}
 	switch name {
-	case "ask_question", "submit_plan":
+	case "ask_question", "write_plan", "submit_plan":
 		return o.Ask
 	case "run_agent":
 		return o.Agents
@@ -216,32 +216,30 @@ func buildSchemas() []llm.Tool {
 			}),
 		}},
 		{Type: "function", Function: llm.FunctionSpec{
-			Name:        "submit_plan",
-			Description: prompts.ToolSubmitPlan(),
+			Name:        "write_plan",
+			Description: prompts.ToolWritePlan(),
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"title": map[string]any{"type": "string", "description": "The change, in a few words."},
-					"goal":  map[string]any{"type": "string", "description": "What the change is for and the approach taken."},
-					"files": map[string]any{
-						"type":        "array",
-						"description": "Each file to change, with the functions or sections in it and what changes there.",
-						"items":       map[string]any{"type": "string"},
-					},
-					"steps": map[string]any{
-						"type":        "array",
-						"description": "The work in order, one line each, naming its files.",
-						"items":       map[string]any{"type": "string"},
-						"minItems":    1,
-					},
-					"check": map[string]any{"type": "string", "description": "The tests to add or change, the commands to run, and what to look at by hand."},
-					"open": map[string]any{
-						"type":        "array",
-						"description": "What is still undecided. Empty when nothing is.",
-						"items":       map[string]any{"type": "string"},
-					},
+					"title":      map[string]any{"type": "string", "description": "The change, in a few words."},
+					"goal":       map[string]any{"type": "string", "description": "What the change is for, the approach taken and the one not taken."},
+					"code":       map[string]any{"type": "array", "description": "Each file to change, with the functions or sections in it and what changes there.", "items": map[string]any{"type": "string"}},
+					"tests":      map[string]any{"type": "array", "description": "Each unit test to add or change, and what it asserts.", "items": map[string]any{"type": "string"}},
+					"validation": map[string]any{"type": "array", "description": "The commands to run and what to check by hand or against a running instance.", "items": map[string]any{"type": "string"}},
+					"migration":  map[string]any{"type": "string", "description": "Stored data, config or API shapes that change and how, or None."},
+					"risks":      map[string]any{"type": "array", "description": "What could break: callers, behaviour a user sees, performance.", "items": map[string]any{"type": "string"}},
+					"steps":      map[string]any{"type": "array", "description": "The work in order, one line each, naming its files.", "items": map[string]any{"type": "string"}},
+					"open":       map[string]any{"type": "array", "description": "What is still undecided. Empty when nothing is.", "items": map[string]any{"type": "string"}},
 				},
-				"required":             []string{"title", "steps"},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llm.FunctionSpec{
+			Name:        "submit_plan",
+			Description: prompts.ToolSubmitPlan(),
+			Parameters: mustSchema(map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
 				"additionalProperties": false,
 			}),
 		}},

@@ -199,6 +199,9 @@ export interface State {
   models: Model[];
 }
 
+import type { Plan } from "../plan";
+export type { Plan } from "../plan";
+
 /** What a session is doing: planning a change or carrying one out. Each sends
     its own system prompt and its own tools. */
 export type WorkMode = "plan" | "execute";
@@ -266,6 +269,8 @@ export type HarnessEvent =
   /** The session's mode changed. kickoff marks the switch an approved plan
       made, which also starts the work. */
   | { type: "mode"; mode: WorkMode; kickoff: boolean; seq: number; title: string }
+  /** Plan mode wrote sections of the draft. It carries the whole draft. */
+  | { type: "plan_draft"; plan: Plan }
   /** A line the harness writes into the transcript, such as a model change. */
   | { type: "status_entry"; text: string }
   /** The model named the session after its first turn. */
@@ -461,6 +466,8 @@ export interface Transcript {
   steer: Steer | null;
   /** The mode the next turn runs in. */
   mode: WorkMode;
+  /** The plan being written, or the one last approved. */
+  draft: Plan | null;
 }
 
 export type EventHandler = (event: HarnessEvent) => void;

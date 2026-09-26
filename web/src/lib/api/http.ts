@@ -34,6 +34,7 @@ import type {
   Usage,
   WorkMode,
 } from "./types";
+import { toPlan } from "../plan";
 
 const BASE = "/api";
 
@@ -224,6 +225,7 @@ interface WireSnapshot {
   children?: { id?: string; title?: string; agent?: string; state?: string }[] | null;
   steer?: WireSteer | null;
   mode?: string;
+  draft?: unknown;
   last_seq?: number;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
   breakdown?: { system?: number; tools?: number; messages?: number } | null;
@@ -274,6 +276,7 @@ interface WireEvent {
   requests?: number;
   mode?: string;
   kickoff?: boolean;
+  plan?: unknown;
 }
 
 // transport
@@ -828,6 +831,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
     steer: toSteer(snap.steer),
     status: toStatus(snap.state),
     mode: toWorkMode(snap.mode),
+    draft: toPlan(snap.draft),
   };
 }
 
@@ -846,6 +850,7 @@ interface OpenCall {
 const EVENT_NAMES = [
   "status",
   "mode",
+  "plan_draft",
   "delta",
   "reasoning",
   "tool_call",
@@ -885,6 +890,11 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           title: ev.title ?? "",
         },
       ];
+
+    case "plan_draft": {
+      const plan = toPlan(ev.plan);
+      return plan ? [{ type: "plan_draft", plan }] : [];
+    }
 
     case "delta":
       return [{ type: "delta", text: ev.text ?? "" }];

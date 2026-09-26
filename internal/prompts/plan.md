@@ -1,10 +1,16 @@
 Plan: {{.Title}}
-{{if .Goal}}Goal: {{.Goal}}
-{{end}}{{if .Files}}Files:
-{{range .Files}}- {{.}}
-{{end}}{{end}}Steps:
+Goal: {{.Goal}}
+Code:
+{{range .Code}}- {{.}}
+{{end}}Tests:
+{{range .Tests}}- {{.}}
+{{end}}Validation:
+{{range .Validation}}- {{.}}
+{{end}}Migration: {{.Migration}}
+Risks:
+{{range .Risks}}- {{.}}
+{{end}}Steps:
 {{range .Steps}}- {{.}}
-{{end}}{{if .Check}}Check: {{.Check}}
 {{end}}{{if .Open}}Open:
 {{range .Open}}- {{.}}
 {{end}}{{end}}

@@ -28,7 +28,8 @@ import type {
   WorkMode,
 } from "../api";
 import { applyEvent, nextId, outcomeLabel, pushUser } from "../transcript";
-import { artifactsOf, type Artifact } from "../artifacts";
+import { artifactsOf, withDraft, type Artifact } from "../artifacts";
+import type { Plan } from "../plan";
 import { confirm } from "./confirm.svelte";
 
 // Every screen reads this one object. It holds what the server would hold plus
@@ -58,6 +59,8 @@ export const app = $state({
   // The mode the next turn runs in. With no session open it is held here and
   // sent with the message that creates one.
   workMode: "execute" as WorkMode,
+  // The plan plan mode is writing, or the one last approved.
+  draft: null as Plan | null,
   changes: { files: [], added: 0, removed: 0 } as Changes,
   // The panel in the column beside the transcript. There is room for one.
   dock: "" as Dock,
@@ -100,7 +103,7 @@ export type Dock = "" | "changes" | "runs" | "artifacts";
 
 // The artifacts are read from the transcript, so they follow it without being
 // kept in step by hand.
-const artifactList = $derived(artifactsOf(app.items));
+const artifactList = $derived(withDraft(artifactsOf(app.items), app.draft));
 
 export function artifacts(): Artifact[] {
   return artifactList;
@@ -111,7 +114,7 @@ export function artifacts(): Artifact[] {
 let announced = new Set<string>();
 
 function markAnnounced(): void {
-  announced = new Set(artifactsOf(app.items).map((a) => a.id));
+  announced = new Set(artifactList.map((a) => a.id));
 }
 
 let unsubscribe: (() => void) | null = null;
@@ -211,6 +214,7 @@ function clearSession(): void {
   app.todos = [];
   app.steer = null;
   app.workMode = "execute";
+  app.draft = null;
   app.status = "idle";
   app.awaitingModel = false;
   app.changes = { files: [], added: 0, removed: 0 };
@@ -241,6 +245,7 @@ export async function selectSession(id: string): Promise<void> {
   app.todos = t.todos;
   app.steer = t.steer;
   app.workMode = t.mode;
+  app.draft = t.draft;
   // A session opened while its turn runs is running, and the snapshot is the
   // only thing that says so. A model being read and a compaction both draw
   // nothing until they land, so the wait is taken from the status.
@@ -793,7 +798,7 @@ function resetArtifacts(): void {
 /** Opens the panel on an artifact the stream has just started, unless the
     reader closed it this turn or chose another one to look at. */
 function announceArtifacts(): void {
-  for (const artifact of artifactsOf(app.items)) {
+  for (const artifact of artifactList) {
     if (announced.has(artifact.id)) continue;
     announced.add(artifact.id);
     if (!app.artifactPinned) app.artifactId = artifact.id;
@@ -857,6 +862,7 @@ function onEvent(event: HarnessEvent): void {
     app.usage = event.transcript.usage;
     app.todos = event.transcript.todos;
     app.workMode = event.transcript.mode;
+    app.draft = event.transcript.draft;
     app.steer = event.transcript.steer;
     app.status = event.transcript.status;
     app.awaitingModel = WAITING.has(event.transcript.status);
@@ -883,10 +889,20 @@ function onEvent(event: HarnessEvent): void {
     return;
   }
 
+  // The draft is drawn in the panel, which opens on it as it is first written.
+  if (event.type === "plan_draft") {
+    app.draft = event.plan;
+    announceArtifacts();
+    return;
+  }
+
   // An approved plan starts its execution in the same turn, and the message
   // that starts it is drawn as the divider.
   if (event.type === "mode") {
     app.workMode = event.mode;
+    // A mode the person picks starts new work, and the harness drops the
+    // plan with it. An approval keeps the plan it is carrying out.
+    if (!event.kickoff) app.draft = null;
     if (event.kickoff) {
       app.items.push({
         kind: "mode",

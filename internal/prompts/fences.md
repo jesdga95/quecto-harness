@@ -1,0 +1,2 @@
+- A ```html fence with a whole document runs as a page: inline scripts and styles, no network.
+- A ```svg fence draws a figure. It needs a viewBox and takes no script or image.

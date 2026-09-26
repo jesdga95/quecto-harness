@@ -613,6 +613,7 @@ export class MockApi implements HarnessApi {
       // so a subagent left part way through still reads as working.
       status: run ? (run.compacting ? "compacting" : "streaming") : t.status,
       mode: t.mode,
+      draft: t.draft,
     };
   }
 
@@ -729,6 +730,7 @@ export class MockApi implements HarnessApi {
       steer: null,
       status: "idle",
       mode: "execute",
+      draft: null,
     });
     return { ...session };
   }
@@ -1282,6 +1284,7 @@ export class MockApi implements HarnessApi {
       steer: null,
       status: "running",
       mode: "execute",
+      draft: null,
     });
 
     const workerItems: TranscriptItem[] = [];
@@ -1296,6 +1299,7 @@ export class MockApi implements HarnessApi {
       steer: null,
       status: "idle",
       mode: "execute",
+      draft: null,
     });
 
     const items: TranscriptItem[] = [];
@@ -1321,6 +1325,7 @@ export class MockApi implements HarnessApi {
       steer: null,
       status: "idle",
       mode: "execute",
+      draft: null,
     });
     for (const s of [second, third]) {
       this.transcripts.set(s.id, {
@@ -1331,6 +1336,7 @@ export class MockApi implements HarnessApi {
         steer: null,
         status: "idle",
         mode: "execute",
+      draft: null,
       });
     }
   }
