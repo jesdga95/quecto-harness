@@ -259,7 +259,7 @@
         {:else if item.kind === "mode"}
           <div class="mode-divider">
             {#if item.kickoff}
-              <span><b>Plan approved</b>{item.title ? `: ${item.title}` : ""}. Execute mode</span>
+              <span><b>Plan approved</b>{item.title ? `: ${item.title}.` : ""}</span>
             {:else if item.mode === "plan"}
               <span><b>Plan mode</b>. Files are read only</span>
             {:else}
