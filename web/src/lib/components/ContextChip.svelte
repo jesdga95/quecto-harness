@@ -16,11 +16,13 @@
   const stats = $derived(turnStats());
   const running = $derived(app.status !== "idle");
 
-  // The parts are measured against the whole window, so each segment is its
-  // own share of it and the tail of the bar is what is still free. They arrive
-  // once the first turn has been measured, so the bar is plain until then.
-  // With no window they are measured against the fill, so the bar reads as
+  // The parts are scaled against the whole window, so each segment is its
+  // own share of it and the tail of the bar is what is still free. They
+  // arrive once the first turn has run, so the bar is plain until then.
+  // With no window they are scaled against the fill, so the bar reads as
   // the composition of the prompt with nothing left free.
+  // The system, agents and tools lines are character-count estimates, so
+  // they carry a tilde; messages is the remainder of a real usage report.
   const parts = $derived(app.usage.breakdown);
   const share = (n: number) => pct(n, limited ? app.usage.n_ctx : fill);
 
@@ -77,19 +79,19 @@
                 <dt class="flex items-center gap-1.5 text-muted">
                   <span class="ctxdot part-system"></span> System prompt
                 </dt>
-                <dd class="num">{k(parts.system)}</dd>
+                <dd class="num">~{k(parts.system)}</dd>
               </div>
               <div class="flex items-center justify-between">
                 <dt class="flex items-center gap-1.5 text-muted" title="AGENTS.md in the project root">
                   <span class="ctxdot part-rules"></span> Agents
                 </dt>
-                <dd class="num">{k(parts.rules)}</dd>
+                <dd class="num">~{k(parts.rules)}</dd>
               </div>
               <div class="flex items-center justify-between">
                 <dt class="flex items-center gap-1.5 text-muted">
                   <span class="ctxdot part-tools"></span> Tools
                 </dt>
-                <dd class="num">{k(parts.tools)}</dd>
+                <dd class="num">~{k(parts.tools)}</dd>
               </div>
               <div class="flex items-center justify-between">
                 <dt class="flex items-center gap-1.5 text-muted">

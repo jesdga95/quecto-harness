@@ -573,7 +573,7 @@ export async function removeAgent(id: string): Promise<void> {
     choice: the next message that needs the model is what loads it. */
 export async function setActiveAgent(id: string): Promise<void> {
   if (app.config?.agent === id) return;
-  // The split was measured against the previous model, so it goes with it
+  // The split was estimated against the previous prompt, so it goes with it
   // rather than being shown beside a total the new model reported.
   app.usage.breakdown = undefined;
   if ((await guard(() => api.selectAgent(id))) === null) return;

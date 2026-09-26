@@ -41,9 +41,6 @@ func (e *Engine) SetMode(id string, mode config.WorkMode) error {
 		s.Mode = mode
 		s.Plan = nil
 		s.Draft = nil
-		// The system prompt and the tools are the mode's own, so what was
-		// measured for the last one says nothing about this one.
-		s.baseProbedModel = ""
 	}
 	s.mu.Unlock()
 	if !changed {
@@ -261,7 +258,6 @@ func (e *Engine) takeApproval(s *Session) bool {
 	s.Mode = config.WorkExecute
 	s.Plan = plan
 	s.Todos = seedTodos(*plan)
-	s.baseProbedModel = ""
 	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user",
 		Content: prompts.PlanApproved(plan.Title), InContext: true, Visible: true,
 		Meta: map[string]any{"mode": string(config.WorkExecute), "kickoff": true}})

@@ -174,8 +174,7 @@ func TestPlanModeAnswersAWriteItDidNotSend(t *testing.T) {
 	}
 }
 
-// A mode the person picks starts new work, so the approved plan goes, and
-// the fixed context is measured again for the new prompt.
+// A mode the person picks starts new work, so the approved plan goes.
 func TestSetModeDropsThePlanAndRefusesAnUnknownMode(t *testing.T) {
 	h := newHarness(t)
 	s := h.session(t)
@@ -188,7 +187,7 @@ func TestSetModeDropsThePlanAndRefusesAnUnknownMode(t *testing.T) {
 
 	plan := store.Plan{Title: "T", Steps: []string{"one"}}
 	s.mu.Lock()
-	s.Plan, s.Draft, s.baseProbedModel = &plan, &plan, "Alpha-12B"
+	s.Plan, s.Draft = &plan, &plan
 	s.mu.Unlock()
 
 	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
@@ -196,8 +195,8 @@ func TestSetModeDropsThePlanAndRefusesAnUnknownMode(t *testing.T) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.Plan != nil || s.Draft != nil || s.baseProbedModel != "" {
-		t.Errorf("after a switch plan = %+v, draft = %+v, probed = %q", s.Plan, s.Draft, s.baseProbedModel)
+	if s.Plan != nil || s.Draft != nil {
+		t.Errorf("after a switch plan = %+v, draft = %+v", s.Plan, s.Draft)
 	}
 }
 

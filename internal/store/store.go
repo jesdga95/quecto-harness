@@ -133,7 +133,7 @@ type Session struct {
 	// LastToolTokens is the tool schema cost inside LastUsage. It is zero when
 	// the request that produced LastUsage was sent without tools.
 	LastToolTokens int `json:"last_tool_tokens,omitempty"`
-	// ContextBase is the measured fixed part of every prompt this model sees.
+	// ContextBase is the estimated fixed part of every prompt this model sees.
 	ContextBase *ContextBase `json:"context_base,omitempty"`
 	Todos       []Todo       `json:"todos,omitempty"`
 	// Baselines are the files this session has written to, as they stood
@@ -142,22 +142,14 @@ type Session struct {
 	Entries   []Entry    `json:"entries"`
 }
 
-// ContextBase is the token cost of the three parts of a prompt that never
-// change: the system message, the project's rules inside it and the tool
-// schemas. Model and Chars say what was measured, since a different
-// tokenizer or a different system message makes the numbers something else.
+// ContextBase is the estimated token cost of the three parts of a prompt that
+// never change: the system message, the project's rules inside it and the tool
+// schemas. It is a character-count estimate rather than a measurement, so a
+// turn re-takes it instead of anything having to notice a change.
 type ContextBase struct {
-	Model  string `json:"model"`
-	Chars  int    `json:"chars"`
-	System int    `json:"system"`
-	Rules  int    `json:"rules"`
-	Tools  int    `json:"tools"`
-}
-
-// Fits reports that the measurement was taken against this model and a system
-// message of this size, which is what makes it still true.
-func (b *ContextBase) Fits(model string, chars int) bool {
-	return b != nil && b.Model == model && b.Chars == chars
+	System int `json:"system"`
+	Rules  int `json:"rules"`
+	Tools  int `json:"tools"`
 }
 
 // Summary is what the sidebar needs, cheap enough to keep for every session.

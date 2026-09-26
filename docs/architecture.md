@@ -215,14 +215,15 @@ too late to be picked up starts a turn of its own.
   zero. Zero is no limit: nothing compacts against it and the meter has no denominator.
 - **`Prepare`** is the only request allowed to autoload a model, and it is called from
   `ensureReady`, so a model loads on the first message that needs it, never from the menu.
-- **Context breakdown.** The system and schema costs are measured with two one-token
-  completions (with and without the schemas), once per model per session; the message cost
-  is the remainder of a real usage report. A negative remainder reports nothing.
+- **Context breakdown.** The fixed parts are estimated at four characters per token
+  from the rendered system message and the marshalled schemas, re-taken at each turn
+  start and a mode switch; the message cost is the remainder of a real usage report.
+  A negative remainder reports nothing.
 - **Titles.** A session with no typed title asks the model for one from the opening message
   alone, before the first reply, so it does not evict the turn's cache. A subagent run is
   titled from its task and asks nothing.
 - **One agent.** Selecting or editing the active agent repoints every live conversation and
-  clears `n_ctx`, caps and the measurement; a turn already running finishes on the agent it
+  clears `n_ctx`, caps and the estimate; a turn already running finishes on the agent it
   started with, and a subagent run stays on the agent it was launched onto.
 - **Compaction** fires when fill crosses the threshold, or manually on an idle session
   (Stop is refused while it runs). On success it flips every prior entry to *not
@@ -258,7 +259,7 @@ shows the card in its answered state.
 - A session is **one file at `0600`**, beside a sidecar folder holding the baseline copies,
   with one mutex per id so sessions never serialise against each other. The header carries
   project, agent, parent, model, title, whether the title was typed, times, `n_ctx` and its
-  source, compactions, last usage and its tool share, the measured context base, the todo
+  source, compactions, last usage and its tool share, the estimated context base, the todo
   list and the baselines. The system prompt is **regenerated, not stored**.
 - `Open` builds an index from a one-time scan, so `List` never touches the filesystem; a
   corrupt file is skipped and named, not fatal. `Save` atomic-replaces with indented JSON.
@@ -379,7 +380,7 @@ Per-package suites, each tied to a fixture or a recorded stream:
   writes the allowlist before returning.
 - **agent**: the state transitions and the loop against the replay server: a plain reply,
   a tool call, a denial, a stop, a spent call budget; `computeFill`; an unknown window;
-  `SetAgent`; preparation; the naming request; the context measurement; compaction; the
+  `SetAgent`; preparation; the naming request; the context estimate; compaction; the
   unanswered-tool-call repair; and, in files of their own, delegation, steering, questions,
   the change list and resend.
 - **store**: round trip of every entry kind; a corrupt file skipped and named; concurrent
@@ -409,7 +410,7 @@ The fourteen review questions, each settled and already folded into the sections
 | 1  | The token persists across restarts; deleting the file is the only rotation. |
 | 2  | Effort `off` sends both `reasoning_budget: 0` and `enable_thinking: false` on llama.cpp, and `reasoning_effort: none` on the chat backend. |
 | 3  | Parallel tool calls run sequentially, one card at a time, in model order. |
-| 4  | `max_tokens` is sent when the agent sets one, and by the title and measurement requests. There is no iteration limit; a spent `max_tool_calls` drops the tool schemas instead. |
+| 4  | `max_tokens` is sent when the agent sets one, and by the title request. There is no iteration limit; a spent `max_tool_calls` drops the tool schemas instead. |
 | 5  | Manual compaction is idle-only; Stop the turn first. |
 | 6  | Stop cancels the session, not the model server; nothing in the HTTP protocol cancels work already started (a llama.cpp slot keeps going). |
 | 7  | Stopping a compaction is refused, with no deadline, since the prefill of a full context has no honest bound. |

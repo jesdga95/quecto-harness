@@ -1572,85 +1572,41 @@ func mustJSON(v any) string {
 	return string(b)
 }
 
-func waitForProbes(t *testing.T, h *harness, n int) {
-	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		h.replay.mu.Lock()
-		got := len(h.replay.Probes)
-		h.replay.mu.Unlock()
-		if got >= n {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("the context measurement did not run")
-}
-
-func TestContextBreakdownFromMeasuredParts(t *testing.T) {
+func TestContextBreakdownIsEstimatedFromThePrompt(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt", "stream_title.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "what is in this project", nil)
 	waitIdle(t, s)
-	waitForProbes(t, h, 2)
 
-	// The fixtures report 20 tokens for the system message alone and 35 with
-	// the schemas attached, so the schemas cost 15.
-	var parts *Breakdown
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if parts = s.Breakdown(); parts != nil {
-			break
-		}
-		time.Sleep(2 * time.Millisecond)
+	// The fixed parts are estimated locally, so the turn sends the title and
+	// the reply and nothing else.
+	h.replay.mu.Lock()
+	order := append([]string(nil), h.replay.Order...)
+	h.replay.mu.Unlock()
+	if strings.Join(order, ",") != "title,chat" {
+		t.Errorf("server order = %v, want the title and the reply alone", order)
 	}
+
+	s.mu.Lock()
+	baseChars := len(s.systemMessage(h.agent, h.engine.os, h.engine.today(), topBrief()).Content)
+	schemaChars := len(mustJSON(tools.Schemas(topBrief().offer)))
+	s.mu.Unlock()
+	parts := s.Breakdown()
 	if parts == nil {
-		t.Fatal("no breakdown after the parts were measured")
+		t.Fatal("no breakdown after the turn")
 	}
-	if parts.System != 20 {
-		t.Errorf("system = %d, want 20", parts.System)
+	if want := baseChars / charsPerToken; parts.System != want {
+		t.Errorf("system = %d, want %d", parts.System, want)
 	}
-	if parts.Tools != 15 {
-		t.Errorf("tools = %d, want 15", parts.Tools)
+	if parts.Rules != 0 {
+		t.Errorf("rules = %d, want 0: the project has no rules file", parts.Rules)
 	}
-	// The turn reported 44 prompt and 48 completion tokens.
-	if want := 44 + 48 - 20 - 15; parts.Messages != want {
+	if want := schemaChars / charsPerToken; parts.Tools != want {
+		t.Errorf("tools = %d, want %d", parts.Tools, want)
+	}
+	// The turn reported 1950 prompt and 48 completion tokens.
+	if want := 1950 + 48 - parts.System - parts.Tools; parts.Messages != want {
 		t.Errorf("messages = %d, want %d", parts.Messages, want)
-	}
-
-	h.replay.mu.Lock()
-	first, second := h.replay.Probes[0], h.replay.Probes[1]
-	h.replay.mu.Unlock()
-	if _, ok := first["tools"]; ok {
-		t.Error("the first measurement carried tools, so it cannot isolate the system message")
-	}
-	if _, ok := second["tools"]; !ok {
-		t.Error("the second measurement carried no tools, so the difference is not the schema cost")
-	}
-	msgs, _ := first["messages"].([]any)
-	if len(msgs) != 1 {
-		t.Fatalf("the measurement carried %d messages, want the system message alone", len(msgs))
-	}
-	if m, _ := msgs[0].(map[string]any); m["role"] != "system" {
-		t.Errorf("measured message role = %v, want system", m["role"])
-	}
-}
-
-func TestContextMeasurementRunsOncePerSession(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
-	s := h.session(t)
-	h.engine.Send(s.ID, "first", nil)
-	waitIdle(t, s)
-	waitForProbes(t, h, 2)
-
-	h.engine.Send(s.ID, "second", nil)
-	waitIdle(t, s)
-
-	h.replay.mu.Lock()
-	got := len(h.replay.Probes)
-	h.replay.mu.Unlock()
-	if got != 2 {
-		t.Errorf("the parts were measured %d times, want twice for one model", got)
 	}
 }
 
@@ -1713,33 +1669,7 @@ func TestInstructionsReachTheRequest(t *testing.T) {
 	}
 }
 
-// A measurement is only true for the text it was taken against, so editing the
-// instructions of an agent a session is already on throws it away.
-func TestContextBaseIsRemeasuredWhenInstructionsChange(t *testing.T) {
-	h := newHarness(t)
-	s := h.session(t)
-	s.mu.Lock()
-	system := s.systemMessage(h.agent, "darwin", "2026-02-06", topBrief())
-	s.ContextBase = &store.ContextBase{Model: "Alpha-12B", Chars: len(system.Content), System: 154, Tools: 1026}
-	s.LastUsage = &llm.Usage{PromptTokens: 2000, CompletionTokens: 10}
-	fits := s.ContextBase.Fits(s.Model, s.sysChars)
-	s.mu.Unlock()
-	if !fits {
-		t.Fatal("the base did not fit the text it was measured against")
-	}
-
-	edited := h.setAgent(t, func(a *config.Agent) { a.Instructions = "Answer in Latin." })
-	s.mu.Lock()
-	s.systemMessage(edited, "darwin", "2026-02-06", topBrief())
-	still := s.ContextBase.Fits(s.Model, s.sysChars)
-	s.mu.Unlock()
-	if still {
-		t.Error("a base measured against the old system message was kept")
-	}
-}
-
-// rulesMarker is the line the project-rules tests write into the file, which
-// is what the replay's probe branch looks for to pick its fixture.
+// rulesMarker is the line the project-rules tests write into the file.
 const rulesMarker = "Never use tabs."
 
 func TestProjectRulesReachTheRequest(t *testing.T) {
@@ -1750,7 +1680,6 @@ func TestProjectRulesReachTheRequest(t *testing.T) {
 	s := h.session(t)
 	h.engine.Send(s.ID, "what is in this project", nil)
 	waitIdle(t, s)
-	waitForProbes(t, h, 3)
 
 	msgs, _ := h.replay.Body(0)["messages"].([]any)
 	first, _ := msgs[0].(map[string]any)
@@ -1758,32 +1687,11 @@ func TestProjectRulesReachTheRequest(t *testing.T) {
 	if !strings.Contains(system, "Rules for this project, from AGENTS.md at its root:\n"+rulesMarker) {
 		t.Errorf("the first request does not carry the rules under their label: %q", system)
 	}
-
-	// The three measurements, in order, differ only in what the system
-	// message carries: nothing, the rules, the rules and the schemas.
-	pick := func(i int, wantRules, wantTools bool) {
-		t.Helper()
-		p := h.replay.Probes[i]
-		if _, hasTools := p["tools"]; hasTools != wantTools {
-			t.Errorf("measurement %d carries tools = %v", i, hasTools)
-		}
-		msgs, _ := p["messages"].([]any)
-		m, _ := msgs[0].(map[string]any)
-		content, _ := m["content"].(string)
-		if strings.Contains(content, rulesMarker) != wantRules {
-			t.Errorf("measurement %d carries the rules = %v", i, wantRules)
-		}
-	}
-	h.replay.mu.Lock()
-	defer h.replay.mu.Unlock()
-	pick(0, false, false)
-	pick(1, true, false)
-	pick(2, true, true)
 }
 
-// A file that grows between turns is a different prompt, so the measurement
-// is retaken rather than a stale number standing.
-func TestProjectRulesRemeasuredWhenTheFileGrows(t *testing.T) {
+// A file that grows between turns is a different prompt, and the estimate is
+// re-taken at the next turn start rather than the old one standing.
+func TestProjectRulesReestimatedWhenTheFileGrows(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
 	if err := os.WriteFile(filepath.Join(h.project, "AGENTS.md"), []byte(rulesMarker), 0o644); err != nil {
 		t.Fatal(err)
@@ -1791,25 +1699,30 @@ func TestProjectRulesRemeasuredWhenTheFileGrows(t *testing.T) {
 	s := h.session(t)
 	h.engine.Send(s.ID, "one", nil)
 	waitIdle(t, s)
-	waitForProbes(t, h, 3)
+	first := s.Breakdown()
+	if first == nil || first.Rules == 0 {
+		t.Fatalf("breakdown = %+v, want the rules to cost something", first)
+	}
 
-	if err := os.WriteFile(filepath.Join(h.project, "AGENTS.md"), []byte(rulesMarker+"\nAnd never use semicolons."), 0o644); err != nil {
+	grown := rulesMarker + "\nAnd never use semicolons."
+	if err := os.WriteFile(filepath.Join(h.project, "AGENTS.md"), []byte(grown), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	h.engine.Send(s.ID, "two", nil)
 	waitIdle(t, s)
-	waitForProbes(t, h, 6)
 
-	h.replay.mu.Lock()
-	mid, _ := h.replay.Probes[4]["messages"].([]any)
-	m, _ := mid[0].(map[string]any)
-	content, _ := m["content"].(string)
-	h.replay.mu.Unlock()
-	if !strings.Contains(content, rulesMarker) {
-		t.Error("the remeasurement's middle prompt carries no rules")
-	}
+	withRules := topBrief()
+	withRules.rules, withRules.rulesName = grown, "AGENTS.md"
+	s.mu.Lock()
+	baseChars := len(s.systemMessage(h.agent, h.engine.os, h.engine.today(), topBrief()).Content)
+	sysChars := len(s.systemMessage(h.agent, h.engine.os, h.engine.today(), withRules).Content)
+	s.mu.Unlock()
 	if parts := s.Breakdown(); parts == nil {
-		t.Error("no breakdown after the remeasurement")
+		t.Fatal("no breakdown after the second turn")
+	} else if want := (sysChars - baseChars) / charsPerToken; parts.Rules != want {
+		t.Errorf("rules = %d, want %d: the estimate follows the grown file", parts.Rules, want)
+	} else if parts.Rules < first.Rules {
+		t.Errorf("rules = %d, want more than the %d the smaller file cost", parts.Rules, first.Rules)
 	}
 }
 
@@ -1843,27 +1756,24 @@ func TestContextBreakdownIncludesProjectRules(t *testing.T) {
 	s := h.session(t)
 	h.engine.Send(s.ID, "what is in this project", nil)
 	waitIdle(t, s)
-	waitForProbes(t, h, 3)
 
-	var parts *Breakdown
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if parts = s.Breakdown(); parts != nil {
-			break
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
+	withRules := topBrief()
+	withRules.rules, withRules.rulesName = rulesMarker, "AGENTS.md"
+	s.mu.Lock()
+	baseChars := len(s.systemMessage(h.agent, h.engine.os, h.engine.today(), topBrief()).Content)
+	sysChars := len(s.systemMessage(h.agent, h.engine.os, h.engine.today(), withRules).Content)
+	s.mu.Unlock()
+	parts := s.Breakdown()
 	if parts == nil {
-		t.Fatal("no breakdown after the parts were measured")
+		t.Fatal("no breakdown after the turn")
 	}
-	// The fixtures report 20 tokens for the prompt without the rules, 30 with
-	// them and 35 with the schemas as well, so the rules cost 10 and the
-	// schemas 5.
-	if parts.System != 20 || parts.Rules != 10 || parts.Tools != 5 {
-		t.Errorf("system/rules/tools = %d/%d/%d, want 20/10/5", parts.System, parts.Rules, parts.Tools)
+	// The step between the system message with and without the rules, at
+	// charsPerToken characters per token, is the rules' cost.
+	if want := (sysChars - baseChars) / charsPerToken; parts.Rules != want {
+		t.Errorf("rules = %d, want %d", parts.Rules, want)
 	}
-	// The turn reported 44 prompt and 48 completion tokens.
-	if want := 44 + 48 - 20 - 10 - 5; parts.Messages != want {
+	// The turn reported 1950 prompt and 48 completion tokens.
+	if want := 1950 + 48 - parts.System - parts.Rules - parts.Tools; parts.Messages != want {
 		t.Errorf("messages = %d, want %d", parts.Messages, want)
 	}
 }
@@ -1877,7 +1787,6 @@ func TestProjectRulesOverTheLimitAreNotInjected(t *testing.T) {
 	s := h.session(t)
 	h.engine.Send(s.ID, "what is in this project", nil)
 	waitIdle(t, s)
-	waitForProbes(t, h, 2)
 
 	want := "AGENTS.md is 258 kb, the limit is 256 kb: it is not in the prompt"
 	msgs, _ := h.replay.Body(0)["messages"].([]any)
@@ -1889,12 +1798,6 @@ func TestProjectRulesOverTheLimitAreNotInjected(t *testing.T) {
 	h.engine.Send(s.ID, "and again", nil)
 	waitIdle(t, s)
 
-	h.replay.mu.Lock()
-	probes := len(h.replay.Probes)
-	h.replay.mu.Unlock()
-	if probes != 2 {
-		t.Errorf("the fixed parts were measured %d times, want two: no rules to measure a third", probes)
-	}
 	doc, _, _, _ := s.Snapshot()
 	notes := 0
 	for _, e := range doc.Entries {
@@ -1914,34 +1817,6 @@ func TestProjectRulesOverTheLimitAreNotInjected(t *testing.T) {
 	}
 	if parts := s.Breakdown(); parts == nil || parts.Rules != 0 {
 		t.Errorf("breakdown = %+v, want the rules to cost nothing", parts)
-	}
-}
-
-// A measurement is only true for the text it was taken against, so growing the
-// rules file of a project a session is already in throws it away.
-func TestContextBaseIsRemeasuredWhenRulesChange(t *testing.T) {
-	h := newHarness(t)
-	s := h.session(t)
-	withRules := topBrief()
-	withRules.rules, withRules.rulesName = rulesMarker, "AGENTS.md"
-	s.mu.Lock()
-	system := s.systemMessage(h.agent, "darwin", "2026-02-06", withRules)
-	s.ContextBase = &store.ContextBase{Model: "Alpha-12B", Chars: len(system.Content), System: 154, Rules: 10, Tools: 1026}
-	s.LastUsage = &llm.Usage{PromptTokens: 2000, CompletionTokens: 10}
-	fits := s.ContextBase.Fits(s.Model, s.sysChars)
-	s.mu.Unlock()
-	if !fits {
-		t.Fatal("the base did not fit the text it was measured against")
-	}
-
-	grown := topBrief()
-	grown.rules, grown.rulesName = rulesMarker+"\nAnd never use semicolons.", "AGENTS.md"
-	s.mu.Lock()
-	s.systemMessage(h.agent, "darwin", "2026-02-06", grown)
-	still := s.ContextBase.Fits(s.Model, s.sysChars)
-	s.mu.Unlock()
-	if still {
-		t.Error("a base measured against the old rules was kept")
 	}
 }
 

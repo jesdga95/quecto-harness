@@ -114,26 +114,6 @@ func TestSteerWaitsForTheToolBatch(t *testing.T) {
 	}
 }
 
-// The context measurement runs before a turn's first request, so a message
-// absorbed at the end of a reply is not preceded on the server by one, which
-// would evict the conversation the reply built up.
-func TestSteerIsNotPrecededByTheMeasurement(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
-	h.replay.Delay = 8 * time.Millisecond
-	s := h.session(t)
-	h.engine.Send(s.ID, "what is here", nil)
-	queueDuringTurn(t, h, s, "and the tests")
-	waitIdle(t, s)
-
-	h.replay.mu.Lock()
-	order := append([]string(nil), h.replay.Order...)
-	h.replay.mu.Unlock()
-	want := []string{"title", "probe", "probe", "chat", "chat"}
-	if strings.Join(order, ",") != strings.Join(want, ",") {
-		t.Errorf("server order = %v, want %v", order, want)
-	}
-}
-
 // Two messages typed against one turn arrive as one, a line each.
 func TestSteersJoin(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")

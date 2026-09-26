@@ -921,79 +921,29 @@ func (e *Engine) turnCaps(s *Session) llm.Caps {
 	return s.caps
 }
 
-// probeContextBase measures the fixed parts of a prompt against the model that
-// will read them. Completions capped at one token carry the system message and
-// differ only in whether the project's rules and the tool schemas are in it,
-// so the step between two counts is the cost of each: the rules, then the
-// schemas. Everything else in the context is then the remainder of a real
-// usage report. A project with no rules file measures two prompts rather
-// than three.
-//
-// It runs before a turn's first request rather than after its last, since the
-// model server holds one prompt at a time and a measurement sent after the
-// last request would evict the conversation a queued message or the next turn
-// is about to read. It is measured at most once per model and system size, and
-// that once is a turn whose first request is a full prefill either way, so the
-// wait it adds costs no cache.
-func (e *Engine) probeContextBase(ctx context.Context, s *Session, a config.Agent, b brief) {
+// estimateBase estimates the token cost of the fixed parts of a prompt from
+// their size, at charsPerToken characters per token. The system message
+// renders once with and once without the project's rules, so the step between
+// the two is the rules' cost, and the schemas' cost is their marshalled size
+// the same way. A turn re-takes it, since re-estimating is free and the prompt
+// it reads is the one the next request is about to send.
+func (e *Engine) estimateBase(s *Session, a config.Agent, b brief) {
 	s.mu.Lock()
-	caps := s.caps
-	// The copy without the project's rules is rendered first and the real
-	// brief last, so sysChars ends as the size of the prompt that is sent.
 	baseBrief := b
 	baseBrief.rules, baseBrief.rulesName = "", ""
-	baseMsg := s.systemMessage(a, e.os, e.today(), baseBrief)
-	system := s.systemMessage(a, e.os, e.today(), b)
-	done := s.ContextBase.Fits(a.Model, s.sysChars) ||
-		(s.baseProbedModel == a.Model && s.baseProbedChars == s.sysChars)
-	s.mu.Unlock()
-	if a.Model == "" || done {
-		return
+	baseChars := len(s.systemMessage(a, e.os, e.today(), baseBrief).Content)
+	sysChars := len(s.systemMessage(a, e.os, e.today(), b).Content)
+	schemaChars := 0
+	if raw, err := json.Marshal(tools.Schemas(b.offer)); err == nil {
+		schemaChars = len(raw)
 	}
-	chars := len(system.Content)
-	// The turn has no deadline of its own, so the measurement carries one.
-	mctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	count := func(msg llm.Message, schemas []llm.Tool) (int, bool) {
-		res, err := e.backends.For(a).Chat(mctx, llm.ChatRequest{
-			Model: a.Model, Messages: []llm.Message{msg}, Tools: schemas,
-			Effort: llm.EffortOff, Caps: caps, MaxTokens: 1}, nil)
-		if err != nil || res.Usage == nil || res.Usage.PromptTokens <= 0 {
-			return 0, false
-		}
-		return res.Usage.PromptTokens, true
-	}
-	bare, okBare := count(baseMsg, nil)
-	ruled, okRuled := bare, true
-	if b.rules != "" {
-		ruled, okRuled = count(system, nil)
-	}
-	armed, okArmed := count(system, tools.Schemas(b.offer))
-
-	s.mu.Lock()
-	// One attempt per model and prompt size is enough: a server that will
-	// not answer the measurement is not asked again for the same text, and a
-	// prompt that has since changed is a different question. A turn stopped
-	// part way through carries no answer either way, so the next one asks.
-	if ctx.Err() == nil {
-		s.baseProbedModel, s.baseProbedChars = a.Model, chars
-	}
-	stale := s.Model != a.Model || s.sysChars != chars
-	measured := okBare && okRuled && okArmed && ruled >= bare && armed >= ruled && !stale
-	if measured {
-		s.ContextBase = &store.ContextBase{Model: a.Model, Chars: chars, System: bare, Rules: ruled - bare, Tools: armed - ruled}
-		// The last usage report carries the same fixed parts, so the schema
-		// cost is attributed to it rather than left for the next turn.
-		if s.LastUsage != nil && s.lastSentTools {
-			s.LastToolTokens = s.ContextBase.Tools
-		}
+	s.ContextBase = &store.ContextBase{
+		System: baseChars / charsPerToken,
+		Rules:  (sysChars - baseChars) / charsPerToken,
+		Tools:  schemaChars / charsPerToken,
 	}
 	s.mu.Unlock()
-	if !measured {
-		return
-	}
 	e.save(s)
-	e.publishUsage(s)
 }
 
 // fail ends the turn on the stream. The message is not kept: it says what went
@@ -1112,9 +1062,8 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	if s.Parent == "" {
 		e.titleSession(ctx, s, back, a, caps)
 	}
-	// The measurement runs before the first request, so it evicts nothing the
-	// turn is about to read.
-	e.probeContextBase(ctx, s, a, b)
+	// The estimate reads the same prompt the first request sends.
+	e.estimateBase(s, a, b)
 	runner, rerr := tools.NewRunner(s.Project, cfg)
 	if rerr != nil {
 		e.fail(s, rerr)
@@ -1182,8 +1131,8 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			Seed:              a.Seed,
 			Caps:              caps,
 		}
-		// The agent's cap is the reply's. The title request and the context
-		// measurement set their own, since what they ask for is not a reply.
+		// The agent's cap is the reply's. The title request sets its own,
+		// since what it asks for is not a reply.
 		if a.MaxTokens != nil {
 			req.MaxTokens = *a.MaxTokens
 		}
@@ -1215,9 +1164,8 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		if res.Usage != nil {
 			s.mu.Lock()
 			s.LastUsage = res.Usage
-			s.lastSentTools = !spent
 			s.LastToolTokens = 0
-			if !spent && s.ContextBase != nil && s.ContextBase.Model == s.Model {
+			if !spent && s.ContextBase != nil {
 				s.LastToolTokens = s.ContextBase.Tools
 			}
 			s.mu.Unlock()
@@ -1303,7 +1251,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		if e.takeApproval(s) {
 			b = e.briefFor(s, cfg)
 			calls = 0
-			e.probeContextBase(ctx, s, a, b)
+			e.estimateBase(s, a, b)
 		}
 	}
 

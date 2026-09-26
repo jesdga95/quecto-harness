@@ -79,22 +79,10 @@ type Session struct {
 
 	caps           llm.Caps
 	lastUsageEntry int
-	// lastSentTools reports whether the request behind LastUsage carried the
-	// tool schemas. A turn that spent its call budget sends none.
-	lastSentTools bool
-	// baseProbedModel and baseProbedChars name the model and the system
-	// message size the measurement was last asked against. The same pair is
-	// not asked again, so a server that will not answer is not retried every
-	// turn, while a prompt that has since changed is measured again.
-	baseProbedModel string
-	baseProbedChars int
 	// rulesNote is the last warning that the project's rules are not in the
 	// prompt, so a file that is still too large is not named again on every
 	// turn. It is not in the document: a restart re-warns once.
 	rulesNote string
-	// sysChars is the size of the system message last rendered for this
-	// session, which is what says whether a stored measurement still holds.
-	sysChars int
 	// prepared reports that the model has been read: its window and its chat
 	// template are known and a request can be shaped for it.
 	prepared bool
@@ -119,7 +107,6 @@ func (s *Session) repoint(agentID, model string) {
 	s.forgetModel()
 	s.LastUsage = nil
 	s.LastToolTokens = 0
-	s.lastSentTools = false
 	s.ContextBase = nil
 	s.lastUsageEntry = -1
 }
@@ -130,7 +117,6 @@ func (s *Session) forgetModel() {
 	s.NCtx, s.NCtxSource = 0, ""
 	s.caps = llm.Caps{}
 	s.prepared = false
-	s.baseProbedModel = ""
 }
 
 // forget marks the session deleted, so nothing still running writes it back.
@@ -333,7 +319,6 @@ func (s *Session) rewindTo(i int) {
 	s.LastUsage = nil
 	s.LastToolTokens = 0
 	s.lastUsageEntry = -1
-	s.lastSentTools = false
 }
 
 // restoreContext rebuilds the in-context set: everything from the newest
@@ -427,8 +412,8 @@ func (s *Session) imageRefs() []string {
 }
 
 // systemMessage is the system prompt as this agent renders it. Everything that
-// sends one goes through here, so a turn, a compaction and the measurement of
-// the fixed context all carry the same text. The caller holds the lock.
+// sends one goes through here, so a turn, a compaction and the estimate of the
+// fixed context all carry the same text. The caller holds the lock.
 func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) llm.Message {
 	plan := ""
 	if b.offer.Mode == config.WorkExecute && s.Plan != nil {
@@ -442,7 +427,6 @@ func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) ll
 		Instructions: a.Instructions,
 		Mode:         string(b.offer.Mode), Tools: tools.Names(b.offer), Plan: plan,
 	})
-	s.sysChars = len(content)
 	return llm.Message{Role: "system", Content: content}
 }
 
@@ -535,15 +519,19 @@ func repairToolResults(entries []store.Entry, at int, calls []llm.ToolCall) []ll
 	return out
 }
 
+// charsPerToken is the rough ratio a token cost is estimated at wherever a
+// usage report does not cover it.
+const charsPerToken = 4
+
 // computeFill estimates tokens currently in context. The last usage report is
 // authoritative up to the response it came from; entries added since are
-// estimated at four characters per token.
+// estimated at charsPerToken characters per token.
 func (s *Session) computeFill() int {
 	if s.LastUsage == nil || s.lastUsageEntry < 0 {
-		return s.estimateChars(-1) / 4
+		return s.estimateChars(-1) / charsPerToken
 	}
 	base := s.LastUsage.PromptTokens + s.LastUsage.CompletionTokens
-	return base + s.estimateChars(s.lastUsageEntry)/4
+	return base + s.estimateChars(s.lastUsageEntry)/charsPerToken
 }
 
 // estimateChars sums the in-context characters after index from, or over the
@@ -571,9 +559,9 @@ func (s *Session) window(a config.Agent) (int, string) {
 	return a.Window(s.NCtx, s.NCtxSource)
 }
 
-// Breakdown splits the context into the four parts a reader can act on. It
-// is reported only from a measured base and a real usage report, so a session
-// with either missing shows no breakdown rather than a guess.
+// Breakdown splits the context into the four parts a reader can act on. The
+// fixed parts are estimated and Messages is the remainder of a real usage
+// report, so a session with no usage yet shows no breakdown at all.
 type Breakdown struct {
 	System   int `json:"system"`
 	Rules    int `json:"rules"`
@@ -589,10 +577,10 @@ func (s *Session) Breakdown() *Breakdown {
 }
 
 // breakdown subtracts the fixed parts from the last usage report. Messages is
-// the remainder, which is exact because every part of it came from the model
-// server rather than from counting characters. The caller holds the lock.
+// the remainder, which is the only part that came from the model server rather
+// than from counting characters. The caller holds the lock.
 func (s *Session) breakdown() *Breakdown {
-	if s.LastUsage == nil || !s.ContextBase.Fits(s.Model, s.sysChars) {
+	if s.LastUsage == nil || s.ContextBase == nil {
 		return nil
 	}
 	b := Breakdown{System: s.ContextBase.System, Rules: s.ContextBase.Rules, Tools: s.LastToolTokens}

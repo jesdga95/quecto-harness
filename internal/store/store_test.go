@@ -25,7 +25,7 @@ func sample(id string, updated time.Time) *Session {
 	code := 0
 	return &Session{
 		ID: id, Project: "/proj", Agent: "agt_alpha", Model: "Alpha-12B", Title: "list the files here",
-		ContextBase: &ContextBase{Model: "Alpha-12B", Chars: 412, System: 154, Rules: 287, Tools: 1026},
+		ContextBase: &ContextBase{System: 154, Rules: 287, Tools: 1026},
 		Created:     updated.Add(-time.Minute), Updated: updated,
 		NCtx: 131072, NCtxSource: "props", Compactions: 1,
 		LastUsage: &llm.Usage{PromptTokens: 4193, CompletionTokens: 118, TotalTokens: 4311, CachedTokens: 3968},
@@ -289,14 +289,11 @@ func TestSessionCarriesItsAgentAndBase(t *testing.T) {
 	if got.Agent != "agt_alpha" {
 		t.Errorf("agent = %q, want agt_alpha", got.Agent)
 	}
-	if !got.ContextBase.Fits("Alpha-12B", 412) {
-		t.Errorf("context base = %+v, want it to fit the model and size it was measured at", got.ContextBase)
+	if got.ContextBase == nil {
+		t.Fatalf("context base = nil, want the estimate that was saved")
 	}
 	if got.ContextBase.Rules != 287 {
 		t.Errorf("context base rules = %d, want 287", got.ContextBase.Rules)
-	}
-	if got.ContextBase.Fits("Alpha-12B", 413) {
-		t.Error("a system message of another size fitted a base measured against this one")
 	}
 	if list := reopened.List("/proj"); len(list) != 1 || list[0].Agent != "agt_alpha" {
 		t.Errorf("summary agent = %+v", list)
