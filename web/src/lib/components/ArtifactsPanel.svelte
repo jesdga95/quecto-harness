@@ -8,6 +8,7 @@
   import Eye from "phosphor-svelte/lib/Eye";
   import FileCode from "phosphor-svelte/lib/FileCode";
   import ListChecks from "phosphor-svelte/lib/ListChecks";
+  import PlanView from "./PlanView.svelte";
   import Prose from "./Prose.svelte";
   import PenNib from "phosphor-svelte/lib/PenNib";
   import CaretDown from "phosphor-svelte/lib/CaretDown";
@@ -130,6 +131,12 @@
           <ArrowClockwise />
         </button>
       {/if}
+      {#if shown && (asSource || onlySource)}
+        <CopyButton text={shown.source} label="Copy source" />
+        <button class="icon-btn" aria-label="Download" title="Download" onclick={download}>
+          <DownloadSimple />
+        </button>
+      {/if}
       {#if shown && !onlySource}
         <button
           class="icon-btn"
@@ -161,19 +168,17 @@
           <p class="artifact-note">This page is too large to run, so it is shown as its source.</p>
         {/if}
         <div class="artifact-source">
-          <div class="artifact-tools">
-            <CopyButton text={shown.source} label="Copy source" />
-            <button class="icon-btn" aria-label="Download" title="Download" onclick={download}>
-              <DownloadSimple />
-            </button>
-          </div>
           <div class="artifact-source-scroll" bind:this={sourceBox}>
             <pre><code>{@html markup}</code></pre>
           </div>
         </div>
       {:else if shown.kind === "plan"}
         <div class="artifact-plan">
-          <Prose text={shown.source} />
+          {#if app.draft}
+            <PlanView plan={app.draft} />
+          {:else}
+            <Prose text={shown.source} />
+          {/if}
         </div>
       {:else if shown.kind === "svg"}
         {#key shown.id}
