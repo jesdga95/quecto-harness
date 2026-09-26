@@ -325,16 +325,6 @@ export async function reorderProjects(ordered: Project[]): Promise<void> {
   else app.projects = before;
 }
 
-/** Moves one conversation inside its project, the same way. A conversation
-    does not move to another project, so the order stays within one. */
-export async function reorderSessions(project: string, ordered: Session[]): Promise<void> {
-  const before = app.sessions[project] ?? [];
-  app.sessions[project] = ordered;
-  const saved = await guard(() => api.reorderSessions(project, ordered.map((s) => s.id)));
-  if (saved) app.sessions[project] = saved;
-  else app.sessions[project] = before;
-}
-
 export async function renameSession(id: string, title: string): Promise<void> {
   if ((await guard(() => api.renameSession(id, title))) === null) return;
   await loadSessions();

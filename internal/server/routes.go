@@ -361,27 +361,6 @@ func (s *Server) putProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"projects": orEmpty(cfg.Projects)})
 }
 
-// putSessionOrder sets the order one project's sessions are listed in. The
-// body names the project's whole list, in its new order.
-func (s *Server) putSessionOrder(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Project string   `json:"project"`
-		IDs     []string `json:"ids"`
-	}
-	if !readJSON(w, r, &body) {
-		return
-	}
-	if err := s.store.Reorder(body.Project, body.IDs); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	list := s.store.List(body.Project)
-	if list == nil {
-		list = []store.Summary{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": list})
-}
-
 func (s *Server) getAllowlist(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	writeJSON(w, http.StatusOK, map[string]any{

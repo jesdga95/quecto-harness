@@ -361,10 +361,10 @@ func TestChildSessionsAreListedOnlyUnderTheirLauncher(t *testing.T) {
 	}
 }
 
-// TestReorderSetsTheListingOrder asserts that a saved order is what List
-// comes out in, that it survives a reopen, and that a list the project does
-// not hold is refused without moving anything.
-func TestReorderSetsTheListingOrder(t *testing.T) {
+// TestListIsNewestFirst asserts that a project's conversations come out of
+// List newest first, that a subagent run is not one of them, and that the
+// order survives a reopen.
+func TestListIsNewestFirst(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir)
 	if err != nil {
@@ -380,75 +380,33 @@ func TestReorderSetsTheListingOrder(t *testing.T) {
 		}
 	}
 	if got, want := ids(s.List("/proj")), []string{c.ID, b.ID, a.ID}; !slices.Equal(got, want) {
-		t.Fatalf("default list = %v, want newest first %v", got, want)
+		t.Fatalf("list = %v, want newest first %v", got, want)
 	}
 
-	if err := s.Reorder("/proj", []string{b.ID, c.ID, a.ID}); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := ids(s.List("/proj")), []string{b.ID, c.ID, a.ID}; !slices.Equal(got, want) {
-		t.Errorf("reordered list = %v, want %v", got, want)
-	}
-
-	// A conversation created after the order was written comes last.
+	// A conversation created later leads the list.
 	d := sample(NewID(), now.Add(time.Hour))
 	if err := s.Save(d); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := ids(s.List("/proj")), []string{b.ID, c.ID, a.ID, d.ID}; !slices.Equal(got, want) {
+	if got, want := ids(s.List("/proj")), []string{d.ID, c.ID, b.ID, a.ID}; !slices.Equal(got, want) {
 		t.Errorf("list with a new conversation = %v, want %v", got, want)
 	}
 
-	// A subagent run is not a conversation of the project, so it is refused
-	// and it is not listed either.
+	// A subagent run is not a conversation, so it is not listed.
 	child := sample(NewID(), now.Add(2*time.Hour))
 	child.Parent = a.ID
 	if err := s.Save(child); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Reorder("/proj", []string{child.ID, b.ID, c.ID, a.ID, d.ID}); err == nil {
-		t.Error("a subagent run was accepted into the order")
-	}
-	if err := s.Reorder("/proj", []string{b.ID, c.ID}); err == nil {
-		t.Error("an incomplete list was accepted")
-	}
-	if err := s.Reorder("/proj", []string{b.ID, b.ID, c.ID, a.ID, d.ID}); err == nil {
-		t.Error("a repeated id was accepted")
-	}
-	if got, want := ids(s.List("/proj")), []string{b.ID, c.ID, a.ID, d.ID}; !slices.Equal(got, want) {
-		t.Errorf("the list moved after a refusal: %v", got)
+	if got, want := ids(s.List("/proj")), []string{d.ID, c.ID, b.ID, a.ID}; !slices.Equal(got, want) {
+		t.Errorf("the list moved for a subagent run: %v", got)
 	}
 
-	// The order is written beside the files, and a reopened store reads it.
 	reopened, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := ids(reopened.List("/proj")), []string{b.ID, c.ID, a.ID, d.ID}; !slices.Equal(got, want) {
-		t.Errorf("the reopened store lost the order: %v", got)
-	}
-}
-
-// A corrupt order file is one bad file among the sessions, so it is ignored
-// rather than stopping the open, and the listing falls back to newest first.
-func TestCorruptOrderIsIgnored(t *testing.T) {
-	dir := t.TempDir()
-	s, _ := Open(dir)
-	a := sample(NewID(), time.Now().Add(-time.Hour))
-	b := sample(NewID(), time.Now())
-	s.Save(a)
-	s.Save(b)
-	if err := s.Reorder("/proj", []string{b.ID, a.ID}); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "order.json"), []byte("{nope"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := Open(dir)
-	if err != nil {
-		t.Fatalf("a corrupt order file must not stop Open: %v", err)
-	}
-	if got, want := ids(reopened.List("/proj")), []string{b.ID, a.ID}; !slices.Equal(got, want) {
-		t.Errorf("list = %v, want the newest-first fallback %v", got, want)
+	if got, want := ids(reopened.List("/proj")), []string{d.ID, c.ID, b.ID, a.ID}; !slices.Equal(got, want) {
+		t.Errorf("the reopened store lists %v, want the newest-first order %v", got, want)
 	}
 }

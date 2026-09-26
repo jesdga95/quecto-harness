@@ -581,9 +581,9 @@ func TestProjectReorderRoute(t *testing.T) {
 	}
 }
 
-// TestSessionReorderRoute asserts that a saved order is what the listing comes
-// out in, and that an order the project does not hold is refused.
-func TestSessionReorderRoute(t *testing.T) {
+// TestSessionListIsNewestFirst asserts that a conversation created later is
+// what the listing leads with.
+func TestSessionListIsNewestFirst(t *testing.T) {
 	f := newFixture(t)
 	a := f.newSession(t)
 	b := f.newSession(t)
@@ -591,28 +591,7 @@ func TestSessionReorderRoute(t *testing.T) {
 
 	list := f.do(t, "GET", "/api/sessions?project="+f.project, nil)
 	if got := sessionIDs(t, list); !slices.Equal(got, []string{c, b, a}) {
-		t.Fatalf("sessions = %v, want newest first", got)
-	}
-
-	if w := f.do(t, "PUT", "/api/sessions/order",
-		map[string]any{"project": f.project, "ids": []string{a, b}}); w.Code != http.StatusBadRequest {
-		t.Errorf("an incomplete order = %d, want 400", w.Code)
-	}
-	if w := f.do(t, "PUT", "/api/sessions/order",
-		map[string]any{"project": "/no/such/project", "ids": []string{}}); w.Code != http.StatusBadRequest {
-		t.Errorf("a project with no conversations = %d, want 400", w.Code)
-	}
-
-	w := f.do(t, "PUT", "/api/sessions/order", map[string]any{"project": f.project, "ids": []string{b, c, a}})
-	if w.Code != http.StatusOK {
-		t.Fatalf("reorder = %d %s", w.Code, w.Body.String())
-	}
-	if got := sessionIDs(t, w); !slices.Equal(got, []string{b, c, a}) {
-		t.Errorf("the answer = %v, want the new order", got)
-	}
-	list = f.do(t, "GET", "/api/sessions?project="+f.project, nil)
-	if got := sessionIDs(t, list); !slices.Equal(got, []string{b, c, a}) {
-		t.Errorf("the listing = %v, want the saved order", got)
+		t.Errorf("sessions = %v, want newest first", got)
 	}
 }
 

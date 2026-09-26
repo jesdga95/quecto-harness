@@ -1126,16 +1126,6 @@ class HttpApi implements HarnessApi {
     return list;
   }
 
-  async reorderSessions(project: string, ids: string[]): Promise<Session[]> {
-    const wire = await call<{ sessions?: WireSummary[] }>("/sessions/order", "PUT", {
-      project,
-      ids,
-    });
-    const list = (wire.sessions ?? []).map(toSession);
-    for (const s of list) summaries.set(s.id, s);
-    return list;
-  }
-
   async createSession(project: string): Promise<Session> {
     const wire = await call<WireSummary>("/sessions", "POST", { project });
     const session = toSession(wire);

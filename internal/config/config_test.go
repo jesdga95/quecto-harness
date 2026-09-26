@@ -644,13 +644,26 @@ func TestAddProject(t *testing.T) {
 	if len(cfg.Projects) != 1 || cfg.Projects[0] != real {
 		t.Errorf("projects = %v, want the symlink-resolved path %q", cfg.Projects, real)
 	}
+	// A second project lands in front of the first, so the newest is first.
+	proj2 := t.TempDir()
+	cfg, err = s.AddProject(proj2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	real2, _ := filepath.EvalSymlinks(proj2)
+	if len(cfg.Projects) != 2 || cfg.Projects[0] != real2 || cfg.Projects[1] != real {
+		t.Errorf("projects = %v, want %q first and %q after", cfg.Projects, real2, real)
+	}
 	if _, err := s.AddProject(proj); err == nil {
 		t.Error("adding the same project twice must fail")
 	}
 	if _, err := s.AddProject(filepath.Join(proj, "missing")); err == nil {
 		t.Error("adding a missing directory must fail")
 	}
-	cfg, err = s.RemoveProject(proj)
+	if _, err = s.RemoveProject(proj); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = s.RemoveProject(proj2)
 	if err != nil || len(cfg.Projects) != 0 {
 		t.Errorf("remove left %v (%v)", cfg.Projects, err)
 	}

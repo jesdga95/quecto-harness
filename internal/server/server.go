@@ -113,9 +113,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/allowlist", s.deleteAllowlist)
 	mux.HandleFunc("GET /api/sessions", s.listSessions)
 	mux.HandleFunc("POST /api/sessions", s.createSession)
-	// The literal segment beats the {id} wildcard, so this and the rebind
-	// route stand side by side.
-	mux.HandleFunc("PUT /api/sessions/order", s.putSessionOrder)
 	mux.HandleFunc("GET /api/sessions/{id}", s.getSession)
 	mux.HandleFunc("GET /api/sessions/{id}/changes", s.getChanges)
 	mux.HandleFunc("PUT /api/sessions/{id}", s.rebindSession)

@@ -19,7 +19,6 @@
     deleteSession,
     renameSession,
     reorderProjects,
-    reorderSessions,
   } from "../state/app.svelte";
   import { since } from "../format";
 
@@ -30,11 +29,8 @@
   let renaming = $state("");
   let draft = $state("");
 
-  // What a drag carries. A conversation moves inside its project only, so its
-  // project rides along; a project moves in the project list.
-  type Drag =
-    | { kind: "project"; id: string }
-    | { kind: "session"; id: string; project: string };
+  // What a drag carries: a project moving in the project list.
+  type Drag = { kind: "project"; id: string };
 
   let drag = $state<Drag | null>(null);
   // The row a drop would land against, and which of its edges it takes.
@@ -54,8 +50,6 @@
 
   function passOverRow(e: DragEvent, target: Drag): void {
     if (!drag || drag.kind !== target.kind) return;
-    if (drag.kind === "session" && target.kind === "session" && drag.project !== target.project)
-      return;
     if (drag.id === target.id) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
@@ -94,29 +88,14 @@
     over = null;
     if (!from || !place || from.kind !== place.target.kind) return;
 
-    if (from.kind === "project" && place.target.kind === "project") {
-      const moved = app.projects.find((p) => p.path === from.id);
-      if (!moved) return;
-      const list = app.projects.filter((p) => p.path !== from.id);
-      const at = list.findIndex((p) => p.path === place.target.id);
-      if (at === -1) return;
-      list.splice(at + (place.before ? 0 : 1), 0, moved);
-      if (list.every((p, i) => app.projects[i]?.path === p.path)) return;
-      void reorderProjects(list);
-      return;
-    }
-
-    if (from.kind !== "session" || place.target.kind !== "session") return;
-    const all = sessionsOf(from.project);
-    const moved = all.find((s) => s.id === from.id);
-    const target = all.find((s) => s.id === place.target.id);
-    if (!moved || !target) return;
-    const list = all.filter((s) => s.id !== from.id);
-    const at = list.findIndex((s) => s.id === place.target.id);
+    const moved = app.projects.find((p) => p.path === from.id);
+    if (!moved) return;
+    const list = app.projects.filter((p) => p.path !== from.id);
+    const at = list.findIndex((p) => p.path === place.target.id);
     if (at === -1) return;
     list.splice(at + (place.before ? 0 : 1), 0, moved);
-    if (list.every((s, i) => all[i]?.id === s.id)) return;
-    void reorderSessions(from.project, list);
+    if (list.every((p, i) => app.projects[i]?.path === p.path)) return;
+    void reorderProjects(list);
   }
 
   function sessions(path: string) {
@@ -247,18 +226,10 @@
                 aria-label="Session name"
               />
             {:else}
-              <div class="row-wrap" class:is-draggable={canDrag} class:is-dragging={drag?.id === session.id}>
-                {#if canDrag && over && over.target.id === session.id && over.before}
-                  <div class="drop-line is-top"></div>
-                {/if}
+              <div class="row-wrap">
                 <button
                   class="side-row"
                   class:is-active={session.id === app.sessionId}
-                  draggable={canDrag}
-                  ondragstart={(e) => startDrag(e, { kind: "session", id: session.id, project: project.path })}
-                  ondragover={(e) => passOverRow(e, { kind: "session", id: session.id, project: project.path })}
-                  ondragleave={(e) => leaveRow(e, session.id)}
-                  ondragend={endDrag}
                   onclick={() => selectSession(session.id)}
                 >
                   <span class="min-w-0 flex-1 truncate">{session.title}</span>
@@ -280,9 +251,6 @@
                     }}
                   />
                 </div>
-                {#if canDrag && over && over.target.id === session.id && !over.before}
-                  <div class="drop-line is-bottom"></div>
-                {/if}
               </div>
             {/if}
           {/each}

@@ -241,7 +241,9 @@ func ResolveProject(path string) (string, error) {
 }
 
 // AddProject stores the symlink-resolved absolute path, which is what the
-// path guard compares against and what keys the allowlist.
+// path guard compares against and what keys the allowlist. The path goes to
+// the front of the list, so the newest project is first and is the one
+// selected at startup and right after adding.
 func (s *Store) AddProject(path string) (Config, error) {
 	real, err := ResolveProject(path)
 	if err != nil {
@@ -255,7 +257,7 @@ func (s *Store) AddProject(path string) (Config, error) {
 		}
 	}
 	s.mu.Unlock()
-	return s.Update(func(c *Config) { c.Projects = append(c.Projects, real) })
+	return s.Update(func(c *Config) { c.Projects = append([]string{real}, c.Projects...) })
 }
 
 func (s *Store) RemoveProject(path string) (Config, error) {

@@ -396,9 +396,6 @@ export class MockApi implements HarnessApi {
   private agents: Agent[] = AGENTS.map((a) => ({ ...a }));
   private models: Model[] = MODELS.map((m) => ({ ...m }));
   private sessions: Session[] = [];
-  // Projects whose conversations the user has ordered. A new conversation of
-  // one of them joins the end of its group, the way the harness lists it.
-  private ordered = new Set<string>();
   private transcripts = new Map<string, Transcript>();
   private handlers = new Map<string, EventHandler>();
   private allowlist = new Map<string, string[]>([
@@ -646,34 +643,13 @@ export class MockApi implements HarnessApi {
     this.transcripts.delete(id);
   }
 
-  async reorderSessions(project: string, ids: string[]): Promise<Session[]> {
-    await this.tick();
-    const members = this.sessions.filter((s) => s.project === project && s.parent === "");
-    if (members.length === 0) {
-      throw new Error("The project has no conversations: there is nothing to order");
-    }
-    const named = new Set(ids);
-    if (members.length !== ids.length || members.some((s) => !named.has(s.id))) {
-      throw new Error(
-        "The order does not name every conversation of the project: refetch the list and try again",
-      );
-    }
-    const ordered = ids.map((id) => members.find((s) => s.id === id)!);
-    // The project's conversations stand first, in the order given, and the
-    // rest keep their relative order, the way a filtered list reads them.
-    this.sessions = [
-      ...ordered,
-      ...this.sessions.filter((s) => !(s.project === project && s.parent === "")),
-    ];
-    this.ordered.add(project);
-    return ordered.map((s) => ({ ...s }));
-  }
-
   // writes
 
   async addProject(path: string): Promise<Project[]> {
     await this.tick();
-    if (!this.config.projects.includes(path)) this.config.projects.push(path);
+    // The server puts a new project in front of the list, so the newest is
+    // first; the mock keeps the same order.
+    if (!this.config.projects.includes(path)) this.config.projects.unshift(path);
     return this.config.projects.map((p) => ({ path: p, name: baseName(p) }));
   }
 
@@ -707,21 +683,8 @@ export class MockApi implements HarnessApi {
       parent: "",
       children: [],
     };
-    if (this.ordered.has(project)) {
-      // After the project's last conversation, since its group stands in the
-      // order the user gave rather than newest first.
-      let at = -1;
-      for (let i = this.sessions.length - 1; i >= 0; i--) {
-        const s = this.sessions[i]!;
-        if (s.project === project && s.parent === "") {
-          at = i;
-          break;
-        }
-      }
-      this.sessions.splice(at + 1, 0, session);
-    } else {
-      this.sessions.unshift(session);
-    }
+    // Newest first: a new conversation leads its project's list.
+    this.sessions.unshift(session);
     this.transcripts.set(session.id, {
       session,
       items: [],
