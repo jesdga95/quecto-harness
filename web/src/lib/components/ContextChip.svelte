@@ -25,6 +25,49 @@
   const parts = $derived(app.usage.breakdown);
   const share = (n: number) => pct(n, limited ? app.usage.n_ctx : fill);
 
+  // The line the bar fills toward. The tick only speaks where a window is,
+  // and a label at the very edge would overhang the popover.
+  const compactAt = $derived(app.config?.compact_at ?? 0.8);
+  const hasTick = $derived(limited && compactAt > 0 && compactAt < 1);
+  const tickPct = $derived(compactAt * 100);
+  const tickSide = $derived(hasTick ? (tickPct <= 10 ? "start" : tickPct >= 90 ? "end" : "mid") : "");
+
+  // The context as it stood at each finished turn's last request, so the
+  // line climbs toward the window rather than billing. A turn stored before
+  // the figure was counted is left out.
+  const series = $derived(
+    app.items
+      .map((i) => (i.kind === "assistant" && i.cost?.window ? i.cost.window : undefined))
+      .filter((n): n is number => n !== undefined),
+  );
+
+  // Round up to a 1, 2, 2.5, 5 or 10 of a power of ten, so the axis values
+  // are clean.
+  const niceCeil = (v: number) => {
+    const mag = Math.pow(10, Math.floor(Math.log10(Math.max(v, 1))));
+    for (const m of [1, 2, 2.5, 5, 10]) if (m * mag >= v) return m * mag;
+    return 10 * mag;
+  };
+
+  // The line scales to its own data, so a gentle climb still reads as a
+  // climb; the tick on the bar above is the threshold.
+  const spark = $derived.by(() => {
+    if (series.length < 2) return null;
+    const max = niceCeil(Math.max(...series));
+    const y = (v: number) => 58 - (v / max) * 46;
+    const pts = series.map((v, i) => {
+      const x = 4 + (i * 264) / (series.length - 1);
+      return [Math.round(x * 10) / 10, Math.round(y(v) * 10) / 10] as const;
+    });
+    const line = pts.map(([x, v]) => `${x},${v}`).join(" ");
+    return {
+      line,
+      area: `${line} 268,58 4,58`,
+      points: pts,
+      grid: [max / 2, max].map((v) => ({ v, y: Math.round(y(v) * 10) / 10 })),
+    };
+  });
+
   // The session so far, summed from what each finished turn recorded. A turn
   // stored before a field was counted adds nothing to it, and a figure no turn
   // has is left out rather than shown as zero.
@@ -117,44 +160,81 @@
         </div>
 
         {#if parts}
-          <div class="ctxparts" class:is-warn={tone === "warn"} class:is-crit={tone === "crit"}>
-            <div class="ctxsplit mt-2">
-              <span class="part-system" style="width:{share(parts.system)}%"></span>
-              <span class="part-rules" style="width:{share(parts.rules)}%"></span>
-              <span class="part-tools" style="width:{share(parts.tools)}%"></span>
-              <span style="width:{share(parts.messages)}%"></span>
+          <div class="ctxline" class:has-tick={hasTick}>
+            <div class="bar">
+              <span class="seg-system" style="width:{share(parts.system)}%"></span>
+              <span class="seg-rules" style="width:{share(parts.rules)}%"></span>
+              <span class="seg-tools" style="width:{share(parts.tools)}%"></span>
+              <span class="seg-msg" style="width:{share(parts.messages)}%"></span>
             </div>
-
-            <dl class="mt-3 space-y-1 text-[12px]">
-              <div class="flex items-center justify-between">
-                <dt class="flex items-center gap-1.5 text-muted">
-                  <span class="ctxdot part-system"></span> System prompt
-                </dt>
-                <dd class="num">~{k(parts.system)}</dd>
-              </div>
-              <div class="flex items-center justify-between">
-                <dt class="flex items-center gap-1.5 text-muted" title="AGENTS.md in the project root">
-                  <span class="ctxdot part-rules"></span> Agents
-                </dt>
-                <dd class="num">~{k(parts.rules)}</dd>
-              </div>
-              <div class="flex items-center justify-between">
-                <dt class="flex items-center gap-1.5 text-muted">
-                  <span class="ctxdot part-tools"></span> Tools
-                </dt>
-                <dd class="num">~{k(parts.tools)}</dd>
-              </div>
-              <div class="flex items-center justify-between">
-                <dt class="flex items-center gap-1.5 text-muted">
-                  <span class="ctxdot"></span> Messages
-                </dt>
-                <dd class="num">{k(parts.messages)}</dd>
-              </div>
-            </dl>
+            {#if hasTick}
+              <span class="tick" style="left:{tickPct}%"></span>
+              <span
+                class="tick-label"
+                class:is-start={tickSide === "start"}
+                class:is-end={tickSide === "end"}
+                style="left:{tickPct}%"
+              >
+                Compact {k(Math.round(app.usage.n_ctx * compactAt))}
+              </span>
+            {/if}
           </div>
-        {:else if limited}
-          <div class="ctxtrack mt-2" class:is-warn={tone === "warn"} class:is-crit={tone === "crit"}>
-            <span style="width:{percent}%"></span>
+
+          <dl class="ctxlegend">
+            <div class="row">
+              <dt class="flex items-center gap-1.5"><span class="ctxdot seg-system"></span>System
+                prompt</dt>
+              <dd class="num">~{k(parts.system)}</dd>
+            </div>
+            <div class="row">
+              <dt class="flex items-center gap-1.5" title="AGENTS.md in the project root"
+                ><span class="ctxdot seg-rules"></span>Agents</dt
+              >
+              <dd class="num">~{k(parts.rules)}</dd>
+            </div>
+            <div class="row">
+              <dt class="flex items-center gap-1.5"><span class="ctxdot seg-tools"></span>Tools</dt>
+              <dd class="num">~{k(parts.tools)}</dd>
+            </div>
+            <div class="row">
+              <dt class="flex items-center gap-1.5"><span class="ctxdot seg-msg"></span>Messages</dt>
+              <dd class="num">{k(parts.messages)}</dd>
+            </div>
+          </dl>
+        {:else}
+          <div class="ctxline" class:has-tick={hasTick}>
+            <div class="bar">
+              <span class="seg-plain" style="width:{limited ? percent : 100}%"></span>
+            </div>
+            {#if hasTick}
+              <span class="tick" style="left:{tickPct}%"></span>
+              <span
+                class="tick-label"
+                class:is-start={tickSide === "start"}
+                class:is-end={tickSide === "end"}
+                style="left:{tickPct}%"
+              >
+                Compact {k(Math.round(app.usage.n_ctx * compactAt))}
+              </span>
+            {/if}
+          </div>
+        {/if}
+
+        {#if spark}
+          <div class="ctxspark">
+            <svg viewBox="0 0 280 58" preserveAspectRatio="none">
+              {#each spark.grid as g}
+                <line x1="0" y1={g.y} x2="280" y2={g.y} stroke="var(--hair)" />
+                <text x="2" y={g.y - 3} font-size="9" fill="var(--muted)" class="num">
+                  {k(g.v)}
+                </text>
+              {/each}
+              <polygon points={spark.area} fill="var(--c-msg)" opacity="0.15" />
+              <polyline points={spark.line} fill="none" stroke="var(--c-msg)" stroke-width="2" />
+              {#each spark.points as p, i}
+                <circle cx={p[0]} cy={p[1]} r={i === spark.points.length - 1 ? 2.5 : 1.75} fill="var(--c-msg)" />
+              {/each}
+            </svg>
           </div>
         {/if}
 

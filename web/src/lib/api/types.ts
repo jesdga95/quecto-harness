@@ -471,6 +471,8 @@ export interface TurnCost {
   requests: number;
   /** Every prompt token sent, cached ones included. */
   input?: number;
+  /** The context as it stood when the turn's last request was made. */
+  window?: number;
   cached?: number;
   /** Time inside requests, generating, before the first token, and in tools. */
   llmMs?: number;

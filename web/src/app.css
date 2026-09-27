@@ -106,6 +106,11 @@
   --term-prompt: #63d6b4;
   --term-muted: #8ca79c;
   --term-bad: #f2a099;
+  /* One hue per part of the context, dull enough to sit together. */
+  --c-system: #94a3b8;
+  --c-agents: #7c3aed;
+  --c-tools: #1d4ed8;
+  --c-msg: #0d9488;
   /* The composer is frosted over the light along the bottom of the page. The
      light is teal while the next turn executes and violet while it plans. */
   --glass: rgb(255 255 255 / 0.8);
@@ -156,6 +161,10 @@
     --hl-fn: #67e8f9;
     --hl-com: #8496ad;
     --term-bg: #26382f;
+    --c-system: #64748b;
+    --c-agents: #a78bfa;
+    --c-tools: #60a5fa;
+    --c-msg: #2dd4bf;
     --glass: rgb(21 30 47 / 0.74);
     --glow-1: rgb(45 212 191 / 0.2);
     --glow-2: rgb(94 234 212 / 0.16);
@@ -1024,11 +1033,15 @@
     color: var(--muted);
   }
 
-  /* The session so far, under the context in its popover. */
+  /* The session so far, under the context in its popover. The sparkline sits
+     on the hairline; the legend above it keeps some air. */
   .ctx-session {
-    margin-top: 14px;
+    margin-top: 12px;
     padding-top: 12px;
     border-top: 1px solid var(--hair);
+  }
+  .ctxspark + .ctx-session {
+    margin-top: 0;
   }
 
   /* A card per file the turn created, two to a row. */
@@ -1292,68 +1305,109 @@
     color: var(--crit);
   }
 
-  .ctxtrack {
-    height: 3px;
-    border-radius: 999px;
-    background: var(--hair);
-    overflow: hidden;
+  /* The context as one line against the whole window: a colour per part, the
+     tail is what is free, and the tick is where compaction fires. The tick
+     hangs past the line and its label sits under it, so the legend clears
+     them. */
+  .ctxline {
+    position: relative;
+    margin-top: 10px;
   }
-  .ctxtrack span {
-    display: block;
-    height: 100%;
-    background: var(--ok);
-    transition: width 220ms ease;
-  }
-  .ctxtrack.is-warn span {
-    background: var(--warn);
-  }
-  .ctxtrack.is-crit span {
-    background: var(--crit);
-  }
-
-  /* The context in prompt order: the two fixed parts, then everything the
-     conversation added. One hue at three weights, so the fill level still
-     reads off the colour. */
-  .ctxparts .ctxsplit {
+  .ctxline .bar {
     display: flex;
-    height: 3px;
+    height: 10px;
     border-radius: 999px;
-    background: var(--hair);
+    background: var(--surface-2);
     overflow: hidden;
   }
-  .ctxparts .ctxsplit span {
+  .ctxline .bar span {
     flex: none;
     height: 100%;
-    background: var(--ok);
     transition: width 220ms ease;
   }
-  .ctxparts.is-warn .ctxsplit span {
+  .seg-system {
+    background: var(--c-system);
+  }
+  .seg-rules {
+    background: var(--c-agents);
+  }
+  .seg-tools {
+    background: var(--c-tools);
+  }
+  .seg-msg {
+    background: var(--c-msg);
+  }
+  /* A bar with no measured parts has only its fill. */
+  .seg-plain {
+    background: var(--ok);
+  }
+  .ctxline .tick {
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    width: 2px;
+    border-radius: 999px;
     background: var(--warn);
   }
-  .ctxparts.is-crit .ctxsplit span {
-    background: var(--crit);
+  .ctxline .tick-label {
+    position: absolute;
+    top: 14px;
+    transform: translateX(-50%);
+    font-size: 11px;
+    color: var(--warn);
+    white-space: nowrap;
+  }
+  .ctxline .tick-label.is-start {
+    transform: none;
+  }
+  .ctxline .tick-label.is-end {
+    transform: translateX(-100%);
+  }
+
+  /* The part names under the line, one per row. */
+  .ctxlegend {
+    margin-top: 12px;
+    display: grid;
+    gap: 5px;
+  }
+  .ctxline.has-tick + .ctxlegend {
+    margin-top: 34px;
+  }
+  .ctxlegend .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .ctxlegend dt {
+    color: var(--muted);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ctxlegend dd {
+    margin: 0;
   }
   .ctxdot {
     flex: none;
     width: 7px;
     height: 7px;
     border-radius: 999px;
-    background: var(--ok);
   }
-  .ctxparts.is-warn .ctxdot {
-    background: var(--warn);
+
+  /* The context at each finished turn, scaled to its own data so a gentle
+     climb still reads as one; the tick on the line above carries the
+     threshold. The baseline rides the bottom edge, so the next hairline sits
+     right below it. */
+  .ctxspark {
+    margin-top: 14px;
   }
-  .ctxparts.is-crit .ctxdot {
-    background: var(--crit);
-  }
-  .part-system {
-    opacity: 0.4;
-  }
-  .part-rules {
-    opacity: 0.55;
-  }
-  .part-tools {
-    opacity: 0.68;
+  .ctxspark svg {
+    display: block;
+    width: 100%;
+    height: 58px;
   }
 
   /* The row and its menu share one line. The menu is always there, so a row

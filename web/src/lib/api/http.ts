@@ -538,6 +538,7 @@ function toCost(src: object | null | undefined): TurnCost | undefined {
     tokPerS: num("tok_per_s") ?? 0,
     requests: num("requests") ?? 0,
     input: num("input_tokens"),
+    window: num("window_tokens"),
     cached: num("cached_tokens"),
     llmMs: num("llm_ms"),
     genMs: num("gen_ms"),

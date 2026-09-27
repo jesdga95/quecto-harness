@@ -971,8 +971,11 @@ type turnCost struct {
 	// tokens is the output. input counts every prompt token sent, cached ones
 	// included; cached is how many of those the server said it reused, and
 	// counts only once a server has said so.
-	tokens     int
-	input      int
+	tokens int
+	input  int
+	// window is the prompt of the turn's last request, the context as it stood
+	// when the turn ended.
+	window     int
 	cached     int
 	cachedSeen bool
 	generating time.Duration
@@ -992,6 +995,7 @@ func (c *turnCost) add(res llm.Result, sent, first time.Time) {
 	if u := res.Usage; u != nil {
 		c.tokens += u.CompletionTokens
 		c.input += u.PromptTokens
+		c.window = u.PromptTokens
 		if u.CachedTokens != nil {
 			c.cached += *u.CachedTokens
 			c.cachedSeen = true
@@ -1011,15 +1015,16 @@ func (c *turnCost) fields() map[string]any {
 		rate = float64(c.tokens) / secs
 	}
 	out := map[string]any{
-		"tokens":       c.tokens,
-		"input_tokens": c.input,
-		"ms":           time.Since(c.started).Milliseconds(),
-		"llm_ms":       c.asking.Milliseconds(),
-		"gen_ms":       c.generating.Milliseconds(),
-		"first_ms":     c.waiting.Milliseconds(),
-		"tool_ms":      c.tools.Milliseconds(),
-		"tok_per_s":    rate,
-		"requests":     c.requests,
+		"tokens":        c.tokens,
+		"input_tokens":  c.input,
+		"window_tokens": c.window,
+		"ms":            time.Since(c.started).Milliseconds(),
+		"llm_ms":        c.asking.Milliseconds(),
+		"gen_ms":        c.generating.Milliseconds(),
+		"first_ms":      c.waiting.Milliseconds(),
+		"tool_ms":       c.tools.Milliseconds(),
+		"tok_per_s":     rate,
+		"requests":      c.requests,
 	}
 	if c.cachedSeen {
 		out["cached_tokens"] = c.cached

@@ -1166,6 +1166,7 @@ export class MockApi implements HarnessApi {
         tokPerS: 52,
         requests: 4,
         input,
+        window: input,
         cached: Math.round(input * 0.99),
         llmMs: Math.round(ms * 0.8),
         genMs: Math.round(ms * 0.6),
