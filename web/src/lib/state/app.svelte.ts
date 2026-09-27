@@ -223,11 +223,14 @@ export function activeSession(): Session | undefined {
   return app.opened?.id === app.sessionId ? app.opened : undefined;
 }
 
-export async function selectProject(path: string): Promise<void> {
+/** Chooses the project a new session and a file path go to. With openFirst,
+    the project's first conversation is opened; otherwise the screen is
+    cleared and left empty, as the new session page wants it. */
+export async function selectProject(path: string, openFirst = true): Promise<void> {
   app.projectPath = path;
   app.allowlist = (await guard(() => api.listAllowlist(path))) ?? [];
   const first = sessionsOf(path)[0];
-  if (first) await selectSession(first.id);
+  if (openFirst && first) await selectSession(first.id);
   else clearSession();
 }
 

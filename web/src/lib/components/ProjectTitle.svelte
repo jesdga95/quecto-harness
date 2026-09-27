@@ -10,7 +10,9 @@
 
   function pick(path: string) {
     open = false;
-    void selectProject(path);
+    // Choosing a project here only aims the composer at it. Opening the
+    // project's first conversation would leave the empty screen.
+    void selectProject(path, false);
   }
 </script>
 
