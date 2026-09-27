@@ -7,6 +7,7 @@
   import PermissionChip from "./PermissionChip.svelte";
   import X from "phosphor-svelte/lib/X";
   import FileIcon from "./FileIcon.svelte";
+  import PlanPanel from "./PlanPanel.svelte";
   import {
     app,
     pasteFile,
@@ -209,6 +210,8 @@
 
 <div class="w-full">
   <div class="composer px-4 pt-4 pb-3" class:is-plan={app.workMode === "plan"}>
+    <!-- The model's todo list is the top of the same box while it has one. -->
+    <PlanPanel />
     {#if files.length > 0}
       <div class="tiles mb-3">
         {#each files as path (path)}

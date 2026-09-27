@@ -14,7 +14,7 @@
 </script>
 
 {#if todos.length > 0}
-  <div class="plan mb-2">
+  <div class="plan-dock">
     <button class="plan-head" onclick={() => (open = !open)}>
       <ListChecks />
       <span class="plan-now">{current?.text ?? "Plan"}</span>
@@ -23,7 +23,7 @@
     </button>
 
     {#if open}
-      <div class="px-3 pb-3">
+      <div class="px-4 pb-3">
         <TodoList {todos} />
       </div>
     {/if}

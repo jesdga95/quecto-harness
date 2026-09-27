@@ -245,7 +245,7 @@
   </button>
 
   {#if open && expandable}
-    <div class="mt-1 mb-2 ml-8 flex flex-col gap-2">
+    <div class="step-body">
       {#if item.kind === "reasoning"}
         <p class="step-text">{item.text}</p>
       {:else if item.kind === "compaction"}

@@ -68,6 +68,7 @@
      on the border rather than as a colour. */
   --edge: rgb(13 148 136 / 0.3);
   --edge-focus: rgb(13 148 136 / 0.55);
+  --spin-run: #0d9488;
   --plan: #6d28d9;
   --plan-bg: #efe9fd;
   --plan-edge: rgb(124 58 237 / 0.3);
@@ -115,6 +116,7 @@
     --hair: rgb(226 232 240 / 0.09);
     --edge: rgb(45 212 191 / 0.28);
     --edge-focus: rgb(45 212 191 / 0.5);
+    --spin-run: #fcd34d;
     --plan: #c4b5fd;
     --plan-bg: rgb(167 139 250 / 0.16);
     --plan-edge: rgb(167 139 250 / 0.3);
@@ -279,7 +281,7 @@
     align-items: center;
     gap: 8px;
     margin: 8px 0 4px;
-    font-size: 15px;
+    font-size: 14px;
     color: var(--text-2);
   }
   .plan-approved svg {
@@ -815,6 +817,15 @@
     height: 13px;
   }
 
+  /* What an opened step shows, set in under the step's name: the icon's 15 px
+     and the 8 px gap after it. */
+  .step-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 4px 0 8px 23px;
+  }
+
   /* A finished turn's work, folded under one line with a hairline below it.
      Opened, the rows follow in the order they ran. */
   .fold {
@@ -901,6 +912,11 @@
   }
   .foot-chip.is-static {
     cursor: default;
+  }
+  /* The row is pulled left for the copy glyph; with no copy button the first
+     chip is pulled the rest of the way, so its icon stands on the text edge. */
+  .turn-foot > .relative:first-child {
+    margin-left: -4px;
   }
   .foot-time {
     padding: 0 6px;
@@ -1490,39 +1506,46 @@
     height: 12px;
   }
 
-  /* A session at work: a small grid of dots lighting in turn. */
-  .gen-dots {
+  /* A session row sits further in than its project, and the room on its left
+     is where the working mark goes, so the title never moves. */
+  .session-row {
+    position: relative;
+    padding-left: 24px;
+  }
+  /* A session at work: a small square that turns a quarter and eases down to
+     half, then back, in the room left of the title. */
+  .working {
+    position: absolute;
+    left: 7px;
+    top: 50%;
     display: grid;
-    grid-template-columns: repeat(2, 3px);
-    grid-auto-rows: 3px;
-    gap: 2px;
-    flex: none;
+    place-items: center;
+    width: 12px;
+    height: 12px;
+    margin-top: -6px;
   }
-  .gen-dots i {
-    border-radius: 1px;
+  .working::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 1.5px;
     background: var(--accent);
-    opacity: 0.25;
-    animation: gen-dot 1.2s ease-in-out infinite;
+    animation: working 1.2s cubic-bezier(0.65, 0, 0.35, 1) infinite;
   }
-  .gen-dots i:nth-child(1) { animation-delay: 0ms; }
-  .gen-dots i:nth-child(2) { animation-delay: 200ms; }
-  .gen-dots i:nth-child(4) { animation-delay: 400ms; }
-  .gen-dots i:nth-child(6) { animation-delay: 600ms; }
-  .gen-dots i:nth-child(5) { animation-delay: 800ms; }
-  .gen-dots i:nth-child(3) { animation-delay: 1000ms; }
-  @keyframes gen-dot {
-    0%,
-    100% {
-      opacity: 0.25;
+  @keyframes working {
+    0% {
+      transform: rotate(0) scale(1);
     }
-    30% {
-      opacity: 1;
+    50% {
+      transform: rotate(90deg) scale(0.5);
+    }
+    100% {
+      transform: rotate(180deg) scale(1);
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .gen-dots i {
+    .working::before {
       animation: none;
-      opacity: 0.8;
     }
   }
 
@@ -1638,20 +1661,20 @@
     height: 13px;
   }
 
-  /* The plan the model keeps, sitting above the composer. */
-  .plan {
-    border: 1px solid var(--hair);
-    border-radius: 14px;
-    background: var(--surface);
+  /* The plan the model keeps, as the top of the composer: edge to edge across
+     the box, over a hairline, past the composer's own padding. */
+  .plan-dock {
+    margin: -16px -16px 12px;
+    border-bottom: 1px solid var(--hair);
   }
   .plan-head {
     display: flex;
     align-items: center;
     gap: 8px;
     width: 100%;
-    padding: 9px 12px;
+    padding: 11px 16px;
     border: 0;
-    border-radius: 14px;
+    border-radius: 22px 22px 0 0;
     background: none;
     text-align: left;
     font-size: 13px;
@@ -2547,17 +2570,43 @@
     overflow: auto;
   }
 
+  /* The working mark: the logo's rounded plate as an outline, with a segment
+     running round it. The outline is a gradient masked down to its border, so
+     every existing span draws it with no markup of its own. */
+  @property --plate-turn {
+    syntax: "<angle>";
+    inherits: false;
+    initial-value: 0deg;
+  }
   .spinner {
+    display: inline-block;
+    flex: none;
     width: 14px;
     height: 14px;
-    border-radius: 999px;
-    border: 2px solid var(--border-2);
-    border-top-color: var(--accent);
-    animation: spin 700ms linear infinite;
+    padding: 1.6px;
+    border-radius: 4px;
+    background: conic-gradient(
+      from var(--plate-turn),
+      var(--spin-run) 0 24%,
+      var(--border-2) 24% 100%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box exclude,
+      linear-gradient(#000 0 0);
+    animation: plate-trace 1s linear infinite;
   }
-  @keyframes spin {
+  @keyframes plate-trace {
     to {
-      transform: rotate(360deg);
+      --plate-turn: 360deg;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation: none;
     }
   }
 

@@ -354,17 +354,17 @@
          approved plan, which starts work, draws a line. -->
     {#if item.kickoff}
       <p class="plan-approved">
-        <CheckCircle size={17} weight="fill" class="shrink-0" />
+        <CheckCircle size={15} weight="fill" class="shrink-0" />
         <span><b>Plan approved</b>{item.title ? `: ${item.title}` : ""}</span>
       </p>
     {/if}
   {:else if item.kind === "status"}
-    <div class="flex items-center gap-2 px-2 py-1 text-[13px] text-muted">
+    <div class="flex items-center gap-2 py-[5px] text-[13px] text-muted">
       <ArrowsLeftRight size={15} class="shrink-0" />
       <span class="truncate">{item.text}</span>
     </div>
   {:else if item.kind === "error"}
-    <div class="flex items-center gap-2 px-2 py-1 text-[13px] text-crit">
+    <div class="flex items-center gap-2 py-[5px] text-[13px] text-crit">
       <Warning size={15} class="shrink-0" />
       <span class="truncate">{item.message}</span>
     </div>
