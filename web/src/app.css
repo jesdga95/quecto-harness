@@ -2960,11 +2960,11 @@
     width: 100%;
     max-width: 820px;
   }
-  /* Raised over the blocks after it: each block's entrance makes it a layer of
-     its own, and the project menu opens over the composer. */
+  /* No z-index here: a lifted layer paints over the composer's popovers where
+     they open back up over the title and swallows their clicks. Both menus
+     take their order from their own z-40 in the page's layer. */
   .hero-project {
     position: relative;
-    z-index: 2;
     padding-left: 32px;
   }
   .hero-brace {
@@ -3078,8 +3078,12 @@
     font: 500 10.5px/1 var(--font-sans);
     color: var(--text-2);
   }
+  /* backwards, not both: a held final frame keeps an identity transform on the
+     block, which is a layer of its own, and its z-40 popovers cannot climb out
+     of it. The entrance needs no hold, since the last frame is the block's own
+     style. */
   .rise {
-    animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
   }
   .rise:nth-child(2) {
     animation-delay: 0.06s;
