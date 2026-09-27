@@ -1612,6 +1612,10 @@ func argSummary(call llm.ToolCall) (command, path string) {
 
 // compact replaces the in-context set with one summary. A failure leaves the
 // history untouched, so a failed compaction never loses context.
+//
+// The request carries the turn's tools and effort. A chat template renders
+// both at the head of the prompt, so dropping either would miss the server's
+// prompt cache and read the whole conversation again. A tool call is ignored.
 func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config.Agent, b brief, caps llm.Caps) error {
 	msgs := append(e.messages(s, a, b), llm.Message{Role: "user", Content: prompts.Compact()})
 	s.mu.Lock()
@@ -1619,7 +1623,7 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	s.mu.Unlock()
 
 	res, err := back.Chat(ctx, llm.ChatRequest{
-		Model: a.Model, Messages: msgs, Effort: llm.EffortOff,
+		Model: a.Model, Messages: msgs, Tools: tools.Schemas(b.offer), Effort: a.Effort,
 		PreserveReasoning: a.PreserveReasoning,
 		Temperature:       a.Temperature, TopP: a.TopP, TopK: a.TopK,
 		RepeatPenalty: a.RepeatPenalty, Seed: a.Seed, Caps: caps}, nil)
@@ -1627,6 +1631,9 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 		return err
 	}
 	summary := strings.TrimSpace(res.Content)
+	if summary == "" && len(res.ToolCalls) > 0 {
+		return errors.New("The model called a tool instead of writing a summary: try again or start a new session")
+	}
 	if summary == "" {
 		return errors.New("The model returned an empty summary: try again or start a new session")
 	}

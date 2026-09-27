@@ -932,12 +932,14 @@ func TestCompactionRewritesInContextOnly(t *testing.T) {
 		t.Errorf("compactions = %d", doc.Compactions)
 	}
 
+	// The tools and the effort are the turn's, so the prompt shares its head
+	// with the requests before it and the server's cache still holds.
 	body := h.replay.Body(0)
-	if _, ok := body["tools"]; ok {
-		t.Error("the compaction request carried tools")
+	if _, ok := body["tools"]; !ok {
+		t.Error("the compaction request dropped the tools")
 	}
-	if body["reasoning_budget"] != 0.0 {
-		t.Errorf("the compaction request did not turn thinking off: %v", body["reasoning_budget"])
+	if body["reasoning_budget"] == 0.0 {
+		t.Error("the compaction request turned thinking off, which the turns before it left on")
 	}
 	if len(h.rec.ofType("compacted")) != 1 {
 		t.Error("no compacted event")
