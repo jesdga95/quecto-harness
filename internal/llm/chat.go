@@ -141,11 +141,14 @@ type ChatRequest struct {
 	MaxTokens int
 }
 
+// Usage is what one request reports it spent. PromptTokens counts the cached
+// part too. CachedTokens is nil where the server did not say, which is not the
+// same as a cache that held nothing.
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-	CachedTokens     int `json:"cached_tokens"`
+	PromptTokens     int  `json:"prompt_tokens"`
+	CompletionTokens int  `json:"completion_tokens"`
+	TotalTokens      int  `json:"total_tokens"`
+	CachedTokens     *int `json:"cached_tokens,omitempty"`
 }
 
 type Timings struct {

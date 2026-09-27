@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1158,6 +1159,134 @@ func TestChangesRoute(t *testing.T) {
 	}
 	if removed != "two" || added != "TWO" {
 		t.Errorf("the hunk turns %q into %q", removed, added)
+	}
+}
+
+// The file route is a path guard first: it reaches what a tool could and no
+// further, and it serves bytes only for images, since a page or drawing served
+// from this origin would run with the reader's session.
+func TestProjectFileRoute(t *testing.T) {
+	f := newFixture(t)
+	id := f.newSession(t)
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+	for name, data := range map[string][]byte{
+		"hello.py":    []byte("print('Hello, World!')\n"),
+		"drawing.svg": []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`),
+		"dot.png":     png,
+	} {
+		if err := os.WriteFile(filepath.Join(f.project, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	os.WriteFile(outside, []byte("no"), 0o644)
+	get := func(path string) *httptest.ResponseRecorder {
+		return f.do(t, "GET", "/api/sessions/"+id+"/file?"+url.Values{"path": {path}}.Encode(), nil)
+	}
+
+	body := decode(t, get("hello.py"))
+	if body["kind"] != "text" || body["content"] != "print('Hello, World!')\n" || body["path"] != "hello.py" {
+		t.Errorf("text = %v", body)
+	}
+	// An absolute path inside the project comes back relative to it.
+	if body := decode(t, get(filepath.Join(f.project, "hello.py"))); body["path"] != "hello.py" {
+		t.Errorf("absolute path = %v, want it named relative to the project", body["path"])
+	}
+	if body := decode(t, get("drawing.svg")); body["kind"] != "text" {
+		t.Errorf("svg kind = %v, want text: it can carry script", body["kind"])
+	}
+	if body := decode(t, get("dot.png")); body["kind"] != "image" || body["content"] != "" {
+		t.Errorf("image = %v, want its kind and no content", body)
+	}
+
+	for _, path := range []string{"../secret.txt", outside} {
+		if w := get(path); w.Code != http.StatusForbidden {
+			t.Errorf("%s = %d, want 403", path, w.Code)
+		}
+	}
+	if w := get("missing.txt"); w.Code != http.StatusNotFound {
+		t.Errorf("missing = %d, want 404", w.Code)
+	}
+	if w := get("."); w.Code != http.StatusBadRequest {
+		t.Errorf("folder = %d, want 400", w.Code)
+	}
+
+	raw := func(path string) *httptest.ResponseRecorder {
+		return f.do(t, "GET", "/api/sessions/"+id+"/file?raw=1&"+url.Values{"path": {path}}.Encode(), nil)
+	}
+	w := raw("dot.png")
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/png" || !bytes.Equal(w.Body.Bytes(), png) {
+		t.Errorf("raw png = %d %q", w.Code, w.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(w.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Errorf("raw png csp = %q", w.Header().Get("Content-Security-Policy"))
+	}
+	for _, path := range []string{"drawing.svg", "hello.py"} {
+		if w := raw(path); w.Code != http.StatusUnsupportedMediaType {
+			t.Errorf("raw %s = %d, want 415", path, w.Code)
+		}
+	}
+}
+
+func TestProjectDirRoute(t *testing.T) {
+	f := newFixture(t)
+	id := f.newSession(t)
+	os.MkdirAll(filepath.Join(f.project, "web", "src"), 0o755)
+	os.WriteFile(filepath.Join(f.project, "Makefile"), []byte("all:\n"), 0o644)
+	os.WriteFile(filepath.Join(f.project, "AGENTS.md"), []byte("# rules\n"), 0o644)
+	os.WriteFile(filepath.Join(f.project, "web", "index.html"), []byte("<p>hi</p>"), 0o644)
+	get := func(path string) *httptest.ResponseRecorder {
+		return f.do(t, "GET", "/api/sessions/"+id+"/dir?"+url.Values{"path": {path}}.Encode(), nil)
+	}
+
+	body := decode(t, get(""))
+	if body["path"] != "" || body["root"] != f.project {
+		t.Errorf("root listing names %v under %v", body["path"], body["root"])
+	}
+	var names []string
+	for _, e := range body["entries"].([]any) {
+		names = append(names, e.(map[string]any)["name"].(string))
+	}
+	// Folders first, then files by name without regard to case.
+	if strings.Join(names, ",") != "web,AGENTS.md,Makefile" {
+		t.Errorf("entries = %v", names)
+	}
+	if body := decode(t, get("web")); body["path"] != "web" || len(body["entries"].([]any)) != 2 {
+		t.Errorf("web = %v", body)
+	}
+	if w := get(".."); w.Code != http.StatusForbidden {
+		t.Errorf("parent = %d, want 403", w.Code)
+	}
+	if w := get("Makefile"); w.Code != http.StatusBadRequest {
+		t.Errorf("file = %d, want 400", w.Code)
+	}
+	if w := get("nope"); w.Code != http.StatusNotFound {
+		t.Errorf("missing = %d, want 404", w.Code)
+	}
+}
+
+func TestProjectFilesRoute(t *testing.T) {
+	f := newFixture(t)
+	for _, name := range []string{"hello.py", "web/src/hello_test.py", "node_modules/hello.py", "notes/say-hello.md", "readme.md"} {
+		path := filepath.Join(f.project, name)
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		os.WriteFile(path, []byte("x"), 0o644)
+	}
+	get := func(project, q string) *httptest.ResponseRecorder {
+		return f.do(t, "GET", "/api/projects/files?"+url.Values{"project": {project}, "q": {q}}.Encode(), nil)
+	}
+	body := decode(t, get(f.project, "hello"))
+	var files []string
+	for _, v := range body["files"].([]any) {
+		files = append(files, v.(string))
+	}
+	// A name that starts with the word ranks first, then shorter paths, and
+	// the folders find skips are not walked.
+	if strings.Join(files, ",") != "hello.py,web/src/hello_test.py,notes/say-hello.md" {
+		t.Errorf("files = %v", files)
+	}
+	if w := get(t.TempDir(), "x"); w.Code != http.StatusNotFound {
+		t.Errorf("unknown project = %d, want 404", w.Code)
 	}
 }
 

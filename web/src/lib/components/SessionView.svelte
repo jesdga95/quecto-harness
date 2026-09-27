@@ -1,24 +1,18 @@
 <script lang="ts">
   import ArrowUUpLeft from "phosphor-svelte/lib/ArrowUUpLeft";
-  import ArtifactsChip from "./ArtifactsChip.svelte";
-  import ArtifactsPanel from "./ArtifactsPanel.svelte";
-  import ChangesChip from "./ChangesChip.svelte";
-  import ChangesPanel from "./ChangesPanel.svelte";
   import Composer from "./Composer.svelte";
+  import PanelButton from "./PanelButton.svelte";
+  import SidePanel from "./SidePanel.svelte";
   import ContextChip from "./ContextChip.svelte";
   import PlanPanel from "./PlanPanel.svelte";
-  import RunsChip from "./RunsChip.svelte";
-  import RunsPanel from "./RunsPanel.svelte";
   import Transcript from "./Transcript.svelte";
-  import { activeSession, app, artifacts, selectSession } from "../state/app.svelte";
+  import { activeSession, app, selectSession } from "../state/app.svelte";
   import { shortPath } from "../format";
 
   const session = $derived(activeSession());
-  const showChanges = $derived(app.dock === "changes" && app.changes.files.length > 0);
-  const showRuns = $derived(app.dock === "runs" && app.runs.length > 0);
-  const showArtifacts = $derived(app.dock === "artifacts" && artifacts().length > 0);
+  const showPanel = $derived(app.panel && app.tabs.length > 0);
   // Hidden rather than removed, so a message being typed survives the expand.
-  const hideMain = $derived(showArtifacts && app.artifactsWide);
+  const hideMain = $derived(showPanel && app.artifactsWide);
   // The chip draws once there is something to draw: a window to measure
   // against, or tokens counted where no window is known.
   const measured = $derived(
@@ -47,9 +41,7 @@
         {/if}
       </div>
       <div class="ml-auto flex shrink-0 items-center gap-2">
-        <ArtifactsChip />
-        <RunsChip />
-        <ChangesChip />
+        <PanelButton />
         {#if measured}
           <ContextChip />
         {/if}
@@ -61,16 +53,12 @@
     <div class="shrink-0 px-6 pt-2 pb-5">
       <div class="mx-auto w-full max-w-[820px]">
         <PlanPanel />
-        <Composer placeholder="Message the agent" />
+        <Composer placeholder="Message the agent, @ to quote a file" />
       </div>
     </div>
   </div>
 
-  {#if showChanges}
-    <ChangesPanel />
-  {:else if showRuns}
-    <RunsPanel />
-  {:else if showArtifacts}
-    <ArtifactsPanel />
+  {#if showPanel}
+    <SidePanel />
   {/if}
 </div>

@@ -261,6 +261,19 @@ func TestTurnCostIsRecordedOnTheEntryThatEndedIt(t *testing.T) {
 	if last.Meta["requests"] != 2 {
 		t.Errorf("requests = %v, want 2", last.Meta["requests"])
 	}
+	// Input and cache are sums too: 410 and 1950 sent, 384 and 0 reused. A
+	// cache that reused nothing is still a count, so the field is present.
+	if last.Meta["input_tokens"] != 2360 {
+		t.Errorf("input_tokens = %v, want 2360", last.Meta["input_tokens"])
+	}
+	if last.Meta["cached_tokens"] != 384 {
+		t.Errorf("cached_tokens = %v, want 384", last.Meta["cached_tokens"])
+	}
+	for _, key := range []string{"llm_ms", "gen_ms", "first_ms", "tool_ms"} {
+		if ms, ok := last.Meta[key].(int64); !ok || ms < 0 {
+			t.Errorf("%s = %v", key, last.Meta[key])
+		}
+	}
 	if ms, ok := last.Meta["ms"].(int64); !ok || ms < 0 {
 		t.Errorf("ms = %v", last.Meta["ms"])
 	}

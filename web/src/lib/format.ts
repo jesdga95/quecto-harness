@@ -185,3 +185,17 @@ export function searchProviderHint(name: string): string {
       return "Searches the open web.";
   }
 }
+
+/** The time of day something happened, with the date in front once it is not
+    today. */
+export function timeOf(ms: number): string {
+  const d = new Date(ms);
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === new Date().toDateString()) return time;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+}
+
+/** A count written out in full, for a popover with room for the digits. */
+export function full(n: number): string {
+  return n.toLocaleString("en-US");
+}

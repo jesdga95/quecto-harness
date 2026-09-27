@@ -964,21 +964,42 @@ func (e *Engine) fail(s *Session, err error) {
 // covers the tool calls between those requests; generating does not, so the
 // rate below is the model's and not the harness's.
 type turnCost struct {
-	started    time.Time
-	requests   int
+	started  time.Time
+	agent    string
+	model    string
+	requests int
+	// tokens is the output. input counts every prompt token sent, cached ones
+	// included; cached is how many of those the server said it reused, and
+	// counts only once a server has said so.
 	tokens     int
+	input      int
+	cached     int
+	cachedSeen bool
 	generating time.Duration
+	// asking is the time spent inside requests, waiting the part of it before
+	// the first token, and tools the time spent running tool calls.
+	asking  time.Duration
+	waiting time.Duration
+	tools   time.Duration
 }
 
-// add folds in one finished request. first is when its stream began to
-// produce, which is zero for a request that produced nothing.
-func (c *turnCost) add(res llm.Result, first time.Time) {
+// add folds in one finished request. sent is when it was made and first is
+// when its stream began to produce, which is zero for a request that produced
+// nothing.
+func (c *turnCost) add(res llm.Result, sent, first time.Time) {
 	c.requests++
-	if res.Usage != nil {
-		c.tokens += res.Usage.CompletionTokens
+	c.asking += time.Since(sent)
+	if u := res.Usage; u != nil {
+		c.tokens += u.CompletionTokens
+		c.input += u.PromptTokens
+		if u.CachedTokens != nil {
+			c.cached += *u.CachedTokens
+			c.cachedSeen = true
+		}
 	}
 	if !first.IsZero() {
 		c.generating += time.Since(first)
+		c.waiting += first.Sub(sent)
 	}
 }
 
@@ -989,12 +1010,27 @@ func (c *turnCost) fields() map[string]any {
 	if secs := c.generating.Seconds(); secs > 0 {
 		rate = float64(c.tokens) / secs
 	}
-	return map[string]any{
-		"tokens":    c.tokens,
-		"ms":        time.Since(c.started).Milliseconds(),
-		"tok_per_s": rate,
-		"requests":  c.requests,
+	out := map[string]any{
+		"tokens":       c.tokens,
+		"input_tokens": c.input,
+		"ms":           time.Since(c.started).Milliseconds(),
+		"llm_ms":       c.asking.Milliseconds(),
+		"gen_ms":       c.generating.Milliseconds(),
+		"first_ms":     c.waiting.Milliseconds(),
+		"tool_ms":      c.tools.Milliseconds(),
+		"tok_per_s":    rate,
+		"requests":     c.requests,
 	}
+	if c.cachedSeen {
+		out["cached_tokens"] = c.cached
+	}
+	if c.agent != "" {
+		out["agent"] = c.agent
+	}
+	if c.model != "" {
+		out["model"] = c.model
+	}
+	return out
 }
 
 // carriesOutput reports whether an event is part of the generation. Usage and
@@ -1085,7 +1121,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// only thing that ends a runaway turn is the Stop button.
 	budget := cfg.MaxToolCalls
 	calls := 0
-	cost := turnCost{started: time.Now()}
+	cost := turnCost{started: time.Now(), agent: a.Name, model: a.Model}
 
 	for iteration := 0; ; iteration++ {
 		e.setState(s, StatePreflight)
@@ -1145,6 +1181,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		// generation rate is measured against. Chat calls on synchronously
 		// from its read loop, so no lock is needed here.
 		var first time.Time
+		sent := time.Now()
 		res, err := back.Chat(ctx, req, func(event llm.Event) error {
 			if first.IsZero() && carriesOutput(event.Kind) {
 				first = time.Now()
@@ -1156,7 +1193,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			e.endWithError(s, err, iteration)
 			return
 		}
-		cost.add(res, first)
+		cost.add(res, sent, first)
 		if res.Dropped > 0 {
 			e.publish(s.ID, ev("error", map[string]any{"kind": "malformed",
 				"message": fmt.Sprintf("The model server sent %d frames that could not be read: some output was lost", res.Dropped)}))
@@ -1232,7 +1269,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			if decision.Kind != perms.DecideDeny {
 				e.publishStarted(s, runner, call, i)
 			}
+			began := time.Now()
 			entry := e.execute(ctx, s, runner, call, decision, record, i)
+			cost.tools += time.Since(began)
 			e.save(s)
 			e.publish(s.ID, ev("tool_output", map[string]any{
 				"index": i, "id": call.ID, "name": call.Function.Name,

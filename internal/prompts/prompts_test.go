@@ -237,27 +237,21 @@ func TestSystemDoesNotParseAgentNames(t *testing.T) {
 	}
 }
 
-// The renderer for figures and pages is in the UI that shows the person's
-// conversation, so only a session with no launcher is told about it.
+// The panel that draws a written page or figure is in the UI that shows the
+// person's conversation, so only a session with no launcher is told about it.
 func TestSystemNamesDrawingsOnlyForTheMainAgent(t *testing.T) {
 	main := System(SystemVars{Project: "/src/x", OS: "darwin"})
-	if !strings.Contains(main, "```svg") || !strings.Contains(main, "```html") {
-		t.Errorf("prompt does not name the figure and page fences: %q", main)
+	for _, want := range []string{"prototype", "write_file", ".html", ".svg", "backticks"} {
+		if !strings.Contains(main, want) {
+			t.Errorf("prompt does not say %q about showing a file: %q", want, main)
+		}
 	}
-	// A prototype is better seen than read, so the prompt says which fence
-	// presents one, and that it stays in the reply.
-	if !strings.Contains(main, "prototype") {
-		t.Errorf("prompt does not say a prototype goes in a page: %q", main)
-	}
-	if !strings.Contains(main, "not in write_file") {
-		t.Errorf("prompt does not say a shown thing stays out of write_file: %q", main)
-	}
-	if !strings.Contains(main, "```name.ext") {
-		t.Errorf("prompt does not say how to present a whole file: %q", main)
+	if strings.Contains(main, "```name.ext") {
+		t.Errorf("prompt still presents whole files as fences: %q", main)
 	}
 	child := System(SystemVars{Project: "/src/x", OS: "darwin", Launcher: "sess_aaaaaaaaaaaaaaaa"})
-	if strings.Contains(child, "```svg") || strings.Contains(child, "```html") || strings.Contains(child, "```name.ext") {
-		t.Errorf("a subagent's prompt names the fences, but its output is not drawn: %q", child)
+	if strings.Contains(child, "opens beside the conversation") {
+		t.Errorf("a subagent's prompt says its files are drawn, but nobody sees them: %q", child)
 	}
 }
 

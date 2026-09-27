@@ -190,6 +190,9 @@ func TestWriteFileCreatesParentsAndPreservesMode(t *testing.T) {
 	if !strings.HasPrefix(res.Output, "wrote sub/deep/new.txt (12 bytes, 2 lines)") {
 		t.Errorf("output = %q", res.Output)
 	}
+	if res.Meta["added"] != 2 || res.Meta["removed"] != 0 {
+		t.Errorf("meta = %v, want 2 added and 0 removed for a new file", res.Meta)
+	}
 	got, err := os.ReadFile(filepath.Join(base, "sub", "deep", "new.txt"))
 	if err != nil || string(got) != "hello\nthere\n" {
 		t.Errorf("file = %q %v", got, err)
@@ -203,6 +206,9 @@ func TestWriteFileCreatesParentsAndPreservesMode(t *testing.T) {
 	}
 	if !strings.HasPrefix(res.Output, "replaced exec.sh") {
 		t.Errorf("output = %q, want the replaced wording", res.Output)
+	}
+	if res.Meta["added"] != 1 || res.Meta["removed"] != 1 {
+		t.Errorf("meta = %v, want the one line swapped", res.Meta)
 	}
 	info, _ := os.Stat(target)
 	if info.Mode().Perm() != 0o755 {
@@ -495,6 +501,9 @@ func TestReplaceInFileChangesOneRun(t *testing.T) {
 	}
 	if res.Output != "edited hub.go at line 2 (-1 +1)" {
 		t.Errorf("output = %q", res.Output)
+	}
+	if res.Meta["added"] != 1 || res.Meta["removed"] != 1 {
+		t.Errorf("meta = %v", res.Meta)
 	}
 	got, _ := os.ReadFile(target)
 	if string(got) != "one\nTWO\nthree\n" {
@@ -960,5 +969,25 @@ func TestSchemasFollowTheMode(t *testing.T) {
 	}
 	if len(Names(Offer{})) != 0 {
 		t.Error("an offer with no mode sent tools")
+	}
+}
+
+// A model writes arguments in the order the schema lists them, and the file
+// panel can only draw a write once it has the path, so path comes first.
+func TestWriteSchemasListThePathFirst(t *testing.T) {
+	for _, tool := range Schemas(Offer{Mode: config.WorkExecute}) {
+		name := tool.Function.Name
+		if name != "write_file" && name != "replace_in_file" {
+			continue
+		}
+		raw := string(tool.Function.Parameters)
+		path := strings.Index(raw, `"path"`)
+		other := strings.Index(raw, `"content"`)
+		if name == "replace_in_file" {
+			other = strings.Index(raw, `"old_string"`)
+		}
+		if path == -1 || other == -1 || path > other {
+			t.Errorf("%s lists its properties as %s, want path first", name, raw)
+		}
 	}
 }

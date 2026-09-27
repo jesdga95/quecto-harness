@@ -30,6 +30,8 @@ import type {
   Transcript,
   TranscriptItem,
   TurnCost,
+  ProjectFile,
+  ProjectDir,
   TurnStatus,
   Usage,
   WorkMode,
@@ -186,6 +188,7 @@ interface WireEntry {
   edited?: boolean;
   from?: string;
   visible?: boolean;
+  at?: string;
   meta?: Record<string, unknown> | null;
 }
 
@@ -522,14 +525,34 @@ function thoughtTokens(text: string): number {
 
 /** The turn cost, from a done event or from the meta of the entry that ended
     the turn. Absent where the turn was stopped or failed before it counted. */
-function toCost(src: WireEvent | Record<string, unknown> | null | undefined): TurnCost | undefined {
-  if (!src || typeof src.tokens !== "number" || typeof src.ms !== "number") return undefined;
+function toCost(src: object | null | undefined): TurnCost | undefined {
+  const f = (src ?? {}) as Record<string, unknown>;
+  const num = (key: string) => (typeof f[key] === "number" ? (f[key] as number) : undefined);
+  const str = (key: string) => (typeof f[key] === "string" && f[key] !== "" ? (f[key] as string) : undefined);
+  const tokens = num("tokens");
+  const ms = num("ms");
+  if (tokens === undefined || ms === undefined) return undefined;
   return {
-    tokens: src.tokens,
-    ms: src.ms,
-    tokPerS: typeof src.tok_per_s === "number" ? src.tok_per_s : 0,
-    requests: typeof src.requests === "number" ? src.requests : 0,
+    tokens,
+    ms,
+    tokPerS: num("tok_per_s") ?? 0,
+    requests: num("requests") ?? 0,
+    input: num("input_tokens"),
+    cached: num("cached_tokens"),
+    llmMs: num("llm_ms"),
+    genMs: num("gen_ms"),
+    firstMs: num("first_ms"),
+    toolMs: num("tool_ms"),
+    agent: str("agent"),
+    model: str("model"),
   };
+}
+
+/** A stored time, or nothing where the entry has none a date can read. */
+function toTime(at: string | undefined): number | undefined {
+  if (!at) return undefined;
+  const t = Date.parse(at);
+  return Number.isNaN(t) || t <= 0 ? undefined : t;
 }
 
 // One stored entry can hold a thought, a reply and several calls at once, so
@@ -554,6 +577,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
         files,
         edited: e.edited === true,
         from: e.from ?? "",
+        at: toTime(e.at),
       });
     }
     return;
@@ -569,13 +593,17 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
         open: false,
       });
     }
-    if (e.content) {
+    // The entry that ends a turn carries its cost, and keeps its row when the
+    // model ended it with no text.
+    const cost = toCost(e.meta);
+    if (e.content || (cost && (e.tool_calls ?? []).length === 0)) {
       items.push({
         kind: "assistant",
         id: `a${seq}`,
-        text: e.content,
+        text: e.content ?? "",
         streaming: false,
-        cost: toCost(e.meta),
+        cost,
+        at: toTime(e.at),
       });
     }
     (e.tool_calls ?? []).forEach((c, i) => {
@@ -877,6 +905,45 @@ const EVENT_NAMES = [
   "resync",
 ];
 
+/** One string field of a JSON object that may be cut off, decoded as far as
+    it goes. done says its closing quote has arrived. */
+function stringField(raw: string, key: string): { text: string; done: boolean } | null {
+  const match = new RegExp(`(?<!\\\\)"${key}"\\s*:\\s*"`).exec(raw);
+  if (!match) return null;
+  const escapes: Record<string, string> = { n: "\n", t: "\t", r: "\r", b: "\b", f: "\f" };
+  let out = "";
+  let i = match.index + match[0].length;
+  while (i < raw.length) {
+    const c = raw[i]!;
+    if (c === '"') return { text: out, done: true };
+    if (c !== "\\") {
+      out += c;
+      i += 1;
+      continue;
+    }
+    const next = raw[i + 1];
+    if (next === undefined) break;
+    if (next === "u") {
+      const hex = raw.slice(i + 2, i + 6);
+      if (hex.length < 4) break;
+      out += String.fromCharCode(parseInt(hex, 16));
+      i += 6;
+      continue;
+    }
+    out += escapes[next] ?? next;
+    i += 2;
+  }
+  return { text: out, done: false };
+}
+
+/** The path and the text so far of a write_file call still arriving, or null
+    before the path is whole. */
+function partialWrite(raw: string): Record<string, unknown> | null {
+  const path = stringField(raw, "path");
+  if (!path?.done) return null;
+  return { path: path.text, content: stringField(raw, "content")?.text ?? "" };
+}
+
 // Argument fragments arrive one chunk at a time and join on index rather than
 // id, since the id is empty until the call is nearly complete. The card is
 // opened on the first fragment and its arguments filled once they parse.
@@ -919,7 +986,14 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       if (ev.name) open.name = ev.name;
       open.args += ev.arguments ?? "";
       const args = parseArgs(open.args);
-      if (args) out.push({ type: "tool_args", id: open.id, name: open.name, args });
+      if (args) {
+        out.push({ type: "tool_args", id: open.id, name: open.name, args });
+      } else if (open.name === "write_file") {
+        // A file being written is drawn as it arrives, so its path and the
+        // text so far are read out of the unfinished arguments.
+        const partial = partialWrite(open.args);
+        if (partial) out.push({ type: "tool_args", id: open.id, name: open.name, args: partial, partial: true });
+      }
       return out;
     }
 
@@ -1148,6 +1222,45 @@ class HttpApi implements HarnessApi {
     return toChanges(wire);
   }
 
+  async readFile(id: string, path: string): Promise<ProjectFile> {
+    const wire = await call<{ path?: string; kind?: string; bytes?: number; content?: string }>(
+      `/sessions/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`,
+    );
+    const kind = wire.kind;
+    return {
+      path: wire.path ?? path,
+      kind: kind === "image" || kind === "binary" || kind === "large" ? kind : "text",
+      bytes: wire.bytes ?? 0,
+      content: wire.content ?? "",
+    };
+  }
+
+  async findFiles(project: string, q: string): Promise<string[]> {
+    const wire = await call<{ files?: unknown[] | null }>(
+      `/projects/files?project=${encodeURIComponent(project)}&q=${encodeURIComponent(q)}`,
+    );
+    return (wire.files ?? []).filter((f): f is string => typeof f === "string" && f !== "");
+  }
+
+  async listDir(id: string, path: string): Promise<ProjectDir> {
+    const wire = await call<{
+      root?: string;
+      path?: string;
+      entries?: { name?: string; dir?: boolean; bytes?: number }[] | null;
+    }>(`/sessions/${encodeURIComponent(id)}/dir?path=${encodeURIComponent(path)}`);
+    return {
+      root: wire.root ?? "",
+      path: wire.path ?? path,
+      entries: (wire.entries ?? [])
+        .filter((e) => typeof e.name === "string" && e.name !== "")
+        .map((e) => ({ name: e.name!, dir: e.dir === true, bytes: e.bytes ?? 0 })),
+    };
+  }
+
+  fileUrl(id: string, path: string): string {
+    return `${BASE}/sessions/${encodeURIComponent(id)}/file?raw=1&path=${encodeURIComponent(path)}`;
+  }
+
   async renameSession(id: string, title: string): Promise<void> {
     await call<unknown>(`/sessions/${encodeURIComponent(id)}`, "PUT", { title });
     const known = summaries.get(id);
@@ -1291,7 +1404,14 @@ class HttpApi implements HarnessApi {
       const batch = held;
       held = [];
       for (const raw of batch) {
-        if (!deliver(raw)) return;
+        try {
+          if (!deliver(raw)) return;
+        } catch {
+          // A frame that cannot be applied is dropped, and the transcript is
+          // refetched whole so the rest of the batch is not lost with it.
+          void rebuild();
+          return;
+        }
       }
     };
 

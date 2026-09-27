@@ -38,26 +38,34 @@
   function note(status: string): string {
     return status === "idle" ? "Done" : status;
   }
+
+  // Shown with nothing followed, the tab follows the one still working, which
+  // is what a reader opening it came for.
+  $effect(() => {
+    if (app.runId || app.runs.length === 0) return;
+    const first = app.runs.find((r) => r.status !== "idle") ?? app.runs[0];
+    if (first) void openRun(first.id);
+  });
 </script>
 
-<aside class="dock">
-  <div class="dock-head">
-    <h2 class="text-[13px] font-medium">Agents working</h2>
-    <span class="num ml-auto text-[12px] text-muted">
-      {running} of {app.runs.length}
-    </span>
-    {#if shown}
-      <button
-        class="icon-btn changes-copy"
-        aria-label="Open this agent's conversation"
-        onclick={() => void selectSession(shown.id)}
-      >
-        <ArrowSquareOut />
-      </button>
-    {/if}
+<div class="panel-path">
+  <div class="panel-crumbs">
+    <span class="crumb is-last">{running} of {app.runs.length} working</span>
   </div>
+  {#if shown}
+    <button
+      class="icon-btn"
+      aria-label="Open this agent's conversation"
+      title="Open the conversation"
+      onclick={() => void selectSession(shown.id)}
+    >
+      <ArrowSquareOut />
+    </button>
+  {/if}
+</div>
 
-  <div class="shrink-0 border-b border-hair px-2.5 pb-2">
+<div class="artifact-body">
+  <div class="shrink-0 border-b border-hair px-2.5 py-2">
     {#each app.runs as run (run.id)}
       <button
         class="run-row"
@@ -97,4 +105,4 @@
       <p class="px-2 text-[13px] text-muted">Pick an agent to see what it is doing.</p>
     {/if}
   </div>
-</aside>
+</div>

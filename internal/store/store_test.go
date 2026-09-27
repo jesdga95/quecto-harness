@@ -22,13 +22,13 @@ func ids(list []Summary) []string {
 }
 
 func sample(id string, updated time.Time) *Session {
-	code := 0
+	code, cached := 0, 3968
 	return &Session{
 		ID: id, Project: "/proj", Agent: "agt_alpha", Model: "Alpha-12B", Title: "list the files here",
 		ContextBase: &ContextBase{System: 154, Rules: 287, Tools: 1026},
 		Created:     updated.Add(-time.Minute), Updated: updated,
 		NCtx: 131072, NCtxSource: "props", Compactions: 1,
-		LastUsage: &llm.Usage{PromptTokens: 4193, CompletionTokens: 118, TotalTokens: 4311, CachedTokens: 3968},
+		LastUsage: &llm.Usage{PromptTokens: 4193, CompletionTokens: 118, TotalTokens: 4311, CachedTokens: &cached},
 		Entries: []Entry{
 			{Seq: 1, Kind: "user", Role: "user", Content: "list the files here", InContext: false, Visible: true, At: updated},
 			{Seq: 2, Kind: "assistant", Role: "assistant", Reasoning: "run_shell with ls",

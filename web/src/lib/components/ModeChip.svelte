@@ -43,6 +43,7 @@
   <button
     class="chip"
     class:chip-mode={current.value !== "execute"}
+    title="Switch with Shift+Tab"
     aria-haspopup="menu"
     aria-expanded={open}
     onclick={() => (open = !open)}
@@ -57,7 +58,11 @@
       {#each modes as m (m.value)}
         <button class="popover-item" onclick={() => pick(m.value)}>
           <span class="min-w-0 flex-1">
-            <span class="block" class:text-accent={m.value === current.value}>{m.label}</span>
+            <span
+              class="block"
+              class:text-accent={m.value === current.value && m.value === "execute"}
+              class:text-plan={m.value === current.value && m.value === "plan"}>{m.label}</span
+            >
             <span class="block text-[12px] text-muted">{m.hint}</span>
           </span>
         </button>

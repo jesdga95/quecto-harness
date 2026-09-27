@@ -17,10 +17,6 @@ Work out the approach before the steps:
 - Follow the project's conventions for naming, errors, tests and comments.
 {{if .CanAsk}}- Use ask_question when a choice changes the plan and the project does not settle it. Ask before submitting, not inside the plan.
 {{end}}
-When the change has an interface, show a design of it in your reply before the plan. It opens beside the conversation.
-{{template "fences"}}
-Read the project's styles first and use its own colours, fonts and components. To change a design, send it again whole.
-
 {{if .CanAsk}}Write the plan with write_plan, a section at a time as you learn it. Every section but open is required.
 Each step is small, names its files, and can be checked on its own.
 When every section is written, call submit_plan and wait for the answer.

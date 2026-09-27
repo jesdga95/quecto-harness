@@ -1,37 +1,27 @@
 <script lang="ts">
-  import ArtifactCard from "./ArtifactCard.svelte";
   import { render } from "../markdown";
-  import { sourceHtml } from "../highlight";
+  import { openFile } from "../state/app.svelte";
 
-  let {
-    text,
-    streaming = false,
-    itemId = "",
-  }: {
-    text: string;
-    streaming?: boolean;
-    /** The reply this text belongs to. Without one, a drawing, page or file
-        has no panel to open in and is shown as its source. */
-    itemId?: string;
-  } = $props();
+  let { text, streaming = false }: { text: string; streaming?: boolean } = $props();
 
   // render escapes and allowlists everything it emits, which is what makes the
-  // raw html below safe for output arriving from the model. A drawing, page or
-  // file comes back as its source and is shown in the artifacts panel.
-  const parts = $derived(render(text));
+  // raw html below safe for output arriving from the model.
+  const html = $derived(render(text));
+
+  // A file link is markup rather than a component, so one listener on the
+  // block answers for every link in it, and each stays a real button.
+  function fileLinks(node: HTMLElement) {
+    const click = (event: MouseEvent) => {
+      const link = (event.target as HTMLElement).closest<HTMLElement>("[data-file]");
+      if (!link || !node.contains(link)) return;
+      event.preventDefault();
+      void openFile(link.dataset.file ?? "");
+    };
+    node.addEventListener("click", click);
+    return { destroy: () => node.removeEventListener("click", click) };
+  }
 </script>
 
-<div class="prose" class:is-streaming={streaming}>
-  {#each parts as part, i (i)}
-    {#if part.kind === "html"}
-      {@html part.html}
-    {:else if itemId}
-      <ArtifactCard {itemId} block={part} />
-    {:else}
-      <div class="md-code">
-        <div class="md-code-lang">{part.name || (part.kind === "svg" ? "svg" : "html")}</div>
-        <pre><code>{@html sourceHtml(part.source, part.name)}</code></pre>
-      </div>
-    {/if}
-  {/each}
+<div class="prose" class:is-streaming={streaming} use:fileLinks>
+  {@html html}
 </div>

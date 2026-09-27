@@ -29,7 +29,7 @@ func TestResponsesGathersOneCallUnderTwoIDs(t *testing.T) {
 		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"path\":"}`,
 		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"\"/etc/hosts\"}"}`,
 		`data: {"type":"response.output_item.done","item_id":"fc_1","item":{"id":"fc_1","type":"function_call","call_id":"call_abc","name":"read_file","arguments":"{\"path\":\"/etc/hosts\"}"}}`,
-		`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"call_abc","name":"read_file","arguments":"{\"path\":\"/etc/hosts\"}"}],"usage":{"input_tokens":60,"output_tokens":21,"total_tokens":81}}}`,
+		`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"call_abc","name":"read_file","arguments":"{\"path\":\"/etc/hosts\"}"}],"usage":{"input_tokens":60,"input_tokens_details":{"cached_tokens":48},"output_tokens":21,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":81}}}`,
 	})
 	if err != nil {
 		t.Fatalf("chat: %v", err)
@@ -49,6 +49,9 @@ func TestResponsesGathersOneCallUnderTwoIDs(t *testing.T) {
 	}
 	if res.Usage == nil || res.Usage.PromptTokens != 60 || res.Usage.CompletionTokens != 21 {
 		t.Errorf("usage = %+v", res.Usage)
+	}
+	if res.Usage != nil && (res.Usage.CachedTokens == nil || *res.Usage.CachedTokens != 48) {
+		t.Errorf("cached = %v, want 48 from input_tokens_details", res.Usage.CachedTokens)
 	}
 	var kinds []EventKind
 	for _, e := range events {

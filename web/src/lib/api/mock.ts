@@ -7,6 +7,8 @@ import type {
   Config,
   EventHandler,
   FileChange,
+  ProjectFile,
+  ProjectDir,
   HarnessApi,
   HarnessEvent,
   Model,
@@ -165,7 +167,32 @@ interface ScriptedTurn {
   /** A choice put to the user before the tool runs, on the turns that have
       one, so the card is on screen with no harness behind it. */
   question?: Asked;
+  /** Files written after the tool, each a step of its own, so the file links
+      and the panel have something to open. */
+  writes?: { path: string; content: string }[];
 }
+
+const MOCK_SVG = [
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260">',
+  "  <defs>",
+  '    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">',
+  '      <stop offset="0" stop-color="#ffd166"/>',
+  '      <stop offset="1" stop-color="#f77f00"/>',
+  "    </linearGradient>",
+  "  </defs>",
+  '  <rect width="400" height="260" fill="#bde0fe"/>',
+  '  <circle cx="300" cy="80" r="40" fill="url(#sun)"/>',
+  '  <path d="M0 200 Q100 140 200 190 T400 180 V260 H0 Z" fill="#80b918"/>',
+  '  <rect x="90" y="150" width="70" height="50" fill="#fefae0"/>',
+  '  <polygon points="85,150 125,120 165,150" fill="#bc4749"/>',
+  '  <text x="20" y="40" font-family="sans-serif" font-size="18" fill="#1d3557">Hello</text>',
+  "</svg>",
+  "",
+].join("\n");
+
+const MOCK_PY = ['def main():', '    print("Hello, World!")', "", "", 'if __name__ == "__main__":', "    main()", ""].join(
+  "\n",
+);
 
 const MOCK_TODOS: Todo[] = [
   { text: "Read the hub and the routes", status: "done" },
@@ -264,12 +291,17 @@ const SCRIPT: ScriptedTurn[] = [
     ].join("\n"),
     exit: 0,
     truncated: false,
+    writes: [
+      { path: "example.svg", content: MOCK_SVG },
+      { path: "hello.py", content: MOCK_PY },
+    ],
     reply:
       "The project is a Go module.\n\n" +
       "## Layout\n" +
-      "- `cmd` holds the entry point\n" +
+      "- `cmd` holds the entry point, see `cmd/quecto-harness/main.go`\n" +
       "- `internal` holds the agent loop, the model client and the tools\n" +
-      "- `web` holds this interface\n\n" +
+      "- `web` holds this interface, and `AGENTS.md` the house rules\n\n" +
+      "I also wrote `example.svg`, a small scene, and `hello.py`, which prints a greeting.\n\n" +
       "Tell me which part to change and I will read it before touching anything.",
     denied:
       "No shell then. Paste the output of ls or name the file you want me to " +
@@ -416,6 +448,11 @@ export class MockApi implements HarnessApi {
   // When the running turn began, so the cost line under the answer is real
   // wall clock rather than a made-up number.
   private turnStart = 0;
+  // What the scripted turns wrote, which is all the project readFile knows.
+  private files = new Map<string, string>([
+    ["AGENTS.md", "# Working in this repo\n\nAnswer in as few words as the question needs.\n"],
+    ["cmd/quecto-harness/main.go", 'package main\n\nfunc main() {\n\tprintln("quecto")\n}\n'],
+  ]);
 
   constructor() {
     this.seed();
@@ -630,6 +667,46 @@ export class MockApi implements HarnessApi {
       added: files.reduce((n, f) => n + f.added, 0),
       removed: files.reduce((n, f) => n + f.removed, 0),
     };
+  }
+
+  async readFile(id: string, path: string): Promise<ProjectFile> {
+    await this.tick();
+    if (!this.transcripts.has(id)) throw new Error(`session ${id} not found`);
+    const clean = path.replace(/^\.\//, "").replace(/^\/Users\/jay\/Projects\/Personal\/quecto-harness\//, "");
+    const content = this.files.get(clean);
+    if (content === undefined) throw new Error(`No such file: ${clean}`);
+    return { path: clean, kind: "text", bytes: content.length, content };
+  }
+
+  async findFiles(_project: string, q: string): Promise<string[]> {
+    await this.tick(60);
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    return [...this.files.keys()]
+      .filter((path) => words.every((w) => path.toLowerCase().includes(w)))
+      .sort((a, b) => a.length - b.length)
+      .slice(0, 30);
+  }
+
+  async listDir(id: string, path: string): Promise<ProjectDir> {
+    await this.tick();
+    if (!this.transcripts.has(id)) throw new Error(`session ${id} not found`);
+    const prefix = path ? `${path}/` : "";
+    const seen = new Map<string, { name: string; dir: boolean; bytes: number }>();
+    for (const [file, content] of this.files) {
+      if (!file.startsWith(prefix)) continue;
+      const [name, ...rest] = file.slice(prefix.length).split("/");
+      if (!name) continue;
+      seen.set(name, { name, dir: rest.length > 0, bytes: rest.length > 0 ? 0 : content.length });
+    }
+    if (path && seen.size === 0) throw new Error(`No such folder: ${path}`);
+    const entries = [...seen.values()].sort((a, b) =>
+      a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
+    );
+    return { root: this.config.projects[0] ?? "", path, entries };
+  }
+
+  fileUrl(id: string, path: string): string {
+    return `/api/sessions/${encodeURIComponent(id)}/file?raw=1&path=${encodeURIComponent(path)}`;
   }
 
   async renameSession(id: string, title: string): Promise<void> {
@@ -992,6 +1069,27 @@ export class MockApi implements HarnessApi {
         });
       }
 
+      if (allowed) {
+        for (const write of script.writes ?? []) {
+          const id = nextId("t");
+          const fresh = !this.files.has(write.path);
+          this.send(session, t, { type: "tool_call", id, name: "write_file", args: write });
+          await this.sleep(200, turn);
+          this.send(session, t, { type: "tool_start", id, name: "write_file", timeout_s: null });
+          this.files.set(write.path, write.content);
+          const lines = write.content.replace(/\n$/, "").split("\n").length;
+          this.send(session, t, {
+            type: "tool_output",
+            id,
+            output: `${fresh ? "wrote" : "replaced"} ${write.path} (${write.content.length} bytes, ${lines} lines)`,
+            exit_code: null,
+            truncated: false,
+            meta: { added: lines, removed: 0 },
+          });
+          await this.sleep(160, turn);
+        }
+      }
+
       this.emit(session, { type: "status", status: "streaming" });
       await this.sleep(300, turn);
       await this.stream(session, t, allowed ? script.reply : script.denied, turn);
@@ -1059,9 +1157,23 @@ export class MockApi implements HarnessApi {
       (n, i) => n + (i.kind === "assistant" || i.kind === "reasoning" ? tokensIn(i.text) : 0),
       0,
     );
+    const input = 36000 + tokens * 3;
     this.send(session, t, {
       type: "done",
-      cost: { tokens, ms, tokPerS: 52, requests: 2 },
+      cost: {
+        tokens,
+        ms,
+        tokPerS: 52,
+        requests: 4,
+        input,
+        cached: Math.round(input * 0.99),
+        llmMs: Math.round(ms * 0.8),
+        genMs: Math.round(ms * 0.6),
+        firstMs: 2800,
+        toolMs: Math.round(ms * 0.15),
+        agent: this.active()?.name,
+        model: this.active()?.model,
+      },
     });
     this.emit(session, { type: "status", status: "idle" });
   }

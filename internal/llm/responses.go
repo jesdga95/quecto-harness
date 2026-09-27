@@ -263,7 +263,10 @@ type responseOutput struct {
 }
 
 type responsesUsage struct {
-	InputTokens  *int `json:"input_tokens"`
+	InputTokens        *int `json:"input_tokens"`
+	InputTokensDetails *struct {
+		CachedTokens *int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
 	OutputTokens *int `json:"output_tokens"`
 	TotalTokens  *int `json:"total_tokens"`
 }
@@ -272,11 +275,15 @@ func (u *responsesUsage) toUsage() *Usage {
 	if u == nil {
 		return nil
 	}
-	return &Usage{
+	out := &Usage{
 		PromptTokens:     deref(u.InputTokens),
 		CompletionTokens: deref(u.OutputTokens),
 		TotalTokens:      deref(u.TotalTokens),
 	}
+	if u.InputTokensDetails != nil {
+		out.CachedTokens = u.InputTokensDetails.CachedTokens
+	}
+	return out
 }
 
 // dispatch decodes one named frame. The endpoint closes the stream with a

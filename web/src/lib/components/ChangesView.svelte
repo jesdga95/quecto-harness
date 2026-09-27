@@ -34,19 +34,21 @@
   }
 </script>
 
-<aside class="dock">
-  <div class="dock-head">
-    <h2 class="text-[13px] font-medium">Changes in this session</h2>
-    <span class="num ml-auto text-[12px]">
+<div class="panel-path">
+  <div class="panel-crumbs"><span class="crumb is-last">Every file this session wrote</span></div>
+  <div class="flex shrink-0 items-center gap-1.5">
+    <span class="num text-[12px]">
       <span class="stat-add">+{app.changes.added}</span>
       <span class="stat-del ml-1.5">&minus;{app.changes.removed}</span>
     </span>
     {#if patch}
-      <CopyButton text={patch} label="Copy diff" extra="changes-copy" />
+      <CopyButton text={patch} label="Copy diff" />
     {/if}
   </div>
+</div>
 
-  <div class="min-h-0 flex-1 overflow-y-auto px-2.5 pb-5">
+<div class="artifact-body">
+  <div class="min-h-0 flex-1 overflow-y-auto px-2.5 pt-2 pb-5">
     {#each files as file (file.path)}
       <div class="mb-1">
         <button
@@ -77,4 +79,4 @@
       </div>
     {/each}
   </div>
-</aside>
+</div>

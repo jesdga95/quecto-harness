@@ -68,6 +68,10 @@
      on the border rather than as a colour. */
   --edge: rgb(13 148 136 / 0.3);
   --edge-focus: rgb(13 148 136 / 0.55);
+  --plan: #6d28d9;
+  --plan-bg: #efe9fd;
+  --plan-edge: rgb(124 58 237 / 0.3);
+  --plan-edge-focus: rgb(124 58 237 / 0.55);
   --surface: #ffffff;
   --surface-2: #f1f5f9;
   --border: #e2e8f0;
@@ -111,6 +115,10 @@
     --hair: rgb(226 232 240 / 0.09);
     --edge: rgb(45 212 191 / 0.28);
     --edge-focus: rgb(45 212 191 / 0.5);
+    --plan: #c4b5fd;
+    --plan-bg: rgb(167 139 250 / 0.16);
+    --plan-edge: rgb(167 139 250 / 0.3);
+    --plan-edge-focus: rgb(167 139 250 / 0.55);
     --surface: #1a2436;
     --surface-2: #263145;
     --border: #2e3b50;
@@ -250,36 +258,36 @@
 
   /* A session that changes no files carries its mode in the accent, so a
      read-only conversation shows at a glance. */
+  /* The mode chip in plan mode, in the colour the composer's edge takes. */
   .chip-mode {
     border-color: transparent;
-    background: var(--accent-bg);
-    color: var(--accent);
+    background: var(--plan-bg);
+    color: var(--plan);
   }
   .chip-mode:hover {
     border-color: transparent;
-    background: var(--accent-bg);
+    background: var(--plan-bg);
     opacity: 0.88;
   }
+  .text-plan {
+    color: var(--plan);
+  }
 
-  /* Where the conversation moved to another mode. */
-  .mode-divider {
+  /* An approved plan, said in one line where the planning folded away. */
+  .plan-approved {
     display: flex;
     align-items: center;
-    gap: 10px;
-    margin: 18px 0 2px;
-    font-size: 12px;
-    color: var(--muted);
+    gap: 8px;
+    margin: 8px 0 4px;
+    font-size: 15px;
+    color: var(--text-2);
   }
-  .mode-divider::before,
-  .mode-divider::after {
-    content: "";
-    flex: 1;
-    height: 1px;
-    background: var(--hair);
-  }
-  .mode-divider b {
-    font-weight: 500;
+  .plan-approved svg {
     color: var(--accent);
+  }
+  .plan-approved b {
+    font-weight: 500;
+    color: var(--text);
   }
 
   /* The plan waiting for approval. The composer's edge sets it apart from a
@@ -612,6 +620,13 @@
   .composer:focus-within {
     border-color: var(--edge-focus);
   }
+  /* Plan mode reads files and changes none, and the field says so in its edge. */
+  .composer.is-plan {
+    border-color: var(--plan-edge);
+  }
+  .composer.is-plan:focus-within {
+    border-color: var(--plan-edge-focus);
+  }
 
   .popover {
     border-radius: 14px;
@@ -736,14 +751,16 @@
     color: var(--muted);
   }
 
-  /* One line per agent step until it is opened, so a long turn stays readable. */
+  /* One line per agent step until it is opened, so a long turn stays readable.
+     The text stands on the reply edge, the hover keeps its own 8 px around it. */
   .step {
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 100%;
+    width: calc(100% + 16px);
+    margin: 0 -8px;
     padding: 5px 8px;
-    border-radius: 10px;
+    border-radius: 8px;
     background: none;
     border: 0;
     text-align: left;
@@ -751,6 +768,7 @@
     font-size: 13px;
     color: var(--text);
   }
+
   .step:hover {
     background: var(--surface-2);
   }
@@ -781,6 +799,7 @@
   .step .sep {
     color: var(--border-2);
   }
+
   /* Points down once the row is open, so a row with more to show says so. */
   .step .caret {
     display: inline-grid;
@@ -794,6 +813,287 @@
   .step .caret svg {
     width: 13px;
     height: 13px;
+  }
+
+  /* A finished turn's work, folded under one line with a hairline below it.
+     Opened, the rows follow in the order they ran. */
+  .fold {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 6px 0 2px;
+  }
+  .fold-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 0 10px;
+    border: 0;
+    border-bottom: 1px solid var(--hair);
+    background: none;
+    font-size: 14px;
+    color: var(--muted);
+    text-align: left;
+    cursor: pointer;
+  }
+  .fold-head:hover {
+    color: var(--text);
+  }
+  .fold-head .caret {
+    display: inline-grid;
+    place-items: center;
+    transition: transform 120ms ease;
+  }
+  .fold-head .caret.is-open {
+    transform: rotate(90deg);
+  }
+  .fold-head .caret svg {
+    width: 13px;
+    height: 13px;
+  }
+  .fold-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  /* The line under a turn's answer. The copy glyph stands on the text edge. */
+  .turn-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin: 10px 0 0 -5px;
+  }
+  /* Parts the actions on a turn from the figures about it. */
+  .foot-sep {
+    width: 1px;
+    height: 16px;
+    margin: 0 6px;
+    background: var(--border);
+  }
+  .foot-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: none;
+    font-size: 12.5px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .foot-chip svg {
+    width: 15px;
+    height: 15px;
+    flex: none;
+  }
+  .foot-chip:hover:not(.is-static),
+  .foot-chip.is-open {
+    background: var(--border);
+    color: var(--text);
+  }
+  .foot-chip:focus-visible {
+    outline: none;
+    border-color: var(--edge-focus);
+  }
+  .foot-chip.is-static {
+    cursor: default;
+  }
+  .foot-time {
+    padding: 0 6px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  /* A popover of figures: a title, a few large numbers, and one quiet line
+     for the rest. */
+  .stat-card {
+    padding: 8px 10px 6px;
+  }
+  .stat-title {
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .stat-who {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .stat-tiles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 16px;
+    margin-top: 14px;
+  }
+  .stat-tiles > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .stat-tiles span {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .stat-tiles b {
+    font-size: 19px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .stat-tiles small {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .stat-note {
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid var(--hair);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+
+  /* The session so far, under the context in its popover. */
+  .ctx-session {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--hair);
+  }
+
+  /* A card per file the turn created, two to a row. */
+  .file-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .file-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    padding: 12px 12px 12px 12px;
+    border: 1px solid var(--hair);
+    border-radius: 14px;
+    background: var(--surface);
+  }
+  .file-card-icon {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    flex: none;
+    border-radius: 10px;
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+  .split-btn {
+    display: flex;
+    flex: none;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .split-main,
+  .split-caret {
+    display: inline-flex;
+    align-items: center;
+    border: 0;
+    background: none;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .split-main {
+    padding: 5px 11px;
+    border-radius: 9px 0 0 9px;
+  }
+  .split-caret {
+    padding: 5px 8px;
+    border-left: 1px solid var(--border);
+    border-radius: 0 9px 9px 0;
+    color: var(--muted);
+  }
+  .split-main:hover,
+  .split-caret:hover,
+  .split-caret[aria-expanded="true"] {
+    background: var(--surface-2);
+  }
+
+  /* What a write or edit put in its file: a header naming it, the lines, the
+     middle of a long one folded, and the counts. */
+  .wdiff {
+    border-radius: 12px;
+    background: var(--surface-2);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    overflow: hidden;
+  }
+  .wdiff-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 6px 2px 13px;
+  }
+  .wdiff-path {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-weight: 600;
+    color: var(--text);
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+  .wdiff-path:hover {
+    color: var(--accent);
+  }
+  .wdiff-head .icon-btn {
+    margin-left: auto;
+  }
+  .wdiff-body {
+    padding: 2px 13px;
+    max-height: 360px;
+    overflow: auto;
+  }
+  .wdiff-line {
+    display: flex;
+    gap: 8px;
+    white-space: pre;
+  }
+  .wdiff-line.is-add {
+    color: var(--ok);
+  }
+  .wdiff-line.is-del {
+    color: var(--crit);
+  }
+  .wdiff-sign {
+    flex: none;
+    user-select: none;
+  }
+  .wdiff-fold {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .wdiff-fold:hover {
+    color: var(--text);
+  }
+  .wdiff-foot {
+    padding: 6px 13px 9px;
+    color: var(--muted);
   }
 
   /* The text an opened row shows. Its line breaks are the model's own, and a
@@ -1064,26 +1364,166 @@
   .row-wrap.is-draggable .side-row {
     cursor: grab;
   }
-  .row-wrap.is-dragging {
+  .project-group {
+    position: relative;
+  }
+  .project-group.is-dragging {
     opacity: 0.4;
   }
-  .row-wrap.is-dragging .side-row {
+  .project-group.is-dragging .side-row {
     cursor: grabbing;
   }
+  /* Where a dragged project lands: a line across the gap between two groups,
+     capped with a ring at its start so it reads as an insertion point. */
   .drop-line {
     position: absolute;
-    left: 8px;
-    right: 8px;
+    left: 10px;
+    right: 6px;
     height: 2px;
     border-radius: 1px;
     background: var(--accent);
     pointer-events: none;
+    z-index: 1;
+  }
+  .drop-line::before {
+    content: "";
+    position: absolute;
+    left: -6px;
+    top: -3px;
+    width: 8px;
+    height: 8px;
+    box-sizing: border-box;
+    border: 2px solid var(--accent);
+    border-radius: 50%;
+    background: var(--panel);
   }
   .drop-line.is-top {
-    top: -2px;
+    top: -5px;
   }
   .drop-line.is-bottom {
-    bottom: -2px;
+    bottom: 3px;
+  }
+
+  /* The one filled control in the sidebar: starting a session is what the
+     sidebar is most often opened for. */
+  .new-session {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--hair);
+    border-radius: 12px;
+    background: rgb(100 116 139 / 0.14);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    cursor: pointer;
+    transition:
+      background 90ms ease,
+      border-color 90ms ease;
+  }
+  .new-session:hover {
+    background: rgb(100 116 139 / 0.22);
+    border-color: var(--border-2);
+  }
+  .new-session:focus-visible {
+    outline: none;
+    border-color: var(--edge-focus);
+  }
+  .new-session svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  /* The project a new session goes to: its folder is open and in the accent.
+     Its name stays plain, since the open session is marked below it. */
+  .project-row {
+    padding-right: 54px;
+  }
+  .project-row.is-current {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .project-row.is-current .folder-glyph svg {
+    color: var(--accent);
+  }
+  .folder-glyph {
+    display: inline-grid;
+    place-items: center;
+  }
+  /* Folds a project's sessions. It shows on hover, and stays while folded so
+     a folded project says it has more. */
+  .fold-toggle {
+    position: absolute;
+    right: 28px;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 7px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    opacity: 0;
+  }
+  .row-wrap:hover .fold-toggle,
+  .fold-toggle:focus-visible,
+  .fold-toggle[aria-expanded="false"] {
+    opacity: 1;
+  }
+  .fold-toggle:hover {
+    background: rgb(100 116 139 / 0.16);
+    color: var(--text);
+  }
+  .fold-toggle .caret {
+    display: inline-grid;
+    transition: transform 120ms ease;
+  }
+  .fold-toggle .caret.is-open {
+    transform: rotate(90deg);
+  }
+  .fold-toggle svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  /* A session at work: a small grid of dots lighting in turn. */
+  .gen-dots {
+    display: grid;
+    grid-template-columns: repeat(2, 3px);
+    grid-auto-rows: 3px;
+    gap: 2px;
+    flex: none;
+  }
+  .gen-dots i {
+    border-radius: 1px;
+    background: var(--accent);
+    opacity: 0.25;
+    animation: gen-dot 1.2s ease-in-out infinite;
+  }
+  .gen-dots i:nth-child(1) { animation-delay: 0ms; }
+  .gen-dots i:nth-child(2) { animation-delay: 200ms; }
+  .gen-dots i:nth-child(4) { animation-delay: 400ms; }
+  .gen-dots i:nth-child(6) { animation-delay: 600ms; }
+  .gen-dots i:nth-child(5) { animation-delay: 800ms; }
+  .gen-dots i:nth-child(3) { animation-delay: 1000ms; }
+  @keyframes gen-dot {
+    0%,
+    100% {
+      opacity: 0.25;
+    }
+    30% {
+      opacity: 1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .gen-dots i {
+      animation: none;
+      opacity: 0.8;
+    }
   }
 
   /* What the user sent: the message and everything attached to it, in one
@@ -1386,30 +1826,151 @@
     flex: 1;
     border-left: 0;
   }
-  /* The panel's title, which opens the list of artifacts when there are
-     several. */
-  .artifact-pick {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    max-width: 100%;
-    margin-left: -8px;
-    padding: 5px 8px;
-    border: 0;
-    border-radius: 8px;
-    background: none;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text);
-    cursor: pointer;
-  }
   .popover-item.is-on {
     background: var(--surface-2);
     font-weight: 500;
   }
-  .artifact-pick:hover,
-  .artifact-pick.is-open {
-    background: var(--surface-2);
+  /* Files matching an @ in the composer, over the field. */
+  .mention-list {
+    max-height: 280px;
+    overflow-y: auto;
+  }
+  /* The panel's tabs: what the reader has open, the file browser among them.
+     The strip scrolls sideways once it is full. */
+  .panel-tabs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 52px;
+    padding: 0 12px 0 10px;
+  }
+  .panel-tab-strip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .panel-tab {
+    display: flex;
+    align-items: center;
+    flex: none;
+    max-width: 200px;
+    border-radius: 9px;
+    color: var(--text-2);
+  }
+  .panel-tab:hover {
+    background: rgb(100 116 139 / 0.12);
+  }
+  .panel-tab.is-on {
+    background: rgb(100 116 139 / 0.18);
+    color: var(--text);
+  }
+  .panel-tab-main {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    padding: 6px 4px 6px 10px;
+    border: 0;
+    background: none;
+    font-size: 13px;
+    color: inherit;
+    cursor: pointer;
+  }
+  .panel-tab-x {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    margin-right: 5px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    opacity: 0;
+  }
+  .panel-tab:hover .panel-tab-x,
+  .panel-tab.is-on .panel-tab-x,
+  .panel-tab-x:focus-visible {
+    opacity: 1;
+  }
+  .panel-tab-x:hover {
+    background: var(--border);
+    color: var(--text);
+  }
+  /* Where the tab's file lives, each folder a way into the browser, and how
+     the file is drawn. */
+  .panel-path {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 0 12px 6px 16px;
+    border-bottom: 1px solid var(--hair);
+  }
+  .panel-crumbs {
+    display: flex;
+    flex: 1;
+    align-items: baseline;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .crumb {
+    flex: none;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+  }
+  button.crumb {
+    cursor: pointer;
+  }
+  button.crumb:hover {
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .crumb.is-last {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+  }
+  .crumb-sep {
+    flex: none;
+    padding: 0 5px;
+  }
+  /* One folder of the project, a row per entry. */
+  .browse-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 8px 10px 16px;
+  }
+  .browse-row {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 9px;
+    background: none;
+    font-size: 14px;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+  }
+  .browse-row:hover {
+    background: rgb(100 116 139 / 0.12);
   }
   .artifact-body {
     position: relative;
@@ -1429,6 +1990,13 @@
   .artifact-svg {
     position: absolute;
     inset: 20px;
+  }
+  .artifact-img {
+    position: absolute;
+    inset: 20px;
+    width: calc(100% - 40px);
+    height: calc(100% - 40px);
+    object-fit: contain;
   }
   .artifact-frame {
     display: block;
@@ -1455,7 +2023,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 4px 24px 18px;
+    padding: 16px 24px 18px;
   }
 
   /* A plan drawn by section: an icon and a label over each, the body set in
@@ -1563,14 +2131,12 @@
     color: var(--ok);
   }
 
+  /* The code fills the panel edge to edge, under the path row. */
   .artifact-source {
     position: relative;
     display: flex;
     flex: 1;
     min-height: 0;
-    margin: 0 10px 10px;
-    border: 1px solid var(--hair);
-    border-radius: 12px;
     background: var(--surface-2);
     overflow: hidden;
   }
@@ -1579,67 +2145,37 @@
     min-height: 0;
     overflow: auto;
   }
+  /* The gutter and the code share one size and one line height, or the
+     numbers drift from their lines as the file goes on. */
   .artifact-source pre {
     margin: 0;
-    padding: 11px 13px;
-  }
-  .artifact-source code {
+    padding: 14px 16px;
     font-family: var(--font-mono);
     font-size: 12.5px;
     line-height: 1.55;
+  }
+  /* Line numbers beside the code. They stay put while the code scrolls
+     sideways, on the code's own background. */
+  .source-rows {
+    display: flex;
+    align-items: flex-start;
+    min-width: max-content;
+  }
+  .artifact-source .source-gutter {
+    position: sticky;
+    left: 0;
+    flex: none;
+    padding: 14px 10px 14px 14px;
+    border-right: 1px solid var(--hair);
+    background: var(--surface-2);
+    text-align: right;
+    color: var(--muted);
+    user-select: none;
+  }
+  .artifact-source code {
+    font: inherit;
     color: var(--text-2);
     white-space: pre;
-  }
-  /* Where a drawing or page sits in a reply. It opens the artifact beside the
-     transcript. */
-  .artifact-card {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    width: 100%;
-    margin: 16px 0;
-    padding: 14px 16px 14px 14px;
-    border: 1px solid var(--hair);
-    border-radius: 14px;
-    background: var(--surface);
-    text-align: left;
-    cursor: pointer;
-    transition:
-      background 90ms ease,
-      border-color 90ms ease;
-  }
-  .artifact-card:hover {
-    background: var(--surface-2);
-    border-color: var(--border-2);
-  }
-  .artifact-card.is-on {
-    border-color: var(--accent);
-  }
-  .artifact-card-icon {
-    display: grid;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    flex: none;
-    border-radius: 10px;
-    background: var(--accent-bg);
-    color: var(--accent);
-  }
-  .artifact-card-icon svg {
-    width: 20px;
-    height: 20px;
-  }
-  .artifact-card-open {
-    padding: 4px 11px;
-    border-radius: 999px;
-    background: var(--surface-2);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-2);
-  }
-  .artifact-card.is-on .artifact-card-open {
-    background: var(--accent-bg);
-    color: var(--accent);
   }
   /* Pulled right, so the icon rather than its hit area lines up with the edge. */
   .changes-copy {
@@ -2022,6 +2558,71 @@
   @keyframes spin {
     to {
       transform: rotate(360deg);
+    }
+  }
+
+  /* The compaction mark: the conversation as a stack of lines, squeezed down
+     to the summary it becomes. */
+  .sq {
+    position: relative;
+    width: 24px;
+    height: 17px;
+    flex: none;
+    animation: squash 2.6s cubic-bezier(0.6, 0, 0.3, 1) infinite;
+  }
+  .sq i {
+    position: absolute;
+    left: 0;
+    height: 2.5px;
+    border-radius: 2px;
+    background: var(--border-2);
+  }
+  .sq i:nth-child(1) {
+    top: 0;
+    width: 24px;
+    animation: lineout 2.6s ease infinite;
+  }
+  .sq i:nth-child(2) {
+    top: 4px;
+    width: 18px;
+    animation: lineout 2.6s ease infinite 60ms;
+  }
+  .sq i:nth-child(3) {
+    top: 8px;
+    width: 21px;
+    animation: lineout 2.6s ease infinite 120ms;
+  }
+  .sq i:nth-child(4) {
+    top: 12px;
+    width: 14px;
+    background: var(--accent);
+  }
+  @keyframes squash {
+    0%,
+    45% {
+      transform: scaleY(1);
+    }
+    70%,
+    84% {
+      transform: scaleY(0.16);
+    }
+    100% {
+      transform: scaleY(1);
+    }
+  }
+  @keyframes lineout {
+    0%,
+    45% {
+      opacity: 1;
+    }
+    62% {
+      opacity: 0;
+    }
+    84% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
     }
   }
 

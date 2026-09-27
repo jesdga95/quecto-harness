@@ -1,5 +1,8 @@
 <script lang="ts">
+  import CaretRight from "phosphor-svelte/lib/CaretRight";
   import Folder from "phosphor-svelte/lib/Folder";
+  import FolderOpen from "phosphor-svelte/lib/FolderOpen";
+  import PlusCircle from "phosphor-svelte/lib/PlusCircle";
   import RowMenu from "./RowMenu.svelte";
   import { confirm } from "../state/confirm.svelte";
   import FolderPlus from "phosphor-svelte/lib/FolderPlus";
@@ -98,6 +101,33 @@
     void reorderProjects(list);
   }
 
+  // Projects whose sessions are folded away. It is this browser's own
+  // preference, so it lives in local storage and a blocked store costs only
+  // the memory of it.
+  const FOLDED_KEY = "quecto.folded-projects";
+  let folded = $state<string[]>(readFolded());
+  function readFolded(): string[] {
+    try {
+      const raw = JSON.parse(localStorage.getItem(FOLDED_KEY) ?? "[]");
+      return Array.isArray(raw) ? raw.filter((p): p is string => typeof p === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+  function toggleFold(path: string): void {
+    folded = folded.includes(path) ? folded.filter((p) => p !== path) : [...folded, path];
+    try {
+      localStorage.setItem(FOLDED_KEY, JSON.stringify(folded));
+    } catch {
+      // The fold holds for this page.
+    }
+  }
+  // A search shows every match, folded or not.
+  const isFolded = (path: string) => query.trim() === "" && folded.includes(path);
+
+  // The open session is the one whose run state this page follows.
+  const generating = $derived(app.status !== "idle");
+
   function sessions(path: string) {
     const list = sessionsOf(path);
     const q = query.trim().toLowerCase();
@@ -128,8 +158,8 @@
     </div>
 
     <div class="px-3 pb-3">
-      <button class="btn btn-ghost w-full justify-center" onclick={() => newSession()}>
-        <Plus /> New session
+      <button class="new-session" onclick={() => newSession()}>
+        <PlusCircle /> New session
       </button>
     </div>
 
@@ -164,96 +194,120 @@
       ondrop={drop}
     >
       {#each projects() as project (project.path)}
-        <div class="row-wrap" class:is-draggable={canDrag} class:is-dragging={drag?.id === project.path}>
+        <!-- The whole group is the drop target, since a drop moves the project
+             with its sessions, and the line marks the group's edge. -->
+        <div
+          class="project-group"
+          class:is-dragging={drag?.id === project.path}
+          role="group"
+          ondragover={(e) => passOverRow(e, { kind: "project", id: project.path })}
+          ondragleave={(e) => leaveRow(e, project.path)}
+        >
           {#if canDrag && over && over.target.id === project.path && over.before}
             <div class="drop-line is-top"></div>
           {/if}
-          <button
-            class="side-row"
-            draggable={canDrag}
-            ondragstart={(e) => startDrag(e, { kind: "project", id: project.path })}
-            ondragover={(e) => passOverRow(e, { kind: "project", id: project.path })}
-            ondragleave={(e) => leaveRow(e, project.path)}
-            ondragend={endDrag}
-            onclick={() => selectProject(project.path)}
-          >
-            <Folder />
-            <span
-              class="min-w-0 flex-1 truncate"
-              class:text-ink={project.path === app.projectPath}
-              class:font-medium={project.path === app.projectPath}>{project.name}</span
+          <div class="row-wrap" class:is-draggable={canDrag}>
+            <button
+              class="side-row project-row"
+              class:is-current={project.path === app.projectPath}
+              draggable={canDrag}
+              ondragstart={(e) => startDrag(e, { kind: "project", id: project.path })}
+              ondragend={endDrag}
+              onclick={() => selectProject(project.path)}
             >
-          </button>
-          <div class="row-act">
-            <RowMenu
-              deleteLabel="Remove"
-              ondelete={async () => {
-                const count = sessions(project.path).length;
-                const ok = await confirm({
-                  title: `Remove ${project.name}?`,
-                  body:
-                    (count === 1
-                      ? "Its 1 conversation is deleted. "
-                      : count > 1
-                        ? `Its ${count} conversations are deleted. `
-                        : "") +
-                    "The folder and the files in it are left alone, and its allowlist rules are kept for when you add it back.",
-                  confirmLabel: count > 0 ? "Remove and delete" : "Remove",
-                });
-                if (ok) await removeProject(project.path);
-              }}
-            />
+              <span class="folder-glyph">
+                {#if project.path === app.projectPath}<FolderOpen weight="fill" />{:else}<Folder />{/if}
+              </span>
+              <span class="min-w-0 flex-1 truncate">{project.name}</span>
+            </button>
+            {#if sessions(project.path).length > 0}
+              <button
+                class="fold-toggle"
+                aria-label={isFolded(project.path) ? `Show the sessions in ${project.name}` : `Hide the sessions in ${project.name}`}
+                aria-expanded={!isFolded(project.path)}
+                onclick={() => toggleFold(project.path)}
+              >
+                <span class="caret" class:is-open={!isFolded(project.path)}><CaretRight /></span>
+              </button>
+            {/if}
+            <div class="row-act">
+              <RowMenu
+                deleteLabel="Remove"
+                ondelete={async () => {
+                  const count = sessions(project.path).length;
+                  const ok = await confirm({
+                    title: `Remove ${project.name}?`,
+                    body:
+                      (count === 1
+                        ? "Its 1 conversation is deleted. "
+                        : count > 1
+                          ? `Its ${count} conversations are deleted. `
+                          : "") +
+                      "The folder and the files in it are left alone, and its allowlist rules are kept for when you add it back.",
+                    confirmLabel: count > 0 ? "Remove and delete" : "Remove",
+                  });
+                  if (ok) await removeProject(project.path);
+                }}
+              />
+            </div>
           </div>
+
+          {#if !isFolded(project.path)}
+            <div class="mb-3 pl-3">
+              {#each sessions(project.path) as session (session.id)}
+                {#if renaming === session.id}
+                  <input
+                    class="input mb-[3px]"
+                    bind:value={draft}
+                    onkeydown={(e) => {
+                      if (e.key === "Enter") {
+                        renaming = "";
+                        void renameSession(session.id, draft);
+                      }
+                      if (e.key === "Escape") renaming = "";
+                    }}
+                    onblur={() => (renaming = "")}
+                    aria-label="Session name"
+                  />
+              {:else}
+                <div class="row-wrap">
+                  <button
+                    class="side-row"
+                    class:is-active={session.id === app.sessionId}
+                    onclick={() => selectSession(session.id)}
+                  >
+                    {#if session.id === app.sessionId && generating}
+                      <span class="gen-dots" aria-label="Working"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                    {/if}
+                    <span class="min-w-0 flex-1 truncate">{session.title}</span>
+                    <span class="num text-[11px] text-muted">{since(session.created)}</span>
+                  </button>
+                  <div class="row-act">
+                    <RowMenu
+                      onrename={() => {
+                        draft = session.title;
+                        renaming = session.id;
+                      }}
+                      ondelete={async () => {
+                        const ok = await confirm({
+                          title: "Delete this session?",
+                          body: "Its transcript is removed from disk. This cannot be undone.",
+                          confirmLabel: "Delete",
+                        });
+                        if (ok) await deleteSession(session.id);
+                      }}
+                    />
+                  </div>
+                </div>
+              {/if}
+            {/each}
+            </div>
+          {:else}
+            <div class="mb-2"></div>
+          {/if}
           {#if canDrag && over && over.target.id === project.path && !over.before}
             <div class="drop-line is-bottom"></div>
           {/if}
-        </div>
-
-        <div class="mb-3 pl-3">
-          {#each sessions(project.path) as session (session.id)}
-            {#if renaming === session.id}
-              <input
-                class="input mb-[3px]"
-                bind:value={draft}
-                onkeydown={(e) => {
-                  if (e.key === "Enter") {
-                    renaming = "";
-                    void renameSession(session.id, draft);
-                  }
-                  if (e.key === "Escape") renaming = "";
-                }}
-                onblur={() => (renaming = "")}
-                aria-label="Session name"
-              />
-            {:else}
-              <div class="row-wrap">
-                <button
-                  class="side-row"
-                  class:is-active={session.id === app.sessionId}
-                  onclick={() => selectSession(session.id)}
-                >
-                  <span class="min-w-0 flex-1 truncate">{session.title}</span>
-                  <span class="num text-[11px] text-muted">{since(session.created)}</span>
-                </button>
-                <div class="row-act">
-                  <RowMenu
-                    onrename={() => {
-                      draft = session.title;
-                      renaming = session.id;
-                    }}
-                    ondelete={async () => {
-                      const ok = await confirm({
-                        title: "Delete this session?",
-                        body: "Its transcript is removed from disk. This cannot be undone.",
-                        confirmLabel: "Delete",
-                      });
-                      if (ok) await deleteSession(session.id);
-                    }}
-                  />
-                </div>
-              </div>
-            {/if}
-          {/each}
         </div>
       {/each}
     </nav>

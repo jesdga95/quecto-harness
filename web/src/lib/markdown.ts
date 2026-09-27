@@ -1,13 +1,12 @@
-// Markdown, TeX and drawings for model output, which is untrusted and usually
-// half written. Every branch either escapes what it emits or builds the markup
+// Markdown and TeX for model output, which is untrusted and usually half
+// written. Every branch either escapes what it emits or builds the markup
 // itself, so the result is safe to hand to {@html}. An unclosed fence, a lone
-// dollar or a table missing its body stays literal text and never throws. A
-// drawing, a page and a named file are handed back as their source, for the
-// caller to show as an artifact.
+// dollar or a table missing its body stays literal text and never throws.
 
 import { Marked, type RendererObject } from "marked";
 import katex from "katex";
 import { escapeHtml, guess, highlight } from "./highlight";
+import { fileLinkHtml, fileTarget } from "./files";
 
 // Formulas are lifted out before the markdown runs and put back afterwards.
 // The slots use private use characters, which are stripped from the source
@@ -19,26 +18,6 @@ const SLOT_RE = /\uE000(\d+)\uE001/g;
 // slot. That paragraph is dropped so the formula becomes a block of its own.
 const LONE_SLOT_RE = /<p>\s*\uE000(\d+)\uE001\s*<\/p>/g;
 const PRE_RE = /<pre>[\s\S]*?<\/pre>/g;
-// Drawings and pages use a second pair of slots, since what fills them is an
-// element rather than markup. One that did not end up a paragraph of its own
-// goes back to being text.
-const CLOSE_RE = /(^|\n)[ ]*(`{3,}|~{3,})[ \t]*\n?$/;
-const DRAW_OPEN = "\uE002";
-const DRAW_CLOSE = "\uE003";
-const DRAW_RE = /\uE002(\d+)\uE003/g;
-const LONE_DRAW_RE = /<p>\s*\uE002(\d+)\uE003\s*<\/p>/g;
-
-/** A drawing, page or named file in a reply. Name is the file name the fence
-    gave, or empty. Index counts blocks in order within the reply, and complete
-    says its fence or closing tag has arrived. */
-export interface Block {
-  kind: "svg" | "page" | "file";
-  name: string;
-  source: string;
-  complete: boolean;
-  index: number;
-}
-
 interface Formula {
   raw: string;
   tex: string;
@@ -88,53 +67,6 @@ function fenceEnd(source: string, open: number, char: string, size: number): num
     line = nl + 1;
   }
   return source.length;
-}
-
-// Where a page's markup starts, past whitespace and comments.
-function pageHead(body: string): string {
-  return body.replace(/^(\s|<!--[\s\S]*?-->)*/, "").slice(0, 16).toLowerCase();
-}
-
-// A fence whose info string is a file name, extension included, holds that
-// whole file. The name may follow a language, or be joined to one by a colon.
-function fenceFile(info: string): string {
-  const words = info.trim().split(/[\s:]+/).slice(0, 2);
-  for (const word of words) {
-    if (/^[\w./-]{0,120}[\w-]\.[a-z0-9]{1,10}$/i.test(word) && !word.includes("..")) return word;
-  }
-  return "";
-}
-
-// What a fence is shown as rather than as its text, or null for a fence that
-// stays code. All are taken as they stream. A page is a whole document, so an
-// unnamed fragment of markup stays something to read, and a body too short to
-// tell stays code until it can be told. A named file is a file whatever it is.
-function fenceBlock(
-  source: string,
-  open: number,
-  end: number,
-  size: number,
-): Omit<Block, "index"> | null {
-  const nl = source.indexOf("\n", open);
-  if (nl < 0 || nl >= end) return null;
-  const infoRaw = source.slice(open + size, nl);
-  const name = fenceFile(infoRaw);
-  const ext = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
-  const info = name ? ext : fenceLanguage(infoRaw).toLowerCase();
-
-  const raw = source.slice(nl + 1, end);
-  const body = raw.replace(CLOSE_RE, "");
-  const complete = body !== raw;
-  if (info === "svg") return { kind: "svg", name, source: body, complete };
-  if (info === "html" || info === "htm") {
-    if (/^(<!doctype html|<html[\s>])/.test(pageHead(body))) {
-      return { kind: "page", name, source: body, complete };
-    }
-    // A named page shows as its source until it is known to be a document.
-    if (name && pageHead(body).length >= 14) return { kind: "file", name, source: body, complete };
-    return null;
-  }
-  return name ? { kind: "file", name, source: body, complete } : null;
 }
 
 // Index just past the backtick run that closes a code span, or -1 while the
@@ -188,27 +120,15 @@ function spansFence(text: string): boolean {
 // Replaces every closed formula, and every drawing, with a slot. Code fences
 // and code spans are copied through untouched, so a dollar inside them stays a
 // dollar.
-function extract(source: string): {
-  text: string;
-  formulas: Formula[];
-  blocks: Block[];
-} {
-  const src = source.replace(/[\uE000-\uE003]/g, "");
+function extract(source: string): { text: string; formulas: Formula[] } {
+  const src = source.replace(/[\uE000-\uE001]/g, "");
   const formulas: Formula[] = [];
-  const blocks: Block[] = [];
   let out = "";
   let i = 0;
 
   const slot = (raw: string, tex: string, display: boolean): string => {
     formulas.push({ raw, tex, display });
     return `${SLOT_OPEN}${formulas.length - 1}${SLOT_CLOSE}`;
-  };
-
-  // Blank lines around the slot keep it a block of its own, since a single
-  // newline is a line break in this dialect.
-  const figure = (block: Omit<Block, "index">): string => {
-    blocks.push({ ...block, index: blocks.length });
-    return `\n\n${DRAW_OPEN}${blocks.length - 1}${DRAW_CLOSE}\n\n`;
   };
 
   while (i < src.length) {
@@ -219,22 +139,12 @@ function extract(source: string): {
     if (lineStart && (char === "`" || char === "~")) {
       const size = runLength(src, i, char);
       if (size >= 3) {
+        // A fence is code, so what is in it is kept from the formula scan.
         const end = fenceEnd(src, i, char, size);
-        const block = fenceBlock(src, i, end, size);
-        out += block === null ? src.slice(i, end) : figure(block);
+        out += src.slice(i, end);
         i = end;
         continue;
       }
-    }
-
-    // A drawing the model wrote as markup, with no fence around it. Markup is
-    // otherwise shown as the text it is.
-    if (lineStart && char === "<" && /^<svg[\s>]/i.test(src.slice(i, i + 5))) {
-      const close = /<\/svg\s*>/i.exec(src.slice(i));
-      const end = close ? i + close.index + close[0].length : src.length;
-      out += figure({ kind: "svg", name: "", source: src.slice(i, end), complete: close !== null });
-      i = end;
-      continue;
     }
 
     if (char === "`") {
@@ -294,7 +204,7 @@ function extract(source: string): {
     i += 1;
   }
 
-  return { text: out, formulas, blocks };
+  return { text: out, formulas };
 }
 
 // KaTeX is the slowest part of a redraw and the same formula arrives on every
@@ -346,7 +256,16 @@ const renderer: RendererObject = {
     return escapeHtml(text);
   },
 
+  // Inline code that names a file opens it in the panel.
+  codespan({ text }) {
+    const path = fileTarget(text);
+    return path ? fileLinkHtml(path, text, true) : `<code>${escapeHtml(text)}</code>`;
+  },
+
   link({ href, title, tokens }) {
+    // A link to a file has no page to open; the file opens in the panel.
+    const target = /^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith("file://") ? null : fileTarget(href);
+    if (target) return fileLinkHtml(target, this.parser.parseInline(tokens, this.parser.textRenderer), false);
     const label = this.parser.parseInline(tokens);
     const url = safeUrl(href);
     if (!url) return label;
@@ -396,48 +315,12 @@ function fillMath(html: string, formulas: Formula[]): string {
   return unwrapped.replace(SLOT_RE, (_, index: string) => renderMath(formulas[Number(index)]));
 }
 
-/** A run of markup, or a drawing, page or file for the caller to show. */
-export type Segment = { kind: "html"; html: string } | Block;
-
-// Only a slot standing alone as a paragraph becomes an element. Anywhere else,
-// splitting the markup there would cut a tag in half, so the slot goes back to
-// the source it was written as.
-function asText(html: string, blocks: Block[]): string {
-  return html.replace(DRAW_RE, (_, i: string) => escapeHtml(blocks[Number(i)]?.source ?? ""));
-}
-
-function split(html: string, blocks: Block[]): Segment[] {
-  const parts: Segment[] = [];
-  let at = 0;
-  for (const match of html.matchAll(LONE_DRAW_RE)) {
-    const before = html.slice(at, match.index);
-    if (before.trim()) parts.push({ kind: "html", html: asText(before, blocks) });
-    const block = blocks[Number(match[1])];
-    if (block) parts.push(block);
-    at = match.index + match[0].length;
-  }
-  const rest = html.slice(at);
-  if (rest.trim() || parts.length === 0) parts.push({ kind: "html", html: asText(rest, blocks) });
-  return parts;
-}
-
-/** The drawings, pages and files in a reply, without rendering the rest. */
-export function blocksOf(source: string): Block[] {
-  if (!source) return [];
+export function render(source: string): string {
+  if (!source) return "";
   try {
-    return extract(source).blocks;
+    const { text, formulas } = extract(source);
+    return fillMath(marked.parse(text, { async: false }), formulas);
   } catch {
-    return [];
-  }
-}
-
-export function render(source: string): Segment[] {
-  if (!source) return [];
-  try {
-    const { text, formulas, blocks } = extract(source);
-    const html = fillMath(marked.parse(text, { async: false }), formulas);
-    return split(html, blocks);
-  } catch {
-    return [{ kind: "html", html: `<p>${escapeHtml(source)}</p>` }];
+    return `<p>${escapeHtml(source)}</p>`;
   }
 }

@@ -6,12 +6,15 @@
   import ModeChip from "./ModeChip.svelte";
   import PermissionChip from "./PermissionChip.svelte";
   import X from "phosphor-svelte/lib/X";
+  import FileIcon from "./FileIcon.svelte";
   import {
     app,
     pasteFile,
     blockingPermission,
     pendingQuestion,
     pickAttachments,
+    findFiles,
+    setWorkMode,
     send,
     stop,
   } from "../state/app.svelte";
@@ -112,17 +115,91 @@
     if (path && !files.includes(path)) files = [...files, path];
   }
 
+  // An @ before the caret, and the word after it, is a file being named. The
+  // list under it comes from the project, and a choice puts the path in the
+  // message for the model to read.
+  let mention = $state<{ start: number; query: string } | null>(null);
+  let hits = $state<string[]>([]);
+  let pick = $state(0);
+  let asked = 0;
+
+  function readMention() {
+    const el = field;
+    if (!el) return;
+    const before = text.slice(0, el.selectionStart ?? text.length);
+    const match = /(^|\s)@([^\s@]*)$/.exec(before);
+    if (!match) {
+      mention = null;
+      return;
+    }
+    const query = match[2] ?? "";
+    if (mention && mention.query === query) return;
+    mention = { start: before.length - query.length - 1, query };
+    const ticket = ++asked;
+    setTimeout(async () => {
+      if (ticket !== asked) return;
+      const found = await findFiles(query);
+      if (ticket !== asked || !mention) return;
+      hits = found;
+      pick = 0;
+    }, 90);
+  }
+
+  function choose(path: string) {
+    const el = field;
+    if (!mention || !el) return;
+    const end = mention.start + 1 + mention.query.length;
+    const insert = `@${path} `;
+    text = text.slice(0, mention.start) + insert + text.slice(end);
+    const caret = mention.start + insert.length;
+    mention = null;
+    hits = [];
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(caret, caret);
+    });
+  }
+
   function submit() {
     if (disabled || (!text.trim() && files.length === 0)) return;
     const value = text;
     const attached = files;
+    mention = null;
+    hits = [];
     text = "";
     files = [];
     void send(value, attached);
   }
 
-  // Enter sends, Shift and Enter makes a line.
+  // Enter sends, Shift and Enter makes a line. While the file list is open,
+  // the arrows move through it and Enter or Tab takes the one marked.
   function onkeydown(event: KeyboardEvent) {
+    // Shift and Tab moves between planning and carrying out.
+    if (event.key === "Tab" && event.shiftKey) {
+      event.preventDefault();
+      void setWorkMode(app.workMode === "plan" ? "execute" : "plan");
+      return;
+    }
+    if (mention && hits.length > 0) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        pick = (pick + step + hits.length) % hits.length;
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const path = hits[pick];
+        if (path) choose(path);
+        return;
+      }
+    }
+    if (mention && event.key === "Escape") {
+      event.preventDefault();
+      mention = null;
+      hits = [];
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       submit();
@@ -131,7 +208,7 @@
 </script>
 
 <div class="w-full">
-  <div class="composer px-4 pt-4 pb-3">
+  <div class="composer px-4 pt-4 pb-3" class:is-plan={app.workMode === "plan"}>
     {#if files.length > 0}
       <div class="tiles mb-3">
         {#each files as path (path)}
@@ -150,6 +227,30 @@
       </div>
     {/if}
 
+    <div class="relative">
+    {#if mention && hits.length > 0}
+      <div class="popover mention-list absolute right-0 bottom-full left-0 z-40 mb-3" role="listbox">
+        {#each hits as path, i (path)}
+          <button
+            class="popover-item"
+            class:is-on={i === pick}
+            role="option"
+            aria-selected={i === pick}
+            onmousedown={(e) => {
+              e.preventDefault();
+              choose(path);
+            }}
+            onmouseenter={() => (pick = i)}
+          >
+            <FileIcon {path} size={15} />
+            <span class="truncate">{path.split("/").pop()}</span>
+            {#if path.includes("/")}
+              <span class="ml-auto truncate pl-3 text-[12px] text-muted">{path.slice(0, path.lastIndexOf("/"))}</span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
     <textarea
       bind:this={field}
       class="textarea"
@@ -162,8 +263,12 @@
       bind:value={text}
       {onkeydown}
       {onpaste}
+      oninput={readMention}
+      onclick={readMention}
+      onblur={() => (mention = null)}
       {disabled}
     ></textarea>
+    </div>
 
     <div class="mt-2 flex items-center gap-2">
       <AddMenu up onattach={attach} canAttach={!disabled && files.length < maxFiles} />

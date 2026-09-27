@@ -16,6 +16,7 @@
   import SearchResults from "./SearchResults.svelte";
   import TerminalCard from "./TerminalCard.svelte";
   import TodoList from "./TodoList.svelte";
+  import WriteDiff from "./WriteDiff.svelte";
   import type { Todo, TranscriptItem } from "../api";
   import { clockLabel, describeCommand, firstSentence, k } from "../format";
   import { asked } from "../question";
@@ -149,6 +150,29 @@
     return item.timeoutS ? `${on} of ${clockLabel(item.timeoutS)}` : on;
   });
 
+  // What a write or edit did to the file, as the text it wrote and the lines
+  // it counted. The harness counts against the file as it was; a call still
+  // running, or one stored before counts were kept, counts its own arguments.
+  const edit = $derived.by(() => {
+    if (item.kind !== "tool" || (item.name !== "write_file" && item.name !== "replace_in_file")) return null;
+    const text = (key: string) => (typeof item.args[key] === "string" ? (item.args[key] as string) : "");
+    const added = item.name === "write_file" ? text("content") : text("new_string");
+    const removed = item.name === "write_file" ? "" : text("old_string");
+    const count = (s: string) => (s === "" ? 0 : s.replace(/\n$/, "").split("\n").length);
+    const meta = item.meta;
+    const counts =
+      typeof meta?.added === "number" && typeof meta?.removed === "number"
+        ? { added: meta.added, removed: meta.removed }
+        : { added: count(added), removed: count(removed) };
+    return { added, removed, counts };
+  });
+  // A write that failed carries the error as its output, which is what the
+  // row opens on instead of the text it did not write.
+  const wrote = $derived(
+    item.kind === "tool" &&
+      (item.running || /^(wrote|replaced|edited) /.test(item.output)),
+  );
+
   const isPath = $derived(item.kind === "tool" && item.name !== "find" && path !== "");
   // A compaction with no summary is a divider and nothing more.
   const expandable = $derived(item.kind !== "compaction" || item.summary !== "");
@@ -188,6 +212,12 @@
     <span class="sep">&middot;</span>
     <span class="desc" class:path={isPath}>{desc}</span>
 
+    {#if edit && wrote && (edit.counts.added > 0 || edit.counts.removed > 0)}
+      <span class="num text-[12px]">
+        <span class="stat-add">+{edit.counts.added}</span>
+        <span class="stat-del">&minus;{edit.counts.removed}</span>
+      </span>
+    {/if}
     {#if item.kind === "permission" && item.outcome}
       <span class="text-[12px] text-muted">{item.outcome}</span>
     {/if}
@@ -268,6 +298,8 @@
         <FileBlock {path} output={item.output} />
       {:else if item.kind === "tool" && item.name === "web_search"}
         <SearchResults item={item} />
+      {:else if edit && wrote && path}
+        <WriteDiff {path} added={edit.added} removed={edit.removed} counts={edit.counts} />
       {:else if item.kind === "tool"}
         {#if item.output}
           <pre class="mono-block">{item.output}</pre>

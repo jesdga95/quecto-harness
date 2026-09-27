@@ -94,13 +94,45 @@ addEventListener("message", (event) => {
 
   $effect(() => () => cancelAnimationFrame(queued));
 
-  // The first load is the page itself. Any later one is the page sending the
-  // frame somewhere else, which a policy cannot stop, so the frame is taken
-  // down before whatever it loaded can do more.
+  // The page is handed to its frame only once the frame has a size. A frame
+  // that runs in a process of its own learns its size after the parent has laid
+  // it out, and a page loaded ahead of that runs its scripts in a 0 by 0 window,
+  // which a canvas sized on start draws as a blank.
+  let run = $state<HTMLIFrameElement | null>(null);
+  let sized = $state(false);
+
+  $effect(() => {
+    if (!run) return;
+    const watch = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect;
+      if (!box || box.width === 0 || box.height === 0) return;
+      watch.disconnect();
+      sized = true;
+    });
+    watch.observe(run);
+    return () => watch.disconnect();
+  });
+
+  // The first load of the page is the page itself. Any later one is the page
+  // sending the frame somewhere else, which a policy cannot stop, so the frame
+  // is taken down before whatever it loaded can do more. The empty document the
+  // frame holds before it has the page is not counted.
   let loads = 0;
   let left = $state(false);
 
+  // The page the run frame holds. The same text arriving again, as when the
+  // file is read back from disk, leaves it alone; different text is a new page,
+  // loaded on purpose, so its load starts the count again.
+  let held = $state("");
+  $effect(() => {
+    if (!complete || !sized || page === held) return;
+    loads = 0;
+    left = false;
+    held = page;
+  });
+
   function onRunLoad() {
+    if (!held) return;
     loads += 1;
     if (loads > 1) left = true;
   }
@@ -113,11 +145,12 @@ addEventListener("message", (event) => {
     </p>
   {:else}
     <iframe
+      bind:this={run}
       class="artifact-frame"
       title="Page"
       sandbox="allow-scripts"
       referrerpolicy="no-referrer"
-      srcdoc={page}
+      srcdoc={held || undefined}
       onload={onRunLoad}
     ></iframe>
   {/if}

@@ -136,6 +136,53 @@
   padding: 1px 5px;
 }
 
+/* A file named in a reply: its glyph and name in the accent, opening the
+   file in the panel. */
+.md-file {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  vertical-align: baseline;
+}
+.md-file-icon {
+  width: 1em;
+  height: 1em;
+  flex: none;
+  align-self: center;
+}
+/* Named in code, the link is one chip: the tint runs under the glyph and
+   the name together. */
+.md-file.is-code {
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--accent-bg);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.prose .md-file.is-code code {
+  padding: 0;
+  background: none;
+  color: inherit;
+}
+.md-file:hover span,
+.md-file:hover code {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-file:focus-visible {
+  outline: 2px solid var(--edge-focus);
+  outline-offset: 2px;
+  border-radius: 5px;
+}
+
 /* The block scrolls inside its own box, so a long line moves the code and
    leaves the width of the page alone. */
 .md-code {

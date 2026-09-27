@@ -29,23 +29,3 @@ export function withoutOpenTag(source: string): string {
   const open = source.indexOf("<", end);
   return open < 0 ? source : source.slice(0, open);
 }
-
-const ENTITIES: Record<string, string> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  "#39": "'",
-};
-
-/** The text of the first title element, or "" when there is none yet. */
-export function titleOf(source: string): string {
-  const match = /<title[^>]*>([^<]*)<\/title\s*>/i.exec(source);
-  if (!match) return "";
-  return match[1]!
-    .replace(/&(amp|lt|gt|quot|apos|#39);/g, (_, name: string) => ENTITIES[name] ?? "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 80);
-}

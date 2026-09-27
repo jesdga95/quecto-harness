@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md fences.md system_plan.md system_execute.md plan.md plan_approved.md tool_write_plan.md tool_submit_plan.md tool_read_file.md tool_find.md tool_web_search.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md tool_ask_question.md tool_run_agent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md
+//go:embed system.md system_plan.md system_execute.md plan.md plan_approved.md tool_write_plan.md tool_submit_plan.md tool_read_file.md tool_find.md tool_web_search.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md tool_ask_question.md tool_run_agent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md
 var files embed.FS
 
 var (
@@ -27,11 +27,9 @@ var (
 	messageTmpl    = template.Must(template.New("message").Parse(mustRead("message.md")))
 )
 
-// parseBody parses one mode's body with the partials every body may include
-// by name, so a rule two modes share is written once.
+// parseBody parses one mode's body.
 func parseBody(name, file string) *template.Template {
 	t := template.Must(template.New(name).Parse(mustRead(file)))
-	template.Must(t.New("fences").Parse(mustRead("fences.md")))
 	return t
 }
 

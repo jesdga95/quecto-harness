@@ -402,7 +402,7 @@ func TestChatPlain(t *testing.T) {
 	if res.Content != "Hello" || res.FinishReason != "stop" {
 		t.Errorf("got %+v", res)
 	}
-	if res.Usage == nil || res.Usage.TotalTokens != 92 || res.Usage.CachedTokens != 12 {
+	if res.Usage == nil || res.Usage.TotalTokens != 92 || res.Usage.CachedTokens == nil || *res.Usage.CachedTokens != 12 {
 		t.Errorf("usage = %+v", res.Usage)
 	}
 	if res.Timings == nil || res.Timings.CacheN != 236 {

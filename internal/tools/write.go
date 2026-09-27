@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"quecto-harness/internal/config"
+	"quecto-harness/internal/diff"
 )
 
 // baselineLimit is the largest file kept as a baseline. Past it the write
@@ -76,7 +77,23 @@ func (r *Runner) WriteFile(ctx context.Context, raw json.RawMessage) (Result, er
 	return Result{
 		Output: fmt.Sprintf("%s %s (%d bytes, %d lines)", verb, r.rel(path), len(data), lines),
 		Bytes:  len(data),
+		Meta:   lineCounts(before, args.Content),
 	}, nil
+}
+
+// lineCounts is how many lines a write added and removed, for the step row.
+// A file that was binary or too large before has nothing to count against.
+func lineCounts(before Snapshot, after string) map[string]any {
+	old := ""
+	switch before.State {
+	case SnapshotText:
+		old = string(before.Content)
+	case SnapshotNew:
+	default:
+		return nil
+	}
+	d := diff.Compute(old, after, 1)
+	return map[string]any{"added": d.Added, "removed": d.Removed}
 }
 
 // Current describes a file in the project as it stands now. A missing file

@@ -2,6 +2,8 @@
   import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
   import ArrowDown from "phosphor-svelte/lib/ArrowDown";
   import ArrowsLeftRight from "phosphor-svelte/lib/ArrowsLeftRight";
+  import CaretRight from "phosphor-svelte/lib/CaretRight";
+  import CheckCircle from "phosphor-svelte/lib/CheckCircle";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
   import Robot from "phosphor-svelte/lib/Robot";
   import Warning from "phosphor-svelte/lib/Warning";
@@ -11,17 +13,14 @@
   import PlanCard from "./PlanCard.svelte";
   import QuestionCard from "./QuestionCard.svelte";
   import StepRow from "./StepRow.svelte";
+  import TurnFiles from "./TurnFiles.svelte";
+  import TurnFooter from "./TurnFooter.svelte";
   import type { Attached, TranscriptItem } from "../api";
   import { app, canResend, resend } from "../state/app.svelte";
-  import { bytes, duration, fileKind, fileName, k } from "../format";
+  import { bytes, fileKind, fileName, timeOf } from "../format";
 
   let scroller = $state<HTMLDivElement | null>(null);
   let atBottom = $state(true);
-
-  // A compaction rewrites the conversation, which is worth naming. Every other
-  // wait is the harness waiting on the model, and the reader has no use for
-  // which step it is on.
-  const waiting = $derived(app.status === "compacting" ? "Compacting" : "Working on it");
 
   // Seconds spent on the current wait. A wait can run for minutes and draws
   // nothing while it does, and a spinner on its own reads as a page that has
@@ -78,6 +77,90 @@
   const count = $derived(app.items.length);
   const tail = $derived(app.items.at(-1));
 
+  // A turn is the message that started it and everything after it up to the
+  // next one. An approved plan and a compaction start one too: the work after
+  // either reads as its own, and a compaction stays in view. Once a turn is over, everything before its answer
+  // folds under one line, and the answer and what it wrote stay out. A turn
+  // still running, or one holding a card that waits on a person, shows all.
+  function pending(item: TranscriptItem): boolean {
+    if (item.kind === "permission") return item.outcome === null;
+    return item.kind === "tool" && item.running && !!item.askId;
+  }
+  function isProcess(item: TranscriptItem): boolean {
+    return item.kind === "tool" || item.kind === "reasoning" || item.kind === "permission";
+  }
+  function lastIndex(items: TranscriptItem[], test: (item: TranscriptItem) => boolean): number {
+    for (let i = items.length - 1; i >= 0; i--) if (test(items[i]!)) return i;
+    return -1;
+  }
+  type Turn = {
+    key: string;
+    head: TranscriptItem | null;
+    body: TranscriptItem[];
+    fold: TranscriptItem[];
+    rest: TranscriptItem[];
+  };
+  const turns = $derived.by(() => {
+    const out: Turn[] = [];
+    let cur: Turn | null = null;
+    for (const item of app.items) {
+      const starts = item.kind === "user" || item.kind === "mode" || item.kind === "compaction";
+      if (starts || !cur) {
+        cur = { key: item.id, head: null, body: [], fold: [], rest: [] };
+        out.push(cur);
+        if (starts) {
+          cur.head = item;
+          continue;
+        }
+      }
+      cur.body.push(item);
+    }
+    out.forEach((turn, i) => {
+      const live = (i === out.length - 1 && app.status !== "idle") || turn.body.some(pending);
+      let cut = 0;
+      if (!live) {
+        const lastProcess = lastIndex(turn.body, isProcess);
+        const answer = lastIndex(turn.body, (item) => item.kind === "assistant");
+        cut = answer > lastProcess ? answer : lastProcess + 1;
+        // Planning ends in the plan being approved rather than in a reply, and
+        // the approval line under it says so, so all of it folds.
+        const next = out[i + 1]?.head;
+        if (next?.kind === "mode" && next.kickoff) cut = turn.body.length;
+      }
+      turn.fold = turn.body.slice(0, cut);
+      turn.rest = turn.body.slice(cut);
+    });
+    return out;
+  });
+
+  // Which folded turns the reader has opened. It sticks until closed.
+  const openTurns = $state<Record<string, boolean>>({});
+
+  function foldLabel(items: TranscriptItem[]): string {
+    const tools = items.filter((i) => i.kind === "tool").length;
+    const messages = items.filter((i) => i.kind === "assistant").length;
+    const parts: string[] = [];
+    if (tools > 0) parts.push(`Used ${tools} ${tools === 1 ? "tool" : "tools"}`);
+    if (messages > 0) parts.push(`${messages} ${messages === 1 ? "note" : "notes"} on the way`);
+    if (parts.length === 0) {
+      const thoughts = items.filter((i) => i.kind === "reasoning").length;
+      if (thoughts > 0) parts.push(`${thoughts} ${thoughts === 1 ? "thought" : "thoughts"}`);
+      else parts.push(`${items.length} ${items.length === 1 ? "step" : "steps"}`);
+    }
+    return parts.join(", ");
+  }
+
+  // The writes each finished turn made, keyed by the reply that ends it, so the
+  // reply can list them above its footer.
+  const turnWrites = $derived.by(() => {
+    const out = new Map<string, TranscriptItem[]>();
+    for (const turn of turns) {
+      const end = turn.rest[lastIndex(turn.rest, (i) => i.kind === "assistant" && !!i.cost)];
+      if (end) out.set(end.id, turn.body);
+    }
+    return out;
+  });
+
   // How much the last item has to draw. A reply, a thinking block and a command
   // still running all grow line by line, and an expanded one moves the end of
   // the page as it does.
@@ -95,6 +178,14 @@
     void app.steer?.text.length;
     void tailLength;
     if (scroller && atBottom) scroller.scrollTop = scroller.scrollHeight;
+  });
+
+  // A compaction can start while the reader is scrolled up, and it is the one
+  // wait worth seeing, so it is pulled into view when it starts.
+  $effect(() => {
+    if (app.status !== "compacting" || !scroller) return;
+    atBottom = true;
+    scroller.scrollTop = scroller.scrollHeight;
   });
 
   function onscroll() {
@@ -172,134 +263,172 @@
   </div>
 {/snippet}
 
+{#snippet renderItem(item: TranscriptItem)}
+  {#if item.kind === "user" && editing === item.id}
+    <div class="composer mt-4 px-3 pt-3 pb-2">
+      {#if item.files.length > 0}
+        {@render attachments(item.files)}
+      {/if}
+      <textarea
+        class="textarea"
+        rows="1"
+        bind:value={draft}
+        onkeydown={(event) => onkeydown(event, item)}
+        use:editBox
+      ></textarea>
+      <div class="mt-2 flex items-center gap-2">
+        {#if item.files.length > 0}
+          <span class="text-[12px] text-muted">The files stay as they are</span>
+        {/if}
+        <div class="ml-auto flex items-center gap-2">
+          <button class="btn" onclick={() => (editing = "")}>Cancel</button>
+          <button
+            class="btn btn-primary"
+            onclick={() => commit(item)}
+            disabled={!canResend(item) || (!draft.trim() && item.files.length === 0)}
+          >
+            Send
+          </button>
+        </div>
+      </div>
+    </div>
+  {:else if item.kind === "user"}
+    <div class="mt-4 flex flex-col items-end gap-1">
+      {#if item.from}
+        <span class="flex items-center gap-1.5 text-[12px] text-muted">
+          <Robot size={13} />
+          {item.from}
+        </span>
+      {/if}
+      <div class="bubble">
+        {#if item.files.length > 0}
+          {@render attachments(item.files)}
+        {/if}
+
+        {#if item.text}
+          <p class="bubble-text">{item.text}</p>
+        {/if}
+      </div>
+      <div class="flex items-center gap-1">
+        {#if item.edited}
+          <span class="mr-1 text-[12px] text-muted">Edited</span>
+        {/if}
+        {#if item.at}
+          <span class="num mr-1 text-[12px] text-muted" title={new Date(item.at).toLocaleString()}>
+            {timeOf(item.at)}
+          </span>
+        {/if}
+        {#if item.text && !item.from}
+          <CopyButton text={item.text} label="Copy message" />
+        {/if}
+        {#if canResend(item)}
+          <button class="icon-btn" aria-label="Edit message" onclick={() => edit(item)}>
+            <PencilSimple />
+          </button>
+          <button class="icon-btn" aria-label="Send again" onclick={() => resend(item.seq)}>
+            <ArrowClockwise />
+          </button>
+        {/if}
+      </div>
+    </div>
+  {:else if item.kind === "assistant"}
+    <div class="my-2">
+      {#if item.text === "" && !item.streaming}
+        <p class="text-[14px] text-muted">Ended without a reply.</p>
+      {:else}
+        <Prose text={item.text} streaming={item.streaming} />
+      {/if}
+      <!-- The cost arrives when the turn ends, so it is also what says
+           this block is the end of one rather than a fragment between
+           two tool calls. -->
+      {#if item.cost}
+        {@const writes = turnWrites.get(item.id)}
+        {#if writes}
+          <TurnFiles items={writes} />
+        {/if}
+        <TurnFooter text={replies.get(item.id) ?? item.text} cost={item.cost} at={item.at} />
+      {/if}
+    </div>
+  {:else if item.kind === "mode"}
+    <!-- A mode switch the reader made is shown by the composer, so only an
+         approved plan, which starts work, draws a line. -->
+    {#if item.kickoff}
+      <p class="plan-approved">
+        <CheckCircle size={17} weight="fill" class="shrink-0" />
+        <span><b>Plan approved</b>{item.title ? `: ${item.title}` : ""}</span>
+      </p>
+    {/if}
+  {:else if item.kind === "status"}
+    <div class="flex items-center gap-2 px-2 py-1 text-[13px] text-muted">
+      <ArrowsLeftRight size={15} class="shrink-0" />
+      <span class="truncate">{item.text}</span>
+    </div>
+  {:else if item.kind === "error"}
+    <div class="flex items-center gap-2 px-2 py-1 text-[13px] text-crit">
+      <Warning size={15} class="shrink-0" />
+      <span class="truncate">{item.message}</span>
+    </div>
+  {:else if item.kind === "permission" && item.outcome === null}
+    <div class="my-2">
+      <PermissionCard {item} />
+    </div>
+  {:else if item.kind === "tool" && item.name === "ask_question" && item.running && item.askId}
+    <div class="my-2">
+      <QuestionCard {item} />
+    </div>
+  {:else if item.kind === "tool" && item.name === "submit_plan" && item.running && item.askId}
+    <div class="my-2">
+      <PlanCard {item} />
+    </div>
+  {:else}
+    <StepRow {item} />
+  {/if}
+{/snippet}
+
 <div class="relative min-h-0 flex-1">
   <div bind:this={scroller} {onscroll} class="h-full overflow-y-auto">
     <div class="mx-auto flex w-full max-w-[820px] flex-col gap-1.5 px-6 py-6">
-      {#each app.items as item (item.id)}
-        {#if item.kind === "user" && editing === item.id}
-          <div class="composer mt-4 px-3 pt-3 pb-2">
-            {#if item.files.length > 0}
-              {@render attachments(item.files)}
-            {/if}
-            <textarea
-              class="textarea"
-              rows="1"
-              bind:value={draft}
-              onkeydown={(event) => onkeydown(event, item)}
-              use:editBox
-            ></textarea>
-            <div class="mt-2 flex items-center gap-2">
-              {#if item.files.length > 0}
-                <span class="text-[12px] text-muted">The files stay as they are</span>
-              {/if}
-              <div class="ml-auto flex items-center gap-2">
-                <button class="btn" onclick={() => (editing = "")}>Cancel</button>
-                <button
-                  class="btn btn-primary"
-                  onclick={() => commit(item)}
-                  disabled={!canResend(item) || (!draft.trim() && item.files.length === 0)}
-                >
-                  Send
-                </button>
-              </div>
-            </div>
-          </div>
-        {:else if item.kind === "user"}
-          <div class="mt-4 flex flex-col items-end gap-1">
-            {#if item.from}
-              <span class="flex items-center gap-1.5 text-[12px] text-muted">
-                <Robot size={13} />
-                {item.from}
-              </span>
-            {/if}
-            <div class="bubble">
-              {#if item.files.length > 0}
-                {@render attachments(item.files)}
-              {/if}
-
-              {#if item.text}
-                <p class="bubble-text">{item.text}</p>
-              {/if}
-            </div>
-            <div class="flex items-center gap-1">
-              {#if item.edited}
-                <span class="mr-1 text-[12px] text-muted">Edited</span>
-              {/if}
-              {#if item.text && !item.from}
-                <CopyButton text={item.text} label="Copy message" />
-              {/if}
-              {#if canResend(item)}
-                <button class="icon-btn" aria-label="Edit message" onclick={() => edit(item)}>
-                  <PencilSimple />
-                </button>
-                <button class="icon-btn" aria-label="Send again" onclick={() => resend(item.seq)}>
-                  <ArrowClockwise />
-                </button>
-              {/if}
-            </div>
-          </div>
-        {:else if item.kind === "assistant"}
-          <div class="my-2">
-            <Prose text={item.text} streaming={item.streaming} itemId={item.id} />
-            <!-- The cost arrives when the turn ends, so it is also what says
-                 this block is the end of one rather than a fragment between
-                 two tool calls. -->
-            {#if item.cost}
-              <div class="mt-0.5 flex items-center gap-2">
-                <CopyButton text={replies.get(item.id) ?? item.text} label="Copy reply" />
-                <span class="num text-[12px] text-muted">
-                  {k(item.cost.tokens)} tokens &middot; {duration(item.cost.ms)}
-                  {#if item.cost.tokPerS > 0}
-                    &middot; {Math.round(item.cost.tokPerS)} tok/s
-                  {/if}
-                </span>
-              </div>
-            {/if}
-          </div>
-        {:else if item.kind === "mode"}
-          <div class="mode-divider">
-            {#if item.kickoff}
-              <span><b>Plan approved</b>{item.title ? `: ${item.title}.` : ""}</span>
-            {:else if item.mode === "plan"}
-              <span><b>Plan mode</b>. Files are read only</span>
-            {:else}
-              <span><b>Execute mode</b>. Files can change</span>
-            {/if}
-          </div>
-        {:else if item.kind === "status"}
-          <div class="flex items-center gap-2 px-2 py-1 text-[13px] text-muted">
-            <ArrowsLeftRight size={15} class="shrink-0" />
-            <span class="truncate">{item.text}</span>
-          </div>
-        {:else if item.kind === "error"}
-          <div class="flex items-center gap-2 px-2 py-1 text-[13px] text-crit">
-            <Warning size={15} class="shrink-0" />
-            <span class="truncate">{item.message}</span>
-          </div>
-        {:else if item.kind === "permission" && item.outcome === null}
-          <div class="my-2">
-            <PermissionCard {item} />
-          </div>
-        {:else if item.kind === "tool" && item.name === "ask_question" && item.running && item.askId}
-          <div class="my-2">
-            <QuestionCard {item} />
-          </div>
-        {:else if item.kind === "tool" && item.name === "submit_plan" && item.running && item.askId}
-          <div class="my-2">
-            <PlanCard {item} />
-          </div>
-        {:else}
-          <StepRow {item} />
+      {#each turns as turn (turn.key)}
+        {#if turn.head}
+          {@render renderItem(turn.head)}
         {/if}
+        {#if turn.fold.length > 0}
+          <div class="fold" class:is-open={openTurns[turn.key]}>
+            <button
+              class="fold-head"
+              aria-expanded={openTurns[turn.key] === true}
+              onclick={() => (openTurns[turn.key] = !openTurns[turn.key])}
+            >
+              <span>{foldLabel(turn.fold)}</span>
+              <span class="caret" class:is-open={openTurns[turn.key]}><CaretRight /></span>
+            </button>
+            {#if openTurns[turn.key]}
+              <div class="fold-list">
+                {#each turn.fold as item (item.id)}
+                  {@render renderItem(item)}
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
+        {#each turn.rest as item (item.id)}
+          {@render renderItem(item)}
+        {/each}
       {/each}
 
       <!-- The stretch between asking the model and its first output draws
            nothing of its own, so the wait is shown where the reply will land,
-           with the seconds it has taken. -->
+           with the seconds it has taken. A compaction gets the squeeze mark,
+           since it rewrites the conversation rather than waiting on a reply. -->
       {#if app.awaitingModel}
         <div class="step" aria-live="polite">
-          <span class="spinner"></span>
-          <span class="text-muted">{waiting}</span>
+          {#if app.status === "compacting"}
+            <span class="sq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+            <span class="text-muted">Compacting</span>
+          {:else}
+            <span class="spinner"></span>
+            <span class="text-muted">Working on it</span>
+          {/if}
           <!-- The clock is aria-hidden: a reader does not need it announced
                every second. -->
           {#if waited >= 2}

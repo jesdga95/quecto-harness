@@ -229,7 +229,8 @@ export type HarnessEvent =
   | { type: "reasoning"; text: string }
   | { type: "tool_call"; id: string; name: string; args: Record<string, unknown> }
   /** Arguments stream in after the call opens, so they land in a second event. */
-  | { type: "tool_args"; id: string; name: string; args: Record<string, unknown> }
+  /** partial marks arguments read out of JSON that is still arriving. */
+  | { type: "tool_args"; id: string; name: string; args: Record<string, unknown>; partial?: boolean }
   /** The call left the permission card and began running. timeout_s is the
       deadline a shell command was given, and is null for every other tool. */
   | { type: "tool_start"; id: string; name: string; timeout_s: number | null }
@@ -314,8 +315,19 @@ export type TranscriptItem =
       edited: boolean;
       /** The agent that sent it. Empty is the person. */
       from: string;
+      /** When it was sent, in epoch milliseconds. */
+      at?: number;
     }
-  | { kind: "assistant"; id: string; text: string; streaming: boolean; cost?: TurnCost }
+  /** at is when the block was stored, which for the one that ends a turn is
+      when the turn ended. */
+  | {
+      kind: "assistant";
+      id: string;
+      text: string;
+      streaming: boolean;
+      cost?: TurnCost;
+      at?: number;
+    }
   | { kind: "reasoning"; id: string; text: string; tokens: number; open: boolean }
   | {
       kind: "tool";
@@ -326,6 +338,8 @@ export type TranscriptItem =
       exitCode: number | null;
       truncated: boolean;
       running: boolean;
+      /** The arguments are still arriving, and args holds what has come. */
+      writing?: boolean;
       /** When the call began running, and the seconds a shell command was
           given. A reloaded transcript has neither. */
       startedAt?: number;
@@ -447,12 +461,41 @@ export interface Usage {
 
 /** What one turn spent. ms is the wall clock from the message to the answer,
     tool calls included; tokPerS is the rate while the model was generating,
-    which excludes them. */
+    which excludes them. tokens is the output. The rest are summed over the
+    turn's requests and are absent where the turn predates them; cached is also
+    absent where the server never said. */
 export interface TurnCost {
   tokens: number;
   ms: number;
   tokPerS: number;
   requests: number;
+  /** Every prompt token sent, cached ones included. */
+  input?: number;
+  cached?: number;
+  /** Time inside requests, generating, before the first token, and in tools. */
+  llmMs?: number;
+  genMs?: number;
+  firstMs?: number;
+  toolMs?: number;
+  agent?: string;
+  model?: string;
+}
+
+/** One folder in the project, as the panel's browser lists it. path is
+    relative to root, empty for root itself. */
+export interface ProjectDir {
+  root: string;
+  path: string;
+  entries: { name: string; dir: boolean; bytes: number }[];
+}
+
+/** One file in the project, as the panel shows it. Only text carries its
+    content; an image is drawn from fileUrl. */
+export interface ProjectFile {
+  path: string;
+  kind: "text" | "image" | "binary" | "large";
+  bytes: number;
+  content: string;
 }
 
 export interface Transcript {
@@ -508,6 +551,15 @@ export interface HarnessApi {
   /** Every file the session wrote, against the copy kept before its first
       write and the file on disk now. */
   getChanges(id: string): Promise<Changes>;
+  /** One file in the session's project. Rejects with the harness's message
+      for a path outside the project, a folder, or a file that is not there. */
+  readFile(id: string, path: string): Promise<ProjectFile>;
+  /** Files in a project whose path holds every word of q, best first. */
+  findFiles(project: string, q: string): Promise<string[]>;
+  /** One folder in the session's project, folders first. */
+  listDir(id: string, path: string): Promise<ProjectDir>;
+  /** Where an image in the session's project is served from. */
+  fileUrl(id: string, path: string): string;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string): Promise<void>;
   /** Files are read by the harness and inlined into the message. What comes

@@ -16,6 +16,7 @@ import (
 	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
 	"quecto-harness/internal/store"
+	"quecto-harness/internal/tools"
 )
 
 type modelJSON struct {
@@ -497,6 +498,111 @@ func (s *Server) getChanges(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"files": files, "added": added, "removed": removed,
 	})
+}
+
+// viewLimit is the most text the file panel is sent, and rawLimit the largest
+// image it is served.
+const (
+	viewLimit = 1 << 20
+	rawLimit  = 16 << 20
+)
+
+// getProjectFile reads one file in the session's project for the panel a file
+// link opens. Text comes back as JSON. raw=1 serves the bytes of an image and
+// of nothing else, since a page or drawing served from this origin would run
+// with the reader's session.
+func (s *Server) getProjectFile(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	arg := r.URL.Query().Get("path")
+	v, err := tools.ViewFile(sess.Project, arg, viewLimit)
+	switch {
+	case errors.Is(err, tools.ErrOutside):
+		writeError(w, http.StatusForbidden, "That path is outside the project")
+		return
+	case errors.Is(err, tools.ErrMissing):
+		writeError(w, http.StatusNotFound, "No such file: "+v.Path)
+		return
+	case errors.Is(err, tools.ErrFolder):
+		writeError(w, http.StatusBadRequest, v.Path+" is a folder, not a file")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if r.URL.Query().Get("raw") != "1" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"path": v.Path, "kind": v.Kind, "bytes": v.Bytes, "content": v.Content,
+		})
+		return
+	}
+	if v.Kind != tools.ViewImage {
+		writeError(w, http.StatusUnsupportedMediaType, "Only images are served as they are")
+		return
+	}
+	if v.Bytes > rawLimit {
+		writeError(w, http.StatusRequestEntityTooLarge, "The image is too large to show")
+		return
+	}
+	f, err := os.Open(v.Abs)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "No such file: "+v.Path)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Read the file: "+err.Error())
+		return
+	}
+	// The file can change under the same address, so nothing is kept.
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	w.Header().Set("Content-Type", v.Mime)
+	http.ServeContent(w, r, "", info.ModTime(), f)
+}
+
+// getProjectDir lists one folder in the session's project for the panel's
+// file browser.
+func (s *Server) getProjectDir(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	rel, entries, err := tools.ListDir(sess.Project, r.URL.Query().Get("path"))
+	switch {
+	case errors.Is(err, tools.ErrOutside):
+		writeError(w, http.StatusForbidden, "That path is outside the project")
+	case errors.Is(err, tools.ErrMissing):
+		writeError(w, http.StatusNotFound, "No such folder: "+rel)
+	case errors.Is(err, tools.ErrNotFolder):
+		writeError(w, http.StatusBadRequest, rel+" is a file, not a folder")
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"root": sess.Project, "path": rel, "entries": entries})
+	}
+}
+
+// getProjectFiles finds files in a project by name, for the composer's @
+// mentions. It takes the project rather than a session, since the message
+// that mentions a file may be the one that creates the session.
+func (s *Server) getProjectFiles(w http.ResponseWriter, r *http.Request) {
+	project := r.URL.Query().Get("project")
+	if !s.cfg.HasProject(project) {
+		writeError(w, http.StatusNotFound, "No project at that path: add it first")
+		return
+	}
+	files, err := tools.FindFiles(project, r.URL.Query().Get("q"), 30)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "List the project files: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": files})
 }
 
 func (s *Server) rebindSession(w http.ResponseWriter, r *http.Request) {

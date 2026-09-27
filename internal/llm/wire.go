@@ -87,7 +87,7 @@ func (u *usage) toUsage() *Usage {
 		TotalTokens:      deref(u.TotalTokens),
 	}
 	if u.PromptTokensDetails != nil {
-		out.CachedTokens = deref(u.PromptTokensDetails.CachedTokens)
+		out.CachedTokens = u.PromptTokensDetails.CachedTokens
 	}
 	if out.TotalTokens == 0 {
 		out.TotalTokens = out.PromptTokens + out.CompletionTokens

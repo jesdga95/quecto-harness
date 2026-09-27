@@ -72,6 +72,7 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 			r.rel(path), lineOf(old, args.OldString),
 			countLines(args.OldString), countLines(args.NewString)),
 		Bytes: len(updated),
+		Meta:  lineCounts(before, updated),
 	}, nil
 }
 

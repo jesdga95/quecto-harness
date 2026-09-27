@@ -57,6 +57,7 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
           id: nextId("a"),
           text: event.text,
           streaming: true,
+          at: Date.now(),
         });
       }
       break;
@@ -126,6 +127,7 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
       if (item && item.kind === "tool") {
         item.args = event.args;
         item.name = event.name;
+        item.writing = event.partial === true;
       }
       break;
     }
@@ -217,7 +219,12 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
     case "done": {
       if (last && last.kind === "assistant") {
         last.streaming = false;
+        last.at = Date.now();
         if (event.cost) last.cost = event.cost;
+      } else if (event.cost) {
+        // A turn that ended with no text still ended, and the line under the
+        // reply is what says so.
+        items.push({ kind: "assistant", id: nextId("a"), text: "", streaming: false, cost: event.cost, at: Date.now() });
       }
       break;
     }
@@ -241,5 +248,5 @@ export function pushUser(
   edited = false,
   from = "",
 ): void {
-  items.push({ kind: "user", id: nextId("u"), seq, text, files, edited, from });
+  items.push({ kind: "user", id: nextId("u"), seq, text, files, edited, from, at: Date.now() });
 }

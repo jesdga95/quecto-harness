@@ -141,9 +141,9 @@ func buildSchemas() []llm.Tool {
 			Description: prompts.ToolWriteFile(),
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
-				"properties": map[string]any{
-					"path":    map[string]any{"type": "string", "description": "Path relative to the project root."},
-					"content": map[string]any{"type": "string", "description": "The full file contents."},
+				"properties": ordered{
+					{"path", map[string]any{"type": "string", "description": "Path relative to the project root."}},
+					{"content", map[string]any{"type": "string", "description": "The full file contents."}},
 				},
 				"required":             []string{"path", "content"},
 				"additionalProperties": false,
@@ -154,10 +154,10 @@ func buildSchemas() []llm.Tool {
 			Description: prompts.ToolReplaceInFile(),
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
-				"properties": map[string]any{
-					"path":       map[string]any{"type": "string", "description": "Path relative to the project root."},
-					"old_string": map[string]any{"type": "string", "description": "The exact text to replace. It must appear once."},
-					"new_string": map[string]any{"type": "string", "description": "What to put in its place. Empty deletes the text."},
+				"properties": ordered{
+					{"path", map[string]any{"type": "string", "description": "Path relative to the project root."}},
+					{"old_string", map[string]any{"type": "string", "description": "The exact text to replace. It must appear once."}},
+					{"new_string", map[string]any{"type": "string", "description": "What to put in its place. Empty deletes the text."}},
 				},
 				"required":             []string{"path", "old_string", "new_string"},
 				"additionalProperties": false,
@@ -283,6 +283,34 @@ func buildSchemas() []llm.Tool {
 			}),
 		}},
 	}
+}
+
+// ordered is a JSON object that keeps its keys in the order written, where a
+// map would sort them. A model writes arguments in the order the schema lists
+// them, and a path listed before the content is what lets the reader place a
+// file while it is still being written.
+type ordered []struct {
+	key   string
+	value any
+}
+
+func (o ordered) MarshalJSON() ([]byte, error) {
+	buf := []byte{'{'}
+	for i, f := range o {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		k, err := json.Marshal(f.key)
+		if err != nil {
+			return nil, err
+		}
+		v, err := json.Marshal(f.value)
+		if err != nil {
+			return nil, err
+		}
+		buf = append(append(append(buf, k...), ':'), v...)
+	}
+	return append(buf, '}'), nil
 }
 
 func mustSchema(v map[string]any) json.RawMessage {

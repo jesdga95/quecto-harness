@@ -2,7 +2,7 @@
   import ArrowsIn from "phosphor-svelte/lib/ArrowsIn";
   import Popover from "./Popover.svelte";
   import { app, compact, turnStats } from "../state/app.svelte";
-  import { k, level, pct } from "../format";
+  import { duration, k, level, pct } from "../format";
 
   let open = $state(false);
 
@@ -13,7 +13,6 @@
   const ratio = $derived(limited ? fill / app.usage.n_ctx : 0);
   const percent = $derived(pct(fill, app.usage.n_ctx));
   const tone = $derived(level(ratio));
-  const stats = $derived(turnStats());
   const running = $derived(app.status !== "idle");
 
   // The parts are scaled against the whole window, so each segment is its
@@ -25,6 +24,58 @@
   // they carry a tilde; messages is the remainder of a real usage report.
   const parts = $derived(app.usage.breakdown);
   const share = (n: number) => pct(n, limited ? app.usage.n_ctx : fill);
+
+  // The session so far, summed from what each finished turn recorded. A turn
+  // stored before a field was counted adds nothing to it, and a figure no turn
+  // has is left out rather than shown as zero.
+  const sums = $derived.by(() => {
+    const s = {
+      turns: 0,
+      output: 0,
+      input: 0,
+      inputSeen: false,
+      cached: 0,
+      cachedSeen: false,
+      llm: 0,
+      tool: 0,
+      timed: false,
+      first: 0,
+      firstN: 0,
+      gen: 0,
+    };
+    for (const item of app.items) {
+      if (item.kind !== "assistant" || !item.cost) continue;
+      const c = item.cost;
+      s.turns += 1;
+      s.output += c.tokens;
+      if (c.input !== undefined) {
+        s.input += c.input;
+        s.inputSeen = true;
+      }
+      if (c.cached !== undefined) {
+        s.cached += c.cached;
+        s.cachedSeen = true;
+      }
+      if (c.llmMs !== undefined) {
+        s.llm += c.llmMs;
+        s.tool += c.toolMs ?? 0;
+        s.gen += c.genMs ?? 0;
+        s.timed = true;
+      }
+      if (c.firstMs !== undefined && c.requests > 0) {
+        s.first += c.firstMs;
+        s.firstN += c.requests;
+      }
+    }
+    return s;
+  });
+
+  const stats = $derived(turnStats());
+  const tps = $derived(sums.gen > 0 ? Math.round(sums.output / (sums.gen / 1000)) : 0);
+  const total = $derived(sums.input + sums.output);
+  const hit = $derived(
+    sums.cachedSeen && sums.input > 0 ? Math.round((sums.cached / sums.input) * 100) : undefined,
+  );
 
   // Circumference of the r=7 track, so the dash offset is a percentage of it.
   const circumference = 2 * Math.PI * 7;
@@ -56,7 +107,7 @@
   </button>
 
   {#if open}
-    <Popover onclose={() => (open = false)} align="right" width={248}>
+    <Popover onclose={() => (open = false)} align="right" width={288}>
       <div class="px-2.5 py-2">
         <div class="flex items-baseline justify-between">
           <span class="text-[13px] font-medium">Context</span>
@@ -107,24 +158,28 @@
           </div>
         {/if}
 
-        <dl class="mt-3 space-y-1 text-[12px]">
-          {#if app.usage.cached_pct}
-            <div class="flex justify-between">
-              <dt class="text-muted">Cache hit</dt>
-              <dd class="num">{app.usage.cached_pct}%</dd>
+        {#if sums.turns > 0}
+          <div class="ctx-session">
+            <div class="stat-title">This session</div>
+            <div class="stat-tiles">
+              <div><span>Tokens</span><b class="num">{k(total)}</b></div>
+              {#if hit !== undefined}
+                <div><span>From cache</span><b class="num">{hit}%</b></div>
+              {:else}
+                <div><span>Generated</span><b class="num">{k(sums.output)}</b></div>
+              {/if}
+              {#if tps > 0}
+                <div><span>Speed</span><b class="num">{tps}<small> tok/s</small></b></div>
+              {/if}
+              {#if sums.firstN > 0}
+                <div><span>First token</span><b class="num">{duration(sums.first / sums.firstN)}</b></div>
+              {/if}
             </div>
-          {/if}
-          {#if app.usage.tok_per_s}
-            <div class="flex justify-between">
-              <dt class="text-muted">Speed</dt>
-              <dd class="num">{app.usage.tok_per_s} tok/s</dd>
-            </div>
-          {/if}
-          <div class="flex justify-between">
-            <dt class="text-muted">Turns</dt>
-            <dd class="num">{stats.turns} &middot; {stats.steps} steps</dd>
+            <p class="stat-note">
+              {stats.turns} {stats.turns === 1 ? "turn" : "turns"}, {stats.steps} steps{#if sums.timed}. {duration(sums.llm)} on the model, {duration(sums.tool)} on tools{/if}
+            </p>
           </div>
-        </dl>
+        {/if}
 
         <button
           class="chip chip-plain mt-3 w-full justify-center"

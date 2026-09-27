@@ -15,6 +15,8 @@ import type {
   Probe,
   Protocol,
   Project,
+  ProjectFile,
+  ProjectDir,
   SearchConfig,
   SearchPatch,
   SearchProbe,
@@ -28,7 +30,14 @@ import type {
   WorkMode,
 } from "../api";
 import { applyEvent, nextId, outcomeLabel, pushUser } from "../transcript";
-import { artifactsOf, withDraft, type Artifact } from "../artifacts";
+import {
+  fileArtifactId,
+  projectArtifacts,
+  planArtifacts,
+  writtenPreviews,
+  type Artifact,
+} from "../artifacts";
+import { inProject } from "../files";
 import type { Plan } from "../plan";
 import { confirm } from "./confirm.svelte";
 
@@ -62,8 +71,8 @@ export const app = $state({
   // The plan plan mode is writing, or the one last approved.
   draft: null as Plan | null,
   changes: { files: [], added: 0, removed: 0 } as Changes,
-  // The panel in the column beside the transcript. There is room for one.
-  dock: "" as Dock,
+  // Whether the tabbed panel beside the transcript is open.
+  panel: false,
   // The subagent runs this session launched, newest first, with what each is
   // doing now. The chip counts them and the panel lists them.
   runs: [] as Child[],
@@ -80,6 +89,16 @@ export const app = $state({
   artifactPinned: false,
   artifactsDismissed: false,
   artifactsWide: false,
+  // Files in the project as last read, by the path the harness named them
+  // under, and the ones the reader opened, in the order they were opened.
+  files: {} as Record<string, ProjectFile | undefined>,
+  fileErrors: {} as Record<string, string>,
+  openFiles: [] as string[],
+  // The panel's tabs, by artifact id, in the order they were opened, and the
+  // folder its file browser is showing.
+  tabs: [] as string[],
+  browseDir: null as ProjectDir | null,
+  browseError: "",
   usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: 0 } as Usage,
   status: "idle" as TurnStatus,
   // The model has been asked and nothing has come back yet. True from the
@@ -99,11 +118,20 @@ export const app = $state({
   modelsKind: "",
 });
 
-export type Dock = "" | "changes" | "runs" | "artifacts";
 
 // The artifacts are read from the transcript, so they follow it without being
-// kept in step by hand.
-const artifactList = $derived(withDraft(artifactsOf(app.items), app.draft));
+// kept in step by hand. Files in the project follow them: the drawings, pages
+// and images a turn wrote, and whatever the reader opened.
+const written = $derived(writtenPreviews(app.items, app.projectPath));
+const projectPaths = $derived.by(() => {
+  const paths = [...written.keys()];
+  for (const path of app.openFiles) if (!paths.includes(path)) paths.push(path);
+  return paths;
+});
+const artifactList = $derived([
+  ...planArtifacts(app.draft),
+  ...projectArtifacts(projectPaths, app.files, written),
+]);
 
 export function artifacts(): Artifact[] {
   return artifactList;
@@ -218,7 +246,7 @@ function clearSession(): void {
   app.status = "idle";
   app.awaitingModel = false;
   app.changes = { files: [], added: 0, removed: 0 };
-  closeDock();
+  closePanel();
   app.runs = [];
   resetArtifacts();
   // Nothing is known about the next session's context until its model has
@@ -239,6 +267,14 @@ export async function selectSession(id: string): Promise<void> {
   app.sessionId = id;
   const t = await guard(() => api.getSession(id));
   if (!t) return;
+  // A session opened from another project's list makes that project the one
+  // a new session, a file path and an @ search go to.
+  const project = t.session.project;
+  if (project && project !== app.projectPath) {
+    app.projectPath = project;
+    app.allowlist = (await guard(() => api.listAllowlist(project))) ?? [];
+    if (app.sessionId !== id) return;
+  }
   app.opened = t.session;
   app.items = t.items;
   app.usage = t.usage;
@@ -254,11 +290,13 @@ export async function selectSession(id: string): Promise<void> {
   app.changes = { files: [], added: 0, removed: 0 };
   // A reloaded page reads which subagents are still working from the snapshot,
   // since their state only reaches the launcher's stream when it changes.
-  // The change panel stays open across sessions; the others show this one's.
+  // The changes tab stays open across sessions; the others were this one's.
   closeRuns();
-  if (app.dock === "artifacts") app.dock = "";
+  const keepChanges = app.panel && app.artifactId === CHANGES_ID;
   app.runs = t.session.children;
   resetArtifacts();
+  if (keepChanges) showTab(CHANGES_ID);
+  else app.panel = false;
   markAnnounced();
   unsubscribe = api.events(id, onEvent);
   void loadChanges();
@@ -350,6 +388,17 @@ export function looksLikeImage(path: string): boolean {
 /** Asks the host for files to attach. Empty when the dialog is dismissed. */
 export async function pickAttachments(): Promise<string[]> {
   return (await guard(() => api.pickFiles())) ?? [];
+}
+
+/** Files in the open project matching what follows an @ in the composer. It
+    fails quietly: a list that does not come is a list with nothing in it. */
+export async function findFiles(q: string): Promise<string[]> {
+  if (!app.projectPath) return [];
+  try {
+    return await api.findFiles(app.projectPath, q);
+  } catch {
+    return [];
+  }
 }
 
 /** Stores a pasted file with the harness, which is what gives it the path a
@@ -715,69 +764,166 @@ export async function loadChanges(): Promise<void> {
   }
 }
 
-/** Puts a panel in the column beside the transcript, replacing the one there.
-    Leaving the agents panel drops the stream it was following. */
-function openDock(dock: Dock): void {
-  if (app.dock === "runs" && dock !== "runs") closeRuns();
-  if (dock !== "artifacts") app.artifactsWide = false;
-  app.dock = dock;
+// The panel's fixed tabs. Everything else in the tab list is an artifact id.
+export const BROWSE_ID = "panel:files";
+export const CHANGES_ID = "panel:changes";
+export const RUNS_ID = "panel:runs";
+
+function addTab(id: string): void {
+  if (!app.tabs.includes(id)) app.tabs.push(id);
 }
 
-/** Empties the column. Closing the artifacts panel while a turn runs keeps it
-    closed until the next turn. */
-export function closeDock(): void {
-  if (app.dock === "artifacts" && app.status !== "idle") app.artifactsDismissed = true;
-  openDock("");
+/** Shows one tab, opening the panel on it. */
+export function showTab(id: string): void {
+  addTab(id);
+  app.artifactId = id;
+  app.artifactPinned = true;
+  app.artifactsDismissed = false;
+  app.panel = true;
 }
 
-export function toggleChanges(): void {
-  if (app.dock === "changes") closeDock();
-  else openDock("changes");
+/** Closes the panel. Closing it while a turn runs keeps it closed until the
+    next turn, and the agent it was following is let go. */
+export function closePanel(): void {
+  if (app.panel && app.status !== "idle") app.artifactsDismissed = true;
+  app.panel = false;
+  app.artifactsWide = false;
+  closeRuns();
 }
 
-export function toggleRuns(): void {
-  if (app.dock === "runs") {
-    closeDock();
+/** The header's panel button. An empty panel opens on what is newest: an
+    artifact, else the changes, else the agents, else the files. */
+export function togglePanel(): void {
+  if (app.panel) {
+    closePanel();
     return;
   }
-  openDock("runs");
-  // The one still working is what a reader opening the panel came for.
-  const first = app.runs.find((r) => r.status !== "idle") ?? app.runs[0];
-  if (first) void openRun(first.id);
+  if (app.tabs.length === 0) {
+    const last = artifactList.at(-1);
+    const first = last
+      ? last.id
+      : app.changes.files.length > 0
+        ? CHANGES_ID
+        : app.runs.length > 0
+          ? RUNS_ID
+          : BROWSE_ID;
+    showTab(first);
+    if (first === BROWSE_ID) void browse("");
+    return;
+  }
+  if (!app.tabs.includes(app.artifactId)) app.artifactId = app.tabs[0]!;
+  app.artifactsDismissed = false;
+  app.panel = true;
 }
 
-/** Drops the run the agents panel was following, and the panel with it. */
+export function showChanges(): void {
+  showTab(CHANGES_ID);
+}
+
+export function showRuns(): void {
+  showTab(RUNS_ID);
+}
+
+/** Lets go of the agent the panel was following. The tab stays, and follows
+    one again when it is next shown. */
 function closeRuns(): void {
   runStream?.();
   runStream = null;
   app.runId = "";
   app.runItems = [];
-  if (app.dock === "runs") app.dock = "";
 }
 
-export function toggleArtifacts(): void {
-  if (app.dock === "artifacts") {
-    closeDock();
-    return;
+/** Takes a tab out of the panel. The one beside it takes its place, and the
+    panel closes with its last tab. */
+export function closeTab(id: string): void {
+  const at = app.tabs.indexOf(id);
+  if (at === -1) return;
+  app.tabs.splice(at, 1);
+  if (id === BROWSE_ID) {
+    app.browseDir = null;
+    app.browseError = "";
   }
-  app.artifactsDismissed = false;
-  openDock("artifacts");
+  if (id === RUNS_ID) closeRuns();
+  if (app.artifactId !== id) return;
+  const next = app.tabs[at] ?? app.tabs[at - 1];
+  if (next) {
+    app.artifactId = next;
+    app.artifactPinned = true;
+  } else {
+    app.artifactId = "";
+    app.artifactPinned = false;
+    closePanel();
+  }
+}
+
+/** Opens the file browser tab on a folder, the project root by default. */
+export async function browse(path = app.browseDir?.path ?? ""): Promise<void> {
+  showTab(BROWSE_ID);
+  const id = app.sessionId;
+  if (!id) return;
+  try {
+    const dir = await api.listDir(id, path);
+    if (app.sessionId !== id) return;
+    app.browseDir = dir;
+    app.browseError = "";
+  } catch (err) {
+    if (app.sessionId === id) app.browseError = err instanceof Error ? err.message : String(err);
+  }
 }
 
 /** Shows one artifact in the panel. Choosing the newest goes back to following
     whatever comes next. */
 export function showArtifact(id: string): void {
+  addTab(id);
   app.artifactId = id;
   app.artifactPinned = artifactList.at(-1)?.id !== id;
   app.artifactsDismissed = false;
-  openDock("artifacts");
+  app.panel = true;
 }
 
 export function toggleArtifactsWide(): void {
   app.artifactsWide = !app.artifactsWide;
 }
 
+/** Reads a file in the project into the panel's cache. A failure is kept
+    against the path for the panel to say, and toasted when asked for. */
+export async function loadFile(raw: string, loud = false): Promise<ProjectFile | null> {
+  const id = app.sessionId;
+  if (!id) return null;
+  const path = inProject(raw, app.projectPath);
+  try {
+    const file = await api.readFile(id, path);
+    if (app.sessionId !== id) return null;
+    app.files[file.path] = file;
+    delete app.fileErrors[file.path];
+    return file;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (app.sessionId === id) app.fileErrors[path] = message;
+    if (loud) toast(message);
+    return null;
+  }
+}
+
+/** Opens a file in the project in the panel, as a file link asks. */
+export async function openFile(raw: string): Promise<void> {
+  const file = await loadFile(raw, true);
+  if (!file) return;
+  if (!app.openFiles.includes(file.path)) app.openFiles.push(file.path);
+  showArtifact(fileArtifactId(file.path));
+}
+
+export function fileUrl(path: string): string {
+  return app.sessionId ? api.fileUrl(app.sessionId, path) : "";
+}
+
 function resetArtifacts(): void {
+  app.files = {};
+  app.fileErrors = {};
+  app.openFiles = [];
+  app.tabs = [];
+  app.browseDir = null;
+  app.browseError = "";
   app.artifactId = "";
   app.artifactPinned = false;
   app.artifactsDismissed = false;
@@ -791,8 +937,11 @@ function announceArtifacts(): void {
   for (const artifact of artifactList) {
     if (announced.has(artifact.id)) continue;
     announced.add(artifact.id);
-    if (!app.artifactPinned) app.artifactId = artifact.id;
-    if (!app.artifactsDismissed && app.dock !== "artifacts") openDock("artifacts");
+    if (!app.artifactPinned) {
+      addTab(artifact.id);
+      app.artifactId = artifact.id;
+    }
+    if (!app.artifactsDismissed && !app.panel) app.panel = true;
   }
 }
 
@@ -958,6 +1107,12 @@ function onEvent(event: HarnessEvent): void {
         card.name === "replace_in_file" ||
         (card.name === "run_shell" && app.changes.files.length > 0));
     if (touched) void loadChanges();
+    // A file the panel holds is read again once a write to it lands.
+    if (card?.kind === "tool" && (card.name === "write_file" || card.name === "replace_in_file")) {
+      const path = typeof card.args.path === "string" ? inProject(card.args.path, app.projectPath) : "";
+      if (path && (app.files[path] || written.has(path))) void loadFile(path);
+      announceArtifacts();
+    }
   }
 
   if (event.type === "usage") {
