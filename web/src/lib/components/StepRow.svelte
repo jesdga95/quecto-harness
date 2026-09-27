@@ -16,6 +16,7 @@
   import SearchResults from "./SearchResults.svelte";
   import TerminalCard from "./TerminalCard.svelte";
   import TodoList from "./TodoList.svelte";
+  import StreamText from "./StreamText.svelte";
   import WriteDiff from "./WriteDiff.svelte";
   import type { Todo, TranscriptItem } from "../api";
   import { clockLabel, describeCommand, firstSentence, k } from "../format";
@@ -23,7 +24,8 @@
   import { sectionsOf } from "../plan";
   import { app } from "../state/app.svelte";
 
-  let { item }: { item: TranscriptItem } = $props();
+  // live marks the row the model is still writing into.
+  let { item, live = false }: { item: TranscriptItem; live?: boolean } = $props();
   let open = $state(false);
 
   // A run_agent row names the agent it started and follows it, since what that
@@ -247,7 +249,7 @@
   {#if open && expandable}
     <div class="step-body">
       {#if item.kind === "reasoning"}
-        <p class="step-text">{item.text}</p>
+        <StreamText class="step-text" text={item.text} {live} />
       {:else if item.kind === "compaction"}
         <p class="step-text">{item.summary}</p>
       {:else if item.kind === "error"}

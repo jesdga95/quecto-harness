@@ -26,6 +26,7 @@
   import Prose from "./Prose.svelte";
   import type { Artifact } from "../artifacts";
   import { escapeHtml, sourceHtml } from "../highlight";
+  import { Streamed } from "../stream.svelte";
   import {
     app,
     artifacts,
@@ -107,6 +108,13 @@
   // Bumped to run a page's scripts again from the start.
   let runs = $state(0);
 
+  // A file still being written is paced like a streamed reply.
+  const stream = new Streamed(
+    () => shown?.source ?? "",
+    () => !!shown && !shown.complete,
+    () => shown?.id,
+  );
+
   // The source is coloured once it is whole. Colouring a long file again on
   // every token of a stream costs more than the view is worth.
   const markup = $derived(
@@ -114,13 +122,19 @@
       ? ""
       : shown.complete
         ? sourceHtml(shown.source, shown.path ?? shown.name)
-        : escapeHtml(shown.source),
+        : escapeHtml(stream.text),
   );
+
+  let code = $state<HTMLElement | null>(null);
+  $effect(() => {
+    if (code) stream.draw(code, markup);
+  });
 
   // One number a line, as a single run of text so a long file costs one node.
   const gutter = $derived.by(() => {
-    if (!shown || current === "preview" || shown.source === "") return "";
-    const lines = shown.source.replace(/\n$/, "").split("\n").length;
+    const text = shown?.complete ? shown.source : stream.text;
+    if (!shown || current === "preview" || text === "") return "";
+    const lines = text.replace(/\n$/, "").split("\n").length;
     return Array.from({ length: lines }, (_, i) => i + 1).join("\n");
   });
 
@@ -385,7 +399,7 @@
             <div class="artifact-source-scroll" bind:this={sourceBox}>
               <div class="source-rows">
                 <pre class="source-gutter num" aria-hidden="true">{gutter}</pre>
-                <pre><code>{@html markup}</code></pre>
+                <pre><code bind:this={code}></code></pre>
               </div>
             </div>
           </div>

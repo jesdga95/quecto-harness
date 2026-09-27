@@ -3,17 +3,15 @@
   let {
     size = 26,
     wordmark = true,
-    bare = false,
     panel = false,
-  }: { size?: number; wordmark?: boolean; bare?: boolean; panel?: boolean } = $props();
+  }: { size?: number; wordmark?: boolean; panel?: boolean } = $props();
 
-  // The braces carry the amber on the plate and on the dark panel alike. On a
-  // white page they take the brand teal instead, since amber will not hold.
-  const stroke = $derived(bare && !panel ? "#0D9488" : "#FCD34D");
+  // The braces carry the amber on the plate and on the dark panel alike.
+  const stroke = "#FCD34D";
   // The plate's padding is part of the square mark. Without it the box is the
   // glyph's own bounds, so the mark sits close to whatever follows it.
-  const box = $derived(bare || panel ? "23.7 20.7 56.6 62.6" : "0 0 104 104");
-  const height = $derived(bare || panel ? Math.round((size * 62.6) / 56.6) : size);
+  const box = $derived(panel ? "23.7 20.7 56.6 62.6" : "0 0 104 104");
+  const height = $derived(panel ? Math.round((size * 62.6) / 56.6) : size);
 
   const type = $derived(Math.round(size * 0.47 * 10) / 10);
   const gap = $derived(Math.round(size * 0.27));
@@ -29,7 +27,7 @@
     aria-label={wordmark ? undefined : "Quecto Harness"}
     aria-hidden={wordmark ? "true" : undefined}
   >
-    {#if !bare && !panel}
+    {#if !panel}
       <rect width="104" height="104" rx="24" fill="#0D9488" />
     {/if}
     <path

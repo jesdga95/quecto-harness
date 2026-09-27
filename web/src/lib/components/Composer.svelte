@@ -21,7 +21,18 @@
   } from "../state/app.svelte";
   import { fileKind, fileName } from "../format";
 
-  let { placeholder }: { placeholder: string } = $props();
+  let {
+    placeholder,
+    compact = false,
+    onbeforesend,
+  }: {
+    placeholder: string;
+    /** Narrow, beside the side panel: the chips drop the words they can spare. */
+    compact?: boolean;
+    /** Told as a message goes, so the empty screen can measure where the
+        composer stood. */
+    onbeforesend?: (composer: HTMLElement) => void;
+  } = $props();
 
   // Each mode asks for something different, so the empty field says what.
   const modeHint = $derived(app.workMode === "plan" ? "Describe the change to plan" : placeholder);
@@ -29,6 +40,7 @@
   let text = $state("");
   let files = $state<string[]>([]);
   let field = $state<HTMLTextAreaElement | null>(null);
+  let box = $state<HTMLDivElement | null>(null);
 
   // Every attachment is inlined into the prompt, which is what the harness
   // caps at five.
@@ -165,6 +177,7 @@
     if (disabled || (!text.trim() && files.length === 0)) return;
     const value = text;
     const attached = files;
+    if (box) onbeforesend?.(box);
     mention = null;
     hits = [];
     text = "";
@@ -209,7 +222,12 @@
 </script>
 
 <div class="w-full">
-  <div class="composer px-4 pt-4 pb-3" class:is-plan={app.workMode === "plan"}>
+  <div
+    class="composer composer-main"
+    class:is-plan={app.workMode === "plan"}
+    class:is-compact={compact}
+    bind:this={box}
+  >
     <!-- The model's todo list is the top of the same box while it has one. -->
     <PlanPanel />
     {#if files.length > 0}
@@ -256,7 +274,7 @@
     {/if}
     <textarea
       bind:this={field}
-      class="textarea"
+      class="textarea field-main"
       rows="1"
       placeholder={asking
         ? "Answer the card above first"
@@ -273,7 +291,7 @@
     ></textarea>
     </div>
 
-    <div class="mt-2 flex items-center gap-2">
+    <div class="mt-3 flex items-center gap-1.5">
       <AddMenu up onattach={attach} canAttach={!disabled && files.length < maxFiles} />
       <ModeChip />
       <PermissionChip />
@@ -288,12 +306,12 @@
           </button>
         {/if}
         {#if running}
-          <button class="round round-brand" aria-label="Stop" onclick={() => stop()}>
+          <button class="round send is-stop" aria-label="Stop" onclick={() => stop()}>
             <Square weight="fill" />
           </button>
         {:else}
           <button
-            class="round round-brand"
+            class="round send"
             aria-label="Send"
             onclick={submit}
             disabled={disabled || (!text.trim() && files.length === 0)}

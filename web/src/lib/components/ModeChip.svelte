@@ -41,16 +41,17 @@
 
 <div class="relative">
   <button
-    class="chip"
+    class="chip chip-bare"
     class:chip-mode={current.value !== "execute"}
     title="Switch with Shift+Tab"
+    aria-label={current.label}
     aria-haspopup="menu"
     aria-expanded={open}
     onclick={() => (open = !open)}
   >
     <Icon />
-    {current.label}
-    <CaretDown />
+    <span class="chip-mode-label">{current.label}</span>
+    <CaretDown class="chip-caret" />
   </button>
 
   {#if open}

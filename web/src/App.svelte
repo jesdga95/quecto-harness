@@ -5,6 +5,7 @@
   import ConfirmDialog from "./lib/components/ConfirmDialog.svelte";
   import Settings from "./lib/components/Settings.svelte";
   import Agents from "./lib/components/Agents.svelte";
+  import Backdrop from "./lib/components/Backdrop.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import Toasts from "./lib/components/Toasts.svelte";
   import { app, init } from "./lib/state/app.svelte";
@@ -17,6 +18,11 @@
   const setup = $derived(app.agents.length === 0);
 
   void init();
+
+  // Plan mode colours the whole page, overlays included, so it is marked on the root.
+  $effect(() => {
+    document.documentElement.classList.toggle("mode-plan", app.workMode === "plan");
+  });
 </script>
 
 {#if app.ready && setup}
@@ -24,7 +30,8 @@
 {:else if app.ready}
   <div class="flex h-screen min-w-[900px] bg-page text-ink">
     <Sidebar onsettings={() => (settings = true)} />
-    <main class="flex min-w-0 flex-1 flex-col">
+    <main class="relative isolate flex min-w-0 flex-1 flex-col">
+      <Backdrop />
       {#if app.items.length === 0}
         <Hero />
       {:else}

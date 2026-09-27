@@ -1,16 +1,10 @@
 <script lang="ts">
   import CaretDown from "phosphor-svelte/lib/CaretDown";
   import Check from "phosphor-svelte/lib/Check";
-  import FolderOpen from "phosphor-svelte/lib/FolderOpen";
   import FolderPlus from "phosphor-svelte/lib/FolderPlus";
   import Popover from "./Popover.svelte";
   import { app, pickAndAddProject, selectProject } from "../state/app.svelte";
 
-  let {
-    up = false,
-    inline = false,
-    big = false,
-  }: { up?: boolean; inline?: boolean; big?: boolean } = $props();
   let open = $state(false);
   const current = $derived(app.projects.find((p) => p.path === app.projectPath));
 
@@ -20,20 +14,15 @@
   }
 </script>
 
-<div class={inline ? "relative inline-block" : "relative"}>
-  <button
-    class={inline ? (big ? "linkpick is-big" : "linkpick") : "chip"}
-    aria-haspopup="menu"
-    aria-expanded={open}
-    onclick={() => (open = !open)}
-  >
-    <FolderOpen />
-    {current?.name ?? "Choose a project"}
-    <CaretDown />
+<!-- The empty screen's title is the project, and it is the picker for one. -->
+<div class="relative inline-block">
+  <button class="hero-title" aria-haspopup="menu" aria-expanded={open} onclick={() => (open = !open)}>
+    <span class="hero-name">{current?.name ?? "Choose a project"}</span>
+    <span class="hero-caret"><CaretDown /></span>
   </button>
 
   {#if open}
-    <Popover onclose={() => (open = false)} {up} width={280}>
+    <Popover onclose={() => (open = false)} width={280}>
       {#each app.projects as project (project.path)}
         <button class="popover-item" onclick={() => pick(project.path)}>
           <span class="min-w-0 flex-1">

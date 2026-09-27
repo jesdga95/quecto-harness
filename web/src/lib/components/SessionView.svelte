@@ -7,6 +7,7 @@
   import Transcript from "./Transcript.svelte";
   import { activeSession, app, selectSession } from "../state/app.svelte";
   import { shortPath } from "../format";
+  import { arriveComposer } from "../firstsend";
 
   const session = $derived(activeSession());
   const showPanel = $derived(app.panel && app.tabs.length > 0);
@@ -50,8 +51,8 @@
     <Transcript />
 
     <div class="shrink-0 px-6 pt-2 pb-5">
-      <div class="mx-auto w-full max-w-[820px]">
-        <Composer placeholder="Message the agent, @ to quote a file" />
+      <div class="mx-auto w-full max-w-[820px]" use:arriveComposer>
+        <Composer placeholder="Message the agent, @ to quote a file" compact={showPanel} />
       </div>
     </div>
   </div>

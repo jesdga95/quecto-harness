@@ -4,6 +4,7 @@
   import Prose from "./Prose.svelte";
   import StepRow from "./StepRow.svelte";
   import { app, openRun, selectSession } from "../state/app.svelte";
+  import { followEnd } from "../stream.svelte";
 
   let scroller = $state<HTMLDivElement | null>(null);
   let atBottom = $state(true);
@@ -82,7 +83,12 @@
     {/each}
   </div>
 
-  <div bind:this={scroller} {onscroll} class="min-h-0 flex-1 overflow-y-auto px-2.5 py-3">
+  <div
+    bind:this={scroller}
+    {onscroll}
+    use:followEnd={() => atBottom}
+    class="min-h-0 flex-1 overflow-y-auto px-2.5 py-3"
+  >
     {#if shown}
       <div class="flex flex-col gap-1.5">
         {#each app.runItems as item (item.id)}
@@ -97,7 +103,7 @@
                  it, so the row here would be a second copy of one answered
                  somewhere else. -->
           {:else}
-            <StepRow {item} />
+            <StepRow {item} live={item === app.runItems.at(-1) && shown.status !== "idle"} />
           {/if}
         {/each}
       </div>

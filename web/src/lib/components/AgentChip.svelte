@@ -39,7 +39,7 @@
 
 <div class="relative">
   <button
-    class="chip"
+    class="chip chip-bare"
     aria-haspopup="listbox"
     aria-expanded={open}
     title={current ? `${current.name} · ${current.model}` : undefined}
@@ -48,11 +48,14 @@
     {#if current}
       <Robot class={problem ? "text-crit" : app.status === "loading" ? "text-warn" : ""} />
       <span class="max-w-[190px] truncate">{current.name}</span>
+      {#if current.model}
+        <span class="chip-model max-w-[160px] truncate">{current.model}</span>
+      {/if}
     {:else}
       <Robot class={app.agents.length > 0 ? "text-crit" : ""} />
       <span>{app.agents.length > 0 ? "No agent is enabled" : "Add an agent"}</span>
     {/if}
-    <CaretDown />
+    <CaretDown class="chip-caret" />
   </button>
 
   {#if open}

@@ -18,6 +18,7 @@
   import type { Attached, TranscriptItem } from "../api";
   import { app, canResend, resend } from "../state/app.svelte";
   import { bytes, fileKind, fileName, timeOf } from "../format";
+  import { followEnd } from "../stream.svelte";
 
   let scroller = $state<HTMLDivElement | null>(null);
   let atBottom = $state(true);
@@ -381,12 +382,12 @@
       <PlanCard {item} />
     </div>
   {:else}
-    <StepRow {item} />
+    <StepRow {item} live={item === app.items.at(-1) && app.status !== "idle"} />
   {/if}
 {/snippet}
 
 <div class="relative min-h-0 flex-1">
-  <div bind:this={scroller} {onscroll} class="h-full overflow-y-auto">
+  <div bind:this={scroller} {onscroll} use:followEnd={() => atBottom} class="h-full overflow-y-auto">
     <div class="mx-auto flex w-full max-w-[820px] flex-col gap-1.5 px-6 py-6">
       {#each turns as turn (turn.key)}
         {#if turn.head}

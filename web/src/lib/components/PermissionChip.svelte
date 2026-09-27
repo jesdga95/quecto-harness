@@ -47,10 +47,12 @@
 </script>
 
 <div class="relative">
-  <button class="chip" aria-haspopup="menu" aria-expanded={open} onclick={() => (open = !open)}>
-    <Icon />
+  <button class="chip chip-bare" aria-haspopup="menu" aria-expanded={open} onclick={() => (open = !open)}>
+    <!-- Anything runs unreviewed, so the icon takes the colour kept for what
+         needs a look. -->
+    <Icon class={current.value === "full" ? "text-warn" : ""} />
     {current.label}
-    <CaretDown />
+    <CaretDown class="chip-caret" />
   </button>
 
   {#if open}
