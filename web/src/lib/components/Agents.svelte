@@ -144,11 +144,13 @@
           {#if !agent.enabled}
             <span class="shrink-0 text-[11px] text-muted">Disabled</span>
           {:else}
-            <!-- Every agent answers the person; the robot adds that it also
-                 takes delegated work, so the pair is what a main-only row lacks. -->
+            <!-- Every agent answers the person; the robot adds that at least
+                 one other agent names it in its list, so it may take work. -->
             <span class="flex shrink-0 items-center gap-1 text-muted">
               <User size={13} />
-              {#if !agent.main_only}<Robot size={13} />{/if}
+              {#if app.agents.some((x) => x.id !== agent.id && x.enabled && x.calls.includes(agent.id))}
+                <Robot size={13} />
+              {/if}
             </span>
           {/if}
         </button>
@@ -169,7 +171,7 @@
             {draft.name || "Unnamed agent"}
           </h3>
           <span class="truncate text-[12px] text-muted">
-            {draft.enabled ? "" : "Disabled · "}{draft.main_only ? "Main only · " : ""}{draft.model ||
+            {draft.enabled ? "" : "Disabled · "}{draft.model ||
               "No model chosen"}{draft.url ? ` · ${draft.url}` : ""}
           </span>
         </div>

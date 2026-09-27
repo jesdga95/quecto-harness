@@ -890,11 +890,45 @@ func TestContextOverrideArmsCompaction(t *testing.T) {
 	}
 }
 
+// earlierWork is a history long enough to be worth compacting.
+var earlierWork = strings.Repeat("Earlier work. ", 300)
+
+// A compaction is refused while there is less to summarise than a summary
+// would take: on a session with nothing in it, and on one holding only the
+// last summary.
+func TestCompactRefusesTooLittle(t *testing.T) {
+	h := newHarness(t, "stream_summary.txt")
+	s := h.session(t)
+	if err := h.engine.Compact(s.ID); err != ErrTooShort {
+		t.Errorf("Compact on an empty session = %v", err)
+	}
+
+	s.mu.Lock()
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: earlierWork, InContext: true, Visible: true})
+	s.mu.Unlock()
+	if !s.Compactable() {
+		t.Fatal("a long history is not compactable")
+	}
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+	if s.Compactable() {
+		t.Error("the summary alone is compactable")
+	}
+	if err := h.engine.Compact(s.ID); err != ErrTooShort {
+		t.Errorf("Compact over the summary alone = %v", err)
+	}
+	if n := h.replay.Count(); n != 1 {
+		t.Errorf("requests = %d, want the one compaction", n)
+	}
+}
+
 func TestCompactionRewritesInContextOnly(t *testing.T) {
 	h := newHarness(t, "stream_summary.txt")
 	s := h.session(t)
 	s.mu.Lock()
-	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "earlier work", InContext: true, Visible: true})
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: earlierWork, InContext: true, Visible: true})
 	s.mu.Unlock()
 
 	if err := h.engine.Compact(s.ID); err != nil {
@@ -953,7 +987,7 @@ func TestCompactRefusesAStop(t *testing.T) {
 	s := h.session(t)
 	h.replay.Delay = 200 * time.Millisecond
 	s.mu.Lock()
-	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "earlier work", InContext: true, Visible: true})
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: earlierWork, InContext: true, Visible: true})
 	s.mu.Unlock()
 
 	if err := h.engine.Compact(s.ID); err != nil {
@@ -987,7 +1021,7 @@ func TestCompactDeliversQueuedMessage(t *testing.T) {
 	s := h.session(t)
 	h.replay.Delay = 200 * time.Millisecond
 	s.mu.Lock()
-	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "earlier work", InContext: true, Visible: true})
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: earlierWork, InContext: true, Visible: true})
 	s.mu.Unlock()
 
 	if err := h.engine.Compact(s.ID); err != nil {
@@ -1503,6 +1537,9 @@ func TestTitleBeforeFirstReply(t *testing.T) {
 func TestEndToEndTurn(t *testing.T) {
 	h := newHarness(t, "stream_read.txt", "stream_tool.txt", "stream_write.txt", "stream_summary.txt", "stream_plain.txt")
 	s := h.session(t)
+	s.mu.Lock()
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: earlierWork, InContext: true, Visible: true})
+	s.mu.Unlock()
 	h.engine.Send(s.ID, "read, run, write", nil)
 
 	// read_file is allowed by policy, run_shell is denied, write_file is

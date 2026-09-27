@@ -267,10 +267,13 @@
             open = false;
             void compact();
           }}
-          disabled={running}
+          disabled={running || !app.usage.compactable}
         >
           <ArrowsIn /> Compact now
         </button>
+        {#if !running && !app.usage.compactable}
+          <p class="mt-1.5 text-center text-[12px] text-muted">Not enough content to compact yet</p>
+        {/if}
       </div>
     </Popover>
   {/if}

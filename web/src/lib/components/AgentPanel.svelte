@@ -10,6 +10,7 @@
     TEMPERATURE_STEPS,
     TOP_K_STEPS,
     TOP_P_STEPS,
+    app,
     probeAgent,
   } from "../state/app.svelte";
   import { effortHint, effortLabel, k, protocolHint, protocolLabel } from "../format";
@@ -120,6 +121,15 @@
 
   function restoreName() {
     if (name.trim() === "") name = agent.name;
+  }
+
+  // The list holds ids, and the panel is the only thing that writes it, so a
+  // chip flips its own entry rather than rebuilding the whole list.
+  function toggleCall(id: string) {
+    const calls = agent.calls.includes(id)
+      ? agent.calls.filter((x) => x !== id)
+      : [...agent.calls, id];
+    onchange({ calls });
   }
 
   function commitUrl(text: string) {
@@ -263,23 +273,41 @@
         onchange={(e) => onchange({ enabled: e.currentTarget.checked })}
       />
     </label>
+  </div>
 
-    <div class="my-3 h-px w-full bg-hair"></div>
-
-    <label class="flex cursor-pointer items-center justify-between gap-6">
-      <span class="flex min-w-0 flex-col gap-0.5">
-        <span class="text-[13px]">Main agent only</span>
+  <div class="field-card" class:opacity-45={!agent.enabled} class:pointer-events-none={!agent.enabled}>
+    <div class="flex items-center justify-between gap-4">
+      <h4 class="field-head">Delegation</h4>
+      {#if agent.calls.length}
         <span class="text-[12px] text-muted">
-          It answers when selected, but other agents cannot hand it work.
+          Can hand work to {agent.calls.length} agent{agent.calls.length === 1 ? "" : "s"}
         </span>
-      </span>
-      <input
-        class="switch"
-        type="checkbox"
-        checked={agent.main_only}
-        onchange={(e) => onchange({ main_only: e.currentTarget.checked })}
-      />
-    </label>
+      {:else}
+        <span class="text-[12px] text-crit">Answers the person only</span>
+      {/if}
+    </div>
+    <div class="grid grid-cols-4 gap-2">
+      {#each app.agents as other (other.id)}
+        {#if other.id !== agent.id}
+          <button
+            type="button"
+            class="cursor-pointer truncate rounded-full border px-3 py-1.5 text-left text-[12px] transition-colors"
+            class:border-brand={agent.calls.includes(other.id)}
+            class:bg-brand={agent.calls.includes(other.id)}
+            class:text-white={agent.calls.includes(other.id)}
+            class:opacity-45={!other.enabled}
+            class:border-line={!agent.calls.includes(other.id)}
+            class:bg-surface={!agent.calls.includes(other.id)}
+            class:text-ink-2={!agent.calls.includes(other.id)}
+            title={other.description || other.name}
+            disabled={!agent.enabled || !other.enabled}
+            onclick={() => toggleCall(other.id)}
+          >
+            {other.name}
+          </button>
+        {/if}
+      {/each}
+    </div>
   </div>
 
   <div class="field-card">

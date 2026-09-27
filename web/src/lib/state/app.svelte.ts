@@ -1123,8 +1123,11 @@ function onEvent(event: HarnessEvent): void {
       tok_per_s: event.tok_per_s ?? app.usage.tok_per_s,
       cached_pct: event.cached_pct ?? app.usage.cached_pct,
       breakdown: event.breakdown,
+      compactable: event.compactable,
     };
   }
+  // A summary leaves nothing new to summarise until the next request says so.
+  if (event.type === "compacted") app.usage.compactable = false;
 
   // A turn that ends in an error still ends, so the composer comes back rather
   // than sitting on a spinner until the next status event.

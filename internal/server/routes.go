@@ -76,7 +76,7 @@ type agentJSON struct {
 	ID                string   `json:"id"`
 	Name              string   `json:"name"`
 	Enabled           bool     `json:"enabled"`
-	MainOnly          bool     `json:"main_only"`
+	Calls             []string `json:"calls"`
 	URL               string   `json:"url"`
 	Key               string   `json:"key"`
 	Protocol          string   `json:"protocol"`
@@ -96,8 +96,12 @@ type agentJSON struct {
 }
 
 func toAgentJSON(a config.Agent) agentJSON {
+	calls := a.Calls
+	if calls == nil {
+		calls = []string{}
+	}
 	return agentJSON{
-		ID: a.ID, Name: a.Name, Enabled: a.Enabled, MainOnly: a.MainOnly, URL: a.URL, Key: a.Key, Protocol: string(a.Protocol),
+		ID: a.ID, Name: a.Name, Enabled: a.Enabled, Calls: calls, URL: a.URL, Key: a.Key, Protocol: string(a.Protocol),
 		Model: a.Model, Effort: string(a.Effort), PreserveReasoning: a.PreserveReasoning,
 		Temperature: a.Temperature, TopP: a.TopP, TopK: a.TopK,
 		RepeatPenalty: a.RepeatPenalty, MaxTokens: a.MaxTokens, MaxContext: a.MaxContext, Seed: a.Seed,
@@ -463,7 +467,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		// A tab that refetches still draws the message waiting for the turn.
 		"steer": steerJSON(sess.Steer()),
 		"state": string(state), "n_ctx": nctx, "n_ctx_source": source,
-		"fill": fill, "compactions": doc.Compactions,
+		"fill": fill, "compactions": doc.Compactions, "compactable": sess.Compactable(),
 		"pending": pending, "entries": entries, "todos": todos,
 		"last_seq": s.hub.Seq(doc.ID),
 	}
@@ -936,7 +940,7 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) (*agent.Session
 func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrNotLast),
-		errors.Is(err, agent.ErrCompacting):
+		errors.Is(err, agent.ErrCompacting), errors.Is(err, agent.ErrTooShort):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, agent.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())

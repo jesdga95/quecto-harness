@@ -194,6 +194,13 @@ func (s *Session) Snapshot() (*store.Session, State, int, llm.Caps) {
 	return s.doc(), s.state, s.computeFill(), s.caps
 }
 
+// Compactable reports whether a compaction asked for now would be taken.
+func (s *Session) Compactable() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.compactable()
+}
+
 // sender is who a message is from: the name a person reads, and the session a
 // reply is addressed to. Both empty is a person.
 type sender struct {
@@ -532,6 +539,23 @@ func (s *Session) computeFill() int {
 	}
 	base := s.LastUsage.PromptTokens + s.LastUsage.CompletionTokens
 	return base + s.estimateChars(s.lastUsageEntry)/charsPerToken
+}
+
+// compactFloor is the fewest characters since the last summary that a
+// compaction takes. The summary may run to 400 words, so compacting less than
+// this would not shrink the context.
+const compactFloor = 4000
+
+// compactable reports whether enough has been said since the last summary to
+// be worth summarising again.
+func (s *Session) compactable() bool {
+	from := -1
+	for i, e := range s.Entries {
+		if e.Kind == "compaction" && e.InContext {
+			from = i
+		}
+	}
+	return s.estimateChars(from) >= compactFloor
 }
 
 // estimateChars sums the in-context characters after index from, or over the

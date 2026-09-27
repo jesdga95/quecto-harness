@@ -14,25 +14,25 @@ import (
 // agentBody is what a write may carry. A field the body leaves out keeps the
 // value it has, and an empty key is no key.
 type agentBody struct {
-	Name              *string        `json:"name"`
-	Enabled           *bool          `json:"enabled"`
-	MainOnly          *bool          `json:"main_only"`
-	URL               *string        `json:"url"`
-	Key               *string        `json:"key"`
-	Protocol          *string        `json:"protocol"`
-	Model             *string        `json:"model"`
-	Effort            *string        `json:"effort"`
-	PreserveReasoning *bool          `json:"preserve_reasoning"`
-	Temperature       patch[float64] `json:"temperature"`
-	TopP              patch[float64] `json:"top_p"`
-	TopK              patch[int]     `json:"top_k"`
-	RepeatPenalty     patch[float64] `json:"repeat_penalty"`
-	MaxTokens         patch[int]     `json:"max_tokens"`
-	MaxContext        patch[int]     `json:"max_context"`
-	Seed              patch[int]     `json:"seed"`
-	Concurrency       *int           `json:"concurrency"`
-	Description       *string        `json:"description"`
-	Instructions      *string        `json:"instructions"`
+	Name              *string         `json:"name"`
+	Enabled           *bool           `json:"enabled"`
+	Calls             patch[[]string] `json:"calls"`
+	URL               *string         `json:"url"`
+	Key               *string         `json:"key"`
+	Protocol          *string         `json:"protocol"`
+	Model             *string         `json:"model"`
+	Effort            *string         `json:"effort"`
+	PreserveReasoning *bool           `json:"preserve_reasoning"`
+	Temperature       patch[float64]  `json:"temperature"`
+	TopP              patch[float64]  `json:"top_p"`
+	TopK              patch[int]      `json:"top_k"`
+	RepeatPenalty     patch[float64]  `json:"repeat_penalty"`
+	MaxTokens         patch[int]      `json:"max_tokens"`
+	MaxContext        patch[int]      `json:"max_context"`
+	Seed              patch[int]      `json:"seed"`
+	Concurrency       *int            `json:"concurrency"`
+	Description       *string         `json:"description"`
+	Instructions      *string         `json:"instructions"`
 }
 
 // check refuses a value the agent cannot hold, before anything is written.
@@ -86,8 +86,12 @@ func (b agentBody) apply(a *config.Agent) {
 	if b.Enabled != nil {
 		a.Enabled = *b.Enabled
 	}
-	if b.MainOnly != nil {
-		a.MainOnly = *b.MainOnly
+	if b.Calls.Set {
+		if b.Calls.Value == nil {
+			a.Calls = nil
+		} else {
+			a.Calls = *b.Calls.Value
+		}
 	}
 	if b.URL != nil {
 		a.URL = strings.TrimRight(strings.TrimSpace(*b.URL), "/")

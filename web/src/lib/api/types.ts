@@ -68,9 +68,9 @@ export interface Agent {
   /** Whether the agent may answer. A disabled one keeps its settings, cannot
       be selected, and is not offered to the agents that hand out work. */
   enabled: boolean;
-  /** Whether the agent answers only as the selected agent. It is not offered
-      to the agents that hand out work, and run_agent refuses it. */
-  main_only: boolean;
+  /** The agents this one may hand work to, by id. Empty is an agent that
+      answers the person only: it is on no caller's list. */
+  calls: string[];
   url: string;
   /** Empty is no key. */
   key: string;
@@ -265,6 +265,7 @@ export type HarnessEvent =
       tok_per_s?: number;
       cached_pct?: number;
       breakdown?: Breakdown;
+      compactable?: boolean;
     }
   | { type: "status"; status: TurnStatus }
   /** The session's mode changed. kickoff marks the switch an approved plan
@@ -457,6 +458,9 @@ export interface Usage {
   tok_per_s?: number;
   cached_pct?: number;
   breakdown?: Breakdown;
+  /** Whether enough has been said since the last summary for a compaction
+      to be taken. */
+  compactable?: boolean;
 }
 
 /** What one turn spent. ms is the wall clock from the message to the answer,

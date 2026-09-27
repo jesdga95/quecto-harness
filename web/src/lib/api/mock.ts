@@ -36,12 +36,18 @@ import { answerText, type Asked } from "../question";
 const MOCK_SYSTEM = 154;
 const MOCK_RULES = 287;
 const MOCK_TOOLS = 1026;
+// The fewest message tokens the harness takes a compaction over.
+const MOCK_COMPACT_FLOOR = 1000;
 
 /** The split as the harness reports it: three measured parts and the rest. */
 function split(usage: Usage): Usage {
   const messages = usage.prompt_tokens + usage.completion_tokens - MOCK_SYSTEM - MOCK_RULES - MOCK_TOOLS;
-  if (messages < 0) return usage;
-  return { ...usage, breakdown: { system: MOCK_SYSTEM, rules: MOCK_RULES, tools: MOCK_TOOLS, messages } };
+  if (messages < 0) return { ...usage, compactable: false };
+  return {
+    ...usage,
+    breakdown: { system: MOCK_SYSTEM, rules: MOCK_RULES, tools: MOCK_TOOLS, messages },
+    compactable: messages >= MOCK_COMPACT_FLOOR,
+  };
 }
 
 // One of every row the panel has to draw, so the states with no diff are
@@ -129,14 +135,14 @@ const ADDRESSES: Record<string, Model[]> = {
 
 const AGENTS: Agent[] = [
   {
-    id: "agt_local", name: "Local llama.cpp", enabled: true, main_only: false, url: "http://192.168.2.205:8080",
+    id: "agt_local", name: "Local llama.cpp", enabled: true, calls: ["agt_studio"], url: "http://192.168.2.205:8080",
     key: "", protocol: "llamacpp", model: "Gemma4-12B", effort: "medium", preserve_reasoning: true,
     temperature: null, top_p: null, top_k: null, repeat_penalty: null,
     max_tokens: null, max_context: null, seed: null, concurrency: 1,
     description: "", instructions: "",
   },
   {
-    id: "agt_studio", name: "Studio box", enabled: true, main_only: false, url: "http://10.0.0.14:1234",
+    id: "agt_studio", name: "Studio box", enabled: true, calls: [], url: "http://10.0.0.14:1234",
     key: "sk-studio", protocol: "responses", model: "Qwen3.8-27B Q5", effort: "high",
     preserve_reasoning: false,
     temperature: 0.7, top_p: 0.9, top_k: 40, repeat_penalty: 1.1,
@@ -145,7 +151,7 @@ const AGENTS: Agent[] = [
     instructions: "Answer in British English.",
   },
   {
-    id: "agt_cloud", name: "Cloud endpoint", enabled: true, main_only: false, url: "https://api.example.com/v1",
+    id: "agt_cloud", name: "Cloud endpoint", enabled: true, calls: [], url: "https://api.example.com/v1",
     key: "", protocol: "chat", model: "gpt-oss-120b", effort: "medium", preserve_reasoning: true,
     temperature: null, top_p: null, top_k: null, repeat_penalty: null,
     max_tokens: null, max_context: null, seed: null, concurrency: 1,
@@ -525,7 +531,7 @@ export class MockApi implements HarnessApi {
       throw new Error(`An agent named "${name}" already exists: choose another name`);
     }
     const agent: Agent = {
-      id: nextId("agt"), enabled: true, main_only: false, url: "", key: "", model: "",
+      id: nextId("agt"), enabled: true, calls: [], url: "", key: "", model: "",
       protocol: "llamacpp", effort: "medium", preserve_reasoning: true,
       temperature: null, top_p: null,
       top_k: null, repeat_penalty: null, max_tokens: null, max_context: null, seed: null,

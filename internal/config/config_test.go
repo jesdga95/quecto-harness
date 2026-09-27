@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -253,7 +254,7 @@ func TestConfigFileRoundTrip(t *testing.T) {
 		t.Errorf("got %+v, want %+v", out, in)
 	}
 	got, ok := out.Agent()
-	if !ok || got != in.Agents[0] {
+	if !ok || !reflect.DeepEqual(got, in.Agents[0]) {
 		t.Errorf("agent = %+v, %v, want %+v", got, ok, in.Agents[0])
 	}
 	for _, key := range []string{"listen", "agents", "agent", "permissions", "compact_at", "shell",
@@ -292,28 +293,28 @@ func TestAgentWithoutConcurrencyWorksAlone(t *testing.T) {
 	}
 }
 
-// main_only answers only as the selected agent. Absent takes false, and a
-// true one is written out and read back.
-func TestMainOnlyIsWrittenAndReadBack(t *testing.T) {
+// calls names the agents an agent may hand work to. Absent is no list, and a
+// named one is written out and read back.
+func TestCallsAreWrittenAndReadBack(t *testing.T) {
 	c, notes := oneAgent(FileAgent{}).Resolve(Defaults())
-	if len(notes) != 0 || c.Agents[0].MainOnly {
-		t.Fatalf("an absent main_only = %+v, notes %v, want false and none", c.Agents[0], notes)
+	if len(notes) != 0 || c.Agents[0].Calls != nil {
+		t.Fatalf("an absent calls = %+v, notes %v, want none and none", c.Agents[0], notes)
 	}
-	c.Agents[0].MainOnly = true
+	c.Agents[0].Calls = []string{"agt_bbbbbbbbbbbbbbbb"}
 	raw, err := json.Marshal(c.File())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"main_only":true`) {
-		t.Errorf("saved file omits a true main_only: %s", raw)
+	if !strings.Contains(string(raw), `"calls":["agt_bbbbbbbbbbbbbbbb"]`) {
+		t.Errorf("saved file omits a named calls list: %s", raw)
 	}
 	var back File
 	if err := json.Unmarshal(raw, &back); err != nil {
 		t.Fatal(err)
 	}
 	out, notes := back.Resolve(Defaults())
-	if len(notes) != 0 || !out.Agents[0].MainOnly {
-		t.Errorf("second resolve = %+v, notes %v, want the flag kept", out.Agents[0], notes)
+	if len(notes) != 0 || !reflect.DeepEqual(out.Agents[0].Calls, []string{"agt_bbbbbbbbbbbbbbbb"}) {
+		t.Errorf("second resolve = %+v, notes %v, want the list kept", out.Agents[0], notes)
 	}
 }
 

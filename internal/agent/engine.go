@@ -46,6 +46,7 @@ var (
 	ErrNoAddress  = errors.New("The agent has no address: add it in the agents dialog")
 	ErrNoModel    = errors.New("The agent has no model: choose one in the agents dialog")
 	ErrCompacting = errors.New("The conversation is being compacted: that finishes on its own")
+	ErrTooShort   = errors.New("Not enough content to compact: keep working and try again later")
 )
 
 // Engine owns every live session and dispatches turns.
@@ -639,6 +640,10 @@ func (e *Engine) Compact(id string) error {
 		s.mu.Unlock()
 		return ErrBusy
 	}
+	if !s.compactable() {
+		s.mu.Unlock()
+		return ErrTooShort
+	}
 	s.state = StateCompacting
 	ctx, cancel := context.WithCancel(e.ctx)
 	s.cancel = cancel
@@ -1138,10 +1143,12 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		s.mu.Lock()
 		fill := s.computeFill()
 		nctx, _ := s.window(a)
+		enough := s.compactable()
 		s.mu.Unlock()
 		// A window nothing reported and nothing overrode is no limit, so a
 		// session against one compacts when the reader asks and not before.
-		if nctx > 0 && float64(fill) >= cfg.CompactAt*float64(nctx) {
+		// A context filled by the prompt itself is sent as it stands.
+		if nctx > 0 && float64(fill) >= cfg.CompactAt*float64(nctx) && enough {
 			e.setState(s, StateCompacting)
 			if err := e.compact(ctx, s, back, a, b, caps); err != nil {
 				e.endWithError(s, err, iteration)
@@ -1390,6 +1397,7 @@ func (e *Engine) publishUsage(s *Session) {
 	s.mu.Lock()
 	u := s.LastUsage
 	fill := s.computeFill()
+	compactable := s.compactable()
 	reported, source := s.NCtx, s.NCtxSource
 	agentID := s.AgentID
 	parts := s.breakdown()
@@ -1403,7 +1411,7 @@ func (e *Engine) publishUsage(s *Session) {
 	nctx, _ := agent.Window(reported, source)
 	payload := map[string]any{
 		"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens,
-		"cached_tokens": u.CachedTokens, "fill": fill, "n_ctx": nctx}
+		"cached_tokens": u.CachedTokens, "fill": fill, "n_ctx": nctx, "compactable": compactable}
 	if parts != nil {
 		payload["breakdown"] = parts
 	}

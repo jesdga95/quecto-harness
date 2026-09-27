@@ -80,7 +80,7 @@ interface WireAgent {
   id?: string;
   name?: string;
   enabled?: boolean;
-  main_only?: boolean;
+  calls?: string[];
   url?: string;
   key?: string;
   protocol?: string;
@@ -231,6 +231,7 @@ interface WireSnapshot {
   draft?: unknown;
   last_seq?: number;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+  compactable?: boolean;
   breakdown?: { system?: number; rules?: number; tools?: number; messages?: number } | null;
 }
 
@@ -266,6 +267,7 @@ interface WireEvent {
   completion_tokens?: number;
   cached_tokens?: number;
   n_ctx?: number;
+  compactable?: boolean;
   before?: number;
   after?: number;
   summary?: string;
@@ -379,7 +381,7 @@ function toAgent(a: WireAgent): Agent {
     id: a.id ?? "",
     name: a.name || "Agent",
     enabled: a.enabled ?? true,
-    main_only: a.main_only ?? false,
+    calls: a.calls ?? [],
     url: a.url ?? "",
     key: a.key ?? "",
     protocol: toProtocol(a.protocol),
@@ -852,6 +854,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
     n_ctx: snap.n_ctx ?? 0,
     tok_per_s: rate && rate > 0 ? Math.round(rate) : undefined,
     breakdown: toBreakdown(snap.breakdown),
+    compactable: snap.compactable ?? false,
   };
 
   const highest = entries.reduce((max, e) => Math.max(max, e.seq ?? 0), 0);
@@ -1077,6 +1080,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           n_ctx: ev.n_ctx ?? 0,
           cached_pct: prompt > 0 ? Math.round((cached / prompt) * 100) : undefined,
           breakdown: toBreakdown(ev.breakdown),
+          compactable: ev.compactable ?? false,
         },
       ];
     }

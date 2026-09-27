@@ -38,7 +38,7 @@ type FileAgent struct {
 	ID                *string  `json:"id,omitempty"`
 	Name              *string  `json:"name,omitempty"`
 	Enabled           *bool    `json:"enabled,omitempty"`
-	MainOnly          *bool    `json:"main_only,omitempty"`
+	Calls             []string `json:"calls,omitempty"`
 	URL               *string  `json:"url,omitempty"`
 	Key               *string  `json:"key,omitempty"`
 	Protocol          *string  `json:"protocol,omitempty"`
@@ -174,11 +174,12 @@ type Agent struct {
 	// address, key and settings, cannot be selected, and is not named to the
 	// agents that hand out work.
 	Enabled bool
-	// MainOnly is whether the agent answers only as the selected agent. It is
-	// not named to the agents that hand out work, and run_agent refuses it.
-	MainOnly bool
-	URL      string
-	Key      string
+	// Calls names the agents this one may hand work to, by id. Empty is an
+	// agent that answers the person only: it is named to no caller's list and
+	// run_agent refuses it.
+	Calls []string
+	URL   string
+	Key   string
 	// Protocol is what the address speaks. It is named rather than found:
 	// two of the three answer the same model list at the same address.
 	Protocol          Protocol
@@ -540,7 +541,7 @@ func (c Config) File() File {
 	agents := make([]FileAgent, 0, len(c.Agents))
 	for _, a := range c.Agents {
 		id, name, url, key := a.ID, a.Name, a.URL, a.Key
-		enabled, mainOnly := a.Enabled, a.MainOnly
+		enabled := a.Enabled
 		protocol, model, effort := string(a.Protocol), a.Model, string(a.Effort)
 		preserve, instructions := a.PreserveReasoning, a.Instructions
 		concurrency, description := a.Concurrency, a.Description
@@ -548,7 +549,7 @@ func (c Config) File() File {
 			ID:                &id,
 			Name:              &name,
 			Enabled:           &enabled,
-			MainOnly:          &mainOnly,
+			Calls:             cloneCalls(a.Calls),
 			URL:               &url,
 			Key:               &key,
 			Protocol:          &protocol,
@@ -615,8 +616,8 @@ func resolveAgents(in []FileAgent, note func(string)) []Agent {
 		if f.Enabled != nil {
 			a.Enabled = *f.Enabled
 		}
-		if f.MainOnly != nil {
-			a.MainOnly = *f.MainOnly
+		if f.Calls != nil {
+			a.Calls = cloneCalls(f.Calls)
 		}
 		// A blank address is an agent still being filled in, not a bad value.
 		if f.URL != nil && strings.TrimSpace(*f.URL) != "" {
@@ -835,6 +836,15 @@ func clonef(p *float64) *float64 {
 	}
 	v := *p
 	return &v
+}
+
+// cloneCalls copies a call list for the same reason, and out of one a nil
+// file value is read as no list rather than a dangling one.
+func cloneCalls(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	return append([]string(nil), in...)
 }
 
 func validListen(s string) (string, bool) {

@@ -748,6 +748,22 @@ func TestMessageStopAndCompact(t *testing.T) {
 		t.Errorf("stop on idle = %d %s", w.Code, w.Body.String())
 	}
 
+	// Two short lines are less than a summary of them would be.
+	if snap := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil)); snap["compactable"] != false {
+		t.Errorf("compactable = %v after two short lines", snap["compactable"])
+	}
+	if w := f.do(t, "POST", "/api/sessions/"+id+"/compact", nil); w.Code != http.StatusConflict {
+		t.Errorf("compact of two short lines = %d, want 409", w.Code)
+	}
+	long := strings.Repeat("The work so far. ", 300)
+	if w := f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": long}); w.Code != http.StatusAccepted {
+		t.Fatalf("message = %d: %s", w.Code, w.Body.String())
+	}
+	f.waitIdle(t, id)
+	if snap := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil)); snap["compactable"] != true {
+		t.Errorf("compactable = %v after a long message", snap["compactable"])
+	}
+
 	f.setFrames(
 		`data: {"choices":[{"delta":{"content":"a summary"},"finish_reason":"stop"}]}`,
 		`data: [DONE]`,
@@ -759,6 +775,9 @@ func TestMessageStopAndCompact(t *testing.T) {
 	snap := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
 	if snap["compactions"] != 1.0 {
 		t.Errorf("compactions = %v", snap["compactions"])
+	}
+	if snap["compactable"] != false {
+		t.Errorf("compactable = %v with only the summary in context", snap["compactable"])
 	}
 }
 
@@ -869,33 +888,43 @@ func TestPutAgentSetsAndClearsSampling(t *testing.T) {
 	}
 }
 
-// A window nothing reported is unknown, and the agent's override fills it in
-// for the session that answers with that agent.
-// The main_only flag is applied on a write and comes back in the agent JSON.
-func TestPutAgentMainOnly(t *testing.T) {
+// The call list is applied on a write and comes back in the agent JSON.
+func TestPutAgentCalls(t *testing.T) {
 	f := newFixture(t)
-	res := f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"main_only": true})
+	other := f.addAgent(t, map[string]any{"name": "Reviewer"})
+	res := f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"calls": []string{other}})
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
 	}
 	a, _ := f.cfg.Config().AgentByID(f.agent)
-	if !a.MainOnly {
-		t.Error("main_only was not applied")
+	if len(a.Calls) != 1 || a.Calls[0] != other {
+		t.Errorf("calls = %v, want [%s]", a.Calls, other)
 	}
-	if got := f.saved(t, res)["main_only"]; got != true {
-		t.Errorf("the reply said main_only = %v, want true", got)
+	if got, _ := f.saved(t, res)["calls"].([]any); len(got) != 1 || got[0] != other {
+		t.Errorf("the reply said calls = %v, want [%s]", got, other)
 	}
-	// A body that leaves the flag out keeps it.
+	// A body that leaves the list out keeps it.
 	res = f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"description": "Main work."})
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
 	}
 	a, _ = f.cfg.Config().AgentByID(f.agent)
-	if !a.MainOnly {
-		t.Errorf("main_only moved to %v on a body that left it out", a.MainOnly)
+	if len(a.Calls) != 1 || a.Calls[0] != other {
+		t.Errorf("calls moved to %v on a body that left the list out", a.Calls)
+	}
+	// A body that sends null clears it.
+	res = f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"calls": nil})
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
+	}
+	a, _ = f.cfg.Config().AgentByID(f.agent)
+	if a.Calls != nil {
+		t.Errorf("calls = %v, want cleared", a.Calls)
 	}
 }
 
+// A window nothing reported is unknown, and the agent's override fills it in
+// for the session that answers with that agent.
 func TestSnapshotWindowComesFromTheAgent(t *testing.T) {
 	f := newFixture(t)
 	id := f.newSession(t)

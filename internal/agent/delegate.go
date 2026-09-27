@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"quecto-harness/internal/config"
@@ -104,8 +105,12 @@ func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 		return b
 	}
 	b.offer = tools.Offer{Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}
+	me, _ := cfg.AgentByID(mine)
+	// What is named is what the caller may hand work to, so a list that names
+	// nothing offers the tool at all, the way a roster with no enabled agents
+	// did.
 	for _, a := range cfg.Agents {
-		if !a.Enabled || a.MainOnly {
+		if !a.Enabled || !slices.Contains(me.Calls, a.ID) {
 			continue
 		}
 		// This turn is already one of its own agent's tasks, so a launch onto
@@ -215,21 +220,18 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 	}
 
 	cfg := e.cfg.Config()
-	target, err := findAgent(cfg, args.Agent)
-	if err != nil {
-		return tools.Result{}, err
-	}
-	if target.MainOnly {
-		return tools.Result{}, fmt.Errorf("run_agent: %s takes no delegated work, pick another agent", target.Name)
-	}
-	if err := usable(target); err != nil {
-		return tools.Result{}, fmt.Errorf("run_agent: %s is not ready: %s", target.Name, err)
-	}
-
 	s.mu.Lock()
 	mine, project, mode := s.AgentID, s.Project, s.Mode
 	s.mu.Unlock()
 	me, _ := cfg.AgentByID(mine)
+
+	target, err := findAgent(cfg, me, args.Agent)
+	if err != nil {
+		return tools.Result{}, err
+	}
+	if err := usable(target); err != nil {
+		return tools.Result{}, fmt.Errorf("run_agent: %s is not ready: %s", target.Name, err)
+	}
 	// The limit belongs to the agent being asked, not to the one asking: what
 	// it counts is requests to one model server. This session is one of them,
 	// so an agent that runs one at a time cannot take work from itself.
@@ -436,23 +438,21 @@ func (e *Engine) rollUp(child, parent *Session) {
 	e.publish(parent.ID, ev("changed", nil))
 }
 
-// findAgent matches an agent by name, which is what the model was given. An
-// disabled agent is not there to match, since it is not in the list
-// the prompt named either. A main-only one still matches, so a call can be
-// refused by name, but it stays out of the names a misspelled call is told.
-func findAgent(cfg config.Config, name string) (config.Agent, error) {
+// findAgent matches an agent by name, which is what the model was given. It
+// may match only what the caller was told: an enabled agent on the caller's
+// list. A disabled one and one off the list are refused by name and left out
+// of the names a misspelled call is told.
+func findAgent(cfg config.Config, me config.Agent, name string) (config.Agent, error) {
 	want := strings.TrimSpace(name)
 	var names []string
 	for _, a := range cfg.Agents {
-		if !a.Enabled {
+		if !a.Enabled || !slices.Contains(me.Calls, a.ID) {
 			continue
 		}
 		if strings.EqualFold(a.Name, want) {
 			return a, nil
 		}
-		if !a.MainOnly {
-			names = append(names, a.Name)
-		}
+		names = append(names, a.Name)
 	}
 	if len(names) == 0 {
 		return config.Agent{}, errors.New("run_agent: there are no agents to run this")

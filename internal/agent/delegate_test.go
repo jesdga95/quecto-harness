@@ -15,11 +15,13 @@ import (
 )
 
 // launcher is a harness with a second agent to hand work to. The two answer on
-// different models, so the replay server can script each of them.
+// different models, so the replay server can script each of them, and the
+// first agent's list names the second, the way the dialog would.
 func launcher(t *testing.T) (*harness, config.Agent) {
 	t.Helper()
 	h := newHarness(t)
 	reviewer := h.addAgent(t, "Reviewer", h.url, "Beta-30B")
+	h.setAgent(t, func(a *config.Agent) { a.Calls = []string{reviewer.ID} })
 	return h, reviewer
 }
 
@@ -415,9 +417,13 @@ func TestConcurrencyBoundsLiveChildren(t *testing.T) {
 // runs one at a time cannot take work from itself: its own turn is the slot.
 func TestAnAgentThatRunsOneAtATimeWillNotTakeItsOwnWork(t *testing.T) {
 	h := newHarness(t)
-	// The only agent is the one answering, so run_agent names it and nothing
-	// else. Its own turn is under way when the call is made.
-	mine := h.setAgent(t, func(a *config.Agent) { a.Name = "Alpha"; a.Concurrency = 1 })
+	// The only agent names itself, which is how one hands work to itself. Its
+	// own turn is under way when the call is made.
+	mine := h.setAgent(t, func(a *config.Agent) {
+		a.Name = "Alpha"
+		a.Concurrency = 1
+		a.Calls = []string{a.ID}
+	})
 	h.replay.forModel("Alpha-12B", "stream_run_agent_self.txt", "stream_plain.txt")
 
 	s := h.session(t)
@@ -727,7 +733,7 @@ func TestADisabledAgentTakesNoWork(t *testing.T) {
 	if len(b.agents) != 0 || b.offer.Agents {
 		t.Errorf("the agents it may hand work to = %+v, want none", b.agents)
 	}
-	if _, err := findAgent(cfg, "Reviewer"); err == nil {
+	if _, err := findAgent(cfg, h.agent, "Reviewer"); err == nil {
 		t.Error("a disabled agent was found by name")
 	}
 
@@ -743,59 +749,53 @@ func TestADisabledAgentTakesNoWork(t *testing.T) {
 	}
 }
 
-// A main-only agent is left off the list the prompt names, and a call by
+// An agent the caller's list does not name is not in the brief, and a call by
 // name is refused by the tool rather than started.
-func TestAMainOnlyAgentTakesNoWork(t *testing.T) {
-	h, reviewer := launcher(t)
-	if _, _, err := h.cfg.UpdateAgent(reviewer.ID, func(a *config.Agent) { a.MainOnly = true }); err != nil {
-		t.Fatal(err)
-	}
+func TestAnAgentOffTheListTakesNoWork(t *testing.T) {
+	h, _ := launcher(t)
+	h.setAgent(t, func(a *config.Agent) { a.Calls = nil })
 	cfg := h.cfg.Config()
 
-	// Every agent is now off the list, so the brief offers no run_agent at all.
+	// The list names nothing, so the brief offers no run_agent at all.
 	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B")
 	b := h.engine.briefFor(top, cfg)
 	if len(b.agents) != 0 || b.offer.Agents {
 		t.Errorf("the agents it may hand work to = %+v, want none", b.agents)
 	}
-	// It still matches by name, so the refusal can say why. A misspelled
-	// call is told the rest of the list, and it is not in that.
-	if _, err := findAgent(cfg, "Reviewer"); err != nil {
-		t.Errorf("a main-only agent was not found by name: %v", err)
+	if _, err := findAgent(cfg, h.agent, "Reviewer"); err == nil {
+		t.Error("an agent off the list was found by name")
 	}
-	if _, err := findAgent(cfg, "Nobody"); err == nil || !strings.Contains(err.Error(), "Local") || strings.Contains(err.Error(), "Reviewer") {
-		t.Errorf("a misspelled name was told %v", err)
+	if _, err := findAgent(cfg, h.agent, "Nobody"); err == nil || !strings.Contains(err.Error(), "no agents to run this") {
+		t.Errorf("a misspelled name was told %v, want the empty-list sentence", err)
 	}
 
 	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "have the reviewer look at internal/llm", nil)
 	waitIdle(t, s)
-	if out := toolOutput(t, s, "run_agent"); !strings.Contains(out, "takes no delegated work") {
-		t.Errorf("run_agent answered %q, want the main-only refusal", out)
+	if out := toolOutput(t, s, "run_agent"); !strings.Contains(out, "no agent") {
+		t.Errorf("run_agent answered %q, want a refusal", out)
 	}
 	if len(h.engine.liveChildren(s.ID)) != 0 {
-		t.Error("a main-only agent was started anyway")
+		t.Error("an agent off the list was started anyway")
 	}
 }
 
-// With every agent off the list, a misspelled call is told there are no
-// agents at all, the same sentence an empty list gives.
-func TestMainOnlyLeavesNoNamesForAMisspelledCall(t *testing.T) {
-	h, reviewer := launcher(t)
-	h.setAgent(t, func(a *config.Agent) { a.MainOnly = true })
-	h.cfg.UpdateAgent(reviewer.ID, func(a *config.Agent) { a.MainOnly = true })
-	cfg := h.cfg.Config()
-	if _, err := findAgent(cfg, "Anyone"); err == nil || !strings.Contains(err.Error(), "no agents to run this") {
-		t.Errorf("a misspelled name was told %v, want the empty-list sentence", err)
-	}
-}
-
-// The gate is on the target, not the caller: a main-only agent can still
-// hand work to one that takes it.
-func TestAMainOnlyAgentStillLaunchesOthers(t *testing.T) {
+// A misspelled call is told what the caller was told, not the whole roster:
+// an enabled agent off the list stays out of the names.
+func TestAMisspelledCallIsToldTheListNotTheRoster(t *testing.T) {
 	h, _ := launcher(t)
-	h.setAgent(t, func(a *config.Agent) { a.MainOnly = true })
+	h.addAgent(t, "Scout", h.url, "Gamma-7B")
+	cfg := h.cfg.Config()
+	if _, err := findAgent(cfg, h.agent, "Nobody"); err == nil || !strings.Contains(err.Error(), "Reviewer") || strings.Contains(err.Error(), "Scout") {
+		t.Errorf("a misspelled name was told %v, want the list without the off-list agent", err)
+	}
+}
+
+// The gate is the caller's list, not anything on the target: an agent nobody
+// else names still takes work from one that names it.
+func TestAnUnnamedTargetStillLaunches(t *testing.T) {
+	h, _ := launcher(t)
 	release := h.replay.hold("Beta-30B")
 	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
@@ -812,14 +812,16 @@ func TestAMainOnlyAgentStillLaunchesOthers(t *testing.T) {
 	}
 }
 
-// usable does not gate on the flag: a main-only agent answers as the selected
-// agent, which is the whole point of it.
-func TestAMainOnlyAgentAnswersAsTheSelectedAgent(t *testing.T) {
+// usable does not gate on the list: an agent that names nobody answers as the
+// selected agent, which is the default for one the dialog just made.
+func TestAnAgentThatNamesNobodyAnswersAsTheSelectedAgent(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt")
-	h.setAgent(t, func(a *config.Agent) { a.MainOnly = true })
 	a, _ := h.cfg.Config().Agent()
+	if a.Calls != nil {
+		t.Fatalf("a fresh agent came up with a call list: %+v", a.Calls)
+	}
 	if err := usable(a); err != nil {
-		t.Fatalf("a main-only agent was reported not ready: %v", err)
+		t.Fatalf("an agent that names nobody was reported not ready: %v", err)
 	}
 	s := h.session(t)
 	if _, err := h.engine.Send(s.ID, "what is here", nil); err != nil {
