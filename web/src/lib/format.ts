@@ -1,8 +1,12 @@
-// Token counts read as thousands everywhere in the interface.
+// Token counts read as thousands, and millions once they pass a thousand thousand.
 export function k(n: number): string {
   if (n < 1000) return String(n);
-  const v = n / 1000;
-  return (v < 10 ? v.toFixed(1) : Math.round(v).toString()) + "k";
+  if (n < 1_000_000) {
+    const v = n / 1000;
+    return (v < 10 ? v.toFixed(1) : Math.round(v).toString()) + "k";
+  }
+  const v = n / 1_000_000;
+  return (v < 10 ? v.toFixed(1) : Math.round(v).toString()) + "M";
 }
 
 export function pct(part: number, whole: number): number {
