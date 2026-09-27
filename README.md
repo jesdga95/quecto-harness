@@ -29,14 +29,51 @@ quecto-harness service status      Report unit presence, run state, URL
 quecto-harness version             Print version, commit, Go version
 ```
 
-The first run writes `~/.quecto-harness/config.json`. Set the server URL, pick a
-model and add your project folders in settings, or edit that file. A session is
-scoped to one project folder and tool calls cannot leave it. Every write and
-every command is asked about until you change the permission mode to
-`allowlist` or `full`.
+The first run writes `~/.quecto-harness/config.json`. The setup screen asks for
+one agent: name it, give it the server address and pick a model. Add your
+project folders in settings, or edit that file. A session is scoped to one
+project folder and tool calls cannot leave it. Every write and every command is
+asked about until you change the permission mode to `allowlist` or `full`.
 
 Configuration, the allowlist, sessions and logs live under `~/.quecto-harness`.
 Nothing is written into a project folder.
+
+## Features
+
+- **Agents.** Any number of named agents, one selected at a time. Each carries
+  its own address, key, protocol (llama.cpp, OpenAI chat or OpenAI responses),
+  model, reasoning effort, sampling, context and instructions. Picking a model
+  loads nothing: it loads on the first message that needs it.
+- **Plan and execute.** A session runs in one of the two modes. Plan offers no
+  tool that writes a file: the agent reads, searches and asks, then submits a
+  plan. The card offers to approve it and switch to execute, or to keep
+  planning.
+- **Tools.** `read_file`, `find`, `write_file`, `replace_in_file`, `run_shell`,
+  `write_todos`, `ask_question`, `web_search`, `run_agent` and `send_message`,
+  plus `write_plan` and `submit_plan` in plan mode.
+- **Permissions.** The card offers Allow once, Allow always and Deny, the
+  denial carrying an optional reason back to the model. An always on a shell
+  command writes its prefix to the project's allowlist, and a command with a
+  shell operator is asked even when its prefix is listed.
+- **Delegation.** `run_agent` starts a subagent run on a named agent, hands it
+  the task and carries on while it works; `send_message` reaches it. Runs go
+  one level deep, ask the person nothing, and report to their launcher. An
+  agent names the agents it may hand work to, and its concurrency bounds the
+  runs it answers at once.
+- **Web search.** `web_search` asks the provider named in settings, Exa being
+  the first. A query leaves the machine and the call is billed, so in ask mode
+  each search is asked.
+- **Attachments.** A message can carry files picked from the host and text
+  pasted from anywhere; an image goes to the model as data.
+- **Context.** The meter shows how full the window is. Past the threshold the
+  session compacts itself into a summary, and a compact can also be run by
+  hand on an idle session. Any message can be resent from where it stands in
+  the transcript, and a message sent while a turn is running is folded into
+  the next step of it.
+- **Transcript and changes.** Replies render as markdown with highlighted code
+  and TeX, and an SVG figure or HTML page the agent writes shows in the page.
+  The changes panel lists the files the session has written, each as a diff
+  against what it held before.
 
 ## Build from source
 
