@@ -380,7 +380,7 @@ func (e *Engine) absorbSteer(s *Session) bool {
 	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: held.Text,
 		From: held.From.Name, FromSession: held.From.Session,
 		Attachments: held.Attachments, InContext: true, Visible: true,
-		Meta: map[string]any{"mode": string(s.Mode)}})
+		Meta: map[string]any{"mode": string(s.Mode), "steer": true}})
 	s.mu.Unlock()
 
 	e.save(s)
@@ -1656,9 +1656,14 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 		s.Entries[i].InContext = false
 	}
 	s.Compactions++
+	meta := map[string]any{"before": before, "n": s.Compactions}
+	// The plan is kept as it stood rather than read live, so the message
+	// does not change under the prompt cache as steps are marked.
+	if s.carriesTodos() {
+		meta["todos"] = renderTodos(s.Todos)
+	}
 	s.appendEntry(store.Entry{Kind: "compaction", Role: "user",
-		Content: summary, InContext: true, Visible: true,
-		Meta: map[string]any{"before": before, "n": s.Compactions}})
+		Content: summary, InContext: true, Visible: true, Meta: meta})
 	s.LastUsage = nil
 	s.LastToolTokens = 0
 	s.lastUsageEntry = len(s.Entries) - 1

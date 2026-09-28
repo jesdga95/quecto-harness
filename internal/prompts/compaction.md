@@ -2,4 +2,6 @@ Summary of earlier work:
 
 {{.Summary}}
 
-Continue.
+{{if .Todos}}Your todo list when this summary was written:
+{{.Todos}}
+{{end}}Continue.

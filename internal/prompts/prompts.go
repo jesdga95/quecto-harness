@@ -150,9 +150,9 @@ func PlanApproved(title string) string {
 
 // Compaction is the message the summary is sent back as, so the entry keeps
 // the summary alone and the framing lives here with the other prompts.
-func Compaction(summary string) string {
+func Compaction(summary, todos string) string {
 	var b strings.Builder
-	if err := compactionTmpl.Execute(&b, struct{ Summary string }{summary}); err != nil {
+	if err := compactionTmpl.Execute(&b, struct{ Summary, Todos string }{summary, todos}); err != nil {
 		panic("prompts: render compaction.md: " + err.Error())
 	}
 	return b.String()

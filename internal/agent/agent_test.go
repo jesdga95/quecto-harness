@@ -980,6 +980,186 @@ func TestCompactionRewritesInContextOnly(t *testing.T) {
 	}
 }
 
+func compactionMessage(t *testing.T, s *Session) string {
+	t.Helper()
+	s.mu.Lock()
+	msgs := s.contextMessages(config.Agent{}, "darwin", "", topBrief(), nil)
+	s.mu.Unlock()
+	for _, m := range msgs {
+		if strings.HasPrefix(m.Content, "Summary of earlier work:") {
+			return m.Content
+		}
+	}
+	t.Fatal("no compaction message in the context")
+	return ""
+}
+
+const carriedTodos = "Your todo list when this summary was written:\n1 of 3 done, 1 in hand\n- [x] Read the routes\n- [>] Add the handler\n- [ ] Wire the panel\n"
+
+func TestCompactionCarriesThePlanOfTheRequest(t *testing.T) {
+	h := newHarness(t, "stream_todos.txt", "stream_plain.txt", "stream_summary.txt", "stream_todos_finished.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, earlierWork, nil)
+	waitIdle(t, s)
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	sent := compactionMessage(t, s)
+	if !strings.Contains(sent, carriedTodos) {
+		t.Errorf("compaction message does not carry the plan:\n%s", sent)
+	}
+	doc, _, _, _ := s.Snapshot()
+	var entry store.Entry
+	for _, e := range doc.Entries {
+		if e.Kind == "compaction" {
+			entry = e
+		}
+	}
+	todos, _ := entry.Meta["todos"].(string)
+	if todos == "" {
+		t.Fatalf("compaction entry carries no plan: %+v", entry.Meta)
+	}
+	s.mu.Lock()
+	chars := s.estimateChars(-1)
+	s.mu.Unlock()
+	if want := len(entry.Content) + len(todos); chars != want {
+		t.Errorf("estimate = %d chars, want %d with the carried plan", chars, want)
+	}
+
+	h.engine.Send(s.ID, "carry on", nil)
+	waitIdle(t, s)
+	doc, _, _, _ = s.Snapshot()
+	compaction, written := -1, false
+	for i, e := range doc.Entries {
+		if e.Kind == "compaction" {
+			compaction = i
+		}
+		if compaction >= 0 && i > compaction && e.Kind == "tool" && e.ToolName == "write_todos" {
+			written = true
+		}
+	}
+	if !written {
+		t.Fatal("no write_todos ran after the compaction")
+	}
+	if done, _ := tallyTodos(doc.Todos); done != len(doc.Todos) {
+		t.Fatalf("todos = %+v, want every step done", doc.Todos)
+	}
+	if again := compactionMessage(t, s); again != sent {
+		t.Errorf("the compaction message changed with the plan:\n%s\nwant\n%s", again, sent)
+	}
+}
+
+func TestCompactionLeavesAPlanFromAnEarlierRequest(t *testing.T) {
+	h := newHarness(t, "stream_todos.txt", "stream_plain.txt", "stream_plain.txt", "stream_summary.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, earlierWork, nil)
+	waitIdle(t, s)
+	h.engine.Send(s.ID, "now something else", nil)
+	waitIdle(t, s)
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	if sent := compactionMessage(t, s); strings.Contains(sent, "todo list") {
+		t.Errorf("a plan from an earlier request was carried:\n%s", sent)
+	}
+}
+
+func TestCompactionLeavesAPlanAFailedWriteDidNotReplace(t *testing.T) {
+	h := newHarness(t, "stream_todos.txt", "stream_plain.txt", "stream_todos_broken.txt", "stream_plain.txt", "stream_summary.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, earlierWork, nil)
+	waitIdle(t, s)
+	h.engine.Send(s.ID, "now something else", nil)
+	waitIdle(t, s)
+	doc, _, _, _ := s.Snapshot()
+	var last store.Entry
+	for _, e := range doc.Entries {
+		if e.Kind == "tool" && e.ToolName == "write_todos" {
+			last = e
+		}
+	}
+	if !strings.Contains(last.Content, "not valid JSON") {
+		t.Fatalf("the second write_todos did not fail: %+v", last)
+	}
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	if sent := compactionMessage(t, s); strings.Contains(sent, "todo list") {
+		t.Errorf("a failed write_todos carried the earlier plan:\n%s", sent)
+	}
+}
+
+func TestCompactionCarriesThePlanPastASteer(t *testing.T) {
+	h := newHarness(t, "stream_todos.txt", "stream_plain.txt", "stream_summary.txt")
+	h.replay.Delay = 8 * time.Millisecond
+	s := h.session(t)
+	h.engine.Send(s.ID, earlierWork, nil)
+	queueDuringTurn(t, h, s, "also check the tests")
+	waitIdle(t, s)
+	doc, _, _, _ := s.Snapshot()
+	var steer store.Entry
+	for _, e := range doc.Entries {
+		if e.Content == "also check the tests" {
+			steer = e
+		}
+	}
+	if steer.Meta["steer"] != true {
+		t.Fatalf("the steer was not marked: %+v", steer)
+	}
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	if sent := compactionMessage(t, s); !strings.Contains(sent, carriedTodos) {
+		t.Errorf("a steer dropped the plan:\n%s", sent)
+	}
+}
+
+func TestCompactionCarriesThePlanPastAnAgentMessage(t *testing.T) {
+	h := newHarness(t, "stream_todos.txt", "stream_plain.txt", "stream_summary.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, earlierWork, nil)
+	waitIdle(t, s)
+	s.mu.Lock()
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "the routes are read",
+		From: "Reviewer", FromSession: "sess_reviewer", InContext: true, Visible: true})
+	s.mu.Unlock()
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	if sent := compactionMessage(t, s); !strings.Contains(sent, carriedTodos) {
+		t.Errorf("a message from another agent dropped the plan:\n%s", sent)
+	}
+}
+
+func TestCompactionLeavesTheApprovedPlanToTheSystemPrompt(t *testing.T) {
+	h := newHarness(t, "stream_todos.txt", "stream_plain.txt", "stream_summary.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, earlierWork, nil)
+	waitIdle(t, s)
+	s.mu.Lock()
+	s.Mode = config.WorkExecute
+	s.Plan = &store.Plan{Title: "Routes", Steps: []string{"Read the routes", "Add the handler", "Wire the panel"}}
+	s.mu.Unlock()
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	if sent := compactionMessage(t, s); strings.Contains(sent, "todo list") {
+		t.Errorf("the approved plan was sent again with the compaction:\n%s", sent)
+	}
+}
+
 // A compaction is not stoppable. Stop is refused where it was pressed and the
 // summary lands as it would have.
 func TestCompactRefusesAStop(t *testing.T) {

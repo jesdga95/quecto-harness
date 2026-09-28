@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"quecto-harness/internal/config"
 	"quecto-harness/internal/store"
 	"quecto-harness/internal/tools"
 )
@@ -81,9 +82,7 @@ func renderTodos(todos []store.Todo) string {
 	return b.String()
 }
 
-// countTodos is the one line the collapsed row and the tool result share.
-func countTodos(todos []store.Todo) string {
-	done, doing := 0, 0
+func tallyTodos(todos []store.Todo) (done, doing int) {
 	for _, t := range todos {
 		switch t.Status {
 		case "done":
@@ -92,6 +91,35 @@ func countTodos(todos []store.Todo) string {
 			doing++
 		}
 	}
+	return done, doing
+}
+
+// carriesTodos reports whether a compaction sends the plan: only when a
+// write_todos replaced it since the request began, which a steer does not
+// restart, and not in execute mode, where the system prompt holds the plan.
+func (s *Session) carriesTodos() bool {
+	if s.Mode == config.WorkExecute && s.Plan != nil {
+		return false
+	}
+	if done, _ := tallyTodos(s.Todos); done == len(s.Todos) {
+		return false
+	}
+	current := renderTodos(s.Todos)
+	for i := len(s.Entries) - 1; i >= 0; i-- {
+		e := s.Entries[i]
+		if e.Kind == "user" && e.From == "" && e.Meta["steer"] != true {
+			return false
+		}
+		if e.Kind == "tool" && e.ToolName == "write_todos" && e.Content == current {
+			return true
+		}
+	}
+	return false
+}
+
+// countTodos is the one line the collapsed row and the tool result share.
+func countTodos(todos []store.Todo) string {
+	done, doing := tallyTodos(todos)
 	if doing > 0 {
 		return fmt.Sprintf("%d of %d done, %d in hand", done, len(todos), doing)
 	}

@@ -318,3 +318,14 @@ func TestSystemCarriesTheApprovedPlan(t *testing.T) {
 		t.Errorf("the kickoff message = %q", got)
 	}
 }
+
+func TestCompactionCarriesAnOpenPlan(t *testing.T) {
+	if got, want := Compaction("did x", ""), "Summary of earlier work:\n\ndid x\n\nContinue."; got != want {
+		t.Errorf("without a plan = %q, want %q", got, want)
+	}
+	got := Compaction("did x", "1 of 2 done\n- [x] read\n- [ ] write\n")
+	want := "Summary of earlier work:\n\ndid x\n\nYour todo list when this summary was written:\n1 of 2 done\n- [x] read\n- [ ] write\n\nContinue."
+	if got != want {
+		t.Errorf("with a plan = %q, want %q", got, want)
+	}
+}

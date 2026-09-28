@@ -451,7 +451,8 @@ func (s *Session) contextMessages(a config.Agent, osName, date string, b brief, 
 		case "user":
 			msgs = append(msgs, userMessage(e, images))
 		case "compaction":
-			msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(e.Content)})
+			todos, _ := e.Meta["todos"].(string)
+			msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(e.Content, todos)})
 		case "assistant":
 			// Thinking from an earlier turn goes back only when the agent asks
 			// for it, whatever the protocol does with the field afterwards.
@@ -567,6 +568,9 @@ func (s *Session) estimateChars(from int) int {
 			continue
 		}
 		total += len(e.Content) + len(e.Reasoning)
+		if todos, ok := e.Meta["todos"].(string); ok && e.Kind == "compaction" {
+			total += len(todos)
+		}
 		if len(e.ToolCalls) > 0 {
 			if b, err := json.Marshal(e.ToolCalls); err == nil {
 				total += len(b)
