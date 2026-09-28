@@ -25,11 +25,11 @@ func responsesFrames(t *testing.T, frames []string) (Result, []Event, error) {
 // second, so the two must fold into one call rather than into two.
 func TestResponsesGathersOneCallUnderTwoIDs(t *testing.T) {
 	res, events, err := responsesFrames(t, []string{
-		`data: {"type":"response.output_item.added","item_id":"fc_1","item":{"id":"fc_1","type":"function_call","call_id":"call_abc","name":"read_file"}}`,
+		`data: {"type":"response.output_item.added","item_id":"fc_1","item":{"id":"fc_1","type":"function_call","call_id":"call_abc","name":"read"}}`,
 		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"path\":"}`,
 		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"\"/etc/hosts\"}"}`,
-		`data: {"type":"response.output_item.done","item_id":"fc_1","item":{"id":"fc_1","type":"function_call","call_id":"call_abc","name":"read_file","arguments":"{\"path\":\"/etc/hosts\"}"}}`,
-		`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"call_abc","name":"read_file","arguments":"{\"path\":\"/etc/hosts\"}"}],"usage":{"input_tokens":60,"input_tokens_details":{"cached_tokens":48},"output_tokens":21,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":81}}}`,
+		`data: {"type":"response.output_item.done","item_id":"fc_1","item":{"id":"fc_1","type":"function_call","call_id":"call_abc","name":"read","arguments":"{\"path\":\"/etc/hosts\"}"}}`,
+		`data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"call_abc","name":"read","arguments":"{\"path\":\"/etc/hosts\"}"}],"usage":{"input_tokens":60,"input_tokens_details":{"cached_tokens":48},"output_tokens":21,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":81}}}`,
 	})
 	if err != nil {
 		t.Fatalf("chat: %v", err)
@@ -41,7 +41,7 @@ func TestResponsesGathersOneCallUnderTwoIDs(t *testing.T) {
 	if tc.ID != "call_abc" {
 		t.Errorf("id = %q, want the call id, which is what a result is sent back under", tc.ID)
 	}
-	if tc.Function.Name != "read_file" || tc.Function.Arguments != `{"path":"/etc/hosts"}` {
+	if tc.Function.Name != "read" || tc.Function.Arguments != `{"path":"/etc/hosts"}` {
 		t.Errorf("call = %+v", tc.Function)
 	}
 	if res.FinishReason != "tool_calls" {
@@ -159,7 +159,7 @@ func TestResponsesInputIsFlattened(t *testing.T) {
 			{Role: "system", Content: "Be terse."},
 			{Role: "user", Content: "Read it."},
 			{Role: "assistant", Content: "On it.", ToolCalls: []ToolCall{
-				{ID: "call_1", Type: "function", Function: FunctionCall{Name: "read_file", Arguments: `{"path":"/x"}`}},
+				{ID: "call_1", Type: "function", Function: FunctionCall{Name: "read", Arguments: `{"path":"/x"}`}},
 			}},
 			{Role: "tool", ToolCallID: "call_1", Content: "the bytes"},
 		},
@@ -182,7 +182,7 @@ func TestResponsesInputIsFlattened(t *testing.T) {
 		}
 	}
 	call, _ := items[2].(map[string]any)
-	if call["call_id"] != "call_1" || call["name"] != "read_file" {
+	if call["call_id"] != "call_1" || call["name"] != "read" {
 		t.Errorf("call item = %v", call)
 	}
 	out, _ := items[3].(map[string]any)
@@ -229,7 +229,7 @@ func TestResponsesToolsAndCapAreFlat(t *testing.T) {
 	got := body(t, ChatRequest{
 		Model: "m", MaxTokens: 512,
 		Tools: []Tool{{Type: "function", Function: FunctionSpec{
-			Name: "read_file", Description: "Read a file",
+			Name: "read", Description: "Read a file",
 			Parameters: json.RawMessage(`{"type":"object"}`),
 		}}},
 	})
@@ -244,7 +244,7 @@ func TestResponsesToolsAndCapAreFlat(t *testing.T) {
 		t.Fatalf("tools = %v", tools)
 	}
 	tool, _ := tools[0].(map[string]any)
-	if tool["name"] != "read_file" || tool["type"] != "function" {
+	if tool["name"] != "read" || tool["type"] != "function" {
 		t.Errorf("tool = %v, want the name on the tool itself", tool)
 	}
 	if _, nested := tool["function"]; nested {

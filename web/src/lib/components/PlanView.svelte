@@ -34,7 +34,7 @@
   const status = $derived.by(() => {
     const out = new Map<string, string>();
     if (app.workMode !== "execute") return out;
-    for (const todo of app.todos) out.set(todo.text, todo.status);
+    for (const todo of app.todos) out.set(todo.content, todo.status);
     return out;
   });
 
@@ -105,9 +105,9 @@
       <ol class="plan-body plan-steps">
         {#each plan.steps as step, i (i)}
           {@const state = status.get(step) ?? ""}
-          <li class:is-done={state === "done"} class:is-doing={state === "doing"}>
+          <li class:is-done={state === "completed"} class:is-doing={state === "in_progress"}>
             <span class="plan-step-mark">
-              {#if state === "done"}<CheckCircle size={15} weight="fill" />{:else}{i + 1}{/if}
+              {#if state === "completed"}<CheckCircle size={15} weight="fill" />{:else}{i + 1}{/if}
             </span>
             <span>{@html inline(step)}</span>
           </li>

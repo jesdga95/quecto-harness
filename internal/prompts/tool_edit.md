@@ -4,4 +4,4 @@ old_string must match byte-for-byte, indentation included, and appear exactly on
 Include enough surrounding lines in old_string to make it unique.
 The call fails without writing if old_string is missing or appears more than once.
 
-Prefer over write_file for a partial change.
+Prefer over write for a partial change.

@@ -25,7 +25,7 @@ func TestLiveResponses(t *testing.T) {
 	t.Logf("models: %d listed", len(models))
 
 	tools := []Tool{{Type: "function", Function: FunctionSpec{
-		Name: "read_file", Description: "Read a file",
+		Name: "read", Description: "Read a file",
 		Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}`),
 	}}}
 	msgs := []Message{
@@ -48,7 +48,7 @@ func TestLiveResponses(t *testing.T) {
 	}
 	tc := res.ToolCalls[0]
 	t.Logf("turn 1 call: id=%q name=%q args=%s", tc.ID, tc.Function.Name, tc.Function.Arguments)
-	if tc.Function.Name != "read_file" || tc.Function.Arguments == "" {
+	if tc.Function.Name != "read" || tc.Function.Arguments == "" {
 		t.Fatalf("call = %+v", tc)
 	}
 
@@ -77,7 +77,7 @@ func TestLiveResponsesEffort(t *testing.T) {
 	model := os.Getenv("QH_LIVE_MODEL")
 	c := New("https://api.openai.com", key, ProtocolResponses)
 	tools := []Tool{{Type: "function", Function: FunctionSpec{
-		Name: "read_file", Description: "Read a file",
+		Name: "read", Description: "Read a file",
 		Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}`),
 	}}}
 	for _, e := range []Effort{EffortAuto, EffortOff, EffortLow, EffortMedium, EffortHigh} {

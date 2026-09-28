@@ -86,7 +86,7 @@ func waitForEntryFrom(t *testing.T, s *Session, from string) store.Entry {
 func TestRunAgentDoesNotWaitAndReportsBack(t *testing.T) {
 	h, _ := launcher(t)
 	release := h.replay.hold("Beta-30B")
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
 
 	s := h.session(t)
@@ -98,9 +98,9 @@ func TestRunAgentDoesNotWaitAndReportsBack(t *testing.T) {
 	if child.State() == StateIdle {
 		t.Fatal("the subagent finished before the launcher, so nothing was proved")
 	}
-	out := toolOutput(t, s, "run_agent")
+	out := toolOutput(t, s, "subagent")
 	if !strings.Contains(out, "started Reviewer") || !strings.Contains(out, child.ID) {
-		t.Errorf("run_agent answered %q, want the handle", out)
+		t.Errorf("subagent answered %q, want the handle", out)
 	}
 
 	release()
@@ -135,7 +135,7 @@ func TestRunAgentDoesNotWaitAndReportsBack(t *testing.T) {
 // rather than costing a request for a title.
 func TestChildRunsOnItsNamedAgent(t *testing.T) {
 	h, reviewer := launcher(t)
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
 
 	s := h.session(t)
@@ -167,7 +167,7 @@ func TestChildRunsOnItsNamedAgent(t *testing.T) {
 // its transcript.
 func TestChildIsOfferedNeitherRunAgentNorAskQuestion(t *testing.T) {
 	h, _ := launcher(t)
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
 
 	s := h.session(t)
@@ -194,12 +194,12 @@ func TestChildIsOfferedNeitherRunAgentNorAskQuestion(t *testing.T) {
 		fn, _ := spec["function"].(map[string]any)
 		names[fn["name"].(string)] = true
 	}
-	for _, banned := range []string{"run_agent", "ask_question"} {
+	for _, banned := range []string{"subagent", "ask_user_question"} {
 		if names[banned] {
 			t.Errorf("the subagent was offered %s", banned)
 		}
 	}
-	for _, want := range []string{"send_message", "read_file", "run_shell"} {
+	for _, want := range []string{"send_message", "read", "bash"} {
 		if !names[want] {
 			t.Errorf("the subagent was not offered %s", want)
 		}
@@ -213,7 +213,7 @@ func TestChildIsOfferedNeitherRunAgentNorAskQuestion(t *testing.T) {
 // the turn the launcher is in the middle of.
 func TestChildMessageReachesItsLauncher(t *testing.T) {
 	h, _ := launcher(t)
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_send_parent.txt", "stream_plain.txt")
 
 	s := h.session(t)
@@ -234,7 +234,7 @@ func TestChildMessageReachesItsLauncher(t *testing.T) {
 // turn that used it still reports what it finished with.
 func TestASubagentThatSpokeStillReportsItsAnswer(t *testing.T) {
 	h, _ := launcher(t)
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_send_parent.txt", "stream_plain.txt")
 
 	s := h.session(t)
@@ -269,7 +269,7 @@ func TestASubagentThatSpokeStillReportsItsAnswer(t *testing.T) {
 func TestARollUpTellsTheLauncherItsFilesMoved(t *testing.T) {
 	h, _ := launcher(t)
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_write_once.txt", "stream_plain.txt")
 
 	s := h.session(t)
@@ -295,7 +295,7 @@ func TestARollUpTellsTheLauncherItsFilesMoved(t *testing.T) {
 // left unpublished.
 func TestTheLauncherIsToldWhenASubagentGoesIdle(t *testing.T) {
 	h, _ := launcher(t)
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
 
 	s := h.session(t)
@@ -330,7 +330,7 @@ func TestAMessageToAnIdleLauncherIsPublished(t *testing.T) {
 	// The launcher's turn ends before the subagent reports, so the report
 	// starts a turn rather than joining one.
 	release := h.replay.hold("Beta-30B")
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
 
 	s := h.session(t)
@@ -365,7 +365,7 @@ func TestAMessageToAnIdleLauncherIsPublished(t *testing.T) {
 // its launcher asked for lands nowhere.
 func TestASilentSubagentStillReports(t *testing.T) {
 	h, _ := launcher(t)
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
 
 	s := h.session(t)
@@ -385,7 +385,7 @@ func TestConcurrencyBoundsLiveChildren(t *testing.T) {
 		t.Fatal(err)
 	}
 	release := h.replay.hold("Beta-30B")
-	h.replay.forModel("Alpha-12B", "stream_run_agent_two.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent_two.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
 
 	s := h.session(t)
@@ -396,13 +396,13 @@ func TestConcurrencyBoundsLiveChildren(t *testing.T) {
 	s.mu.Lock()
 	var outs []string
 	for _, e := range s.Entries {
-		if e.Kind == "tool" && e.ToolName == "run_agent" {
+		if e.Kind == "tool" && e.ToolName == "subagent" {
 			outs = append(outs, e.Content)
 		}
 	}
 	s.mu.Unlock()
 	if len(outs) != 2 {
-		t.Fatalf("run_agent ran %d times, want 2", len(outs))
+		t.Fatalf("subagent ran %d times, want 2", len(outs))
 	}
 	if !strings.Contains(outs[0], "started Reviewer") {
 		t.Errorf("the first launch = %q", outs[0])
@@ -424,15 +424,15 @@ func TestAnAgentThatRunsOneAtATimeWillNotTakeItsOwnWork(t *testing.T) {
 		a.Concurrency = 1
 		a.Calls = []string{a.ID}
 	})
-	h.replay.forModel("Alpha-12B", "stream_run_agent_self.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent_self.txt", "stream_plain.txt")
 
 	s := h.session(t)
 	h.engine.Send(s.ID, "hand it to yourself", nil)
 	waitIdle(t, s)
 
-	out := toolOutput(t, s, "run_agent")
+	out := toolOutput(t, s, "subagent")
 	if !strings.Contains(out, "runs 1 at a time") {
-		t.Errorf("run_agent answered %q, want it refused against the agent's own slot", out)
+		t.Errorf("subagent answered %q, want it refused against the agent's own slot", out)
 	}
 	if h.engine.busy(mine.ID) != 0 {
 		t.Errorf("the launcher is still counted busy after its turn ended")
@@ -451,7 +451,7 @@ func TestAnAgentCanTakeItsOwnWork(t *testing.T) {
 	// The child runs on the same model as the parent, so the order of the
 	// child's request against the parent's second is not the test's to
 	// control: the two plain replies stand in for either.
-	h.replay.forModel("Alpha-12B", "stream_run_agent_self.txt", "stream_plain.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent_self.txt", "stream_plain.txt", "stream_plain.txt", "stream_plain.txt")
 
 	s := h.session(t)
 	h.engine.Send(s.ID, "hand it to yourself", nil)
@@ -459,9 +459,9 @@ func TestAnAgentCanTakeItsOwnWork(t *testing.T) {
 	waitIdle(t, s)
 	waitIdle(t, child)
 
-	out := toolOutput(t, s, "run_agent")
+	out := toolOutput(t, s, "subagent")
 	if !strings.Contains(out, "started Alpha") || !strings.Contains(out, child.ID) {
-		t.Errorf("run_agent answered %q, want the handle", out)
+		t.Errorf("subagent answered %q, want the handle", out)
 	}
 	child.mu.Lock()
 	agentID, model := child.AgentID, child.Model
@@ -485,7 +485,7 @@ func TestAnAgentCanTakeItsOwnWork(t *testing.T) {
 // subagent.
 func TestChildCardIsDrawnInTheLauncher(t *testing.T) {
 	h, _ := launcher(t)
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_tool.txt", "stream_plain.txt")
 
 	s := h.session(t)
@@ -516,7 +516,7 @@ func TestChildCardIsDrawnInTheLauncher(t *testing.T) {
 // neither is carded.
 func TestLaunchingAnAgentIsNotCarded(t *testing.T) {
 	h, _ := launcher(t)
-	for _, tool := range []string{"run_agent", "send_message"} {
+	for _, tool := range []string{"subagent", "send_message"} {
 		if got := h.broker.Evaluate(h.project, tool, "", config.ModeAsk); got != perms.ActionAllow {
 			t.Errorf("%s = %v in ask mode, want allow", tool, got)
 		}
@@ -527,7 +527,7 @@ func TestLaunchingAnAgentIsNotCarded(t *testing.T) {
 func TestStopCascadesToChildren(t *testing.T) {
 	h, _ := launcher(t)
 	h.replay.Delay = 30 * time.Millisecond
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_sleep.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_sleep.txt")
 	h.replay.forModel("Beta-30B", "stream_sleep.txt")
 
 	s := h.session(t)
@@ -556,7 +556,7 @@ func TestStopCascadesToChildren(t *testing.T) {
 // launcher takes it too.
 func TestDeleteRemovesChildren(t *testing.T) {
 	h, _ := launcher(t)
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
 
 	s := h.session(t)
@@ -586,7 +586,7 @@ func TestChildBaselinesRollUp(t *testing.T) {
 	h, _ := launcher(t)
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
 	h.replay.forModel("Alpha-12B", "stream_write_once.txt", "stream_plain.txt",
-		"stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+		"stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_write_once.txt", "stream_write.txt", "stream_plain.txt")
 
 	// The launcher writes file.txt first, so the copy kept is the one from
@@ -647,15 +647,15 @@ func baselineOf(t *testing.T, s *Session, path string) store.Baseline {
 // A name nothing matches is a tool error the turn carries on from.
 func TestUnknownAgentIsAToolError(t *testing.T) {
 	h, _ := launcher(t)
-	h.replay.forModel("Alpha-12B", "stream_run_agent_bad.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent_bad.txt", "stream_plain.txt", "stream_plain.txt")
 
 	s := h.session(t)
 	h.engine.Send(s.ID, "delegate it", nil)
 	waitIdle(t, s)
 
-	out := toolOutput(t, s, "run_agent")
+	out := toolOutput(t, s, "subagent")
 	if !strings.Contains(out, "no agent named") || !strings.Contains(out, "Reviewer") {
-		t.Errorf("run_agent answered %q, want the names that do exist", out)
+		t.Errorf("subagent answered %q, want the names that do exist", out)
 	}
 	if len(h.engine.liveChildren(s.ID)) != 0 {
 		t.Error("a bad name started an agent anyway")
@@ -799,12 +799,12 @@ func TestADisabledAgentTakesNoWork(t *testing.T) {
 		t.Error("a disabled agent was found by name")
 	}
 
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "have the reviewer look at internal/llm", nil)
 	waitIdle(t, s)
-	if out := toolOutput(t, s, "run_agent"); !strings.Contains(out, "no agent") {
-		t.Errorf("run_agent answered %q, want a refusal", out)
+	if out := toolOutput(t, s, "subagent"); !strings.Contains(out, "no agent") {
+		t.Errorf("subagent answered %q, want a refusal", out)
 	}
 	if len(h.engine.liveChildren(s.ID)) != 0 {
 		t.Error("a disabled agent was started anyway")
@@ -818,7 +818,7 @@ func TestAnAgentOffTheListTakesNoWork(t *testing.T) {
 	h.setAgent(t, func(a *config.Agent) { a.Calls = nil })
 	cfg := h.cfg.Config()
 
-	// The list names nothing, so the brief offers no run_agent at all.
+	// The list names nothing, so the brief offers no subagent at all.
 	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B")
 	b := h.engine.briefFor(top, cfg)
 	if len(b.agents) != 0 || b.offer.Agents {
@@ -831,12 +831,12 @@ func TestAnAgentOffTheListTakesNoWork(t *testing.T) {
 		t.Errorf("a misspelled name was told %v, want the empty-list sentence", err)
 	}
 
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "have the reviewer look at internal/llm", nil)
 	waitIdle(t, s)
-	if out := toolOutput(t, s, "run_agent"); !strings.Contains(out, "no agent") {
-		t.Errorf("run_agent answered %q, want a refusal", out)
+	if out := toolOutput(t, s, "subagent"); !strings.Contains(out, "no agent") {
+		t.Errorf("subagent answered %q, want a refusal", out)
 	}
 	if len(h.engine.liveChildren(s.ID)) != 0 {
 		t.Error("an agent off the list was started anyway")
@@ -859,7 +859,7 @@ func TestAMisspelledCallIsToldTheListNotTheRoster(t *testing.T) {
 func TestAnUnnamedTargetStillLaunches(t *testing.T) {
 	h, _ := launcher(t)
 	release := h.replay.hold("Beta-30B")
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
 
 	s := h.session(t)
@@ -869,7 +869,7 @@ func TestAnUnnamedTargetStillLaunches(t *testing.T) {
 	release()
 	waitForEntryFrom(t, s, "Reviewer")
 	waitIdle(t, s)
-	if !strings.Contains(toolOutput(t, s, "run_agent"), child.ID) {
+	if !strings.Contains(toolOutput(t, s, "subagent"), child.ID) {
 		t.Error("the launch was not answered with a handle")
 	}
 }
@@ -902,7 +902,7 @@ func TestAnAgentThatNamesNobodyAnswersAsTheSelectedAgent(t *testing.T) {
 func TestAgentsAreAddressedByHandle(t *testing.T) {
 	h, _ := launcher(t)
 	release := h.replay.hold("Beta-30B")
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
 
 	s := h.session(t)
@@ -933,7 +933,7 @@ func TestAgentsAreAddressedByHandle(t *testing.T) {
 // A name is not a handle, and the refusal says which handles are.
 func TestSendMessageToANameNamesTheHandles(t *testing.T) {
 	h, _ := launcher(t)
-	h.replay.forModel("Alpha-12B", "stream_run_agent.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
 	h.replay.forModel("Beta-30B", "stream_plain.txt")
 
 	s := h.session(t)

@@ -176,7 +176,7 @@ type Agent struct {
 	Enabled bool
 	// Calls names the agents this one may hand work to, by id. Empty is an
 	// agent that answers the person only: it is named to no caller's list and
-	// run_agent refuses it.
+	// subagent refuses it.
 	Calls []string
 	URL   string
 	Key   string

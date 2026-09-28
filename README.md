@@ -48,14 +48,14 @@ Nothing is written into a project folder.
   tool that writes a file: the agent reads, searches and asks, then submits a
   plan. The card offers to approve it and switch to execute, or to keep
   planning.
-- **Tools.** `read_file`, `find`, `write_file`, `replace_in_file`, `run_shell`,
-  `write_todos`, `ask_question`, `web_search`, `run_agent` and `send_message`,
-  plus `write_plan` and `submit_plan` in plan mode.
+- **Tools.** `read`, `grep`, `write`, `edit`, `bash`,
+  `todo_write`, `ask_user_question`, `web_search`, `subagent` and `send_message`,
+  plus `write_plan` and `exit_plan_mode` in plan mode.
 - **Permissions.** The card offers Allow once, Allow always and Deny, the
   denial carrying an optional reason back to the model. An always on a shell
   command writes its prefix to the project's allowlist, and a command with a
   shell operator is asked even when its prefix is listed.
-- **Delegation.** `run_agent` starts a subagent run on a named agent, hands it
+- **Delegation.** `subagent` starts a subagent run on a named agent, hands it
   the task and carries on while it works; `send_message` reaches it. Runs go
   one level deep, ask the person nothing, and report to their launcher. An
   agent names the agents it may hand work to, and its concurrency bounds the

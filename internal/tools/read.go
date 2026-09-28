@@ -17,10 +17,10 @@ const maxReadableFile = 64 << 20
 func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args ReadFileArgs
 	if err := decodeArgs(raw, &args); err != nil {
-		return Result{}, fmt.Errorf("read_file: %s", err)
+		return Result{}, fmt.Errorf("read: %s", err)
 	}
 	if args.Path == "" {
-		return Result{}, errors.New("read_file needs a path")
+		return Result{}, errors.New("read needs a path")
 	}
 	path, err := r.resolve(args.Path)
 	if err != nil {
@@ -34,7 +34,7 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 		return Result{}, fmt.Errorf("%s is a directory", args.Path)
 	}
 	if info.Size() > maxReadableFile {
-		return Result{}, fmt.Errorf("%s is %d MB, too large to read: use run_shell with sed -n to take a range of lines", args.Path, info.Size()/(1<<20))
+		return Result{}, fmt.Errorf("%s is %d MB, too large to read: use bash with sed -n to take a range of lines", args.Path, info.Size()/(1<<20))
 	}
 	if info.Size() == 0 {
 		return Result{Output: fmt.Sprintf("%s is empty", args.Path)}, nil

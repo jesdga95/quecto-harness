@@ -125,7 +125,7 @@ Embedded markdown in three groups: ten tool descriptions, six templates (`system
 `compact.md`. Each file is named individually in the `go:embed` directive, so a deletion
 fails the build, and a template parse error panics at init, which the package test catches.
 
-`System` renders the project, the OS, whether `ask_question`, `send_message` and
+`System` renders the project, the OS, whether `ask_user_question`, `send_message` and
 `web_search` were sent, the agents this session may hand work to and the handle of the one
 that launched it. It then appends the agent's instructions as a **value, never parsed**:
 a stray `{{` survives, the agent's text wins where it disagrees with the built-in
@@ -134,17 +134,17 @@ guidance, and an empty value renders byte-for-byte unchanged.
 ## 6. internal/tools
 
 The package holds ten tool schemas. A `Runner` bound to a symlink-resolved project root
-executes six of them; `agent` executes `write_todos`, `ask_question`, `run_agent` and
+executes six of them; `agent` executes `todo_write`, `ask_user_question`, `subagent` and
 `send_message`, whose effect is on the session rather than the machine.
 
-- **`read_file`** numbers lines, takes an offset and a limit, caps bytes, detects binary
+- **`read`** numbers lines, takes an offset and a limit, caps bytes, detects binary
   content, and marks what it left with `… n more lines`.
-- **`find`** searches inside the project, on the same guard `read_file` uses.
-- **`write_file`** creates parent directories, replaces atomically, preserves the existing
+- **`grep`** searches inside the project, on the same guard `read` uses.
+- **`write`** creates parent directories, replaces atomically, preserves the existing
   file mode, and hands the file as it stood to `Baseline`, which is what the change panel
   compares against.
-- **`replace_in_file`** does the same, for an edit rather than a whole file.
-- **`run_shell`** starts a fresh shell per call, merges stdout and stderr, kills the
+- **`edit`** does the same, for an edit rather than a whole file.
+- **`bash`** starts a fresh shell per call, merges stdout and stderr, kills the
   process group with SIGKILL after 2 s, and adds an exit-code line and timeout/stop notes.
 - **`web_search`** reaches the provider the config names through `internal/search`
   (Exa is the first and only one), the query's whole character budget shared across its
@@ -171,11 +171,11 @@ channel until `Resolve` or the turn is cancelled, so a resolve racing a cancel e
 or reports `ErrNoSuchRequest`, and never blocks the HTTP handler. `Pending` replays
 unanswered requests after a browser reconnect.
 
-- **Policy by mode.** `read_file`, `find`, `write_todos`, `ask_question`, `run_agent` and
+- **Policy by mode.** `read`, `grep`, `todo_write`, `ask_user_question`, `subagent` and
   `send_message` are always allowed: the first two are confined by the path guard, and the
   rest touch the session rather than the machine. `full` allows everything before the tool
-  is even named. In `allowlist` mode, `write_file`, `replace_in_file` and `web_search` run
-  free and `run_shell` runs when it prefix-matches the project allowlist **and** contains
+  is even named. In `allowlist` mode, `write`, `edit` and `web_search` run
+  free and `bash` runs when it prefix-matches the project allowlist **and** contains
   no shell operator. `web_search` prompts in `ask` mode: the query leaves the machine and
   the call is billed, and the allowlist holds shell prefixes, which have nothing to say
   about a query, so "allow always" is not offered for it.
@@ -238,14 +238,14 @@ too late to be picked up starts a turn of its own.
 - **Concurrent turns** are not serialised. llama.cpp queues a request when every slot is
   busy, so a second session sits in `streaming` with no deltas until a slot frees. That is
   documented behaviour, not a defect to work around.
-- **Subagents.** `run_agent` creates a session on the named agent and returns its handle
+- **Subagents.** `subagent` creates a session on the named agent and returns its handle
   without waiting. A subagent runs its own agent, is skipped by `SetAgent`, is offered
-  neither `run_agent` nor `ask_question` (depth is one), reports to its launcher, has its
+  neither `subagent` nor `ask_user_question` (depth is one), reports to its launcher, has its
   permission card drawn in the launcher's conversation, rolls its file writes up onto the
   launcher, and is stopped and deleted with it. An agent's `concurrency` bounds how many
   sessions it answers at once, and one with no room left is left off the list the prompt
   offers. An agent's `calls` names the other agents it may hand work to: only those are
-  offered to it and only those does `run_agent` accept, and an empty list is an agent that
+  offered to it and only those does `subagent` accept, and an empty list is an agent that
   answers the person only, which is also the default for a new one.
 
 ## 9. internal/store
@@ -264,7 +264,7 @@ shows the card in its answered state.
   list and the baselines. The system prompt is **regenerated, not stored**.
 - `Open` builds an index from a one-time scan, so `List` never touches the filesystem; a
   corrupt file is skipped and named, not fatal. `Save` atomic-replaces with indented JSON.
-- **Size.** Tool output is capped at `output_limit_bytes`, but `write_file` content lives in
+- **Size.** Tool output is capped at `output_limit_bytes`, but `write` content lives in
   the assistant's arguments, because a truncated argument makes the history unusable for a
   resend. A session that writes many large files grows large; the mitigation is a new
   session.
@@ -346,7 +346,7 @@ found`.
   figures and HTML pages mounted as elements. Half-written output stays literal text rather
   than throwing.
 - **Permission card** renders inline where the request arrived: *Allow once*, *Allow always*
-  (editable prefix, offered for `run_shell` alone, since the allowlist holds shell
+  (editable prefix, offered for `bash` alone, since the allowlist holds shell
   prefixes), *Deny* (optional reason). A 200 clears `pending` locally, without
   waiting for a server event.
 - **Dialogs.** `Dialog` is the shell both dialogs share: backdrop, focus restore, tab
@@ -374,7 +374,7 @@ Per-package suites, each tied to a fixture or a recorded stream:
   golden JSON across effort and caps, the SSE state machine, tool-call accumulation, the EOF
   cases and the error taxonomy.
 - **prompts**: every embedded file present and non-empty; `System` renders cleanly.
-- **tools**: the path-guard table; read, find, write, replace and run semantics;
+- **tools**: the path-guard table; read, grep, write, edit and bash semantics;
   `Truncate` boundaries.
 - **diff**: hunk shaping, the cap, and honest counts for what the cap left off.
 - **perms**: the `Evaluate` matrix; `Ask`/`Resolve` with cancel while blocked; *always*

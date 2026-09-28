@@ -28,7 +28,7 @@
   let { item, live = false }: { item: TranscriptItem; live?: boolean } = $props();
   let open = $state(false);
 
-  // A run_agent row names the agent it started and follows it, since what that
+  // A subagent row names the agent it started and follows it, since what that
   // agent is doing is in a transcript of its own.
   const child = $derived(item.kind === "tool" ? item.child : undefined);
   const task = $derived(
@@ -50,11 +50,11 @@
     item.kind === "tool" && typeof item.args.path === "string" ? item.args.path : "",
   );
 
-  // What find and web_search were asked for, which is the text unless the
+  // What grep and web_search were asked for, which is the text unless the
   // call only named files.
   const query = $derived.by(() => {
     if (item.kind !== "tool") return "";
-    if (item.name === "find") {
+    if (item.name === "grep") {
       const { text, name } = item.args;
       if (typeof text === "string" && text !== "") return text;
       return typeof name === "string" ? name : "";
@@ -69,16 +69,16 @@
     if (item.kind === "compaction") return "Compacted";
     if (item.kind === "error") return "Error";
     if (item.kind !== "tool") return "Step";
-    if (item.name === "read_file") return "Read";
-    if (item.name === "find") return "Find";
+    if (item.name === "read") return "Read";
+    if (item.name === "grep") return "Find";
     if (item.name === "web_search") return "Search";
-    if (item.name === "write_file") return "Write";
-    if (item.name === "replace_in_file") return "Edit";
-    if (item.name === "write_todos") return "Plan";
-    if (item.name === "ask_question") return "Question";
-    if (item.name === "submit_plan") return "Plan";
+    if (item.name === "write") return "Write";
+    if (item.name === "edit") return "Edit";
+    if (item.name === "todo_write") return "Plan";
+    if (item.name === "ask_user_question") return "Question";
+    if (item.name === "exit_plan_mode") return "Plan";
     if (item.name === "write_plan") return "Draft";
-    if (item.name === "run_agent") return "Agent";
+    if (item.name === "subagent") return "Agent";
     if (item.name === "send_message") return "Message";
     return "Shell";
   });
@@ -89,15 +89,15 @@
     if (item.kind === "compaction") return `${k(item.before)} to ${k(item.after)}`;
     if (item.kind === "error") return firstSentence(item.message);
     if (item.kind !== "tool") return "";
-    if (item.name === "write_todos") {
-      const done = todos.filter((t) => t.status === "done").length;
+    if (item.name === "todo_write") {
+      const done = todos.filter((t) => t.status === "completed").length;
       return `${done} of ${todos.length} done`;
     }
-    if (item.name === "find" || item.name === "web_search") return query;
-    if (item.name === "ask_question") return question.question;
-    if (item.name === "submit_plan") return app.draft?.title ?? "";
+    if (item.name === "grep" || item.name === "web_search") return query;
+    if (item.name === "ask_user_question") return question.question;
+    if (item.name === "exit_plan_mode") return app.draft?.title ?? "";
     if (item.name === "write_plan") return sectionsOf(item.args).join(", ");
-    if (item.name === "run_agent") {
+    if (item.name === "subagent") {
       const to = typeof item.args.agent === "string" ? item.args.agent : "";
       return to === "" ? task : `${to}: ${task}`;
     }
@@ -108,22 +108,22 @@
   // The plan is in the call's own arguments, which is what the row draws
   // rather than the result the model was handed back.
   const todos = $derived.by<Todo[]>(() => {
-    if (item.kind !== "tool" || item.name !== "write_todos") return [];
+    if (item.kind !== "tool" || item.name !== "todo_write") return [];
     const raw = item.args.todos;
     if (!Array.isArray(raw)) return [];
     return raw
       .filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null)
       .map<Todo>((t) => ({
-        text: typeof t.text === "string" ? t.text : "",
-        status: t.status === "doing" || t.status === "done" ? t.status : "todo",
+        content: typeof t.content === "string" ? t.content : "",
+        status: t.status === "in_progress" || t.status === "completed" ? t.status : "pending",
       }))
-      .filter((t) => t.text !== "");
+      .filter((t) => t.content !== "");
   });
 
   // The question is in the call's own arguments and the answer is the result,
   // so the row draws the choice as it was put and what came back.
   const question = $derived(
-    item.kind === "tool" && item.name === "ask_question"
+    item.kind === "tool" && item.name === "ask_user_question"
       ? asked(item.args)
       : { question: "", options: [], multi: false },
   );
@@ -143,7 +143,7 @@
   });
 
   const clock = $derived.by(() => {
-    if (item.kind !== "tool" || item.name !== "run_shell") return "";
+    if (item.kind !== "tool" || item.name !== "bash") return "";
     if (!item.running) {
       return item.ranMs !== undefined && item.ranMs >= 5000 ? clockLabel(item.ranMs / 1000) : "";
     }
@@ -156,10 +156,10 @@
   // it counted. The harness counts against the file as it was; a call still
   // running, or one stored before counts were kept, counts its own arguments.
   const edit = $derived.by(() => {
-    if (item.kind !== "tool" || (item.name !== "write_file" && item.name !== "replace_in_file")) return null;
+    if (item.kind !== "tool" || (item.name !== "write" && item.name !== "edit")) return null;
     const text = (key: string) => (typeof item.args[key] === "string" ? (item.args[key] as string) : "");
-    const added = item.name === "write_file" ? text("content") : text("new_string");
-    const removed = item.name === "write_file" ? "" : text("old_string");
+    const added = item.name === "write" ? text("content") : text("new_string");
+    const removed = item.name === "write" ? "" : text("old_string");
     const count = (s: string) => (s === "" ? 0 : s.replace(/\n$/, "").split("\n").length);
     const meta = item.meta;
     const counts =
@@ -175,7 +175,7 @@
       (item.running || /^(wrote|replaced|edited) /.test(item.output)),
   );
 
-  const isPath = $derived(item.kind === "tool" && item.name !== "find" && path !== "");
+  const isPath = $derived(item.kind === "tool" && item.name !== "grep" && path !== "");
   // A compaction with no summary is a divider and nothing more.
   const expandable = $derived(item.kind !== "compaction" || item.summary !== "");
 </script>
@@ -190,19 +190,19 @@
       <ArrowsIn />
     {:else if item.kind === "error"}
       <WarningCircle class="text-crit" />
-    {:else if item.kind === "tool" && item.name === "read_file"}
+    {:else if item.kind === "tool" && item.name === "read"}
       <FileText />
-    {:else if item.kind === "tool" && item.name === "find"}
+    {:else if item.kind === "tool" && item.name === "grep"}
       <MagnifyingGlass />
     {:else if item.kind === "tool" && item.name === "web_search"}
       <MagnifyingGlass />
-    {:else if item.kind === "tool" && (item.name === "write_file" || item.name === "replace_in_file")}
+    {:else if item.kind === "tool" && (item.name === "write" || item.name === "edit")}
       <PencilSimple />
-    {:else if item.kind === "tool" && (item.name === "write_todos" || item.name === "submit_plan" || item.name === "write_plan")}
+    {:else if item.kind === "tool" && (item.name === "todo_write" || item.name === "exit_plan_mode" || item.name === "write_plan")}
       <ListChecks />
-    {:else if item.kind === "tool" && item.name === "ask_question"}
+    {:else if item.kind === "tool" && item.name === "ask_user_question"}
       <Question />
-    {:else if item.kind === "tool" && item.name === "run_agent"}
+    {:else if item.kind === "tool" && item.name === "subagent"}
       <Robot />
     {:else if item.kind === "tool" && item.name === "send_message"}
       <PaperPlaneTilt />
@@ -223,7 +223,7 @@
     {#if item.kind === "permission" && item.outcome}
       <span class="text-[12px] text-muted">{item.outcome}</span>
     {/if}
-    {#if item.kind === "tool" && item.name === "submit_plan" && !item.running}
+    {#if item.kind === "tool" && item.name === "exit_plan_mode" && !item.running}
       <span class="text-[12px] text-muted">
         {item.output === "approved" ? "Approved" : item.output.startsWith("not approved") ? "Revised" : ""}
       </span>
@@ -256,9 +256,9 @@
         <p class="step-text">{item.message}</p>
       {:else if item.kind === "permission"}
         <pre class="mono-block">{item.command}</pre>
-      {:else if item.kind === "tool" && item.name === "write_todos"}
+      {:else if item.kind === "tool" && item.name === "todo_write"}
         <TodoList {todos} />
-      {:else if item.kind === "tool" && item.name === "ask_question"}
+      {:else if item.kind === "tool" && item.name === "ask_user_question"}
         <ul class="flex flex-col gap-1">
           {#each question.options as option (option.label)}
             <li class="todo" class:is-doing={chosen.has(option.label)}>
@@ -269,20 +269,20 @@
         {#if item.output}
           <p class="text-[13px] text-ink-2">Answered {item.output}</p>
         {/if}
-      {:else if item.kind === "tool" && item.name === "submit_plan"}
+      {:else if item.kind === "tool" && item.name === "exit_plan_mode"}
         {#if item.output.startsWith("not approved: ")}
           <p class="text-[13px] text-ink-2">Asked for: {item.output.slice(14)}</p>
         {:else if item.output}
           <p class="step-text">{item.output}</p>
         {/if}
-      {:else if item.kind === "tool" && item.name === "run_shell"}
+      {:else if item.kind === "tool" && item.name === "bash"}
         <TerminalCard
           {command}
           output={item.output}
           exitCode={item.exitCode}
           truncated={item.truncated}
         />
-      {:else if item.kind === "tool" && item.name === "run_agent"}
+      {:else if item.kind === "tool" && item.name === "subagent"}
         {#if task}
           <p class="step-text">{task}</p>
         {/if}
@@ -296,7 +296,7 @@
         {#if item.output}
           <span class="text-[11.5px] text-muted">{item.output}</span>
         {/if}
-      {:else if item.kind === "tool" && item.name === "read_file" && item.output}
+      {:else if item.kind === "tool" && item.name === "read" && item.output}
         <FileBlock {path} output={item.output} />
       {:else if item.kind === "tool" && item.name === "web_search"}
         <SearchResults item={item} />

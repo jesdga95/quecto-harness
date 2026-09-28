@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md system_plan.md system_execute.md plan.md plan_approved.md tool_write_plan.md tool_submit_plan.md tool_read_file.md tool_find.md tool_web_search.md tool_write_file.md tool_replace_in_file.md tool_run_shell.md tool_write_todos.md tool_ask_question.md tool_run_agent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md
+//go:embed system.md system_plan.md system_execute.md plan.md plan_approved.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md
 var files embed.FS
 
 var (
@@ -63,10 +63,10 @@ type SystemVars struct {
 	// tokens for a whole day, so the prefill cache of it survives. Anything
 	// finer would put a new token at the front of every request and re-prefill
 	// the whole conversation each turn, so the time of day is left to
-	// run_shell. Empty leaves the line out, which is the prompt the harness
+	// bash. Empty leaves the line out, which is the prompt the harness
 	// sent before the date was possible.
 	Date string
-	// CanAsk, CanMessage and CanSearch say whether ask_question, send_message
+	// CanAsk, CanMessage and CanSearch say whether ask_user_question, send_message
 	// and web_search are in this turn's request. The prompt names the tools
 	// that were sent, or the model reaches for one it does not have.
 	CanAsk     bool
@@ -189,19 +189,19 @@ func Image(path string) string {
 	return b.String()
 }
 
-func ToolReadFile() string      { return mustRead("tool_read_file.md") }
-func ToolFind() string          { return mustRead("tool_find.md") }
-func ToolWebSearch() string     { return mustRead("tool_web_search.md") }
-func ToolWriteFile() string     { return mustRead("tool_write_file.md") }
-func ToolReplaceInFile() string { return mustRead("tool_replace_in_file.md") }
-func ToolRunShell() string      { return mustRead("tool_run_shell.md") }
-func ToolWriteTodos() string    { return mustRead("tool_write_todos.md") }
-func ToolAskQuestion() string   { return mustRead("tool_ask_question.md") }
-func ToolRunAgent() string      { return mustRead("tool_run_agent.md") }
-func ToolSendMessage() string   { return mustRead("tool_send_message.md") }
-func ToolSubmitPlan() string    { return mustRead("tool_submit_plan.md") }
-func ToolWritePlan() string     { return mustRead("tool_write_plan.md") }
-func Compact() string           { return mustRead("compact.md") }
+func ToolRead() string            { return mustRead("tool_read.md") }
+func ToolGrep() string            { return mustRead("tool_grep.md") }
+func ToolWebSearch() string       { return mustRead("tool_web_search.md") }
+func ToolWrite() string           { return mustRead("tool_write.md") }
+func ToolEdit() string            { return mustRead("tool_edit.md") }
+func ToolBash() string            { return mustRead("tool_bash.md") }
+func ToolTodoWrite() string       { return mustRead("tool_todo_write.md") }
+func ToolAskUserQuestion() string { return mustRead("tool_ask_user_question.md") }
+func ToolSubagent() string        { return mustRead("tool_subagent.md") }
+func ToolSendMessage() string     { return mustRead("tool_send_message.md") }
+func ToolExitPlanMode() string    { return mustRead("tool_exit_plan_mode.md") }
+func ToolWritePlan() string       { return mustRead("tool_write_plan.md") }
+func Compact() string             { return mustRead("compact.md") }
 
 // Title asks for a name for the task the opening message describes. It carries
 // that message rather than following the conversation, so the request stands on

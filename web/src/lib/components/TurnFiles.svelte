@@ -20,15 +20,15 @@
         i.kind === "tool" &&
         !i.running &&
         typeof i.args.path === "string" &&
-        ((i.name === "write_file" && /^(wrote|replaced) /.test(i.output)) ||
-          (i.name === "replace_in_file" && i.output.startsWith("edited "))),
+        ((i.name === "write" && /^(wrote|replaced) /.test(i.output)) ||
+          (i.name === "edit" && i.output.startsWith("edited "))),
     ),
   );
 
   const created = $derived.by(() => {
     const out: { path: string; lines: number }[] = [];
     for (const item of done) {
-      if (item.name !== "write_file" || !item.output.startsWith("wrote ")) continue;
+      if (item.name !== "write" || !item.output.startsWith("wrote ")) continue;
       const path = inProject(item.args.path as string, app.projectPath);
       if (out.some((c) => c.path === path)) continue;
       const added = item.meta?.added;

@@ -9,15 +9,15 @@
 
 <ul class="flex flex-col gap-1">
   {#each todos as todo, i (i)}
-    <li class="todo" class:is-done={todo.status === "done"} class:is-doing={todo.status === "doing"}>
-      {#if todo.status === "done"}
+    <li class="todo" class:is-done={todo.status === "completed"} class:is-doing={todo.status === "in_progress"}>
+      {#if todo.status === "completed"}
         <Check />
-      {:else if todo.status === "doing"}
+      {:else if todo.status === "in_progress"}
         <CaretRight />
       {:else}
         <Circle />
       {/if}
-      <span>{todo.text}</span>
+      <span>{todo.content}</span>
     </li>
   {/each}
 </ul>

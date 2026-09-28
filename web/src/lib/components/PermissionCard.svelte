@@ -16,8 +16,8 @@
     switch (tool) {
       case "web_search":
         return "wants to search the web";
-      case "write_file":
-      case "replace_in_file":
+      case "write":
+      case "edit":
         return "wants to change a file";
       default:
         return "wants to run a command";
@@ -42,7 +42,7 @@
     <button class="chip chip-brand" onclick={() => decide(item, { decision: "once" })}>
       Allow once
     </button>
-    {#if item.tool === "run_shell"}
+    {#if item.tool === "bash"}
       <button
         class="chip"
         onclick={() => decide(item, { decision: "always", prefix: prefix.trim() })}
@@ -78,7 +78,7 @@
     </div>
   {/if}
 
-  {#if item.tool === "run_shell"}
+  {#if item.tool === "bash"}
     <p class="px-4 pb-3 text-[11.5px] text-muted">
       Always adds the prefix to the allowlist for this project
     </p>

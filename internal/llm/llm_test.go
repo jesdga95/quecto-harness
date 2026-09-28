@@ -424,7 +424,7 @@ func TestChatPlain(t *testing.T) {
 func TestChatToolCallFragments(t *testing.T) {
 	res, events, err := chatFrames(t, []string{
 		`data: {"choices":[{"delta":{"reasoning_content":"The user wants"}}]}`,
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"run_shell","arguments":"{\"comm"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"bash","arguments":"{\"comm"}}]}}]}`,
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"and\":\"ls"}}]}}]}`,
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"}"}}]}}]}`,
 		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
@@ -437,7 +437,7 @@ func TestChatToolCallFragments(t *testing.T) {
 		t.Fatalf("tool calls = %+v", res.ToolCalls)
 	}
 	tc := res.ToolCalls[0]
-	if tc.ID != "call_0" || tc.Type != "function" || tc.Function.Name != "run_shell" {
+	if tc.ID != "call_0" || tc.Type != "function" || tc.Function.Name != "bash" {
 		t.Errorf("tool call = %+v", tc)
 	}
 	if tc.Function.Arguments != `{"command":"ls"}` {
@@ -462,7 +462,7 @@ func TestChatToolCallFragments(t *testing.T) {
 
 func TestChatToolCallWithoutIndexOrID(t *testing.T) {
 	res, _, err := chatFrames(t, []string{
-		`data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"read_file","arguments":"{\"path\":"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"function":{"name":"read","arguments":"{\"path\":"}}]}}]}`,
 		`data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"\"a.txt\"}"}}]}}]}`,
 		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
 		`data: [DONE]`,
@@ -485,9 +485,9 @@ func TestChatToolCallWithoutIndexOrID(t *testing.T) {
 // assembled. Only a fragment repeating the whole of it is a resend.
 func TestChatToolCallNameInPieces(t *testing.T) {
 	res, _, err := chatFrames(t, []string{
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"replace_in_f"}}]}}]}`,
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"i"}}]}}]}`,
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"le","arguments":"{}"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"ask_user_q"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"u"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"estion","arguments":"{}"}}]}}]}`,
 		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
 		`data: [DONE]`,
 	})
@@ -502,15 +502,15 @@ func TestChatToolCallNameInPieces(t *testing.T) {
 	if got := res.ToolCalls[0].ID; got != "call_a" {
 		t.Errorf("id = %q, want call_a", got)
 	}
-	if got := res.ToolCalls[0].Function.Name; got != "replace_in_file" {
-		t.Errorf("name = %q, want replace_in_file", got)
+	if got := res.ToolCalls[0].Function.Name; got != "ask_user_question" {
+		t.Errorf("name = %q, want ask_user_question", got)
 	}
 }
 
 func TestUnparsedToolCall(t *testing.T) {
 	carries := []string{
-		"Now the tests:\n\n<tool_call>\n<function=replace_in_file>\n</function>\n</tool_call>",
-		"<function=read_file>",
+		"Now the tests:\n\n<tool_call>\n<function=edit>\n</function>\n</tool_call>",
+		"<function=read>",
 		"[TOOL_CALLS]",
 		"<|python_tag|>",
 	}
@@ -529,8 +529,8 @@ func TestUnparsedToolCall(t *testing.T) {
 
 func TestChatTwoToolCalls(t *testing.T) {
 	res, _, err := chatFrames(t, []string{
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read_file","arguments":"{\"path\""}}]}}]}`,
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","function":{"name":"run_shell","arguments":"{\"comm"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{\"path\""}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","function":{"name":"bash","arguments":"{\"comm"}}]}}]}`,
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\"a\"}"}}]}}]}`,
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"and\":\"ls\"}"}}]}}]}`,
 		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,

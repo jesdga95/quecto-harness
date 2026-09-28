@@ -36,10 +36,10 @@ var skipDirs = []string{".git", "node_modules", "dist", "build", "vendor", ".ven
 func (r *Runner) Find(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args FindArgs
 	if err := decodeArgs(raw, &args); err != nil {
-		return Result{}, fmt.Errorf("find: %s", err)
+		return Result{}, fmt.Errorf("grep: %s", err)
 	}
 	if args.Name == "" && args.Text == "" {
-		return Result{}, errors.New("find needs name or text")
+		return Result{}, errors.New("grep needs name or text")
 	}
 
 	base := r.Root
@@ -81,7 +81,7 @@ func (r *Runner) Find(ctx context.Context, raw json.RawMessage) (Result, error) 
 		if ctx.Err() != nil {
 			return Result{Output: "stopped"}, nil
 		}
-		return Result{}, fmt.Errorf("find in %s: %s", r.rel(base), err)
+		return Result{}, fmt.Errorf("grep in %s: %s", r.rel(base), err)
 	}
 	out, truncated := Truncate(f.render(args), r.OutputLimit)
 	return Result{Output: out, Truncated: truncated, Bytes: len(out)}, nil

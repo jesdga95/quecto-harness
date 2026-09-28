@@ -552,7 +552,7 @@ func TestToolStartCarriesTheShellDeadline(t *testing.T) {
 	if len(started) != 1 {
 		t.Fatalf("tool_start events = %d, want one", len(started))
 	}
-	if got := started[0].Fields["name"]; got != "run_shell" {
+	if got := started[0].Fields["name"]; got != "bash" {
 		t.Errorf("name = %v, want the call that started", got)
 	}
 	if got := started[0].Fields["timeout_s"]; got != 120 {
@@ -1036,12 +1036,12 @@ func TestCompactionCarriesThePlanOfTheRequest(t *testing.T) {
 		if e.Kind == "compaction" {
 			compaction = i
 		}
-		if compaction >= 0 && i > compaction && e.Kind == "tool" && e.ToolName == "write_todos" {
+		if compaction >= 0 && i > compaction && e.Kind == "tool" && e.ToolName == "todo_write" {
 			written = true
 		}
 	}
 	if !written {
-		t.Fatal("no write_todos ran after the compaction")
+		t.Fatal("no todo_write ran after the compaction")
 	}
 	if done, _ := tallyTodos(doc.Todos); done != len(doc.Todos) {
 		t.Fatalf("todos = %+v, want every step done", doc.Todos)
@@ -1078,12 +1078,12 @@ func TestCompactionLeavesAPlanAFailedWriteDidNotReplace(t *testing.T) {
 	doc, _, _, _ := s.Snapshot()
 	var last store.Entry
 	for _, e := range doc.Entries {
-		if e.Kind == "tool" && e.ToolName == "write_todos" {
+		if e.Kind == "tool" && e.ToolName == "todo_write" {
 			last = e
 		}
 	}
 	if !strings.Contains(last.Content, "not valid JSON") {
-		t.Fatalf("the second write_todos did not fail: %+v", last)
+		t.Fatalf("the second todo_write did not fail: %+v", last)
 	}
 	if err := h.engine.Compact(s.ID); err != nil {
 		t.Fatal(err)
@@ -1091,7 +1091,7 @@ func TestCompactionLeavesAPlanAFailedWriteDidNotReplace(t *testing.T) {
 	waitIdle(t, s)
 
 	if sent := compactionMessage(t, s); strings.Contains(sent, "todo list") {
-		t.Errorf("a failed write_todos carried the earlier plan:\n%s", sent)
+		t.Errorf("a failed todo_write carried the earlier plan:\n%s", sent)
 	}
 }
 
@@ -1156,7 +1156,7 @@ func approvePlan(t *testing.T, h *harness, s *Session) {
 }
 
 func TestCompactionCarriesTheApprovedPlansProgress(t *testing.T) {
-	h := newHarness(t, "stream_write_plan.txt", "stream_submit_plan.txt", "stream_plain.txt", "stream_summary.txt")
+	h := newHarness(t, "stream_write_plan.txt", "stream_exit_plan_mode.txt", "stream_plain.txt", "stream_summary.txt")
 	s := h.session(t)
 	approvePlan(t, h, s)
 	if err := h.engine.Compact(s.ID); err != nil {
@@ -1171,7 +1171,7 @@ func TestCompactionCarriesTheApprovedPlansProgress(t *testing.T) {
 }
 
 func TestCompactionLeavesAnApprovedPlanAfterANewRequest(t *testing.T) {
-	h := newHarness(t, "stream_write_plan.txt", "stream_submit_plan.txt", "stream_plain.txt",
+	h := newHarness(t, "stream_write_plan.txt", "stream_exit_plan_mode.txt", "stream_plain.txt",
 		"stream_plain.txt", "stream_summary.txt")
 	s := h.session(t)
 	approvePlan(t, h, s)
@@ -1453,7 +1453,7 @@ func TestUnansweredToolCallIsRepaired(t *testing.T) {
 	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "go", InContext: true, Visible: true})
 	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
 		ToolCalls: []llm.ToolCall{{ID: "call_x", Type: "function",
-			Function: llm.FunctionCall{Name: "run_shell", Arguments: `{"command":"ls"}`}}}})
+			Function: llm.FunctionCall{Name: "bash", Arguments: `{"command":"ls"}`}}}})
 	msgs := s.contextMessages(config.Agent{}, "darwin", "", topBrief(), nil)
 	s.mu.Unlock()
 
@@ -1528,16 +1528,16 @@ func TestWriteTodosKeepsThePlan(t *testing.T) {
 	if len(doc.Todos) != 3 {
 		t.Fatalf("todos = %+v", doc.Todos)
 	}
-	if doc.Todos[0].Status != "done" || doc.Todos[1].Status != "doing" || doc.Todos[2].Status != "todo" {
+	if doc.Todos[0].Status != todoCompleted || doc.Todos[1].Status != todoInProgress || doc.Todos[2].Status != todoPending {
 		t.Errorf("statuses = %+v", doc.Todos)
 	}
-	if doc.Todos[1].Text != "Add the handler" {
-		t.Errorf("text = %q", doc.Todos[1].Text)
+	if doc.Todos[1].Content != "Add the handler" {
+		t.Errorf("text = %q", doc.Todos[1].Content)
 	}
 
 	var result store.Entry
 	for _, e := range doc.Entries {
-		if e.Kind == "tool" && e.ToolName == "write_todos" {
+		if e.Kind == "tool" && e.ToolName == "todo_write" {
 			result = e
 		}
 	}
@@ -1549,6 +1549,66 @@ func TestWriteTodosKeepsThePlan(t *testing.T) {
 	}
 	if events := h.rec.ofType("todos"); len(events) != 1 {
 		t.Errorf("todos events = %d, want 1", len(events))
+	}
+}
+
+// TestTurnStartClearsAFinishedList asserts that a list with work left carries
+// into the next turn and one with every step completed does not.
+func TestTurnStartClearsAFinishedList(t *testing.T) {
+	h := newHarness(t, "stream_todos.txt", "stream_plain.txt", "stream_plain.txt",
+		"stream_todos_finished.txt", "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "plan the work", nil)
+	waitIdle(t, s)
+	h.engine.Send(s.ID, "carry on", nil)
+	waitIdle(t, s)
+	if doc, _, _, _ := s.Snapshot(); len(doc.Todos) != 3 {
+		t.Fatalf("todos = %+v, want the unfinished list carried over", doc.Todos)
+	}
+	if n := len(h.rec.ofType("todos")); n != 1 {
+		t.Errorf("todos events = %d, want only the write", n)
+	}
+
+	h.engine.Send(s.ID, "finish it", nil)
+	waitIdle(t, s)
+	if doc, _, _, _ := s.Snapshot(); len(doc.Todos) != 3 {
+		t.Fatalf("todos = %+v, want the finished list kept until the next turn", doc.Todos)
+	}
+	h.engine.Send(s.ID, "something else", nil)
+	waitIdle(t, s)
+	if doc, _, _, _ := s.Snapshot(); len(doc.Todos) != 0 {
+		t.Errorf("todos = %+v, want the finished list cleared", doc.Todos)
+	}
+	events := h.rec.ofType("todos")
+	if last, _ := events[len(events)-1].Fields["todos"].([]store.Todo); len(events) != 3 || len(last) != 0 {
+		t.Errorf("todos events = %+v, want the clear published last", events)
+	}
+}
+
+// TestWriteTodosRefusesWhatItWouldHaveToGuess asserts that a list with an
+// unknown key or status, an empty step or a repeated one is an error rather
+// than a list with the doubtful parts changed.
+func TestWriteTodosRefusesWhatItWouldHaveToGuess(t *testing.T) {
+	for name, tc := range map[string]struct{ args, want string }{
+		"old key":      {`{"todos":[{"text":"Read","status":"pending"}]}`, `unknown field "text"`},
+		"extra key":    {`{"todos":[{"content":"Read","status":"pending","id":1}]}`, `unknown field "id"`},
+		"status":       {`{"todos":[{"content":"Read","status":"complete"}]}`, `status "complete"`},
+		"no status":    {`{"todos":[{"content":"Read"}]}`, `status ""`},
+		"empty":        {`{"todos":[{"content":"  ","status":"pending"}]}`, "item 1 has no content"},
+		"repeated":     {`{"todos":[{"content":"Read","status":"pending"},{"content":"Read","status":"completed"}]}`, "listed twice"},
+		"no list":      {`{}`, "todos is missing"},
+		"invalid json": {`{"todos":[`, "not valid JSON"},
+	} {
+		if _, err := parseTodos(json.RawMessage(tc.args)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error = %v, want one naming %q", name, err, tc.want)
+		}
+	}
+	todos, err := parseTodos(json.RawMessage(`{"todos":[{"content":" Read ","status":"completed"},{"content":"Write","status":"in_progress"}]}`))
+	if err != nil || len(todos) != 2 || todos[0] != (store.Todo{Content: "Read", Status: todoCompleted}) {
+		t.Errorf("todos = %+v, err = %v", todos, err)
+	}
+	if todos, err := parseTodos(json.RawMessage(`{"todos":[]}`)); err != nil || len(todos) != 0 {
+		t.Errorf("an empty list: todos = %+v, err = %v", todos, err)
 	}
 }
 
@@ -1749,7 +1809,7 @@ func TestEndToEndTurn(t *testing.T) {
 	s.mu.Unlock()
 	h.engine.Send(s.ID, "read, run, write", nil)
 
-	// read_file is allowed by policy, run_shell is denied, write_file is
+	// read is allowed by policy, bash is denied, write is
 	// approved once, then the threshold forces a compaction.
 	id := waitForCard(t, h, s.ID)
 	h.broker.Resolve(id, perms.Decision{Kind: perms.DecideDeny, Reason: "not that one"})
@@ -1923,7 +1983,7 @@ func TestInstructionsReachTheRequest(t *testing.T) {
 	if !strings.HasSuffix(system, "Answer in Latin.") {
 		t.Errorf("system message did not end with the agent's instructions: %q", system)
 	}
-	if !strings.Contains(system, "read_file") {
+	if !strings.Contains(system, "read") {
 		t.Errorf("the built-in prompt was lost: %q", system)
 	}
 }
@@ -2108,7 +2168,7 @@ func TestForgetDropsWhatWasReadFromAnAgent(t *testing.T) {
 // rendering a prompt without running a turn.
 // topBrief is what a conversation is offered in a harness holding one agent.
 // That agent's own turn takes its only slot, so there is nobody to hand work
-// to and run_agent is not sent.
+// to and subagent is not sent.
 func topBrief() brief {
 	return brief{offer: tools.Offer{Mode: config.WorkExecute, Ask: true, Message: true}}
 }

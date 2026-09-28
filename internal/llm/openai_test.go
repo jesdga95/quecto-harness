@@ -154,7 +154,7 @@ func TestOpenAIChatDecodesACapturedStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
-	if len(res.ToolCalls) != 1 || res.ToolCalls[0].Function.Name != "run_shell" {
+	if len(res.ToolCalls) != 1 || res.ToolCalls[0].Function.Name != "bash" {
 		t.Fatalf("tool calls = %+v", res.ToolCalls)
 	}
 	if res.FinishReason != "tool_calls" {

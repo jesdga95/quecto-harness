@@ -57,8 +57,8 @@ func waitForNewQuestion(t *testing.T, h *harness, sessionID, answered string) Qu
 // same turn then carries on as execute, with the plan in its prompt and its
 // steps as the todo list.
 func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
-	h := newHarness(t, "stream_write_plan.txt", "stream_submit_plan.txt",
-		"stream_write_plan.txt", "stream_submit_plan.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_write_plan.txt", "stream_exit_plan_mode.txt",
+		"stream_write_plan.txt", "stream_exit_plan_mode.txt", "stream_plain.txt")
 	s := h.session(t)
 	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
 		t.Fatal(err)
@@ -71,8 +71,8 @@ func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
 	}
 	body := h.replay.Body(0)
 	got := sentTools(body)
-	if !slices.Contains(got, "submit_plan") || !slices.Contains(got, "write_plan") ||
-		slices.Contains(got, "write_file") || slices.Contains(got, "replace_in_file") {
+	if !slices.Contains(got, "exit_plan_mode") || !slices.Contains(got, "write_plan") ||
+		slices.Contains(got, "write") || slices.Contains(got, "edit") {
 		t.Errorf("plan turn sent %v", got)
 	}
 	if !strings.Contains(systemOf(body), "plan mode") {
@@ -91,12 +91,12 @@ func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
 	doc, _, _, _ := s.Snapshot()
 	var results []string
 	for _, e := range doc.Entries {
-		if e.Kind == "tool" && e.ToolName == "submit_plan" {
+		if e.Kind == "tool" && e.ToolName == "exit_plan_mode" {
 			results = append(results, e.Content)
 		}
 	}
 	if !slices.Equal(results, []string{"not approved: add a test", "approved"}) {
-		t.Errorf("submit_plan results = %q", results)
+		t.Errorf("exit_plan_mode results = %q", results)
 	}
 	if doc.Mode != config.WorkExecute {
 		t.Errorf("mode after approval = %q, want execute", doc.Mode)
@@ -104,7 +104,7 @@ func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
 	if doc.Plan == nil || doc.Plan.Title != "Cache the list" || len(doc.Plan.Steps) != 2 {
 		t.Fatalf("stored plan = %+v", doc.Plan)
 	}
-	if len(doc.Todos) != 2 || doc.Todos[0].Status != "doing" || doc.Todos[1].Text != "Test it" {
+	if len(doc.Todos) != 2 || doc.Todos[0].Status != todoInProgress || doc.Todos[1].Content != "Test it" {
 		t.Errorf("todos = %+v, want the steps with the first in hand", doc.Todos)
 	}
 
@@ -141,7 +141,7 @@ func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
 	}
 	exec := h.replay.Body(4)
 	got = sentTools(exec)
-	if slices.Contains(got, "submit_plan") || !slices.Contains(got, "write_file") {
+	if slices.Contains(got, "exit_plan_mode") || !slices.Contains(got, "write") {
 		t.Errorf("execute request sent %v", got)
 	}
 	if sys := systemOf(exec); !strings.Contains(sys, "The user approved this plan.") ||
@@ -162,8 +162,8 @@ func TestPlanModeAnswersAWriteItDidNotSend(t *testing.T) {
 	waitIdle(t, s)
 
 	doc, _, _, _ := s.Snapshot()
-	result := toolResult(t, doc, "write_file")
-	if result.Content != "write_file is not available in plan mode" {
+	result := toolResult(t, doc, "write")
+	if result.Content != "write is not available in plan mode" {
 		t.Errorf("tool result = %q", result.Content)
 	}
 	if result.Permission != nil {
@@ -219,7 +219,7 @@ func TestWritePlanMergesSections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.Output, "call submit_plan") {
+	if !strings.Contains(res.Output, "call exit_plan_mode") {
 		t.Errorf("a complete draft said %q", res.Output)
 	}
 	s.mu.Lock()
@@ -233,9 +233,9 @@ func TestWritePlanMergesSections(t *testing.T) {
 	}
 }
 
-// submit_plan puts nothing on a card until every required section is written.
+// exit_plan_mode puts nothing on a card until every required section is written.
 func TestSubmitPlanRefusesAnIncompleteDraft(t *testing.T) {
-	h := newHarness(t, "stream_submit_plan.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_exit_plan_mode.txt", "stream_plain.txt")
 	s := h.session(t)
 	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
 		t.Fatal(err)
@@ -243,7 +243,7 @@ func TestSubmitPlanRefusesAnIncompleteDraft(t *testing.T) {
 	h.engine.Send(s.ID, "plan it", nil)
 	waitIdle(t, s)
 	doc, _, _, _ := s.Snapshot()
-	if got := toolResult(t, doc, "submit_plan").Content; !strings.Contains(got, "there is no draft") {
+	if got := toolResult(t, doc, "exit_plan_mode").Content; !strings.Contains(got, "there is no draft") {
 		t.Errorf("submit with no draft = %q", got)
 	}
 	if missing(store.Plan{Title: "T", Goal: "g", Code: []string{"c"}, Tests: []string{"t"},
@@ -256,7 +256,7 @@ func TestSubmitPlanRefusesAnIncompleteDraft(t *testing.T) {
 }
 
 // A subagent works in the mode of the session that launched it, and is never
-// sent submit_plan: its result goes to the launcher.
+// sent exit_plan_mode: its result goes to the launcher.
 func TestASubagentKeepsItsLaunchersMode(t *testing.T) {
 	h, _ := launcher(t)
 	child := newSession("sess_kid", h.project, h.agent.ID, "Alpha-12B")
@@ -264,8 +264,8 @@ func TestASubagentKeepsItsLaunchersMode(t *testing.T) {
 	child.Mode = config.WorkPlan
 	b := h.engine.briefFor(child, h.cfg.Config())
 	names := tools.Names(b.offer)
-	if b.offer.Mode != config.WorkPlan || slices.Contains(names, "submit_plan") ||
-		slices.Contains(names, "write_plan") || slices.Contains(names, "write_file") {
+	if b.offer.Mode != config.WorkPlan || slices.Contains(names, "exit_plan_mode") ||
+		slices.Contains(names, "write_plan") || slices.Contains(names, "write") {
 		t.Errorf("a planning subagent was sent %v in %q", names, b.offer.Mode)
 	}
 }

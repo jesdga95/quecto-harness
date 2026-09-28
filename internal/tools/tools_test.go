@@ -95,10 +95,10 @@ func TestPathGuard(t *testing.T) {
 func TestRootItselfIsRefusedAsAFile(t *testing.T) {
 	r := testRoot(t, t.TempDir())
 	if _, err := r.ReadFile(context.Background(), json.RawMessage(`{"path":"."}`)); err == nil || !strings.Contains(err.Error(), "directory") {
-		t.Errorf("read_file on the root = %v, want a directory refusal", err)
+		t.Errorf("read on the root = %v, want a directory refusal", err)
 	}
 	if _, err := r.WriteFile(context.Background(), json.RawMessage(`{"path":".","content":"x"}`)); err == nil || !strings.Contains(err.Error(), "directory") {
-		t.Errorf("write_file on the root = %v, want a directory refusal", err)
+		t.Errorf("write on the root = %v, want a directory refusal", err)
 	}
 }
 
@@ -395,8 +395,8 @@ func TestLooksBinary(t *testing.T) {
 
 func TestSchemasMatchTheDescriptions(t *testing.T) {
 	s := Schemas(Offer{Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true})
-	names := []string{"read_file", "find", "web_search", "write_file", "replace_in_file",
-		"write_todos", "ask_question", "run_agent", "send_message", "run_shell"}
+	names := []string{"read", "grep", "web_search", "write", "edit",
+		"todo_write", "ask_user_question", "subagent", "send_message", "bash"}
 	if len(s) != len(names) {
 		t.Fatalf("got %d schemas, want %d", len(s), len(names))
 	}
@@ -732,7 +732,7 @@ func find(t *testing.T, r *Runner, args string) string {
 	t.Helper()
 	res, err := r.Find(context.Background(), json.RawMessage(args))
 	if err != nil {
-		t.Fatalf("find %s: %v", args, err)
+		t.Fatalf("grep %s: %v", args, err)
 	}
 	return res.Output
 }
@@ -835,13 +835,13 @@ func TestFindNameAndTextTogetherNarrow(t *testing.T) {
 func TestFindBadInput(t *testing.T) {
 	r := findTree(t)
 	if _, err := r.Find(context.Background(), json.RawMessage(`{}`)); err == nil {
-		t.Error("find with no name and no text was accepted")
+		t.Error("grep with no name and no text was accepted")
 	}
 	if _, err := r.Find(context.Background(), json.RawMessage(`{"text":"x","path":"../outside"}`)); err == nil {
-		t.Error("find escaped the project")
+		t.Error("grep escaped the project")
 	}
 	if _, err := r.Find(context.Background(), json.RawMessage(`{"text":"x","path":"nope"}`)); err == nil {
-		t.Error("find accepted a path that does not exist")
+		t.Error("grep accepted a path that does not exist")
 	}
 	out := find(t, r, `{"text":"(unclosed","regex":true}`)
 	if !strings.Contains(out, "not a valid regular expression") || !strings.Contains(out, "without regex") {
@@ -893,12 +893,12 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 		}
 		return out
 	}
-	base := []string{"read_file", "find", "write_file", "replace_in_file", "write_todos", "run_shell"}
+	base := []string{"read", "grep", "write", "edit", "todo_write", "bash"}
 	optional := map[string]Offer{
-		"ask_question": {Mode: config.WorkExecute, Ask: true},
-		"run_agent":    {Mode: config.WorkExecute, Agents: true},
-		"send_message": {Mode: config.WorkExecute, Message: true},
-		"web_search":   {Mode: config.WorkExecute, Search: true},
+		"ask_user_question": {Mode: config.WorkExecute, Ask: true},
+		"subagent":          {Mode: config.WorkExecute, Agents: true},
+		"send_message":      {Mode: config.WorkExecute, Message: true},
+		"web_search":        {Mode: config.WorkExecute, Search: true},
 	}
 
 	none := names(Offer{Mode: config.WorkExecute})
@@ -926,7 +926,7 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 	}
 	// The order the model sees is the order they are declared, whichever are
 	// left out.
-	if !slices.IsSorted([]int{indexOf(all, "read_file"), indexOf(all, "run_shell")}) {
+	if !slices.IsSorted([]int{indexOf(all, "read"), indexOf(all, "bash")}) {
 		t.Errorf("the order moved: %v", all)
 	}
 }
@@ -941,7 +941,7 @@ func indexOf(in []string, want string) int {
 }
 
 // Plan mode sends no tool that writes a file, and is the only mode that sends
-// submit_plan. A tool the offer leaves out is still in its mode, so a call to
+// exit_plan_mode. A tool the offer leaves out is still in its mode, so a call to
 // it is refused by the tool rather than by the mode.
 func TestSchemasFollowTheMode(t *testing.T) {
 	every := Offer{Ask: true, Agents: true, Message: true, Search: true}
@@ -949,23 +949,23 @@ func TestSchemasFollowTheMode(t *testing.T) {
 	plan.Mode, exec.Mode = config.WorkPlan, config.WorkExecute
 
 	got := Names(plan)
-	want := []string{"read_file", "find", "web_search", "ask_question", "write_plan", "submit_plan",
-		"run_agent", "send_message", "run_shell"}
+	want := []string{"read", "grep", "web_search", "ask_user_question", "write_plan", "exit_plan_mode",
+		"subagent", "send_message", "bash"}
 	if !slices.Equal(got, want) {
 		t.Errorf("plan sent %v, want %v", got, want)
 	}
-	for _, name := range []string{"write_file", "replace_in_file", "write_todos"} {
+	for _, name := range []string{"write", "edit", "todo_write"} {
 		if plan.InMode(name) {
 			t.Errorf("plan mode holds %s", name)
 		}
 	}
-	for _, name := range []string{"write_plan", "submit_plan"} {
+	for _, name := range []string{"write_plan", "exit_plan_mode"} {
 		if slices.Contains(Names(exec), name) {
 			t.Errorf("execute mode sent %s", name)
 		}
 	}
-	if !(Offer{Mode: config.WorkExecute}).InMode("run_agent") {
-		t.Error("run_agent left the mode when the offer left it out")
+	if !(Offer{Mode: config.WorkExecute}).InMode("subagent") {
+		t.Error("subagent left the mode when the offer left it out")
 	}
 	if len(Names(Offer{})) != 0 {
 		t.Error("an offer with no mode sent tools")
@@ -977,13 +977,13 @@ func TestSchemasFollowTheMode(t *testing.T) {
 func TestWriteSchemasListThePathFirst(t *testing.T) {
 	for _, tool := range Schemas(Offer{Mode: config.WorkExecute}) {
 		name := tool.Function.Name
-		if name != "write_file" && name != "replace_in_file" {
+		if name != "write" && name != "edit" {
 			continue
 		}
 		raw := string(tool.Function.Parameters)
 		path := strings.Index(raw, `"path"`)
 		other := strings.Index(raw, `"content"`)
-		if name == "replace_in_file" {
+		if name == "edit" {
 			other = strings.Index(raw, `"old_string"`)
 		}
 		if path == -1 || other == -1 || path > other {

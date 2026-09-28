@@ -96,7 +96,7 @@ export interface Agent {
   /** Makes a reply repeatable. Null is a new one each turn. */
   seed: number | null;
   /** How many tasks this agent runs at once, its own conversation counted. A
-      run_agent call naming it past that is refused. */
+      subagent call naming it past that is refused. */
   concurrency: number;
   /** What this agent is for, in one line, as the agents that may hand it work
       are told. Empty falls back to the first line of the instructions. */
@@ -206,10 +206,10 @@ export type { Plan } from "../plan";
     its own system prompt and its own tools. */
 export type WorkMode = "plan" | "execute";
 
-/** One step of the plan the model keeps with write_todos. */
+/** One step of the plan the model keeps with todo_write. */
 export interface Todo {
-  text: string;
-  status: "todo" | "doing" | "done";
+  content: string;
+  status: "pending" | "in_progress" | "completed";
 }
 
 export type PermissionDecision =
@@ -288,7 +288,7 @@ export type HarnessEvent =
   /** The files this session is answerable for moved for a reason its own
       stream does not carry, such as a subagent writing one. */
   | { type: "changed" }
-  /** A subagent this session launched moved. The row the run_agent call drew
+  /** A subagent this session launched moved. The row the subagent call drew
       follows it without mirroring its stream. */
   | {
       type: "child";
@@ -347,10 +347,10 @@ export type TranscriptItem =
       timeoutS?: number | null;
       /** How long the call took, once it is over. */
       ranMs?: number;
-      /** Set on an ask_question call that is still waiting, and is the id its
+      /** Set on an ask_user_question call that is still waiting, and is the id its
           answer is posted to. */
       askId?: string;
-      /** Set on a run_agent call: the subagent it started and where that
+      /** Set on a subagent call: the subagent it started and where that
           subagent has got to. */
       child?: { session: string; agent: string; status: TurnStatus };
       /** What the tool reports that its result does not say, such as the

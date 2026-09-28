@@ -1,5 +1,5 @@
 : shape from llama.cpp b10812-8b4b3558f
-data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_s","type":"function","function":{"name":"run_shell","arguments":"{\"command\":\"sleep 30\"}"}}]}}],"created":1757141666,"id":"chatcmpl-6","model":"Alpha-12B","object":"chat.completion.chunk"}
+data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_s","type":"function","function":{"name":"bash","arguments":"{\"command\":\"sleep 30\"}"}}]}}],"created":1757141666,"id":"chatcmpl-6","model":"Alpha-12B","object":"chat.completion.chunk"}
 
 data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"created":1757141666,"id":"chatcmpl-6","model":"Alpha-12B","object":"chat.completion.chunk"}
 

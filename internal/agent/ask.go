@@ -222,14 +222,14 @@ func parseQuestion(raw json.RawMessage) (Question, error) {
 		Multi bool `json:"multi_select"`
 	}
 	if len(raw) == 0 {
-		return Question{}, errors.New("ask_question: the arguments were empty")
+		return Question{}, errors.New("ask_user_question: the arguments were empty")
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
-		return Question{}, fmt.Errorf("ask_question: the arguments are not valid JSON: %s", err)
+		return Question{}, fmt.Errorf("ask_user_question: the arguments are not valid JSON: %s", err)
 	}
 	text := strings.TrimSpace(args.Question)
 	if text == "" {
-		return Question{}, errors.New("ask_question: question is empty, say what is being asked")
+		return Question{}, errors.New("ask_user_question: question is empty, say what is being asked")
 	}
 	var opts []Option
 	for _, o := range args.Options {
@@ -240,10 +240,10 @@ func parseQuestion(raw json.RawMessage) (Question, error) {
 		opts = append(opts, Option{Label: label, Description: strings.TrimSpace(o.Description)})
 	}
 	if len(opts) < 2 {
-		return Question{}, errors.New("ask_question: give two to four options, each with a label")
+		return Question{}, errors.New("ask_user_question: give two to four options, each with a label")
 	}
 	if len(opts) > maxOptions {
-		return Question{}, fmt.Errorf("ask_question: %d options, give at most %d", len(opts), maxOptions)
+		return Question{}, fmt.Errorf("ask_user_question: %d options, give at most %d", len(opts), maxOptions)
 	}
 	return Question{Text: text, Options: opts, Multi: args.Multi}, nil
 }

@@ -17,13 +17,13 @@ import (
 func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args ReplaceInFileArgs
 	if err := decodeArgs(raw, &args); err != nil {
-		return Result{}, fmt.Errorf("replace_in_file: %s", err)
+		return Result{}, fmt.Errorf("edit: %s", err)
 	}
 	if args.Path == "" {
-		return Result{}, errors.New("replace_in_file needs a path")
+		return Result{}, errors.New("edit needs a path")
 	}
 	if args.OldString == "" {
-		return Result{}, errors.New("replace_in_file needs old_string: to create a file, use write_file")
+		return Result{}, errors.New("edit needs old_string: to create a file, use write")
 	}
 	if args.OldString == args.NewString {
 		return Result{}, fmt.Errorf("old_string and new_string are the same, so %s is already what you asked for", args.Path)

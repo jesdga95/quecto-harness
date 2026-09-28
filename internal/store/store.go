@@ -81,10 +81,11 @@ type PermissionRecord struct {
 	Reason   string `json:"reason,omitempty"`
 }
 
-// Todo is one step of the plan the model keeps for the session.
+// Todo is one step of the plan the model keeps for the session. Status is
+// pending, in_progress or completed.
 type Todo struct {
-	Text   string `json:"text"`
-	Status string `json:"status"`
+	Content string `json:"content"`
+	Status  string `json:"status"`
 }
 
 // Plan is a plan in its sections. Plan mode writes it as a draft, and once

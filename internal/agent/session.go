@@ -425,19 +425,19 @@ func (s *Session) restoreContext() {
 	}
 }
 
-// restoreTodos rewinds the plan to the newest write_todos the surviving
+// restoreTodos rewinds the plan to the newest todo_write the surviving
 // entries ran. The call carries the whole plan, so nothing is stored for this
 // beyond the entries themselves. The caller holds the lock.
 func (s *Session) restoreTodos() {
 	for i := len(s.Entries) - 1; i >= 0; i-- {
-		if s.Entries[i].Kind == "tool" && s.Entries[i].ToolName == "submit_plan" && s.Entries[i].Meta["approved"] == true {
+		if s.Entries[i].Kind == "tool" && s.Entries[i].ToolName == "exit_plan_mode" && s.Entries[i].Meta["approved"] == true {
 			if s.Plan != nil {
 				s.Todos = seedTodos(*s.Plan)
 				return
 			}
 			continue
 		}
-		if s.Entries[i].Kind != "tool" || s.Entries[i].ToolName != "write_todos" {
+		if s.Entries[i].Kind != "tool" || s.Entries[i].ToolName != "todo_write" {
 			continue
 		}
 		args, ok := s.argumentsOf(i, s.Entries[i].ToolCallID)

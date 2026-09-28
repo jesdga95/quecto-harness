@@ -23,12 +23,12 @@ type Offer struct {
 }
 
 // modeTools is the fixed list each mode may send. Plan holds no tool that
-// writes a file, and write_plan and submit_plan are sent in plan mode alone.
+// writes a file, and write_plan and exit_plan_mode are sent in plan mode alone.
 var modeTools = map[config.WorkMode][]string{
-	config.WorkPlan: {"read_file", "find", "web_search", "ask_question",
-		"run_agent", "send_message", "write_plan", "submit_plan", "run_shell"},
-	config.WorkExecute: {"read_file", "find", "web_search", "write_file", "replace_in_file",
-		"write_todos", "ask_question", "run_agent", "send_message", "run_shell"},
+	config.WorkPlan: {"read", "grep", "web_search", "ask_user_question",
+		"subagent", "send_message", "write_plan", "exit_plan_mode", "bash"},
+	config.WorkExecute: {"read", "grep", "web_search", "write", "edit",
+		"todo_write", "ask_user_question", "subagent", "send_message", "bash"},
 }
 
 // Schemas returns the tool definitions in the order the model sees them,
@@ -79,9 +79,9 @@ func (o Offer) Sends(name string) bool {
 		return false
 	}
 	switch name {
-	case "ask_question", "write_plan", "submit_plan":
+	case "ask_user_question", "write_plan", "exit_plan_mode":
 		return o.Ask
-	case "run_agent":
+	case "subagent":
 		return o.Agents
 	case "send_message":
 		return o.Message
@@ -94,8 +94,8 @@ func (o Offer) Sends(name string) bool {
 func buildSchemas() []llm.Tool {
 	return []llm.Tool{
 		{Type: "function", Function: llm.FunctionSpec{
-			Name:        "read_file",
-			Description: prompts.ToolReadFile(),
+			Name:        "read",
+			Description: prompts.ToolRead(),
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -108,8 +108,8 @@ func buildSchemas() []llm.Tool {
 			}),
 		}},
 		{Type: "function", Function: llm.FunctionSpec{
-			Name:        "find",
-			Description: prompts.ToolFind(),
+			Name:        "grep",
+			Description: prompts.ToolGrep(),
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -137,8 +137,8 @@ func buildSchemas() []llm.Tool {
 			}),
 		}},
 		{Type: "function", Function: llm.FunctionSpec{
-			Name:        "write_file",
-			Description: prompts.ToolWriteFile(),
+			Name:        "write",
+			Description: prompts.ToolWrite(),
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": ordered{
@@ -150,8 +150,8 @@ func buildSchemas() []llm.Tool {
 			}),
 		}},
 		{Type: "function", Function: llm.FunctionSpec{
-			Name:        "replace_in_file",
-			Description: prompts.ToolReplaceInFile(),
+			Name:        "edit",
+			Description: prompts.ToolEdit(),
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": ordered{
@@ -164,8 +164,8 @@ func buildSchemas() []llm.Tool {
 			}),
 		}},
 		{Type: "function", Function: llm.FunctionSpec{
-			Name:        "write_todos",
-			Description: prompts.ToolWriteTodos(),
+			Name:        "todo_write",
+			Description: prompts.ToolTodoWrite(),
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -175,10 +175,10 @@ func buildSchemas() []llm.Tool {
 						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
-								"text":   map[string]any{"type": "string", "description": "What the step is, in a few words."},
-								"status": map[string]any{"type": "string", "enum": []string{"todo", "doing", "done"}, "description": "Where the step stands."},
+								"content": map[string]any{"type": "string", "description": "What the step is, in a few words."},
+								"status":  map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed"}, "description": "Where the step stands."},
 							},
-							"required":             []string{"text", "status"},
+							"required":             []string{"content", "status"},
 							"additionalProperties": false,
 						},
 					},
@@ -188,8 +188,8 @@ func buildSchemas() []llm.Tool {
 			}),
 		}},
 		{Type: "function", Function: llm.FunctionSpec{
-			Name:        "ask_question",
-			Description: prompts.ToolAskQuestion(),
+			Name:        "ask_user_question",
+			Description: prompts.ToolAskUserQuestion(),
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -235,8 +235,8 @@ func buildSchemas() []llm.Tool {
 			}),
 		}},
 		{Type: "function", Function: llm.FunctionSpec{
-			Name:        "submit_plan",
-			Description: prompts.ToolSubmitPlan(),
+			Name:        "exit_plan_mode",
+			Description: prompts.ToolExitPlanMode(),
 			Parameters: mustSchema(map[string]any{
 				"type":                 "object",
 				"properties":           map[string]any{},
@@ -244,8 +244,8 @@ func buildSchemas() []llm.Tool {
 			}),
 		}},
 		{Type: "function", Function: llm.FunctionSpec{
-			Name:        "run_agent",
-			Description: prompts.ToolRunAgent(),
+			Name:        "subagent",
+			Description: prompts.ToolSubagent(),
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -262,7 +262,7 @@ func buildSchemas() []llm.Tool {
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"to":   map[string]any{"type": "string", "description": "The handle run_agent answered with, or parent."},
+					"to":   map[string]any{"type": "string", "description": "The handle subagent answered with, or parent."},
 					"text": map[string]any{"type": "string", "description": "The message."},
 				},
 				"required":             []string{"to", "text"},
@@ -270,8 +270,8 @@ func buildSchemas() []llm.Tool {
 			}),
 		}},
 		{Type: "function", Function: llm.FunctionSpec{
-			Name:        "run_shell",
-			Description: prompts.ToolRunShell(),
+			Name:        "bash",
+			Description: prompts.ToolBash(),
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -39,10 +39,10 @@ type Snapshot struct {
 func (r *Runner) WriteFile(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args WriteFileArgs
 	if err := decodeArgs(raw, &args); err != nil {
-		return Result{}, fmt.Errorf("write_file: %s", err)
+		return Result{}, fmt.Errorf("write: %s", err)
 	}
 	if args.Path == "" {
-		return Result{}, errors.New("write_file needs a path")
+		return Result{}, errors.New("write needs a path")
 	}
 	path, err := r.resolve(args.Path)
 	if err != nil {

@@ -7,18 +7,18 @@ import (
 
 func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 	for name, get := range map[string]func() string{
-		"tool_read_file.md":       ToolReadFile,
-		"tool_find.md":            ToolFind,
-		"tool_web_search.md":      ToolWebSearch,
-		"tool_write_file.md":      ToolWriteFile,
-		"tool_replace_in_file.md": ToolReplaceInFile,
-		"tool_run_shell.md":       ToolRunShell,
-		"tool_write_todos.md":     ToolWriteTodos,
-		"tool_ask_question.md":    ToolAskQuestion,
-		"tool_run_agent.md":       ToolRunAgent,
-		"tool_send_message.md":    ToolSendMessage,
-		"compact.md":              Compact,
-		"title.md":                func() string { return Title("name this") },
+		"tool_read.md":              ToolRead,
+		"tool_grep.md":              ToolGrep,
+		"tool_web_search.md":        ToolWebSearch,
+		"tool_write.md":             ToolWrite,
+		"tool_edit.md":              ToolEdit,
+		"tool_bash.md":              ToolBash,
+		"tool_todo_write.md":        ToolTodoWrite,
+		"tool_ask_user_question.md": ToolAskUserQuestion,
+		"tool_subagent.md":          ToolSubagent,
+		"tool_send_message.md":      ToolSendMessage,
+		"compact.md":                Compact,
+		"title.md":                  func() string { return Title("name this") },
 	} {
 		if strings.TrimSpace(get()) == "" {
 			t.Errorf("%s is empty", name)
@@ -44,7 +44,7 @@ func TestSystemSubstitutesItsFields(t *testing.T) {
 	if strings.Contains(got, "{{") {
 		t.Errorf("system prompt left a template action: %q", got)
 	}
-	for _, tool := range []string{"read_file", "write_file", "run_shell"} {
+	for _, tool := range []string{"read", "write", "bash"} {
 		if !strings.Contains(got, tool) {
 			t.Errorf("system prompt does not name %s", tool)
 		}
@@ -70,25 +70,25 @@ func TestSystemCarriesTheDayOnTheFirstLine(t *testing.T) {
 }
 
 func TestToolDescriptionsNameTheirArguments(t *testing.T) {
-	if !strings.Contains(ToolReadFile(), "offset") || !strings.Contains(ToolReadFile(), "limit") {
-		t.Errorf("read_file description omits its arguments: %q", ToolReadFile())
+	if !strings.Contains(ToolRead(), "offset") || !strings.Contains(ToolRead(), "limit") {
+		t.Errorf("read description omits its arguments: %q", ToolRead())
 	}
-	if !strings.Contains(ToolRunShell(), "exit code") {
-		t.Errorf("run_shell description omits the exit code: %q", ToolRunShell())
+	if !strings.Contains(ToolBash(), "exit code") {
+		t.Errorf("bash description omits the exit code: %q", ToolBash())
 	}
-	if !strings.Contains(ToolFind(), "text") || !strings.Contains(ToolFind(), "name") || !strings.Contains(ToolFind(), "path") {
-		t.Errorf("find description omits its arguments: %q", ToolFind())
+	if !strings.Contains(ToolGrep(), "text") || !strings.Contains(ToolGrep(), "name") || !strings.Contains(ToolGrep(), "path") {
+		t.Errorf("grep description omits its arguments: %q", ToolGrep())
 	}
 	if !strings.Contains(ToolWebSearch(), "query") || !strings.Contains(ToolWebSearch(), "results") ||
 		!strings.Contains(ToolWebSearch(), "full") || !strings.Contains(ToolWebSearch(), "since") {
 		t.Errorf("web_search description omits its arguments: %q", ToolWebSearch())
 	}
-	if !strings.Contains(ToolReplaceInFile(), "old_string") || !strings.Contains(ToolReplaceInFile(), "new_string") {
-		t.Errorf("replace_in_file description omits its arguments: %q", ToolReplaceInFile())
+	if !strings.Contains(ToolEdit(), "old_string") || !strings.Contains(ToolEdit(), "new_string") {
+		t.Errorf("edit description omits its arguments: %q", ToolEdit())
 	}
-	if !strings.Contains(ToolAskQuestion(), "question") || !strings.Contains(ToolAskQuestion(), "options") ||
-		!strings.Contains(ToolAskQuestion(), "multi_select") {
-		t.Errorf("ask_question description omits its arguments: %q", ToolAskQuestion())
+	if !strings.Contains(ToolAskUserQuestion(), "question") || !strings.Contains(ToolAskUserQuestion(), "options") ||
+		!strings.Contains(ToolAskUserQuestion(), "multi_select") {
+		t.Errorf("ask_user_question description omits its arguments: %q", ToolAskUserQuestion())
 	}
 }
 
@@ -102,7 +102,7 @@ func TestSystemAppendsInstructions(t *testing.T) {
 	if !strings.HasSuffix(got, "Review Go, do not write it.") {
 		t.Errorf("instructions are not last: %q", got)
 	}
-	for _, want := range []string{"/src/x", "darwin", "read_file", "run_shell"} {
+	for _, want := range []string{"/src/x", "darwin", "read", "bash"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("appending dropped %q: %q", want, got)
 		}
@@ -176,8 +176,8 @@ func TestSystemSaysItsKnowledgeIsStale(t *testing.T) {
 func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
 	full := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, CanMessage: true, CanSearch: true,
 		Agents: []AgentBrief{{Name: "Reviewer"}},
-		Tools:  append(append([]string(nil), execTools...), "web_search", "ask_question", "run_agent", "send_message")})
-	for _, name := range []string{"ask_question", "run_agent", "send_message", "web_search"} {
+		Tools:  append(append([]string(nil), execTools...), "web_search", "ask_user_question", "subagent", "send_message")})
+	for _, name := range []string{"ask_user_question", "subagent", "send_message", "web_search"} {
 		if !strings.Contains(full, name) {
 			t.Errorf("prompt does not name %s: %q", name, full)
 		}
@@ -185,7 +185,7 @@ func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
 
 	child := System(SystemVars{Project: "/src/x", OS: "darwin", CanMessage: true,
 		Launcher: "sess_aaaaaaaaaaaaaaaa", Tools: append(append([]string(nil), execTools...), "send_message")})
-	for _, name := range []string{"ask_question", "run_agent", "web_search"} {
+	for _, name := range []string{"ask_user_question", "subagent", "web_search"} {
 		if strings.Contains(child, name) {
 			t.Errorf("a subagent's prompt names %s, which it was not sent: %q", name, child)
 		}
@@ -241,7 +241,7 @@ func TestSystemDoesNotParseAgentNames(t *testing.T) {
 // person's conversation, so only a session with no launcher is told about it.
 func TestSystemNamesDrawingsOnlyForTheMainAgent(t *testing.T) {
 	main := System(SystemVars{Project: "/src/x", OS: "darwin"})
-	for _, want := range []string{"prototype", "write_file", ".html", ".svg", "backticks"} {
+	for _, want := range []string{"prototype", "write", ".html", ".svg", "backticks"} {
 		if !strings.Contains(main, want) {
 			t.Errorf("prompt does not say %q about showing a file: %q", want, main)
 		}
@@ -259,7 +259,7 @@ func TestSystemNamesDrawingsOnlyForTheMainAgent(t *testing.T) {
 // prompt the harness sent before either was possible.
 func TestSystemWithoutAgentsIsUnchanged(t *testing.T) {
 	base := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true})
-	if strings.Contains(base, "run_agent") || strings.Contains(base, "send_message") {
+	if strings.Contains(base, "subagent") || strings.Contains(base, "send_message") {
 		t.Errorf("prompt names a tool that was not sent: %q", base)
 	}
 	got := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, Agents: nil, Launcher: ""})
@@ -269,27 +269,27 @@ func TestSystemWithoutAgentsIsUnchanged(t *testing.T) {
 }
 
 // execTools is the list an execute turn with nothing optional sends.
-var execTools = []string{"read_file", "find", "write_file", "replace_in_file", "write_todos", "run_shell"}
+var execTools = []string{"read", "grep", "write", "edit", "todo_write", "bash"}
 
 // Plan mode's body replaces execute's under the same head, and names
-// submit_plan only when it was sent.
+// exit_plan_mode only when it was sent.
 func TestSystemRendersThePlanBody(t *testing.T) {
 	exec := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools})
 	plan := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, Mode: "plan",
-		Tools: []string{"read_file", "find", "ask_question", "write_plan", "submit_plan", "run_shell"}})
-	head := "Use find, not a shell command, to locate files and lines."
+		Tools: []string{"read", "grep", "ask_user_question", "write_plan", "exit_plan_mode", "bash"}})
+	head := "Use the grep tool, not a shell command, to locate files and lines."
 	if !strings.Contains(exec, head) || !strings.Contains(plan, head) {
 		t.Fatal("the shared head is missing from a mode")
 	}
-	if !strings.Contains(plan, "plan mode") || !strings.Contains(plan, "submit_plan") || !strings.Contains(plan, "write_plan") {
+	if !strings.Contains(plan, "plan mode") || !strings.Contains(plan, "exit_plan_mode") || !strings.Contains(plan, "write_plan") {
 		t.Errorf("the plan body is missing: %q", plan)
 	}
-	if strings.Contains(plan, "replace_in_file edits part of a file") {
+	if strings.Contains(plan, "edit changes part of a file") {
 		t.Errorf("plan mode carries execute's body: %q", plan)
 	}
 	child := System(SystemVars{Project: "/src/x", OS: "darwin", Mode: "plan",
-		Launcher: "sess_aaaaaaaaaaaaaaaa", Tools: []string{"read_file", "find", "run_shell"}})
-	if strings.Contains(child, "submit_plan") || strings.Contains(child, "write_plan") {
+		Launcher: "sess_aaaaaaaaaaaaaaaa", Tools: []string{"read", "grep", "bash"}})
+	if strings.Contains(child, "exit_plan_mode") || strings.Contains(child, "write_plan") {
 		t.Errorf("a subagent in plan mode is told to submit a plan: %q", child)
 	}
 }

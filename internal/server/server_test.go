@@ -974,7 +974,7 @@ func TestPermissionRoute(t *testing.T) {
 	f := newFixture(t)
 	go f.perms.Ask(context.Background(), perms.Request{
 		ID: "perm_test000000", SessionID: "s1", Project: f.project,
-		Tool: "run_shell", Command: "go test ./...", Prefix: "go test",
+		Tool: "bash", Command: "go test ./...", Prefix: "go test",
 	})
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -1048,7 +1048,7 @@ func TestQuestionRoute(t *testing.T) {
 
 	args := `{"question":"Where should the cache live?","options":[{"label":"In memory"},{"label":"On disk"}]}`
 	f.nextFrames(
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"ask_question","arguments":`+strconv.Quote(args)+`}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"ask_user_question","arguments":`+strconv.Quote(args)+`}}]}}]}`,
 		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
 		`data: [DONE]`,
 	)
@@ -1130,7 +1130,7 @@ func TestQuestionRoute(t *testing.T) {
 	found := false
 	for _, raw := range entries {
 		e, _ := raw.(map[string]any)
-		if e["tool_name"] == "ask_question" && e["content"] == "On disk" {
+		if e["tool_name"] == "ask_user_question" && e["content"] == "On disk" {
 			found = true
 		}
 	}
@@ -1162,7 +1162,7 @@ func TestChangesRoute(t *testing.T) {
 	// The first request asks for the write; everything after it, the title
 	// request included, is a plain reply.
 	f.nextFrames(
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"write_file","arguments":`+strconv.Quote(args)+`}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"write","arguments":`+strconv.Quote(args)+`}}]}}]}`,
 		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
 		`data: [DONE]`,
 	)
@@ -1331,7 +1331,7 @@ func TestProjectFilesRoute(t *testing.T) {
 		files = append(files, v.(string))
 	}
 	// A name that starts with the word ranks first, then shorter paths, and
-	// the folders find skips are not walked.
+	// the folders grep skips are not walked.
 	if strings.Join(files, ",") != "hello.py,web/src/hello_test.py,notes/say-hello.md" {
 		t.Errorf("files = %v", files)
 	}
@@ -1698,7 +1698,7 @@ func TestAViewCarriesTheReplyStillStreaming(t *testing.T) {
 		`data: {"choices":[{"delta":{"reasoning_content":"Thinking"}}]}`,
 		`data: {"choices":[{"delta":{"content":"Hello "}}]}`,
 		`data: {"choices":[{"delta":{"content":"world"}}]}`,
-		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"pa"}}]}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":"{\"pa"}}]}}]}`,
 	)
 	f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "hi"})
 
@@ -1725,7 +1725,7 @@ func TestAViewCarriesTheReplyStillStreaming(t *testing.T) {
 		t.Fatalf("reply calls = %v, want one", reply["tool_calls"])
 	}
 	call, _ := calls[0].(map[string]any)
-	if call["id"] != "call_1" || call["name"] != "read_file" || call["arguments"] != `{"pa` {
+	if call["id"] != "call_1" || call["name"] != "read" || call["arguments"] != `{"pa` {
 		t.Errorf("call = %v", call)
 	}
 
@@ -1807,9 +1807,9 @@ func TestSSENeedsASession(t *testing.T) {
 func TestToolEventsCarryTheIndex(t *testing.T) {
 	f := newFixture(t)
 	f.hub.Publish("s3", agent.Event{Type: "tool_call", Fields: map[string]any{
-		"index": 0, "id": "call_0", "name": "run_shell", "arguments": "{"}})
+		"index": 0, "id": "call_0", "name": "bash", "arguments": "{"}})
 	f.hub.Publish("s3", agent.Event{Type: "tool_output", Fields: map[string]any{
-		"index": 0, "id": "call_0", "name": "run_shell", "output": "x", "exit_code": 0, "truncated": false}})
+		"index": 0, "id": "call_0", "name": "bash", "output": "x", "exit_code": 0, "truncated": false}})
 	got := f.readStream(t, "/api/events?session=s3&from=0", 2)
 	for _, e := range got {
 		if _, ok := e["index"]; !ok {

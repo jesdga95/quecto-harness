@@ -17,7 +17,7 @@ export interface Artifact {
   /** Set on a file in the project. Its source is empty until it has been
       read. */
   path?: string;
-  /** The source is a write_file call's own text, because the call is still
+  /** The source is a write call's own text, because the call is still
       arriving or the file has not been read since. It may not be on disk yet. */
   fromWrite?: boolean;
 }
@@ -26,7 +26,7 @@ export function fileArtifactId(path: string): string {
   return `file:${path}`;
 }
 
-/** A write_file call to a file the panel can draw, as it stands: the text so
+/** A write call to a file the panel can draw, as it stands: the text so
     far, and whether all of it has arrived. */
 export interface Write {
   content: string;
@@ -39,7 +39,7 @@ export interface Write {
 export function writtenPreviews(items: TranscriptItem[], root: string): Map<string, Write> {
   const out = new Map<string, Write>();
   for (const item of items) {
-    if (item.kind !== "tool" || item.name !== "write_file") continue;
+    if (item.kind !== "tool" || item.name !== "write") continue;
     if (typeof item.args.path !== "string" || typeof item.args.content !== "string") continue;
     // A write that failed carries the error as its output.
     if (!item.running && !/^(wrote|replaced) /.test(item.output)) continue;

@@ -36,7 +36,7 @@ type Status struct {
 }
 
 // DefaultPath is what a service-managed process gets, since it inherits
-// almost no environment and run_shell needs a usable PATH.
+// almost no environment and bash needs a usable PATH.
 const DefaultPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 // NewSpec resolves the running binary and the paths the unit refers to.

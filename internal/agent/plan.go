@@ -177,7 +177,7 @@ func (e *Engine) writePlan(s *Session, raw json.RawMessage) (tools.Result, error
 	if left := missing(draft); len(left) > 0 {
 		out += ". still empty: " + strings.Join(left, ", ")
 	} else {
-		out += ". every required section is written: call submit_plan"
+		out += ". every required section is written: call exit_plan_mode"
 	}
 	return tools.Result{Output: out}, nil
 }
@@ -187,11 +187,11 @@ func (e *Engine) writePlan(s *Session, raw json.RawMessage) (tools.Result, error
 func seedTodos(p store.Plan) []store.Todo {
 	out := make([]store.Todo, 0, len(p.Steps))
 	for i, step := range p.Steps {
-		status := "todo"
+		status := todoPending
 		if i == 0 {
-			status = "doing"
+			status = todoInProgress
 		}
-		out = append(out, store.Todo{Text: step, Status: status})
+		out = append(out, store.Todo{Content: step, Status: status})
 	}
 	return out
 }
@@ -214,10 +214,10 @@ func (e *Engine) submitPlan(ctx context.Context, s *Session, call llm.ToolCall) 
 	}
 	s.mu.Unlock()
 	if !drafted {
-		return tools.Result{}, errors.New("submit_plan: there is no draft: write the plan with write_plan first")
+		return tools.Result{}, errors.New("exit_plan_mode: there is no draft: write the plan with write_plan first")
 	}
 	if left := missing(plan); len(left) > 0 {
-		return tools.Result{}, fmt.Errorf("submit_plan: the plan has no %s: write them with write_plan", strings.Join(left, ", "))
+		return tools.Result{}, fmt.Errorf("exit_plan_mode: the plan has no %s: write them with write_plan", strings.Join(left, ", "))
 	}
 	q := Question{
 		ID: newQuestionID(), SessionID: s.ID, CallID: call.ID, Text: plan.Title,
@@ -238,7 +238,7 @@ func (e *Engine) submitPlan(ctx context.Context, s *Session, call llm.ToolCall) 
 	}
 	text := strings.TrimSpace(ans.Text)
 	if text == "" {
-		text = "the user wants changes and did not say which: ask with ask_question"
+		text = "the user wants changes and did not say which: ask with ask_user_question"
 	}
 	return tools.Result{Output: "not approved: " + text, Meta: map[string]any{"approved": false}}, nil
 }

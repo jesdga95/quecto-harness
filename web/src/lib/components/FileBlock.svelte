@@ -3,7 +3,7 @@
 
   let { path, output }: { path: string; output: string } = $props();
 
-  // read_file numbers each line and may end with a line saying what it left
+  // read numbers each line and may end with a line saying what it left
   // off. The numbers go in a gutter of their own so the code beside them is
   // one block the highlighter can read.
   const rows = $derived.by(() => {

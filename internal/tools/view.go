@@ -168,7 +168,7 @@ func ListDir(root, p string) (rel string, entries []Entry, err error) {
 // FindFiles lists files under root whose path holds every word of q, ignoring
 // case, for a reader picking a file by name. A match in the file name ranks
 // above one in its folders, and a shorter path above a longer one. The walk
-// passes over the folders find skips and stops after scanLimit files.
+// passes over the folders grep skips and stops after scanLimit files.
 func FindFiles(root, q string, limit int) ([]string, error) {
 	r, err := NewRunner(root, config.Config{})
 	if err != nil {

@@ -1,5 +1,5 @@
-// Package tools executes read_file, find, web_search, write_file,
-// replace_in_file and run_shell. It knows nothing about who approved a call;
+// Package tools executes read, grep, web_search, write,
+// edit and bash. It knows nothing about who approved a call;
 // the path guard is its only policy, and web_search has no path to guard,
 // since it leaves the project rather than reading it.
 package tools
@@ -41,7 +41,7 @@ type Runner struct {
 }
 
 // Result is what the model is told. Output is already truncated and, for
-// run_shell, already carries the exit code line.
+// bash, already carries the exit code line.
 type Result struct {
 	Output    string
 	ExitCode  *int

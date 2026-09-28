@@ -17,10 +17,10 @@ import (
 func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args RunShellArgs
 	if err := decodeArgs(raw, &args); err != nil {
-		return Result{}, fmt.Errorf("run_shell: %s", err)
+		return Result{}, fmt.Errorf("bash: %s", err)
 	}
 	if strings.TrimSpace(args.Command) == "" {
-		return Result{}, errors.New("run_shell needs a command")
+		return Result{}, errors.New("bash needs a command")
 	}
 
 	timeout := r.shellTimeout(args)

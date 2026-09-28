@@ -254,13 +254,13 @@ func TestRewindRestoresContextAndPlan(t *testing.T) {
 	todos := func(id, plan string) store.Entry {
 		return store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
 			ToolCalls: []llm.ToolCall{{ID: id, Type: "function",
-				Function: llm.FunctionCall{Name: "write_todos", Arguments: plan}}}}
+				Function: llm.FunctionCall{Name: "todo_write", Arguments: plan}}}}
 	}
 
 	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "one", InContext: true, Visible: true})
-	s.appendEntry(todos("call_1", `{"todos":[{"text":"Read the routes","status":"doing"}]}`))
+	s.appendEntry(todos("call_1", `{"todos":[{"content":"Read the routes","status":"in_progress"}]}`))
 	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: "call_1",
-		ToolName: "write_todos", Content: "0 of 1 done", InContext: true, Visible: true})
+		ToolName: "todo_write", Content: "0 of 1 done", InContext: true, Visible: true})
 	second := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "two", InContext: true, Visible: true})
 
 	// The turn compacted, which takes everything above out of context.
@@ -270,10 +270,10 @@ func TestRewindRestoresContextAndPlan(t *testing.T) {
 	s.Compactions = 1
 	s.appendEntry(store.Entry{Kind: "compaction", Role: "user", Content: "the story so far",
 		InContext: true, Visible: true})
-	s.appendEntry(todos("call_2", `{"todos":[{"text":"Add the handler","status":"todo"}]}`))
+	s.appendEntry(todos("call_2", `{"todos":[{"content":"Add the handler","status":"pending"}]}`))
 	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: "call_2",
-		ToolName: "write_todos", Content: "0 of 1 done", InContext: true, Visible: true})
-	s.Todos = []store.Todo{{Text: "Add the handler", Status: "todo"}}
+		ToolName: "todo_write", Content: "0 of 1 done", InContext: true, Visible: true})
+	s.Todos = []store.Todo{{Content: "Add the handler", Status: "pending"}}
 	s.LastUsage = &llm.Usage{PromptTokens: 900, CompletionTokens: 100}
 	s.LastToolTokens = 15
 	s.lastUsageEntry = len(s.Entries) - 1
@@ -291,7 +291,7 @@ func TestRewindRestoresContextAndPlan(t *testing.T) {
 	if s.Compactions != 0 {
 		t.Errorf("compactions = %d, want none left", s.Compactions)
 	}
-	if len(s.Todos) != 1 || s.Todos[0].Text != "Read the routes" {
+	if len(s.Todos) != 1 || s.Todos[0].Content != "Read the routes" {
 		t.Errorf("todos = %+v, want the plan the surviving entries left", s.Todos)
 	}
 	if s.LastUsage != nil || s.LastToolTokens != 0 || s.lastUsageEntry != -1 {
@@ -313,10 +313,10 @@ func TestRewindClearsAPlanNothingSurvivingSet(t *testing.T) {
 	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "one", InContext: true, Visible: true})
 	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
 		ToolCalls: []llm.ToolCall{{ID: "call_1", Type: "function",
-			Function: llm.FunctionCall{Name: "write_todos", Arguments: `{"todos":[{"text":"Read","status":"todo"}]}`}}}})
+			Function: llm.FunctionCall{Name: "todo_write", Arguments: `{"todos":[{"content":"Read","status":"pending"}]}`}}}})
 	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: "call_1",
-		ToolName: "write_todos", Content: "0 of 1 done", InContext: true, Visible: true})
-	s.Todos = []store.Todo{{Text: "Read", Status: "todo"}}
+		ToolName: "todo_write", Content: "0 of 1 done", InContext: true, Visible: true})
+	s.Todos = []store.Todo{{Content: "Read", Status: "pending"}}
 
 	s.rewindTo(0)
 

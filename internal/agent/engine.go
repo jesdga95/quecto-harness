@@ -113,7 +113,7 @@ func noAgent(cfg config.Config) error {
 // today is the calendar day the prompt runs on, in the host's zone. It is
 // read per request but changes at most once a day, so the system message it
 // opens stays token for token across the day and the prefill cache of a
-// running conversation survives it. The time of day is left to run_shell,
+// running conversation survives it. The time of day is left to bash,
 // since anything finer would put a new token at the front of every request
 // and re-prefill the whole conversation each turn.
 func (e *Engine) today() string {
@@ -527,8 +527,19 @@ func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 }
 
 // startTurn runs one turn in the background. The session is already in
-// preflight with its cancel function set.
+// preflight with its cancel function set. A list whose every step is completed
+// is cleared first; one with work left carries into the turn.
 func (e *Engine) startTurn(ctx context.Context, s *Session, cancel context.CancelFunc) {
+	s.mu.Lock()
+	done, _ := tallyTodos(s.Todos)
+	finished := len(s.Todos) > 0 && done == len(s.Todos)
+	if finished {
+		s.Todos = nil
+	}
+	s.mu.Unlock()
+	if finished {
+		e.publish(s.ID, ev("todos", map[string]any{"todos": []store.Todo{}}))
+	}
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
@@ -1513,7 +1524,7 @@ func (e *Engine) publishDecided(s *Session, r *store.PermissionRecord) {
 // stuck look alike until the limit is on screen.
 func (e *Engine) publishStarted(s *Session, runner *tools.Runner, call llm.ToolCall, index int) {
 	fields := map[string]any{"index": index, "id": call.ID, "name": call.Function.Name}
-	if call.Function.Name == "run_shell" {
+	if call.Function.Name == "bash" {
 		timeout := runner.ShellTimeout(json.RawMessage(call.Function.Arguments))
 		fields["timeout_s"] = int(timeout / time.Second)
 	}
@@ -1537,32 +1548,32 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 		var res tools.Result
 		var err error
 		switch call.Function.Name {
-		case "read_file":
+		case "read":
 			res, err = runner.ReadFile(ctx, args)
-		case "find":
+		case "grep":
 			res, err = runner.Find(ctx, args)
 		case "web_search":
 			res, err = runner.WebSearch(ctx, args)
-		case "write_file":
+		case "write":
 			res, err = runner.WriteFile(ctx, args)
-		case "replace_in_file":
+		case "edit":
 			res, err = runner.ReplaceInFile(ctx, args)
-		case "run_shell":
+		case "bash":
 			res, err = runner.RunShell(ctx, args)
-		case "write_todos":
+		case "todo_write":
 			res, err = e.writeTodos(s, args)
-		case "ask_question":
+		case "ask_user_question":
 			res, err = e.askQuestion(ctx, s, call)
-		case "run_agent":
+		case "subagent":
 			res, err = e.runAgent(s, call)
 		case "send_message":
 			res, err = e.sendMessage(s, call)
 		case "write_plan":
 			res, err = e.writePlan(s, args)
-		case "submit_plan":
+		case "exit_plan_mode":
 			res, err = e.submitPlan(ctx, s, call)
 		default:
-			err = fmt.Errorf("no tool named %s: use read_file, find, web_search, write_file, replace_in_file, run_shell, write_todos, ask_question, write_plan, submit_plan, run_agent or send_message", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read, grep, web_search, write, edit, bash, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
 		}
 		if err != nil {
 			content = err.Error()

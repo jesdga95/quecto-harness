@@ -87,7 +87,7 @@ func readRules(project string) (content, name, note string) {
 }
 
 // briefFor reads what a session may do this turn. A subagent hands work to
-// nobody and asks nobody, so it is offered neither run_agent nor ask_question;
+// nobody and asks nobody, so it is offered neither subagent nor ask_user_question;
 // what it has instead is the launcher waiting on it. The rules file is read
 // outside the lock, like the image bytes a message carries.
 func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
@@ -212,11 +212,11 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 		Task  string `json:"task"`
 	}
 	if err := decodeArgs(call.Function.Arguments, &args); err != nil {
-		return tools.Result{}, fmt.Errorf("run_agent: %s", err)
+		return tools.Result{}, fmt.Errorf("subagent: %s", err)
 	}
 	task := strings.TrimSpace(args.Task)
 	if task == "" {
-		return tools.Result{}, errors.New("run_agent: task is empty, say what the agent is to do")
+		return tools.Result{}, errors.New("subagent: task is empty, say what the agent is to do")
 	}
 
 	cfg := e.cfg.Config()
@@ -230,13 +230,13 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 		return tools.Result{}, err
 	}
 	if err := usable(target); err != nil {
-		return tools.Result{}, fmt.Errorf("run_agent: %s is not ready: %s", target.Name, err)
+		return tools.Result{}, fmt.Errorf("subagent: %s is not ready: %s", target.Name, err)
 	}
 	// The limit belongs to the agent being asked, not to the one asking: what
 	// it counts is requests to one model server. This session is one of them,
 	// so an agent that runs one at a time cannot take work from itself.
 	if live := e.busy(target.ID); target.Concurrency > 0 && live >= target.Concurrency {
-		return tools.Result{}, fmt.Errorf("run_agent: %s runs %d at a time and that many are working now: wait for one to finish, or pick another agent",
+		return tools.Result{}, fmt.Errorf("subagent: %s runs %d at a time and that many are working now: wait for one to finish, or pick another agent",
 			target.Name, target.Concurrency)
 	}
 
@@ -253,7 +253,7 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 	e.save(child)
 
 	if _, err := e.deliverFrom(child, sender{Name: me.Name, Session: s.ID}, task, nil); err != nil {
-		return tools.Result{}, fmt.Errorf("run_agent: %s", err)
+		return tools.Result{}, fmt.Errorf("subagent: %s", err)
 	}
 	e.publish(s.ID, ev("child", map[string]any{
 		"call_id": call.ID, "session": child.ID, "agent": target.Name,
@@ -455,9 +455,9 @@ func findAgent(cfg config.Config, me config.Agent, name string) (config.Agent, e
 		names = append(names, a.Name)
 	}
 	if len(names) == 0 {
-		return config.Agent{}, errors.New("run_agent: there are no agents to run this")
+		return config.Agent{}, errors.New("subagent: there are no agents to run this")
 	}
-	return config.Agent{}, fmt.Errorf("run_agent: no agent named %q. There is %s",
+	return config.Agent{}, fmt.Errorf("subagent: no agent named %q. There is %s",
 		want, strings.Join(names, ", "))
 }
 

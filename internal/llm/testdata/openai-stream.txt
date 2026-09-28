@@ -1,6 +1,6 @@
 data: {"choices":[{"delta":{"content":"","role":"assistant"},"finish_reason":null,"index":0,"logprobs":null}],"created":1788793739,"id":"chatcmpl-d52f68c16390bbb0","model":"Delta3.8-27B","object":"chat.completion.chunk","usage":null}
 
-data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{\"command\":\"ls -la\"}","name":"run_shell"},"id":"call_d4259ff885da5b51","index":0,"type":"function"}]},"finish_reason":null,"index":0,"logprobs":null}],"created":1788793739,"id":"chatcmpl-d52f68c16390bbb0","model":"Delta3.8-27B","object":"chat.completion.chunk","usage":null}
+data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"{\"command\":\"ls -la\"}","name":"bash"},"id":"call_d4259ff885da5b51","index":0,"type":"function"}]},"finish_reason":null,"index":0,"logprobs":null}],"created":1788793739,"id":"chatcmpl-d52f68c16390bbb0","model":"Delta3.8-27B","object":"chat.completion.chunk","usage":null}
 
 data: {"choices":[{"delta":{},"finish_reason":"tool_calls","index":0,"logprobs":null}],"created":1788793739,"id":"chatcmpl-d52f68c16390bbb0","model":"Delta3.8-27B","object":"chat.completion.chunk","usage":null}
 

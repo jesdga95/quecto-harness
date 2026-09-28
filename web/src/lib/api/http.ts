@@ -461,12 +461,12 @@ function parseArgs(raw: string | undefined): Record<string, unknown> | null {
 }
 
 /** A status outside the three the schema names reads as a step not started. */
-function toTodos(wire: { text?: string; status?: string }[] | null | undefined): Todo[] {
+function toTodos(wire: { content?: string; status?: string }[] | null | undefined): Todo[] {
   return (wire ?? [])
-    .filter((t) => (t.text ?? "") !== "")
+    .filter((t) => (t.content ?? "") !== "")
     .map((t) => ({
-      text: t.text ?? "",
-      status: t.status === "doing" || t.status === "done" ? t.status : "todo",
+      content: t.content ?? "",
+      status: t.status === "in_progress" || t.status === "completed" ? t.status : "pending",
     }));
 }
 
@@ -503,7 +503,7 @@ function outcomeOf(p: WirePermission): string {
   return p.reason ? `Denied: ${p.reason}` : "Denied";
 }
 
-// The subagent a run_agent call started, kept on the entry so a page loaded
+// The subagent a subagent call started, kept on the entry so a page loaded
 // later still links the row to the transcript it began. Its state arrives on
 // the stream, and idle is what a reload starts from.
 function toChildRef(
@@ -851,7 +851,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
       .reverse()
       .find(
         (i) =>
-          i.kind === "tool" && (i.name === "ask_question" || i.name === "submit_plan") && i.running,
+          i.kind === "tool" && (i.name === "ask_user_question" || i.name === "exit_plan_mode") && i.running,
       );
     if (row?.kind === "tool") row.askId = asked.id;
   }
@@ -974,7 +974,7 @@ function stringField(raw: string, key: string): { text: string; done: boolean } 
   return { text: out, done: false };
 }
 
-/** The path and the text so far of a write_file call still arriving, or null
+/** The path and the text so far of a write call still arriving, or null
     before the path is whole. */
 function partialWrite(raw: string): Record<string, unknown> | null {
   const path = stringField(raw, "path");
@@ -1026,7 +1026,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       const args = parseArgs(open.args);
       if (args) {
         out.push({ type: "tool_args", id: open.id, name: open.name, args });
-      } else if (open.name === "write_file") {
+      } else if (open.name === "write") {
         // A file being written is drawn as it arrives, so its path and the
         // text so far are read out of the unfinished arguments.
         const partial = partialWrite(open.args);

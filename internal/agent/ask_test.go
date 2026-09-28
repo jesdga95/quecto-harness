@@ -74,7 +74,7 @@ func TestAskQuestionBlocksUntilAnswered(t *testing.T) {
 	waitIdle(t, s)
 
 	doc, _, _, _ := s.Snapshot()
-	result := toolResult(t, doc, "ask_question")
+	result := toolResult(t, doc, "ask_user_question")
 	if result.Content != "On disk" {
 		t.Errorf("tool result = %q, want the label that was chosen", result.Content)
 	}
@@ -103,7 +103,7 @@ func TestAskQuestionTakesTypedWords(t *testing.T) {
 	waitIdle(t, s)
 
 	doc, _, _, _ := s.Snapshot()
-	if got := toolResult(t, doc, "ask_question").Content; got != "neither, drop the cache" {
+	if got := toolResult(t, doc, "ask_user_question").Content; got != "neither, drop the cache" {
 		t.Errorf("tool result = %q", got)
 	}
 }
@@ -125,7 +125,7 @@ func TestAskQuestionJoinsSeveralAnswers(t *testing.T) {
 	waitIdle(t, s)
 
 	doc, _, _, _ := s.Snapshot()
-	if got := toolResult(t, doc, "ask_question").Content; got != "gofmt, go test -race" {
+	if got := toolResult(t, doc, "ask_user_question").Content; got != "gofmt, go test -race" {
 		t.Errorf("tool result = %q", got)
 	}
 }
@@ -140,7 +140,7 @@ func TestAskQuestionRefusesOneOption(t *testing.T) {
 	waitIdle(t, s)
 
 	doc, _, _, _ := s.Snapshot()
-	if got := toolResult(t, doc, "ask_question").Content; !strings.Contains(got, "two to four options") {
+	if got := toolResult(t, doc, "ask_user_question").Content; !strings.Contains(got, "two to four options") {
 		t.Errorf("tool result = %q", got)
 	}
 	if len(h.rec.ofType("question")) != 0 {
@@ -163,7 +163,7 @@ func TestStopUnderAQuestion(t *testing.T) {
 	waitIdle(t, s)
 
 	doc, _, _, _ := s.Snapshot()
-	if got := toolResult(t, doc, "ask_question").Content; got != "no answer: the session was stopped" {
+	if got := toolResult(t, doc, "ask_user_question").Content; got != "no answer: the session was stopped" {
 		t.Errorf("tool result = %q", got)
 	}
 	if h.engine.PendingQuestion(s.ID) != nil {

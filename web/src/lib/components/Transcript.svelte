@@ -373,11 +373,11 @@
     <div class="my-2">
       <PermissionCard {item} />
     </div>
-  {:else if item.kind === "tool" && item.name === "ask_question" && item.running && item.askId}
+  {:else if item.kind === "tool" && item.name === "ask_user_question" && item.running && item.askId}
     <div class="my-2">
       <QuestionCard {item} />
     </div>
-  {:else if item.kind === "tool" && item.name === "submit_plan" && item.running && item.askId}
+  {:else if item.kind === "tool" && item.name === "exit_plan_mode" && item.running && item.askId}
     <div class="my-2">
       <PlanCard {item} />
     </div>

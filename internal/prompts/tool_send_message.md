@@ -1,4 +1,4 @@
-Send one message to the agent at the other end of a run_agent; it joins that agent's current turn, or starts one if idle.
+Send one message to the agent at the other end of a subagent call; it joins that agent's current turn, or starts one if idle.
 
 to: a session handle, or parent for the agent that launched you.
 text: the message.

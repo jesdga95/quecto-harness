@@ -819,7 +819,7 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if kind == perms.DecideAlways {
-		if req.Tool != "run_shell" {
+		if req.Tool != "bash" {
 			writeError(w, http.StatusBadRequest,
 				"Allow always applies to shell commands only: choose allow once")
 			return

@@ -203,9 +203,9 @@ const MOCK_PY = ['def main():', '    print("Hello, World!")', "", "", 'if __name
 );
 
 const MOCK_TODOS: Todo[] = [
-  { text: "Read the hub and the routes", status: "done" },
-  { text: "Keep a set of subscribers per session", status: "doing" },
-  { text: "Drop a slow reader instead of blocking", status: "todo" },
+  { content: "Read the hub and the routes", status: "completed" },
+  { content: "Keep a set of subscribers per session", status: "in_progress" },
+  { content: "Drop a slow reader instead of blocking", status: "pending" },
 ];
 
 const MOCK_SUMMARY = [
@@ -282,7 +282,7 @@ const SCRIPT: ScriptedTurn[] = [
       "List the top level first, then decide what to read. ls is cheap and " +
       "tells me whether this is a Go module or something else.",
     preface: "Let me look at the project root first.\n\n",
-    tool: "run_shell",
+    tool: "bash",
     args: { command: "ls -la", timeout_s: 120 },
     command: "ls -la",
     output: [
@@ -320,7 +320,7 @@ const SCRIPT: ScriptedTurn[] = [
       "Before changing the loop I need to know it builds. go build is the " +
       "shortest check and its errors name the file and line.",
     preface: "Checking that it builds before I change anything.\n\n",
-    tool: "run_shell",
+    tool: "bash",
     args: { command: "go build ./...", timeout_s: 120 },
     command: "go build ./...",
     output: LONG_OUTPUT,
@@ -350,7 +350,7 @@ const SCRIPT: ScriptedTurn[] = [
       ],
       multi: false,
     },
-    tool: "run_shell",
+    tool: "bash",
     args: { command: "go test ./internal/llm", timeout_s: 120 },
     command: "go test ./internal/llm",
     output: ["ok  \tquecto-harness/internal/llm\t0.412s"].join("\n"),
@@ -367,7 +367,7 @@ const SCRIPT: ScriptedTurn[] = [
       "The user wants to see the hub rather than read about it. A drawing for " +
       "the fan out, then a page they can click.",
     preface: "Checking the hub file is where I think it is.\n\n",
-    tool: "run_shell",
+    tool: "bash",
     args: { command: "ls internal/server", timeout_s: 120 },
     command: "ls internal/server",
     output: ["events.go", "hub.go", "routes.go", "server.go"].join("\n"),
@@ -985,11 +985,11 @@ export class MockApi implements HarnessApi {
         await this.sleep(900, turn);
       }
       this.emit(session, { type: "status", status: "thinking" });
-      // The plan the real harness keeps with write_todos, one step further on
+      // The plan the real harness keeps with todo_write, one step further on
       // each turn so the panel has something to show.
       t.todos = MOCK_TODOS.map((todo, i) => ({
-        text: todo.text,
-        status: i < index ? "done" : i === index ? "doing" : "todo",
+        content: todo.content,
+        status: i < index ? "completed" : i === index ? "in_progress" : "pending",
       }));
       this.emit(session, { type: "todos", todos: t.todos });
       await this.sleep(420, turn);
@@ -1011,7 +1011,7 @@ export class MockApi implements HarnessApi {
         this.send(session, t, {
           type: "tool_call",
           id: askCall,
-          name: "ask_question",
+          name: "ask_user_question",
           args: {
             question: script.question.question,
             options: script.question.options,
@@ -1070,7 +1070,7 @@ export class MockApi implements HarnessApi {
           type: "tool_start",
           id: callId,
           name: script.tool,
-          timeout_s: script.tool === "run_shell" ? 600 : null,
+          timeout_s: script.tool === "bash" ? 600 : null,
         });
         await this.sleep(900, turn);
         this.send(session, t, {
@@ -1094,9 +1094,9 @@ export class MockApi implements HarnessApi {
         for (const write of script.writes ?? []) {
           const id = nextId("t");
           const fresh = !this.files.has(write.path);
-          this.send(session, t, { type: "tool_call", id, name: "write_file", args: write });
+          this.send(session, t, { type: "tool_call", id, name: "write", args: write });
           await this.sleep(200, turn);
-          this.send(session, t, { type: "tool_start", id, name: "write_file", timeout_s: null });
+          this.send(session, t, { type: "tool_start", id, name: "write", timeout_s: null });
           this.files.set(write.path, write.content);
           const lines = write.content.replace(/\n$/, "").split("\n").length;
           this.send(session, t, {
@@ -1452,7 +1452,7 @@ function delegationEvents(child: string): HarnessEvent[] {
     {
       type: "tool_call",
       id: call,
-      name: "run_agent",
+      name: "subagent",
       args: {
         agent: "Studio box",
         task: "audit internal/server/hub.go for races and say what you found",
@@ -1513,7 +1513,7 @@ function auditorEvents(): HarnessEvent[] {
   const done = nextId("t");
   const call = nextId("t");
   return [
-    { type: "tool_call", id: done, name: "find", args: { text: "func (s *Server)", name: "*.go" } },
+    { type: "tool_call", id: done, name: "grep", args: { text: "func (s *Server)", name: "*.go" } },
     {
       type: "tool_output",
       id: done,
@@ -1521,7 +1521,7 @@ function auditorEvents(): HarnessEvent[] {
       exit_code: null,
       truncated: false,
     },
-    { type: "tool_call", id: call, name: "read_file", args: { path: "internal/server/routes.go" } },
+    { type: "tool_call", id: call, name: "read", args: { path: "internal/server/routes.go" } },
   ];
 }
 
@@ -1529,7 +1529,7 @@ function auditorEvents(): HarnessEvent[] {
 function workerEvents(): HarnessEvent[] {
   const call = nextId("t");
   return [
-    { type: "tool_call", id: call, name: "run_shell", args: { command: "go test -race ./internal/server/" } },
+    { type: "tool_call", id: call, name: "bash", args: { command: "go test -race ./internal/server/" } },
     {
       type: "tool_output",
       id: call,
@@ -1626,7 +1626,7 @@ function seededEvents(): HarnessEvent[] {
     {
       type: "tool_call",
       id: call,
-      name: "read_file",
+      name: "read",
       args: { path: "internal/server/sse.go", limit: 60 },
     },
     {
@@ -1667,7 +1667,7 @@ function seededEvents(): HarnessEvent[] {
     {
       type: "tool_call",
       id: `${call}_edit`,
-      name: "replace_in_file",
+      name: "edit",
       args: {
         path: "internal/server/hub.go",
         old_string: "\tch := h.subs[session]\n\th.mu.RUnlock()\n\tch <- ev",
@@ -1684,7 +1684,7 @@ function seededEvents(): HarnessEvent[] {
     {
       type: "tool_call",
       id: `${call}_ask`,
-      name: "ask_question",
+      name: "ask_user_question",
       args: {
         question: "Which tab should keep the channel when the last one closes?",
         options: [

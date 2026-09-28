@@ -1128,12 +1128,12 @@ function onEvent(event: HarnessEvent): void {
     const card = app.items.find((i) => i.id === event.id);
     const touched =
       card?.kind === "tool" &&
-      (card.name === "write_file" ||
-        card.name === "replace_in_file" ||
-        (card.name === "run_shell" && app.changes.files.length > 0));
+      (card.name === "write" ||
+        card.name === "edit" ||
+        (card.name === "bash" && app.changes.files.length > 0));
     if (touched) void loadChanges();
     // A file the panel holds is read again once a write to it lands.
-    if (card?.kind === "tool" && (card.name === "write_file" || card.name === "replace_in_file")) {
+    if (card?.kind === "tool" && (card.name === "write" || card.name === "edit")) {
       const path = typeof card.args.path === "string" ? inProject(card.args.path, app.projectPath) : "";
       if (path && (app.files[path] || written.has(path))) void loadFile(path);
       announceArtifacts();
@@ -1207,7 +1207,7 @@ export function pendingQuestion(): TranscriptItem | undefined {
   return app.items.find(
     (i) =>
       i.kind === "tool" &&
-      (i.name === "ask_question" || i.name === "submit_plan") &&
+      (i.name === "ask_user_question" || i.name === "exit_plan_mode") &&
       i.running &&
       i.askId !== undefined,
   );
