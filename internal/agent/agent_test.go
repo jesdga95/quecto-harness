@@ -1141,22 +1141,49 @@ func TestCompactionCarriesThePlanPastAnAgentMessage(t *testing.T) {
 	}
 }
 
-func TestCompactionLeavesTheApprovedPlanToTheSystemPrompt(t *testing.T) {
-	h := newHarness(t, "stream_todos.txt", "stream_plain.txt", "stream_summary.txt")
-	s := h.session(t)
+// approvePlan runs a plan turn to its approval and the execute reply after it.
+func approvePlan(t *testing.T, h *harness, s *Session) {
+	t.Helper()
+	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
+		t.Fatal(err)
+	}
 	h.engine.Send(s.ID, earlierWork, nil)
+	q := waitForQuestion(t, h, s.ID)
+	if err := h.engine.Answer(q.ID, Answer{Options: []int{0}}); err != nil {
+		t.Fatal(err)
+	}
 	waitIdle(t, s)
-	s.mu.Lock()
-	s.Mode = config.WorkExecute
-	s.Plan = &store.Plan{Title: "Routes", Steps: []string{"Read the routes", "Add the handler", "Wire the panel"}}
-	s.mu.Unlock()
+}
+
+func TestCompactionCarriesTheApprovedPlansProgress(t *testing.T) {
+	h := newHarness(t, "stream_write_plan.txt", "stream_submit_plan.txt", "stream_plain.txt", "stream_summary.txt")
+	s := h.session(t)
+	approvePlan(t, h, s)
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	want := "Your todo list when this summary was written:\n0 of 2 done, 1 in hand\n- [>] Add the cache\n- [ ] Test it\n"
+	if sent := compactionMessage(t, s); !strings.Contains(sent, want) {
+		t.Errorf("the approved plan's progress was not carried:\n%s", sent)
+	}
+}
+
+func TestCompactionLeavesAnApprovedPlanAfterANewRequest(t *testing.T) {
+	h := newHarness(t, "stream_write_plan.txt", "stream_submit_plan.txt", "stream_plain.txt",
+		"stream_plain.txt", "stream_summary.txt")
+	s := h.session(t)
+	approvePlan(t, h, s)
+	h.engine.Send(s.ID, "now something else", nil)
+	waitIdle(t, s)
 	if err := h.engine.Compact(s.ID); err != nil {
 		t.Fatal(err)
 	}
 	waitIdle(t, s)
 
 	if sent := compactionMessage(t, s); strings.Contains(sent, "todo list") {
-		t.Errorf("the approved plan was sent again with the compaction:\n%s", sent)
+		t.Errorf("an approved plan from an earlier request was carried:\n%s", sent)
 	}
 }
 

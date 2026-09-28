@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"quecto-harness/internal/config"
 	"quecto-harness/internal/store"
 	"quecto-harness/internal/tools"
 )
@@ -95,18 +94,19 @@ func tallyTodos(todos []store.Todo) (done, doing int) {
 }
 
 // carriesTodos reports whether a compaction sends the plan: only when a
-// write_todos replaced it since the request began, which a steer does not
-// restart, and not in execute mode, where the system prompt holds the plan.
+// write_todos, or the approval that seeded it, set it since the request began.
+// A steer does not restart the request. The approved plan in the system prompt
+// has no marks, so its progress is carried like any other plan.
 func (s *Session) carriesTodos() bool {
-	if s.Mode == config.WorkExecute && s.Plan != nil {
-		return false
-	}
 	if done, _ := tallyTodos(s.Todos); done == len(s.Todos) {
 		return false
 	}
 	current := renderTodos(s.Todos)
 	for i := len(s.Entries) - 1; i >= 0; i-- {
 		e := s.Entries[i]
+		if e.Meta["kickoff"] == true {
+			return s.Plan != nil && renderTodos(seedTodos(*s.Plan)) == current
+		}
 		if e.Kind == "user" && e.From == "" && e.Meta["steer"] != true {
 			return false
 		}
