@@ -1,4 +1,4 @@
-Delegate a task to another agent.
+Delegate a task to an agent.
 It starts at once and works while you carry on, so this returns its handle, not its result.
 
 agent: the agent to run.

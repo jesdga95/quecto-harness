@@ -288,24 +288,22 @@
     </div>
     <div class="grid grid-cols-4 gap-2">
       {#each app.agents as other (other.id)}
-        {#if other.id !== agent.id}
-          <button
-            type="button"
-            class="cursor-pointer truncate rounded-full border px-3 py-1.5 text-left text-[12px] transition-colors"
-            class:border-brand={agent.calls.includes(other.id)}
-            class:bg-brand={agent.calls.includes(other.id)}
-            class:text-white={agent.calls.includes(other.id)}
-            class:opacity-45={!other.enabled}
-            class:border-line={!agent.calls.includes(other.id)}
-            class:bg-surface={!agent.calls.includes(other.id)}
-            class:text-ink-2={!agent.calls.includes(other.id)}
-            title={other.description || other.name}
-            disabled={!agent.enabled || !other.enabled}
-            onclick={() => toggleCall(other.id)}
-          >
-            {other.name}
-          </button>
-        {/if}
+        <button
+          type="button"
+          class="cursor-pointer truncate rounded-full border px-3 py-1.5 text-left text-[12px] transition-colors"
+          class:border-brand={agent.calls.includes(other.id)}
+          class:bg-brand={agent.calls.includes(other.id)}
+          class:text-white={agent.calls.includes(other.id)}
+          class:opacity-45={!other.enabled}
+          class:border-line={!agent.calls.includes(other.id)}
+          class:bg-surface={!agent.calls.includes(other.id)}
+          class:text-ink-2={!agent.calls.includes(other.id)}
+          title={other.description || other.name}
+          disabled={!agent.enabled || !other.enabled}
+          onclick={() => toggleCall(other.id)}
+        >
+          {other.name}
+        </button>
       {/each}
     </div>
   </div>

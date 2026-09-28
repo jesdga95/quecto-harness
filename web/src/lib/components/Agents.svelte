@@ -145,10 +145,11 @@
             <span class="shrink-0 text-[11px] text-muted">Disabled</span>
           {:else}
             <!-- Every agent answers the person; the robot adds that at least
-                 one other agent names it in its list, so it may take work. -->
+                 one agent names it in its list, itself included, so it may
+                 take work. -->
             <span class="flex shrink-0 items-center gap-1 text-muted">
               <User size={13} />
-              {#if app.agents.some((x) => x.id !== agent.id && x.enabled && x.calls.includes(agent.id))}
+              {#if app.agents.some((x) => x.enabled && x.calls.includes(agent.id))}
                 <Robot size={13} />
               {/if}
             </span>

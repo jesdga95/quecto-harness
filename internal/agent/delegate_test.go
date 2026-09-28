@@ -439,6 +439,47 @@ func TestAnAgentThatRunsOneAtATimeWillNotTakeItsOwnWork(t *testing.T) {
 	}
 }
 
+// With a spare slot, an agent that names itself takes the work on top of its
+// own turn, and the launch works the way any other one does.
+func TestAnAgentCanTakeItsOwnWork(t *testing.T) {
+	h := newHarness(t)
+	mine := h.setAgent(t, func(a *config.Agent) {
+		a.Name = "Alpha"
+		a.Concurrency = 2
+		a.Calls = []string{a.ID}
+	})
+	// The child runs on the same model as the parent, so the order of the
+	// child's request against the parent's second is not the test's to
+	// control: the two plain replies stand in for either.
+	h.replay.forModel("Alpha-12B", "stream_run_agent_self.txt", "stream_plain.txt", "stream_plain.txt", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "hand it to yourself", nil)
+	child := childOf(t, h, s)
+	waitIdle(t, s)
+	waitIdle(t, child)
+
+	out := toolOutput(t, s, "run_agent")
+	if !strings.Contains(out, "started Alpha") || !strings.Contains(out, child.ID) {
+		t.Errorf("run_agent answered %q, want the handle", out)
+	}
+	child.mu.Lock()
+	agentID, model := child.AgentID, child.Model
+	child.mu.Unlock()
+	if agentID != mine.ID || model != mine.Model {
+		t.Errorf("the child runs on agent %s / model %s, want the launcher's own", agentID, model)
+	}
+	got := waitForEntryFrom(t, s, "Alpha")
+	if got.Content != "The repository has cmd, internal and web." {
+		t.Errorf("the report = %q, want the child's answer", got.Content)
+	}
+	// The report starts a turn of its own in the launcher.
+	waitIdle(t, s)
+	if h.engine.busy(mine.ID) != 0 {
+		t.Errorf("the agent is still counted busy after both turns ended")
+	}
+}
+
 // A card a subagent raises is drawn in the conversation the person has open,
 // labelled with the agent that asked, and answering it there releases the
 // subagent.
@@ -651,6 +692,27 @@ func TestBriefFollowsTheParent(t *testing.T) {
 	}
 	if len(tools.Schemas(b.offer)) >= len(tools.Schemas(topBrief().offer)) {
 		t.Error("a subagent was sent as many tools as its launcher")
+	}
+}
+
+// An agent may name itself in its own calls list, and the turn's own slot
+// decides whether the name is worth offering.
+func TestBriefListsTheCallerWhenASlotIsFree(t *testing.T) {
+	h := newHarness(t)
+	mine := h.setAgent(t, func(a *config.Agent) { a.Calls = []string{a.ID} })
+	cfg := h.cfg.Config()
+	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B")
+	b := h.engine.briefFor(top, cfg)
+	if len(b.agents) != 0 || b.offer.Agents {
+		t.Errorf("a single-slot agent is offered to itself: %+v", b.agents)
+	}
+	h.setAgent(t, func(a *config.Agent) { a.Concurrency = 2 })
+	b = h.engine.briefFor(top, h.cfg.Config())
+	if len(b.agents) != 1 || b.agents[0].Name != mine.Name {
+		t.Errorf("a two-slot agent is not offered to itself: %+v", b.agents)
+	}
+	if !b.offer.Agents {
+		t.Errorf("the brief offers no agents: %+v", b)
 	}
 }
 
