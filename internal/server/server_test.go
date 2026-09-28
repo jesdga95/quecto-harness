@@ -48,6 +48,9 @@ type fixture struct {
 	chatFrames []string
 	chatQueue  [][]string
 	chatBlock  chan struct{}
+	// chatLead is sent by a blocked request before it hangs, which holds a
+	// reply part way through its stream.
+	chatLead []string
 }
 
 // block makes every chat request hang until the test ends, which is how a
@@ -60,10 +63,25 @@ func (f *fixture) block(t *testing.T) {
 	t.Cleanup(func() { close(ch) })
 }
 
+// holdAfter makes every chat request send lead and then hang until the test
+// ends.
+func (f *fixture) holdAfter(t *testing.T, lead ...string) {
+	f.framesMu.Lock()
+	f.chatLead = lead
+	f.framesMu.Unlock()
+	f.block(t)
+}
+
 func (f *fixture) blocked() chan struct{} {
 	f.framesMu.Lock()
 	defer f.framesMu.Unlock()
 	return f.chatBlock
+}
+
+func (f *fixture) lead() []string {
+	f.framesMu.Lock()
+	defer f.framesMu.Unlock()
+	return append([]string(nil), f.chatLead...)
 }
 
 func (f *fixture) setFrames(frames ...string) {
@@ -169,6 +187,9 @@ func newFixture(t *testing.T) *fixture {
 				return
 			}
 			if block := f.blocked(); block != nil {
+				for _, fr := range f.lead() {
+					fmt.Fprint(w, fr+"\n\n")
+				}
 				if flusher != nil {
 					flusher.Flush()
 				}
@@ -1668,6 +1689,114 @@ func TestAReconnectResumesFromTheHeaderNotTheStaleURL(t *testing.T) {
 	}
 }
 
+// A session opened part way through a reply draws what was streamed before it
+// was opened, and the stream it opens from last_seq carries on from there.
+func TestAViewCarriesTheReplyStillStreaming(t *testing.T) {
+	f := newFixture(t)
+	id := f.newSession(t)
+	f.holdAfter(t,
+		`data: {"choices":[{"delta":{"reasoning_content":"Thinking"}}]}`,
+		`data: {"choices":[{"delta":{"content":"Hello "}}]}`,
+		`data: {"choices":[{"delta":{"content":"world"}}]}`,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"pa"}}]}}]}`,
+	)
+	f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "hi"})
+
+	var body map[string]any
+	var reply map[string]any
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		body = decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
+		reply, _ = body["reply"].(map[string]any)
+		calls, _ := reply["tool_calls"].([]any)
+		if len(calls) == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if reply == nil {
+		t.Fatalf("snapshot has no reply: %v", body)
+	}
+	if reply["content"] != "Hello world" || reply["reasoning"] != "Thinking" {
+		t.Errorf("reply = %v, want the text and the thinking so far", reply)
+	}
+	calls, _ := reply["tool_calls"].([]any)
+	if len(calls) != 1 {
+		t.Fatalf("reply calls = %v, want one", reply["tool_calls"])
+	}
+	call, _ := calls[0].(map[string]any)
+	if call["id"] != "call_1" || call["name"] != "read_file" || call["arguments"] != `{"pa` {
+		t.Errorf("call = %v", call)
+	}
+
+	// Everything the reply holds went out at or before the mark, so nothing
+	// after it repeats the text.
+	seq, _ := body["last_seq"].(float64)
+	var text, thought string
+	for _, e := range f.readStream(t, "/api/events?session="+id+"&from=0", int(seq)) {
+		switch e["type"] {
+		case "delta":
+			text += e["text"].(string)
+		case "reasoning":
+			thought += e["text"].(string)
+		}
+	}
+	if text != "Hello world" || thought != "Thinking" {
+		t.Errorf("frames up to the mark carry %q and %q", text, thought)
+	}
+
+	f.do(t, "POST", "/api/sessions/"+id+"/stop", nil)
+	f.waitIdle(t, id)
+	if _, ok := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))["reply"]; ok {
+		t.Error("an idle session still reports a reply")
+	}
+}
+
+// The session feed opens with every session that is working and then sends
+// each change, whichever session is open in the page.
+func TestSessionFeedReportsEverySession(t *testing.T) {
+	f := newFixture(t)
+	busy := f.newSession(t)
+	quiet := f.newSession(t)
+	f.block(t)
+	f.do(t, "POST", "/api/sessions/"+busy+"/message", map[string]string{"text": "hi"})
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && f.engine.State(busy) != agent.StateStreaming {
+		time.Sleep(time.Millisecond)
+	}
+
+	// Stopped once the feed is watching, so the change lands after the list.
+	go func() {
+		for {
+			f.hub.mu.Lock()
+			n := len(f.hub.watchers)
+			f.hub.mu.Unlock()
+			if n > 0 {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		f.do(t, "POST", "/api/sessions/"+busy+"/stop", nil)
+	}()
+
+	var idle bool
+	got := f.readStreamUntil(t, "/api/events/sessions", func(e map[string]any) bool {
+		idle = e["session"] == busy && e["state"] == "idle"
+		return idle
+	})
+	states, _ := got[0]["states"].(map[string]any)
+	if states[busy] != "streaming" {
+		t.Errorf("opening list = %v, want %s streaming", states, busy)
+	}
+	if _, ok := states[quiet]; ok {
+		t.Errorf("opening list = %v, want no idle session in it", states)
+	}
+	if !idle {
+		t.Errorf("feed = %v, want the stop to reach it", got)
+	}
+	f.waitIdle(t, busy)
+}
+
 func TestSSENeedsASession(t *testing.T) {
 	f := newFixture(t)
 	if w := f.do(t, "GET", "/api/events", nil); w.Code != 400 {
@@ -1931,6 +2060,43 @@ func (f *fixture) readStreamLines(t *testing.T, req *http.Request, want int) []s
 	cancel()
 	<-done
 	return lines
+}
+
+// readStreamUntil reads a stream's events until stop accepts one.
+func (f *fixture) readStreamUntil(t *testing.T, path string, stop func(map[string]any) bool) []map[string]any {
+	t.Helper()
+	req := httptest.NewRequest("GET", path, nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	pr, pw := newPipeRecorder()
+	done := make(chan struct{})
+	go func() {
+		f.handler.ServeHTTP(pw, req)
+		pw.w.Close()
+		close(done)
+	}()
+	var out []map[string]any
+	sc := bufio.NewScanner(pr)
+	for sc.Scan() {
+		line, ok := strings.CutPrefix(sc.Text(), "data: ")
+		if !ok {
+			continue
+		}
+		var v map[string]any
+		if err := json.Unmarshal([]byte(line), &v); err != nil {
+			t.Fatalf("event is not JSON: %q", line)
+		}
+		out = append(out, v)
+		if stop(v) {
+			break
+		}
+	}
+	cancel()
+	<-done
+	return out
 }
 
 // readStreamReq reads the replay an event source receives.

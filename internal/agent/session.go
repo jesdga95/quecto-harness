@@ -90,6 +90,11 @@ type Session struct {
 	// turn switches to execute mode on once its tool calls are answered.
 	approved *store.Plan
 
+	// live is the reply the request under way has streamed so far. It is nil
+	// outside a request and cleared in the same hold that appends the entry
+	// the reply becomes.
+	live *Reply
+
 	state   State
 	cancel  context.CancelFunc
 	turnSeq int
@@ -192,6 +197,75 @@ func (s *Session) Snapshot() (*store.Session, State, int, llm.Caps) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.doc(), s.state, s.computeFill(), s.caps
+}
+
+// Reply is what a request has streamed before it lands as an entry.
+type Reply struct {
+	Content   string      `json:"content"`
+	Reasoning string      `json:"reasoning"`
+	ToolCalls []ReplyCall `json:"tool_calls"`
+}
+
+// ReplyCall is one tool call as far as its fragments have arrived. Fragments
+// join on index, since the id may be empty until the call is nearly whole.
+type ReplyCall struct {
+	Index     int    `json:"index"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// add folds one streamed event into the reply.
+func (r *Reply) add(event llm.Event) {
+	switch event.Kind {
+	case llm.EventContent:
+		r.Content += event.Text
+	case llm.EventReasoning:
+		r.Reasoning += event.Text
+	case llm.EventToolCall:
+		var call *ReplyCall
+		for i := range r.ToolCalls {
+			if r.ToolCalls[i].Index == event.Index {
+				call = &r.ToolCalls[i]
+			}
+		}
+		if call == nil {
+			r.ToolCalls = append(r.ToolCalls, ReplyCall{Index: event.Index})
+			call = &r.ToolCalls[len(r.ToolCalls)-1]
+		}
+		if call.ID == "" {
+			call.ID = event.ID
+		}
+		if event.Name != "" {
+			call.Name = event.Name
+		}
+		call.Arguments += event.Arguments
+	}
+}
+
+// View is a session as a browser opening it needs it: the document, the reply
+// still streaming, and the mark of the last event already sent.
+type View struct {
+	Doc   *store.Session
+	State State
+	Fill  int
+	Reply *Reply
+	Seq   int64
+}
+
+// View reads the session and takes the mark under one hold of the lock.
+// Streamed text is published under the same lock, so a stream opened from
+// the mark carries on exactly where the reply leaves off.
+func (s *Session) View(mark func() int64) View {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v := View{Doc: s.doc(), State: s.state, Fill: s.computeFill(), Seq: mark()}
+	if s.live != nil {
+		held := *s.live
+		held.ToolCalls = append([]ReplyCall(nil), s.live.ToolCalls...)
+		v.Reply = &held
+	}
+	return v
 }
 
 // Compactable reports whether a compaction asked for now would be taken.

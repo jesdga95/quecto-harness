@@ -13,6 +13,7 @@ const (
 	ringSize     = 512
 	subscriberQ  = 256
 	resyncEvType = "resync"
+	statusEvType = "status"
 )
 
 // The events a model streams a token at a time. They are the only ones joined
@@ -42,6 +43,10 @@ type frame struct {
 type Hub struct {
 	mu       sync.Mutex
 	sessions map[string]*channel
+	// watchers follow every session's status at once, for the list that
+	// shows which are working.
+	watchers    map[int64]chan []byte
+	nextWatcher int64
 }
 
 type channel struct {
@@ -67,7 +72,7 @@ type subscriber struct {
 }
 
 func NewHub() *Hub {
-	return &Hub{sessions: map[string]*channel{}}
+	return &Hub{sessions: map[string]*channel{}, watchers: map[int64]chan []byte{}}
 }
 
 // Publish sends one event. Streamed text is joined into a run and goes out a
@@ -83,6 +88,42 @@ func (h *Hub) Publish(sessionID string, ev agent.Event) {
 	}
 	h.sendLocked(c)
 	h.emitLocked(c, ev.Type, ev.Fields)
+	if ev.Type == statusEvType {
+		h.tellWatchersLocked(sessionID, ev.Fields["state"])
+	}
+}
+
+// tellWatchersLocked sends one session's status to every watcher. A watcher
+// that cannot keep up is closed, and the list it reopens with is current.
+func (h *Hub) tellWatchersLocked(sessionID string, state any) {
+	data, _ := json.Marshal(map[string]any{"session": sessionID, "state": state})
+	for id, ch := range h.watchers {
+		select {
+		case ch <- data:
+		default:
+			close(ch)
+			delete(h.watchers, id)
+		}
+	}
+}
+
+// Watch returns a channel of every session's status changes and the function
+// that detaches it. The channel is closed when the watcher falls behind.
+func (h *Hub) Watch() (<-chan []byte, func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	id := h.nextWatcher
+	h.nextWatcher++
+	ch := make(chan []byte, subscriberQ)
+	h.watchers[id] = ch
+	return ch, func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if _, ok := h.watchers[id]; ok {
+			close(ch)
+			delete(h.watchers, id)
+		}
+	}
 }
 
 // holdLocked adds text to the run a session is building, starting one when
@@ -200,6 +241,19 @@ func (h *Hub) Seq(sessionID string) int64 {
 		return c.seq
 	}
 	return 0
+}
+
+// Mark sends any streamed text still held and reports the last sequence
+// number, so everything up to the mark is on the wire.
+func (h *Hub) Mark(sessionID string) int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c, ok := h.sessions[sessionID]
+	if !ok {
+		return 0
+	}
+	h.sendLocked(c)
+	return c.seq
 }
 
 // Drop discards a session's channel, which ends every attached event source.

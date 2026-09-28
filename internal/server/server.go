@@ -137,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/search", s.putSearch)
 	mux.HandleFunc("POST /api/search/probe", s.probeSearch)
 	mux.HandleFunc("GET /api/events", s.getEvents)
+	mux.HandleFunc("GET /api/events/sessions", s.getSessionEvents)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "No such endpoint: check the path")
 	})

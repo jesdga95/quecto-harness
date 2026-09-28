@@ -286,6 +286,23 @@ func (e *Engine) LiveState(id string) State {
 	return s.State()
 }
 
+// Busy maps every session that is not idle to what it is doing.
+func (e *Engine) Busy() map[string]State {
+	e.mu.Lock()
+	held := make([]*Session, 0, len(e.live))
+	for _, s := range e.live {
+		held = append(held, s)
+	}
+	e.mu.Unlock()
+	out := map[string]State{}
+	for _, s := range held {
+		if st := s.State(); st != StateIdle {
+			out[s.ID] = st
+		}
+	}
+	return out
+}
+
 // Sent reports what became of a message: the entry it was appended as, or the
 // queue it joined behind a turn that was already running.
 type Sent struct {
@@ -1187,6 +1204,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		if !spent {
 			req.Tools = tools.Schemas(b.offer)
 		}
+		s.live = &Reply{}
 		s.mu.Unlock()
 
 		// first is when this request began to produce, which is what the
@@ -1202,6 +1220,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			return nil
 		})
 		if err != nil {
+			s.mu.Lock()
+			s.live = nil
+			s.mu.Unlock()
 			e.endWithError(s, err, iteration)
 			return
 		}
@@ -1228,6 +1249,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				Content: res.Content, Reasoning: res.Reasoning,
 				Meta: outcomeMeta(res), InContext: true, Visible: true})
 			s.lastUsageEntry = len(s.Entries) - 1
+			s.live = nil
 			s.mu.Unlock()
 			e.save(s)
 			e.publishUsage(s)
@@ -1256,6 +1278,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			Content: res.Content, Reasoning: res.Reasoning, ToolCalls: res.ToolCalls,
 			Meta: outcomeMeta(res), InContext: true, Visible: true})
 		s.lastUsageEntry = len(s.Entries) - 1
+		s.live = nil
 		s.mu.Unlock()
 		e.save(s)
 		e.publishUsage(s)
@@ -1381,7 +1404,14 @@ func (e *Engine) stopWith(s *Session, call llm.ToolCall, record *store.Permissio
 	e.markStopped(s)
 }
 
+// forward publishes one streamed event and folds it into the live reply under
+// the same hold of the lock, which is what lets a view read both at once.
 func (e *Engine) forward(s *Session, event llm.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.live != nil {
+		s.live.add(event)
+	}
 	switch event.Kind {
 	case llm.EventContent:
 		e.publish(s.ID, ev("delta", map[string]any{"text": event.Text}))

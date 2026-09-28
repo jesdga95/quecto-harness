@@ -24,6 +24,7 @@ import type {
   SearchProbe,
   ServerMode,
   Session,
+  SessionStatesHandler,
   State,
   Steer,
   Todo,
@@ -37,6 +38,7 @@ import type {
   WorkMode,
 } from "./types";
 import { toPlan } from "../plan";
+import { applyEvent } from "../transcript";
 
 const BASE = "/api";
 
@@ -230,6 +232,11 @@ interface WireSnapshot {
   mode?: string;
   draft?: unknown;
   last_seq?: number;
+  reply?: {
+    content?: string;
+    reasoning?: string;
+    tool_calls?: { index?: number; id?: string; name?: string; arguments?: string }[] | null;
+  } | null;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
   compactable?: boolean;
   breakdown?: { system?: number; rules?: number; tools?: number; messages?: number } | null;
@@ -701,6 +708,15 @@ function titleOf(entries: WireEntry[]): string {
 let projectPaths: string[] = [];
 const summaries = new Map<string, Session>();
 const seqs = new Map<string, number>();
+// The tool calls a snapshot's reply left open, by session, for the stream
+// opened after it.
+const replies = new Map<string, Map<number, OpenCall>>();
+
+function takeCalls(session: string): Map<number, OpenCall> {
+  const calls = replies.get(session) ?? new Map<number, OpenCall>();
+  replies.delete(session);
+  return calls;
+}
 
 function toConfig(c: WireConfig): Config {
   return {
@@ -802,6 +818,23 @@ function toTranscript(snap: WireSnapshot): Transcript {
     addEntry(items, entry);
   }
 
+  // The reply a request is still streaming is in no entry yet, so it is drawn
+  // the way its stream would have drawn it. The calls it opened are handed to
+  // the stream that carries on from last_seq, which fills them in.
+  const opened = new Map<number, OpenCall>();
+  const reply = snap.reply;
+  if (reply) {
+    const frames: WireEvent[] = [];
+    if (reply.reasoning) frames.push({ type: "reasoning", text: reply.reasoning });
+    if (reply.content) frames.push({ type: "delta", text: reply.content });
+    for (const c of reply.tool_calls ?? []) {
+      frames.push({ type: "tool_call", index: c.index, id: c.id, name: c.name, arguments: c.arguments });
+    }
+    for (const frame of frames) {
+      for (const event of mapEvent(frame, opened)) applyEvent(items, event);
+    }
+  }
+
   // An unanswered request has no entry of its own yet, so the card that blocks
   // the composer has to be restored from the pending list.
   for (const p of snap.pending ?? []) {
@@ -859,6 +892,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
 
   const highest = entries.reduce((max, e) => Math.max(max, e.seq ?? 0), 0);
   seqs.set(id, snap.last_seq ?? highest);
+  replies.set(id, opened);
 
   return {
     session,
@@ -1387,7 +1421,7 @@ class HttpApi implements HarnessApi {
     let source: EventSource | null = null;
     let closed = false;
     let failures = 0;
-    const calls = new Map<number, OpenCall>();
+    const calls = takeCalls(session);
 
     // Frames that arrived while the tab was away come off the socket in one
     // read, and the browser hands them all over in a single task. They are
@@ -1455,6 +1489,7 @@ class HttpApi implements HarnessApi {
       try {
         const transcript = await this.getSession(session);
         calls.clear();
+        for (const [index, open] of takeCalls(session)) calls.set(index, open);
         onEvent({ type: "resync", transcript });
         open();
       } catch (err) {
@@ -1506,6 +1541,30 @@ class HttpApi implements HarnessApi {
       source = null;
       stopDrain();
     };
+  }
+
+  watchSessions(onStates: SessionStatesHandler): () => void {
+    const es = new EventSource(`${BASE}/events/sessions`);
+    // Each opening, a reconnect included, starts with the whole list.
+    es.addEventListener("states", (ev) => {
+      try {
+        const wire = JSON.parse((ev as MessageEvent<string>).data) as { states?: Record<string, string> };
+        const states: Record<string, TurnStatus> = {};
+        for (const [id, state] of Object.entries(wire.states ?? {})) states[id] = toStatus(state);
+        onStates(states, true);
+      } catch {
+        // A list that cannot be read leaves the last one standing.
+      }
+    });
+    es.addEventListener("state", (ev) => {
+      try {
+        const wire = JSON.parse((ev as MessageEvent<string>).data) as { session?: string; state?: string };
+        if (wire.session) onStates({ [wire.session]: toStatus(wire.state) }, false);
+      } catch {
+        // One change that cannot be read is dropped.
+      }
+    });
+    return () => es.close();
   }
 
   private setProjects(wire: string[] | { projects?: string[] }): Project[] {

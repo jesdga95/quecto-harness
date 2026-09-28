@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -64,6 +65,52 @@ func (s *Server) getEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeFrame(w, f)
+			flusher.Flush()
+		case <-ping.C:
+			fmt.Fprint(w, ":ping\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+// getSessionEvents streams every session's status. It opens with the sessions
+// that are not idle and then sends each change, so a stream reopened after a
+// drop starts from a list that is current.
+func (s *Server) getSessionEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "This connection cannot stream events")
+		return
+	}
+	// Watched before the list is read, so a change landing in between is
+	// sent again rather than missed.
+	ch, cancel := s.hub.Watch()
+	defer cancel()
+	busy := map[string]string{}
+	for id, st := range s.engine.Busy() {
+		busy[id] = string(st)
+	}
+	states, _ := json.Marshal(map[string]any{"states": busy})
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "event: states\ndata: %s\n\n", states)
+	flusher.Flush()
+
+	ping := time.NewTicker(pingInterval)
+	defer ping.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case data, open := <-ch:
+			if !open {
+				return
+			}
+			fmt.Fprintf(w, "event: state\ndata: %s\n\n", data)
 			flusher.Flush()
 		case <-ping.C:
 			fmt.Fprint(w, ":ping\n\n")

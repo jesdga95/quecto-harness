@@ -441,7 +441,8 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "No session with that id: it may have been deleted")
 		return
 	}
-	doc, state, fill, _ := sess.Snapshot()
+	view := sess.View(func() int64 { return s.hub.Mark(sess.ID) })
+	doc, state, fill := view.Doc, view.State, view.Fill
 	// The agent's override stands in for what the model server reported, and a
 	// window neither named is zero: unknown rather than guessed.
 	agent, _ := s.cfg.Config().AgentByID(doc.Agent)
@@ -469,7 +470,12 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		"state": string(state), "n_ctx": nctx, "n_ctx_source": source,
 		"fill": fill, "compactions": doc.Compactions, "compactable": sess.Compactable(),
 		"pending": pending, "entries": entries, "todos": todos,
-		"last_seq": s.hub.Seq(doc.ID),
+		"last_seq": view.Seq,
+	}
+	// The reply a request is still streaming is in no entry yet, and the
+	// stream opened from last_seq carries on from its end.
+	if view.Reply != nil {
+		body["reply"] = view.Reply
 	}
 	// A question is answered on the row its own call already drew, so what a
 	// reloaded page is missing is the id to answer, not the question.

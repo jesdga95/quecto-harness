@@ -21,9 +21,11 @@ import type {
   SearchProbe,
   Sent,
   Session,
+  SessionStatesHandler,
   State,
   Todo,
   Transcript,
+  TurnStatus,
   TranscriptItem,
   Usage,
   WorkMode,
@@ -437,6 +439,7 @@ export class MockApi implements HarnessApi {
   private sessions: Session[] = [];
   private transcripts = new Map<string, Transcript>();
   private handlers = new Map<string, EventHandler>();
+  private watchers = new Set<SessionStatesHandler>();
   private allowlist = new Map<string, string[]>([
     ["/Users/jay/Projects/Personal/quecto-harness", ["git status", "go vet"]],
   ]);
@@ -886,6 +889,18 @@ export class MockApi implements HarnessApi {
     };
   }
 
+  watchSessions(onStates: SessionStatesHandler): () => void {
+    this.watchers.add(onStates);
+    const states: Record<string, TurnStatus> = {};
+    for (const [id, t] of this.transcripts) {
+      const run = this.running?.session === id;
+      const status = run ? "streaming" : t.status;
+      if (status !== "idle") states[id] = status;
+    }
+    onStates(states, true);
+    return () => this.watchers.delete(onStates);
+  }
+
   async sendMessage(
     session: string,
     text: string,
@@ -1205,6 +1220,9 @@ export class MockApi implements HarnessApi {
 
   private emit(session: string, event: HarnessEvent): void {
     this.handlers.get(session)?.(event);
+    if (event.type === "status") {
+      for (const watch of this.watchers) watch({ [session]: event.status }, false);
+    }
   }
 
   /** Answers the open card and remembers the answer on the stored transcript. */

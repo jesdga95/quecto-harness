@@ -522,6 +522,10 @@ export interface Transcript {
 
 export type EventHandler = (event: HarnessEvent) => void;
 
+/** Receives what sessions are doing: the whole list of those not idle when
+    whole is set, otherwise one session that changed. */
+export type SessionStatesHandler = (states: Record<string, TurnStatus>, whole: boolean) => void;
+
 export interface HarnessApi {
   getState(): Promise<State>;
   /** What the active agent's address holds. */
@@ -590,4 +594,7 @@ export interface HarnessApi {
   removeAllowed(project: string, prefix: string): Promise<string[]>;
   /** Subscribes to the session stream. The returned function closes it. */
   events(session: string, onEvent: EventHandler): () => void;
+  /** Follows every session's status, open or not. The returned function
+      closes it. */
+  watchSessions(onStates: SessionStatesHandler): () => void;
 }

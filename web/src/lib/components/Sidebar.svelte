@@ -16,6 +16,7 @@
     newSession,
     pickAndAddProject,
     selectProject,
+    isWorking,
     selectSession,
     sessionsOf,
     removeProject,
@@ -125,8 +126,6 @@
   // A search shows every match, folded or not.
   const isFolded = (path: string) => query.trim() === "" && folded.includes(path);
 
-  // The open session is the one whose run state this page follows.
-  const generating = $derived(app.status !== "idle");
 
   function sessions(path: string) {
     const list = sessionsOf(path);
@@ -276,7 +275,7 @@
                     class:is-active={session.id === app.sessionId}
                     onclick={() => selectSession(session.id)}
                   >
-                    {#if session.id === app.sessionId && generating}
+                    {#if isWorking(session.id)}
                       <span class="working" role="status" aria-label="Working"></span>
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{session.title}</span>

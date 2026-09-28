@@ -101,6 +101,9 @@ export const app = $state({
   browseError: "",
   usage: { prompt_tokens: 0, completion_tokens: 0, n_ctx: 0 } as Usage,
   status: "idle" as TurnStatus,
+  // What every session that is not idle is doing, open or not, from the
+  // harness's feed of session statuses.
+  states: {} as Record<string, TurnStatus>,
   // The model has been asked and nothing has come back yet. True from the
   // moment a turn starts, again after each tool result while the model reads
   // it, and for the whole of a compaction, which are the stretches that draw
@@ -191,14 +194,33 @@ export async function refreshState(): Promise<boolean> {
   return true;
 }
 
+let unwatch: (() => void) | null = null;
+
 export async function init(): Promise<void> {
   if (!(await refreshState())) return;
   await loadSessions();
+  unwatch ??= api.watchSessions(onStates);
   app.ready = true;
   // The first project is named so the empty screen has one, and its most
   // recent conversation is opened if it has one.
   const first = app.projects[0];
   if (first) await selectProject(first.path);
+}
+
+function onStates(states: Record<string, TurnStatus>, whole: boolean): void {
+  const next = whole ? {} : { ...app.states };
+  for (const [id, status] of Object.entries(states)) {
+    if (status === "idle") delete next[id];
+    else next[id] = status;
+  }
+  app.states = next;
+}
+
+/** Whether a session is working. The open one reads its own stream, which
+    the page moves ahead of the feed when a message is sent. */
+export function isWorking(id: string): boolean {
+  if (id === app.sessionId) return app.status !== "idle";
+  return (app.states[id] ?? "idle") !== "idle";
 }
 
 async function loadSessions(): Promise<void> {
