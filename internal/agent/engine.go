@@ -1159,6 +1159,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// only thing that ends a runaway turn is the Stop button.
 	budget := cfg.MaxToolCalls
 	calls := 0
+	// noted and refused track the spent budget: the note is written once, and a
+	// model that calls tools again after being refused ends the turn.
+	noted, refused := false, false
 	cost := turnCost{started: time.Now(), agent: a.Name, model: a.Model}
 
 	for iteration := 0; ; iteration++ {
@@ -1176,7 +1179,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		// A window nothing reported and nothing overrode is no limit, so a
 		// session against one compacts when the reader asks and not before.
 		// A context filled by the prompt itself is sent as it stands.
-		if nctx > 0 && float64(fill) >= cfg.CompactAt*float64(nctx) && enough {
+		if nctx > 0 && float64(fill) >= compactLimit(nctx, cfg.CompactAt, a.MaxTokens) && enough {
 			e.setState(s, StateCompacting)
 			if err := e.compact(ctx, s, back, a, b, caps); err != nil {
 				e.endWithError(s, err, iteration)
@@ -1184,12 +1187,14 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			}
 		}
 
-		// A spent budget takes the tools out of the request rather than ending
-		// the turn where it stands, so the last thing the reader sees is an
-		// answer written with what the model already found.
+		// A spent budget refuses further calls rather than ending the turn where
+		// it stands, so the last thing the reader sees is an answer written with
+		// what the model already found. The tools stay in the request, since
+		// dropping them would change the head of the prompt and miss the cache.
 		spent := budget > 0 && calls >= budget
-		if spent {
+		if spent && !noted {
 			e.noteLimit(s, calls)
+			noted = true
 		}
 
 		e.setState(s, StateStreaming)
@@ -1212,9 +1217,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		if a.MaxTokens != nil {
 			req.MaxTokens = *a.MaxTokens
 		}
-		if !spent {
-			req.Tools = tools.Schemas(b.offer)
-		}
+		req.Tools = tools.Schemas(b.offer)
 		s.live = &Reply{}
 		s.mu.Unlock()
 
@@ -1246,15 +1249,13 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			s.mu.Lock()
 			s.LastUsage = res.Usage
 			s.LastToolTokens = 0
-			if !spent && s.ContextBase != nil {
+			if s.ContextBase != nil {
 				s.LastToolTokens = s.ContextBase.Tools
 			}
 			s.mu.Unlock()
 		}
 
-		// Calls that arrive after the budget is spent were not offered and are
-		// not run, so they are dropped rather than left in the history unpaired.
-		if len(res.ToolCalls) == 0 || spent {
+		if len(res.ToolCalls) == 0 {
 			s.mu.Lock()
 			s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant",
 				Content: res.Content, Reasoning: res.Reasoning,
@@ -1266,7 +1267,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			e.publishUsage(s)
 			// A turn the model meant to continue reads as a finished one, so
 			// the transcript says the call was never run.
-			if !spent && llm.UnparsedToolCall(res.Content) {
+			if llm.UnparsedToolCall(res.Content) {
 				e.noteUnparsed(s)
 			}
 			// A message that landed while the model was answering makes this
@@ -1293,6 +1294,22 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		s.mu.Unlock()
 		e.save(s)
 		e.publishUsage(s)
+
+		if spent {
+			e.refuseCalls(s, res.ToolCalls)
+			// A model that reaches for tools again after being told the budget
+			// is spent will not stop on its own, so the turn ends here.
+			if refused {
+				e.setState(s, StateFinal)
+				counted := cost.fields()
+				e.noteCost(s, counted)
+				e.finish(s, StateIdle, "tool_limit", iteration+1, counted)
+				e.flushSteer(s)
+				return
+			}
+			refused = true
+			continue
+		}
 
 		for i, call := range res.ToolCalls {
 			calls++
@@ -1373,12 +1390,41 @@ func (e *Engine) noteUnparsed(s *Session) {
 // noteLimit records that the budget ran out, so the transcript says why the
 // model stopped reaching for tools.
 func (e *Engine) noteLimit(s *Session, calls int) {
-	text := fmt.Sprintf("Tool call limit reached after %d calls: the model was asked to finish without tools", calls)
+	text := fmt.Sprintf("Tool call limit reached after %d calls: further calls are refused and the model was asked to answer", calls)
 	s.mu.Lock()
 	entry := s.appendEntry(store.Entry{Kind: "status", Content: text, InContext: false, Visible: true})
 	s.mu.Unlock()
 	e.save(s)
 	e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
+}
+
+// refuseCalls answers every call of a reply made after the budget was spent,
+// so each one keeps its pair and the model reads why nothing ran.
+func (e *Engine) refuseCalls(s *Session, calls []llm.ToolCall) {
+	for i, call := range calls {
+		s.mu.Lock()
+		entry := s.appendEntry(store.Entry{Kind: "tool", Role: "tool",
+			ToolCallID: call.ID, ToolName: call.Function.Name, Content: prompts.BudgetSpent(),
+			InContext: true, Visible: true})
+		s.mu.Unlock()
+		e.publish(s.ID, ev("tool_output", map[string]any{
+			"index": i, "id": call.ID, "name": call.Function.Name,
+			"output": entry.Content, "exit_code": nil, "truncated": false,
+		}))
+	}
+	e.save(s)
+}
+
+// compactLimit is the fill a turn compacts at: the configured share of the
+// window, lowered where the agent's reply cap would not fit in what is left.
+func compactLimit(nctx int, share float64, maxTokens *int) float64 {
+	limit := share * float64(nctx)
+	if maxTokens != nil {
+		if room := float64(nctx - *maxTokens); room > 0 && room < limit {
+			limit = room
+		}
+	}
+	return limit
 }
 
 // endWithError separates a cancellation, which is a stop, from a failure.
@@ -1576,7 +1622,9 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 			err = fmt.Errorf("no tool named %s: use read, grep, web_search, write, edit, bash, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
 		}
 		if err != nil {
-			content = err.Error()
+			// The flag is what lets the row say the call failed, since only
+			// bash has an exit code to say it with.
+			content, meta = err.Error(), map[string]any{"error": true}
 		} else {
 			content, exitCode, truncated, meta = res.Output, res.ExitCode, res.Truncated, res.Meta
 		}

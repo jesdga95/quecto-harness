@@ -37,7 +37,20 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 		os.Remove(tmp)
 		return wrapWrite(path, err)
 	}
+	syncDir(dir)
 	return nil
+}
+
+// syncDir flushes the directory entry the rename changed, so a crash cannot
+// bring back the old file. The data is already written, and a filesystem that
+// refuses to sync a directory has nothing more to offer, so a failure is ignored.
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	d.Sync()
+	d.Close()
 }
 
 func wrapWrite(path string, err error) error {

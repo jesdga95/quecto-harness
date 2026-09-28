@@ -587,6 +587,44 @@ func TestReplaceInFileDeletes(t *testing.T) {
 	}
 }
 
+// A CRLF file is matched with its endings folded, since read shows it with LF,
+// and written back with CRLF throughout.
+func TestReplaceInFileMatchesCRLF(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	target := filepath.Join(base, "win.txt")
+	os.WriteFile(target, []byte("one\r\ntwo\r\nthree\r\n"), 0o644)
+
+	res, err := r.ReplaceInFile(context.Background(),
+		json.RawMessage(`{"path":"win.txt","old_string":"one\ntwo\n","new_string":"one\n2\nand a half\n"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Output != "edited win.txt at line 1 (-2 +3)" {
+		t.Errorf("output = %q", res.Output)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "one\r\n2\r\nand a half\r\nthree\r\n" {
+		t.Errorf("file = %q", got)
+	}
+}
+
+// A file past the baseline limit is still edited, with nothing kept to compare.
+func TestReplaceInFileEditsALargeFile(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	target := filepath.Join(base, "big.txt")
+	big := strings.Repeat("filler line\n", baselineLimit/12+10) + "needle\n"
+	os.WriteFile(target, []byte(big), 0o644)
+
+	if _, err := r.ReplaceInFile(context.Background(),
+		json.RawMessage(`{"path":"big.txt","old_string":"needle","new_string":"found"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(target); !strings.HasSuffix(string(got), "found\n") {
+		t.Errorf("the edit did not land at the end of the file")
+	}
+}
+
 // TestLimitBufferRenderCounts pins the byte count the model is told. Cutting
 // once in the buffer and again in Truncate used to report only the second cut,
 // which named 114631 bytes for a command that had produced 100 MB.

@@ -68,13 +68,7 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 	}
 
 	rd := bufio.NewReaderSize(f, 64<<10)
-	clip := r.ReadLimit
-	if clip < 4096 {
-		clip = 4096
-	}
-	if clip > maxLineBytes {
-		clip = maxLineBytes
-	}
+	clip := min(r.ReadLimit, readLineClip)
 
 	var b strings.Builder
 	lineNo, emitted, stoppedOnBytes := 0, 0, false
@@ -139,10 +133,9 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 	return Result{Output: out, Truncated: truncated, Bytes: len(out)}, nil
 }
 
-// maxLineBytes is the ceiling on how much of one line is ever kept. The real
-// clip is the read's own byte budget; this only stops a pathological budget
-// from letting one line grow without bound.
-const maxLineBytes = 1 << 20
+// readLineClip is how much of one line a read shows. A minified file is one
+// line, and a clip this size leaves room in the page for the lines after it.
+const readLineClip = 2000
 
 // readLine returns the next line without its line ending, keeping at most clip
 // bytes of it and counting the rest as over. A minified file is one very long

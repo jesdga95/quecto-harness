@@ -11,17 +11,16 @@
   let asking = $state(false);
 
   // What the card says the call is about. The mono block below shows the
-  // command, the query or the path, which is what the call is of.
-  function cardTitle(tool: string): string {
-    switch (tool) {
-      case "web_search":
-        return "wants to search the web";
-      case "write":
-      case "edit":
-        return "wants to change a file";
-      default:
-        return "wants to run a command";
-    }
+  // command, the query or the path, which is what the call is of. A subagent
+  // asking is named; the conversation's own agent is the one the card is in.
+  function cardTitle(tool: string, agent: string): string {
+    const action =
+      tool === "web_search"
+        ? "search the web"
+        : tool === "write" || tool === "edit"
+          ? "change a file"
+          : "run a command";
+    return agent ? `${agent} wants to ${action}` : `Wants to ${action}`;
   }
 </script>
 
@@ -29,7 +28,7 @@
   <div class="flex items-center gap-2 px-4 pt-3 text-[13px]">
     <ShieldCheck size={15} class="text-accent" />
     <span class="font-medium">
-      {item.agent ? `${item.agent} ${cardTitle(item.tool)}` : `${item.tool} ${cardTitle(item.tool)}`}
+      {cardTitle(item.tool, item.agent ?? "")}
     </span>
     {#if item.agent}
       <span class="text-[12px] text-muted">Working for you</span>

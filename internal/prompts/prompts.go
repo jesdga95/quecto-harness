@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md system_plan.md system_execute.md plan.md plan_approved.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md
+//go:embed system.md system_plan.md system_execute.md plan.md plan_approved.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md denial.md budget_spent.md
 var files embed.FS
 
 var (
@@ -25,6 +25,7 @@ var (
 	imageTmpl      = template.Must(template.New("image").Parse(mustRead("image.md")))
 	titleTmpl      = template.Must(template.New("title").Parse(mustRead("title.md")))
 	messageTmpl    = template.Must(template.New("message").Parse(mustRead("message.md")))
+	denialTmpl     = template.Must(template.New("denial").Parse(mustRead("denial.md")))
 )
 
 // parseBody parses one mode's body.
@@ -170,6 +171,16 @@ func Message(from, session, text string) string {
 	return strings.TrimRight(b.String(), " \t\r\n")
 }
 
+// Denial is what the model is told about a call the user refused, with the
+// reason they gave, if any.
+func Denial(reason string) string {
+	var b strings.Builder
+	if err := denialTmpl.Execute(&b, struct{ Reason string }{strings.TrimSpace(reason)}); err != nil {
+		panic("prompts: render denial.md: " + err.Error())
+	}
+	return strings.TrimRight(b.String(), " \t\r\n")
+}
+
 // Attachment is one file the user attached, as the model is shown it.
 func Attachment(path, content string) string {
 	var b strings.Builder
@@ -202,6 +213,7 @@ func ToolSendMessage() string     { return mustRead("tool_send_message.md") }
 func ToolExitPlanMode() string    { return mustRead("tool_exit_plan_mode.md") }
 func ToolWritePlan() string       { return mustRead("tool_write_plan.md") }
 func Compact() string             { return mustRead("compact.md") }
+func BudgetSpent() string         { return mustRead("budget_spent.md") }
 
 // Title asks for a name for the task the opening message describes. It carries
 // that message rather than following the conversation, so the request stands on

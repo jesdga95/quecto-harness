@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"quecto-harness/internal/config"
+	"quecto-harness/internal/prompts"
 )
 
 type Action string
@@ -318,10 +319,7 @@ func DefaultPrefix(cmd string) string {
 
 // DenialContent is what the model is told about a refused call.
 func DenialContent(reason string) string {
-	if strings.TrimSpace(reason) == "" {
-		return "denied by user"
-	}
-	return "denied by user: " + reason
+	return prompts.Denial(reason)
 }
 
 var idEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)

@@ -14,6 +14,7 @@ import (
 	"quecto-harness/internal/config"
 	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
+	"quecto-harness/internal/prompts"
 	"quecto-harness/internal/search"
 	"quecto-harness/internal/store"
 	"quecto-harness/internal/tools"
@@ -607,7 +608,7 @@ func TestDenialReachesTheModel(t *testing.T) {
 
 	doc, _, _, _ := s.Snapshot()
 	tool := doc.Entries[2]
-	if tool.Content != "denied by user: wrong directory" {
+	if !strings.HasPrefix(tool.Content, "denied by user: wrong directory\n") {
 		t.Errorf("tool content = %q", tool.Content)
 	}
 	if tool.Permission.Decision != "deny" {
@@ -1513,6 +1514,38 @@ func TestToolCallLimit(t *testing.T) {
 	last := doc.Entries[len(doc.Entries)-1]
 	if last.Kind != "assistant" || len(last.ToolCalls) != 0 {
 		t.Errorf("last entry = %+v, want an assistant answer with no calls", last)
+	}
+}
+
+// TestToolCallLimitRefusesThenEnds asserts that calls made after the budget is
+// spent are answered rather than run, with the tools still sent, and that a
+// model calling tools a second time after that ends the turn.
+func TestToolCallLimitRefusesThenEnds(t *testing.T) {
+	h := newHarness(t, "stream_two_tools.txt", "stream_two_tools.txt", "stream_two_tools.txt", "stream_plain.txt")
+	h.cfg.Update(func(c *config.Config) {
+		c.Mode = config.ModeAllowlist
+		c.MaxToolCalls = 2
+	})
+	h.cfg.AddAllow(h.project, "echo")
+	s := h.session(t)
+	h.engine.Send(s.ID, "loop forever", nil)
+	waitIdle(t, s)
+
+	if h.replay.Count() != 3 {
+		t.Errorf("model calls = %d, want 3", h.replay.Count())
+	}
+	if !strings.Contains(mustJSON(h.replay.Body(2)), `"tools"`) {
+		t.Error("the request after the budget was spent carried no tools")
+	}
+	doc, _, _, _ := s.Snapshot()
+	refusals := 0
+	for _, e := range doc.Entries {
+		if e.Kind == "tool" && e.Content == prompts.BudgetSpent() {
+			refusals++
+		}
+	}
+	if refusals != 4 {
+		t.Errorf("refused calls = %d, want 4 across two replies", refusals)
 	}
 }
 

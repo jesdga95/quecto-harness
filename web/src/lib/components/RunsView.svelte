@@ -5,6 +5,7 @@
   import StepRow from "./StepRow.svelte";
   import { app, openRun, selectSession } from "../state/app.svelte";
   import { followEnd } from "../stream.svelte";
+  import { statusLabel } from "../format";
 
   let scroller = $state<HTMLDivElement | null>(null);
   let atBottom = $state(true);
@@ -32,12 +33,6 @@
   function onscroll() {
     if (!scroller) return;
     atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
-  }
-
-  // What a run row says on its right. A run nothing is running has ended, and
-  // how it ended is in its transcript rather than in one word here.
-  function note(status: string): string {
-    return status === "idle" ? "Done" : status;
   }
 
   // Shown with nothing followed, the tab follows the one still working, which
@@ -75,7 +70,7 @@
       >
         <Robot size={14} class="shrink-0" />
         <span class="truncate">{run.agent || "Agent"}</span>
-        <span class="ml-auto shrink-0 text-[12px] text-muted">{note(run.status)}</span>
+        <span class="ml-auto shrink-0 text-[12px] text-muted">{statusLabel(run.status)}</span>
         {#if run.status !== "idle"}
           <span class="spinner"></span>
         {/if}

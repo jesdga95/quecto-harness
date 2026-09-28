@@ -71,6 +71,12 @@ type Result struct {
 // reads as ordinary content rather than being guessed at.
 var toolCallMarkers = []string{"<tool_call>", "<function=", "[TOOL_CALLS]", "<|python_tag|>"}
 
+// CutOff reports whether a finish reason says the reply hit its token limit.
+// Chat completions says length and the Responses API names the limit.
+func CutOff(reason string) bool {
+	return reason == "length" || reason == "max_output_tokens"
+}
+
 // UnparsedToolCall reports whether text carries a tool call the server left in
 // the content. A turn that ends on one ended on a failure, not on an answer.
 func UnparsedToolCall(text string) bool {

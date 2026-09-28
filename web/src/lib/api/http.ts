@@ -152,7 +152,7 @@ interface WireSummary {
   project?: string;
   model?: string;
   title?: string;
-  created?: string;
+  updated?: string;
   parent?: string;
 }
 
@@ -218,7 +218,7 @@ interface WireSnapshot {
   project?: string;
   model?: string;
   title?: string;
-  created?: string;
+  updated?: string;
   n_ctx?: number;
   fill?: number;
   entries?: WireEntry[];
@@ -444,7 +444,7 @@ function toSession(s: WireSummary): Session {
     project: s.project ?? "",
     model: s.model ?? "",
     title: s.title || "New session",
-    created: s.created ?? new Date().toISOString(),
+    updated: s.updated ?? new Date().toISOString(),
     parent: s.parent ?? "",
     children: [],
   };
@@ -865,7 +865,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
     project: snap.project ?? known?.project ?? "",
     model: snap.model ?? known?.model ?? "",
     title: snap.title || known?.title || titleOf(entries),
-    created: snap.created ?? known?.created ?? new Date().toISOString(),
+    updated: snap.updated ?? known?.updated ?? new Date().toISOString(),
     parent: snap.parent ?? known?.parent ?? "",
     children: (snap.children ?? []).map((c) => ({
       id: c.id ?? "",

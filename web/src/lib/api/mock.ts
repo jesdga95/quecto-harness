@@ -766,7 +766,7 @@ export class MockApi implements HarnessApi {
       project,
       model,
       title: "New session",
-      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
       parent: "",
       children: [],
     };
@@ -1322,7 +1322,7 @@ export class MockApi implements HarnessApi {
       project,
       model: "Gemma4-12B",
       title: "Wire the SSE hub",
-      created: new Date(Date.now() - 3_600_000).toISOString(),
+      updated: new Date(Date.now() - 3_600_000).toISOString(),
       parent: "",
       children: [],
     };
@@ -1331,7 +1331,7 @@ export class MockApi implements HarnessApi {
       project,
       model: "Gemma4-12B",
       title: "New session",
-      created: new Date(Date.now() - 600_000).toISOString(),
+      updated: new Date(Date.now() - 600_000).toISOString(),
       parent: "",
       children: [],
     };
@@ -1340,7 +1340,7 @@ export class MockApi implements HarnessApi {
       project: this.config.projects[1]!,
       model: "Qwen3.8-27B Q5",
       title: "Dashboard palette",
-      created: new Date(Date.now() - 86_400_000).toISOString(),
+      updated: new Date(Date.now() - 86_400_000).toISOString(),
       parent: "",
       children: [],
     };
@@ -1351,7 +1351,7 @@ export class MockApi implements HarnessApi {
       project,
       model: "Qwen3.8-27B Q5",
       title: "audit internal/server/hub.go for races",
-      created: new Date(Date.now() - 1_800_000).toISOString(),
+      updated: new Date(Date.now() - 1_800_000).toISOString(),
       parent: first.id,
       children: [],
     };
@@ -1362,7 +1362,7 @@ export class MockApi implements HarnessApi {
       project,
       model: "Kimi K2 Thinking",
       title: "check every handler for a missing context",
-      created: new Date(Date.now() - 300_000).toISOString(),
+      updated: new Date(Date.now() - 300_000).toISOString(),
       parent: first.id,
       children: [],
     };

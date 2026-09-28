@@ -227,11 +227,14 @@ func TestDefaultPrefix(t *testing.T) {
 }
 
 func TestDenialContent(t *testing.T) {
-	if got := DenialContent("wrong directory"); got != "denied by user: wrong directory" {
+	if got := DenialContent("wrong directory"); !strings.HasPrefix(got, "denied by user: wrong directory\n") {
 		t.Errorf("got %q", got)
 	}
-	if got := DenialContent("  "); got != "denied by user" {
+	if got := DenialContent("  "); !strings.HasPrefix(got, "denied by user\n") {
 		t.Errorf("got %q", got)
+	}
+	if got := DenialContent(""); !strings.Contains(got, "Do not retry it") {
+		t.Errorf("the denial does not say to leave the call alone: %q", got)
 	}
 }
 

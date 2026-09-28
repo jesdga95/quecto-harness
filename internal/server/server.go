@@ -191,6 +191,10 @@ func (s *Server) checkOrigin(next http.Handler) http.Handler {
 			writeError(w, http.StatusMethodNotAllowed, "OPTIONS is not accepted here")
 			return
 		}
+		if !s.hostAllowed(r.Host) {
+			writeError(w, http.StatusForbidden, "The Host header names another server: open the URL printed by quecto-harness")
+			return
+		}
 		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 			writeError(w, http.StatusForbidden, "Cross-site requests are refused: open the URL printed by quecto-harness")
 			return
@@ -201,6 +205,22 @@ func (s *Server) checkOrigin(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// hostAllowed accepts an IP address, localhost, or the host the server was
+// told to listen on. A page that rebinds its own domain to this machine
+// reaches the port as same-origin, and the Host header is what still names it.
+func (s *Server) hostAllowed(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || net.ParseIP(host) != nil || strings.EqualFold(host, "localhost") {
+		return true
+	}
+	listenHost, _, err := net.SplitHostPort(s.listen)
+	return err == nil && strings.EqualFold(host, listenHost)
 }
 
 func (s *Server) originAllowed(origin string) bool {

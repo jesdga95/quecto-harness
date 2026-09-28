@@ -47,19 +47,40 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 	if before.State == SnapshotBinary {
 		return Result{}, fmt.Errorf("%s looks like a binary file, not edited", args.Path)
 	}
-	if before.State != SnapshotText {
+	content := before.Content
+	if before.State == SnapshotLarge {
+		// A file past the baseline limit is still edited; only the copy kept
+		// for the change panel is skipped.
+		content, err = os.ReadFile(path)
+		if err == nil && looksBinary(content[:min(len(content), 8192)]) {
+			return Result{}, fmt.Errorf("%s looks like a binary file, not edited", args.Path)
+		}
+	}
+	if before.State == SnapshotNew || err != nil {
 		return Result{}, fmt.Errorf("read %s: check the permissions on the file", args.Path)
 	}
-	old := string(before.Content)
 
-	switch n := strings.Count(old, args.OldString); {
+	// read shows a CRLF file with LF endings, so text copied from it is matched
+	// against the file with its endings folded the same way.
+	old, oldString, newString := string(content), args.OldString, args.NewString
+	crlf := allCRLF(old) && !strings.Contains(oldString, "\r")
+	if crlf {
+		old = strings.ReplaceAll(old, "\r\n", "\n")
+		newString = strings.ReplaceAll(newString, "\r\n", "\n")
+	}
+
+	switch n := strings.Count(old, oldString); {
 	case n == 0:
 		return Result{}, fmt.Errorf("old_string is not in %s: read the file and copy the text exactly, whitespace included", args.Path)
 	case n > 1:
 		return Result{}, fmt.Errorf("old_string appears %d times in %s: include more of the surrounding lines so it matches once", n, args.Path)
 	}
 
-	updated := strings.Replace(old, args.OldString, args.NewString, 1)
+	updated := strings.Replace(old, oldString, newString, 1)
+	line := lineOf(old, oldString)
+	if crlf {
+		updated = strings.ReplaceAll(updated, "\n", "\r\n")
+	}
 	if err := config.WriteAtomic(path, []byte(updated), info.Mode().Perm()); err != nil {
 		return Result{}, fmt.Errorf("write %s: %s", args.Path, err)
 	}
@@ -69,11 +90,17 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 
 	return Result{
 		Output: fmt.Sprintf("edited %s at line %d (-%d +%d)",
-			r.rel(path), lineOf(old, args.OldString),
-			countLines(args.OldString), countLines(args.NewString)),
+			r.rel(path), line, countLines(oldString), countLines(newString)),
 		Bytes: len(updated),
 		Meta:  lineCounts(before, updated),
 	}, nil
+}
+
+// allCRLF reports whether every line in s ends in CRLF. A file that mixes the
+// two is matched as it stands, since folding it could not be undone.
+func allCRLF(s string) bool {
+	n := strings.Count(s, "\r\n")
+	return n > 0 && n == strings.Count(s, "\n")
 }
 
 // countLines counts the lines a run of text spans. A trailing newline ends

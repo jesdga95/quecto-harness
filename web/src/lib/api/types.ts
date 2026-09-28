@@ -41,7 +41,8 @@ export interface Session {
   project: string;
   model: string;
   title: string;
-  created: string;
+  /** When the session last changed, which is what the sidebar orders by. */
+  updated: string;
   /** The session that launched this one, for a subagent run. Empty is a
       conversation somebody started, which is the only kind the sidebar lists. */
   parent: string;

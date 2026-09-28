@@ -187,8 +187,9 @@ unanswered requests after a browser reconnect.
   two fields as an editable default.
 - **An "allow always"** writes the allowlist before the command runs, and downgrades to
   *once* with a note if the write fails.
-- **A denial** returns to the model exactly `denied by user` plus an optional reason,
-  keeping the `tool_call_id` so the history stays valid, and the loop continues. A call
+- **A denial** returns to the model `denied by user` plus an optional reason and a line
+  telling it not to retry the call another way, keeping the `tool_call_id` so the history
+  stays valid, and the loop continues. A call
   stopped by the user gets `stopped by user` and the turn ends.
 
 ## 8. internal/agent
@@ -205,10 +206,12 @@ too late to be picked up starts a turn of its own.
 
 - **The loop** reads the model once at turn start and holds it for the whole turn, so a
   config edit cannot change the prompt mid-turn. Then, with no iteration cap: preflight
-  (absorb a queued message, then check fill against `compact_at × n_ctx`), stream, and for
-  each tool call decide, then execute, persisting after every entry. What bounds a turn is
-  `max_tool_calls`, 50 by default: once it is spent the tool schemas are dropped from the
-  request and a `status` entry says so, so the turn ends in prose rather than being cut off.
+  (absorb a queued message, then check fill against `compact_at × n_ctx`, lowered to
+  `n_ctx − max_tokens` when the agent's reply cap would not fit), stream, and for each tool
+  call decide, then execute, persisting after every entry. What bounds a turn is
+  `max_tool_calls`, 50 by default: once it is spent a `status` entry says so and further
+  calls are answered as not run. The schemas stay in the request so the prompt cache holds,
+  and a model that calls tools a second time after being refused ends the turn.
 - **Token fill** treats the last usage report as authoritative and estimates entries added
   since at four characters per token, so a 16 KiB tool result counts before the next usage.
   The window is the agent's `max_context` override, else what the server reported, else
@@ -278,7 +281,9 @@ auth`. A panic becomes a 500 with a stack in the log; it never takes the process
   `SameSite` cookie for 30 days and 303s to `/`, so the token leaves the address bar. Every
   `/api/*` request needs the cookie or a Bearer token; a 401 is a full-page state.
 - **Origin.** No CORS headers are sent, and `checkOrigin` rejects a cross-origin `Origin`,
-  closing the gap a form or `EventSource` on another origin would otherwise reach.
+  closing the gap a form or `EventSource` on another origin would otherwise reach. It also
+  rejects a `Host` that names a domain other than `localhost` or the listen host, which is
+  what a DNS-rebound page sends.
 - **Routes** cover: `state` (config, agents, the active agent's probe and models, projects,
   OS, version; the probe is cached 15 s, keyed by address and key, and describes the active
   agent alone); agent CRUD with `select` and a `probe` that returns 200 even on failure;
@@ -411,7 +416,7 @@ The fourteen review questions, each settled and already folded into the sections
 | 1  | The token persists across restarts; deleting the file is the only rotation. |
 | 2  | Effort `off` sends both `reasoning_budget: 0` and `enable_thinking: false` on llama.cpp, and `reasoning_effort: none` on the chat backend. |
 | 3  | Parallel tool calls run sequentially, one card at a time, in model order. |
-| 4  | `max_tokens` is sent when the agent sets one, and by the title request. There is no iteration limit; a spent `max_tool_calls` drops the tool schemas instead. |
+| 4  | `max_tokens` is sent when the agent sets one, and by the title request. There is no iteration limit; a spent `max_tool_calls` refuses further calls instead. |
 | 5  | Manual compaction is idle-only; Stop the turn first. |
 | 6  | Stop cancels the session, not the model server; nothing in the HTTP protocol cancels work already started (a llama.cpp slot keeps going). |
 | 7  | Stopping a compaction is refused, with no deadline, since the prefill of a full context has no honest bound. |

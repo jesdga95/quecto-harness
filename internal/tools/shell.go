@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// plainEnv keeps colour codes and pagers out of command output, and stops git
+// waiting on an editor nobody can type into. Later entries override the
+// user's own settings of the same names.
+var plainEnv = []string{"NO_COLOR=1", "TERM=dumb", "PAGER=cat", "GIT_PAGER=cat", "GIT_EDITOR=true"}
+
 // RunShell runs one command in the project root and returns its merged output
 // with an exit code line. Each call is a new shell.
 func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, error) {
@@ -30,7 +35,7 @@ func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, err
 	buf := newLimitBuffer(r.OutputLimit)
 	cmd := exec.CommandContext(runCtx, r.Shell, "-c", args.Command)
 	cmd.Dir = r.Root
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), plainEnv...)
 	cmd.Stdin = nil
 	cmd.Stdout = buf
 	cmd.Stderr = buf

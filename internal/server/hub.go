@@ -210,9 +210,11 @@ func (h *Hub) Subscribe(sessionID string, from int64) (<-chan frame, func(), []f
 	case from < 0:
 		from = 0
 	}
+	// A mark past the last frame was taken from a hub that has since
+	// restarted, so the browser holds a transcript this hub never sent.
 	switch {
-	case from >= c.seq:
-	case from < c.base-1:
+	case from == c.seq:
+	case from > c.seq, from < c.base-1:
 		replay = []frame{{Seq: c.seq, Type: resyncEvType, Data: encode(resyncEvType, c.seq, nil)}}
 	default:
 		for _, f := range c.ring {

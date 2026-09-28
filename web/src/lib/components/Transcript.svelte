@@ -458,7 +458,7 @@
 
   {#if !atBottom}
     <button
-      class="round absolute bottom-4 left-1/2 -translate-x-1/2 shadow-lg"
+      class="round absolute bottom-4 left-1/2 -translate-x-1/2"
       aria-label="Scroll to the end"
       onclick={toBottom}
     >

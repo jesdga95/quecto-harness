@@ -369,14 +369,25 @@ func (e *Engine) report(child *Session) {
 func (e *Engine) answerOf(child *Session) string {
 	child.mu.Lock()
 	defer child.mu.Unlock()
-	answer := ""
+	answer, cut, last := "", false, true
 	for i := len(child.Entries) - 1; i >= 0; i-- {
-		if child.Entries[i].Kind == "assistant" && strings.TrimSpace(child.Entries[i].Content) != "" {
+		if child.Entries[i].Kind != "assistant" {
+			continue
+		}
+		// The last reply is the one that says whether the model ran out of
+		// room, whichever reply the answer is taken from.
+		if last {
+			reason, _ := child.Entries[i].Meta["finish_reason"].(string)
+			cut, last = llm.CutOff(reason), false
+		}
+		if strings.TrimSpace(child.Entries[i].Content) != "" {
 			answer = child.Entries[i].Content
 			break
 		}
 	}
 	switch {
+	case cut:
+		return joinMessages(answer, "The task ran out of room: its last reply was cut off at the token limit.")
 	case child.state == StateStopped:
 		return joinMessages(answer, "The task was stopped before it finished.")
 	case child.state == StateFailed:

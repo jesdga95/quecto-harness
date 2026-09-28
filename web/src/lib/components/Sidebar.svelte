@@ -279,7 +279,7 @@
                       <span class="working" role="status" aria-label="Working"></span>
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{session.title}</span>
-                    <span class="num text-[11px] text-muted">{since(session.created)}</span>
+                    <span class="num text-[11px] text-muted">{since(session.updated)}</span>
                   </button>
                   <div class="row-act">
                     <RowMenu

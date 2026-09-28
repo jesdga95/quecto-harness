@@ -114,6 +114,41 @@ export function firstSentence(text: string): string {
   return end > 0 ? text.slice(0, end + 1) : text;
 }
 
+/** The opening of the newest finished paragraph of a thought still being
+    written, so the collapsed row follows it. The paragraph under way is left
+    until it ends, and a thought of one paragraph shows its first sentence. */
+export function latestSentence(text: string): string {
+  const done = text.split(/\n\s*\n/).slice(0, -1).filter((p) => p.trim() !== "");
+  return firstSentence((done.at(-1) ?? text).trim());
+}
+
+/** The first line of a tool's error, for the collapsed row. */
+export function firstLine(text: string): string {
+  return text.split("\n", 1)[0].trim();
+}
+
+/** What a turn is doing, as a subagent row or run names it. */
+export function statusLabel(status: string): string {
+  switch (status) {
+    case "idle":
+      return "Done";
+    case "loading":
+      return "Loading";
+    case "thinking":
+      return "Starting";
+    case "streaming":
+      return "Writing";
+    case "running":
+      return "Running";
+    case "waiting":
+      return "Waiting on you";
+    case "compacting":
+      return "Compacting";
+    default:
+      return "Working";
+  }
+}
+
 /** Plain description of a command, falling back to the command itself. */
 export function describeCommand(command: string): string {
   if (/^ls\b/.test(command)) return "List the project root";

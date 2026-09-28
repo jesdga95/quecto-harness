@@ -19,7 +19,7 @@
   import StreamText from "./StreamText.svelte";
   import WriteDiff from "./WriteDiff.svelte";
   import type { Todo, TranscriptItem } from "../api";
-  import { clockLabel, describeCommand, firstSentence, k } from "../format";
+  import { clockLabel, describeCommand, firstLine, firstSentence, k, latestSentence, statusLabel } from "../format";
   import { asked } from "../question";
   import { sectionsOf } from "../plan";
   import { app } from "../state/app.svelte";
@@ -63,6 +63,10 @@
     return "";
   });
 
+  // A call that failed before it could run, or that the tool refused, carries
+  // the error as its output. Only bash has an exit code to say so with.
+  const failed = $derived(item.kind === "tool" && !item.running && item.meta?.error === true);
+
   const name = $derived.by(() => {
     if (item.kind === "reasoning") return "Think";
     if (item.kind === "permission") return "Permission";
@@ -84,11 +88,12 @@
   });
 
   const desc = $derived.by(() => {
-    if (item.kind === "reasoning") return firstSentence(item.text);
+    if (item.kind === "reasoning") return live ? latestSentence(item.text) : firstSentence(item.text);
     if (item.kind === "permission") return item.command;
     if (item.kind === "compaction") return `${k(item.before)} to ${k(item.after)}`;
     if (item.kind === "error") return firstSentence(item.message);
     if (item.kind !== "tool") return "";
+    if (failed) return firstLine(item.output);
     if (item.name === "todo_write") {
       const done = todos.filter((t) => t.status === "completed").length;
       return `${done} of ${todos.length} done`;
@@ -212,7 +217,7 @@
 
     <span class="name">{name}</span>
     <span class="sep">&middot;</span>
-    <span class="desc" class:path={isPath}>{desc}</span>
+    <span class="desc" class:path={isPath && !failed} class:text-crit={failed}>{desc}</span>
 
     {#if edit && wrote && (edit.counts.added > 0 || edit.counts.removed > 0)}
       <span class="num text-[12px]">
@@ -235,7 +240,7 @@
       <span class="text-[12px] text-muted">{clock}</span>
     {/if}
     {#if child && child.status !== "idle"}
-      <span class="text-[12px] text-muted">{child.status}</span>
+      <span class="text-[12px] text-muted">{statusLabel(child.status)}</span>
       <span class="spinner"></span>
     {/if}
     {#if item.kind === "tool" && item.running}
@@ -256,6 +261,8 @@
         <p class="step-text">{item.message}</p>
       {:else if item.kind === "permission"}
         <pre class="mono-block">{item.command}</pre>
+      {:else if failed && item.kind === "tool"}
+        <pre class="mono-block">{item.output}</pre>
       {:else if item.kind === "tool" && item.name === "todo_write"}
         <TodoList {todos} />
       {:else if item.kind === "tool" && item.name === "ask_user_question"}

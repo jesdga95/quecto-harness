@@ -974,3 +974,20 @@ func textsFor(h *harness, model string) (system, message string) {
 	}
 	return system, message
 }
+
+// A child whose last reply hit the token limit reports that it ran out of room,
+// rather than passing the cut-off text on as a finished answer.
+func TestAnswerOfNamesACutOffReply(t *testing.T) {
+	e := &Engine{}
+	child := newSession("sess_child", "/p", "a", "m")
+	child.Entries = []store.Entry{{Kind: "assistant", Content: "half an answer",
+		Meta: map[string]any{"finish_reason": "length"}}}
+	got := e.answerOf(child)
+	if !strings.HasPrefix(got, "half an answer\n") || !strings.Contains(got, "ran out of room") {
+		t.Errorf("answer = %q", got)
+	}
+	child.Entries[0].Meta["finish_reason"] = "stop"
+	if got := e.answerOf(child); got != "half an answer" {
+		t.Errorf("a finished reply = %q, want it as it stands", got)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -298,11 +299,19 @@ func (f *fixture) do(t *testing.T, method, path string, body any) *httptest.Resp
 	} else {
 		reader = bytes.NewReader(nil)
 	}
-	req := httptest.NewRequest(method, path, reader)
+	req := newRequest(method, path, reader)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
 	return w
+}
+
+// newRequest is a request as a browser on the printed URL sends it. The
+// default Host of a test request is a domain name, which the server refuses.
+func newRequest(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Host = "127.0.0.1:7331"
+	return req
 }
 
 func decode(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
@@ -316,7 +325,7 @@ func decode(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 
 func TestAuthTokenToCookie(t *testing.T) {
 	f := newFixture(t)
-	req := httptest.NewRequest("GET", "/?token="+testToken, nil)
+	req := newRequest("GET", "/?token="+testToken, nil)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
 	if w.Code != http.StatusSeeOther {
@@ -336,7 +345,7 @@ func TestAuthTokenToCookie(t *testing.T) {
 
 func TestAuthCookieAndBearer(t *testing.T) {
 	f := newFixture(t)
-	req := httptest.NewRequest("GET", "/api/state", nil)
+	req := newRequest("GET", "/api/state", nil)
 	req.AddCookie(&http.Cookie{Name: cookieName, Value: testToken})
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
@@ -350,7 +359,7 @@ func TestAuthCookieAndBearer(t *testing.T) {
 
 func TestAuthMissingIs401(t *testing.T) {
 	f := newFixture(t)
-	req := httptest.NewRequest("GET", "/api/state", nil)
+	req := newRequest("GET", "/api/state", nil)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
@@ -363,7 +372,7 @@ func TestAuthMissingIs401(t *testing.T) {
 
 func TestAuthWrongTokenOnRootServesInstructions(t *testing.T) {
 	f := newFixture(t)
-	req := httptest.NewRequest("GET", "/", nil)
+	req := newRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
 	if w.Code != 200 {
@@ -387,7 +396,7 @@ func TestOriginRejection(t *testing.T) {
 		{"http://127.0.0.1:9999", http.StatusForbidden},
 	}
 	for _, tc := range cases {
-		req := httptest.NewRequest("GET", "/api/state", nil)
+		req := newRequest("GET", "/api/state", nil)
 		req.Header.Set("Authorization", "Bearer "+testToken)
 		if tc.origin != "" {
 			req.Header.Set("Origin", tc.origin)
@@ -400,9 +409,36 @@ func TestOriginRejection(t *testing.T) {
 	}
 }
 
+// A Host naming a domain other than the one listened on is a rebound name,
+// refused before the token is looked at.
+func TestHostRejection(t *testing.T) {
+	f := newFixture(t)
+	cases := []struct {
+		host string
+		want int
+	}{
+		{"127.0.0.1:7331", 200},
+		{"localhost:7331", 200},
+		{"[::1]:7331", 200},
+		{"192.168.1.20:7331", 200},
+		{"evil.example:7331", http.StatusForbidden},
+		{"attacker.test", http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		req := newRequest("GET", "/api/state", nil)
+		req.Host = tc.host
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		w := httptest.NewRecorder()
+		f.handler.ServeHTTP(w, req)
+		if w.Code != tc.want {
+			t.Errorf("host %q = %d, want %d", tc.host, w.Code, tc.want)
+		}
+	}
+}
+
 func TestCrossSiteFetchMetadataRejected(t *testing.T) {
 	f := newFixture(t)
-	req := httptest.NewRequest("GET", "/api/state", nil)
+	req := newRequest("GET", "/api/state", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
 	w := httptest.NewRecorder()
@@ -1581,7 +1617,7 @@ func TestSSEReplayAndResync(t *testing.T) {
 		t.Errorf("replay from ?from= = %v", got)
 	}
 
-	req := httptest.NewRequest("GET", "/api/events?session=s1", nil)
+	req := newRequest("GET", "/api/events?session=s1", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Last-Event-ID", "2")
 	got = f.readStreamReq(t, req, 1)
@@ -1596,6 +1632,23 @@ func TestSSEReplayAndResync(t *testing.T) {
 	got = f.readStream(t, "/api/events?session=s1&from=1", 1)
 	if len(got) != 1 || got[0]["type"] != "resync" {
 		t.Errorf("rolled ring = %v, want a resync", got)
+	}
+}
+
+// TestSSEResyncAfterRestart asserts that a mark from before a restart, which is
+// ahead of anything the new hub sent, is answered with a resync.
+func TestSSEResyncAfterRestart(t *testing.T) {
+	f := newFixture(t)
+	f.hub.Publish("s1", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "0"}})
+	_, cancel, replay := f.hub.Subscribe("s1", 800)
+	defer cancel()
+	if len(replay) != 1 || replay[0].Type != resyncEvType {
+		t.Errorf("replay for a mark ahead of the hub = %+v, want one resync", replay)
+	}
+	_, cancel2, replay := f.hub.Subscribe("s1", 1)
+	defer cancel2()
+	if len(replay) != 0 {
+		t.Errorf("replay for a mark at the last frame = %+v, want none", replay)
 	}
 }
 
@@ -1664,7 +1717,7 @@ func TestThinkingAndTheReplyAreSeparateFrames(t *testing.T) {
 func TestAFrameNamesItsIDInLowercase(t *testing.T) {
 	f := newFixture(t)
 	f.hub.Publish("s7", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
-	req := httptest.NewRequest("GET", "/api/events?session=s7&from=0", nil)
+	req := newRequest("GET", "/api/events?session=s7&from=0", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	lines := f.readStreamLines(t, req, 1)
 	if len(lines) == 0 || lines[0] != "id: 1" {
@@ -1680,7 +1733,7 @@ func TestAReconnectResumesFromTheHeaderNotTheStaleURL(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		f.hub.Publish("s8", agent.Event{Type: "status_entry", Fields: map[string]any{"content": fmt.Sprint(i)}})
 	}
-	req := httptest.NewRequest("GET", "/api/events?session=s8&from=1", nil)
+	req := newRequest("GET", "/api/events?session=s8&from=1", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Last-Event-ID", "3")
 	got := f.readStreamReq(t, req, 1)
@@ -1830,7 +1883,7 @@ func TestPanicIsContained(t *testing.T) {
 	mux.HandleFunc("/boom", func(w http.ResponseWriter, r *http.Request) { panic("boom") })
 	h := recoverPanic(mux)
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/boom", nil))
+	h.ServeHTTP(w, newRequest("GET", "/boom", nil))
 	if w.Code != 500 || !strings.Contains(w.Body.String(), "Internal error") {
 		t.Errorf("status = %d body = %s", w.Code, w.Body.String())
 	}
@@ -1931,7 +1984,7 @@ func TestNoGUISessionIsNamed(t *testing.T) {
 
 func TestEmbedFallbackPage(t *testing.T) {
 	f := newFixture(t)
-	req := httptest.NewRequest("GET", "/", nil)
+	req := newRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
@@ -2027,7 +2080,7 @@ func (f *fixture) waitIdle(t *testing.T, id string) {
 
 func (f *fixture) readStream(t *testing.T, path string, want int) []map[string]any {
 	t.Helper()
-	req := httptest.NewRequest("GET", path, nil)
+	req := newRequest("GET", path, nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	return f.readStreamReq(t, req, want)
 }
@@ -2065,7 +2118,7 @@ func (f *fixture) readStreamLines(t *testing.T, req *http.Request, want int) []s
 // readStreamUntil reads a stream's events until stop accepts one.
 func (f *fixture) readStreamUntil(t *testing.T, path string, stop func(map[string]any) bool) []map[string]any {
 	t.Helper()
-	req := httptest.NewRequest("GET", path, nil)
+	req := newRequest("GET", path, nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
 	defer cancel()
