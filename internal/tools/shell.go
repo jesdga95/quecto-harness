@@ -33,6 +33,11 @@ func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, err
 	defer cancel()
 
 	buf := newLimitBuffer(r.OutputLimit)
+	spill := r.openSpill()
+	if spill != nil {
+		defer spill.Close()
+		buf.spill, buf.spillCap = spill, spillCap
+	}
 	cmd := exec.CommandContext(runCtx, r.Shell, "-c", args.Command)
 	cmd.Dir = r.Root
 	cmd.Env = append(os.Environ(), plainEnv...)
@@ -61,6 +66,7 @@ func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, err
 	if b.Len() > 0 && !strings.HasSuffix(out, "\n") {
 		b.WriteString("\n")
 	}
+	b.WriteString(keepSpill(spill, buf, truncated))
 	if timedOut {
 		fmt.Fprintf(&b, "\ncommand timed out after %ds and was killed\n", int(timeout/time.Second))
 	}
@@ -88,6 +94,45 @@ func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, err
 		Truncated: truncated,
 		Bytes:     buf.Total(),
 	}, nil
+}
+
+// spillCap bounds the saved copy of one command's output.
+const spillCap = 16 << 20
+
+// openSpill starts the file a command's whole output is saved to, or nil when
+// nothing is saved. A folder that cannot be made saves nothing.
+func (r *Runner) openSpill() *os.File {
+	if r.Spill == "" {
+		return nil
+	}
+	if err := os.MkdirAll(r.Spill, 0o700); err != nil {
+		return nil
+	}
+	f, err := os.CreateTemp(r.Spill, "bash-*.txt")
+	if err != nil {
+		return nil
+	}
+	return f
+}
+
+// keepSpill keeps the saved output of a command that was cut and names it,
+// and removes it otherwise. It answers with the line the result carries.
+func keepSpill(f *os.File, buf *limitBuffer, truncated bool) string {
+	if f == nil {
+		return ""
+	}
+	buf.mu.Lock()
+	whole, saved := buf.spill != nil, buf.spilled
+	buf.mu.Unlock()
+	if !truncated || !whole {
+		f.Close()
+		os.Remove(f.Name())
+		return ""
+	}
+	if saved < buf.Total() {
+		return fmt.Sprintf("\nthe first %d bytes of the output are saved to %s: read it with offset and limit, or grep it\n", saved, f.Name())
+	}
+	return fmt.Sprintf("\nthe whole output, %d bytes, is saved to %s: read it with offset and limit, or grep it\n", saved, f.Name())
 }
 
 // ShellTimeout is how long the call in raw would be given. Arguments that do

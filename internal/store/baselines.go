@@ -43,6 +43,12 @@ func (s *Sessions) filesDir(id string) string {
 	return filepath.Join(s.dir, id+".files")
 }
 
+// SpillDir is where a session's cut-off tool output is saved whole. It is
+// inside the session's own folder, so it goes when the session does.
+func (s *Sessions) SpillDir(id string) string {
+	return filepath.Join(s.filesDir(id), "spill")
+}
+
 // WriteBlob stores one baseline copy. The name comes from BlobName, so it can
 // never reach outside the folder.
 func (s *Sessions) WriteBlob(id, name string, data []byte) error {

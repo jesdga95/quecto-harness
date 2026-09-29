@@ -28,3 +28,8 @@ export function pushOverlay(onEscape: () => void): () => void {
 export function isTop(onEscape: () => void): boolean {
   return stack[stack.length - 1] === onEscape;
 }
+
+/** Whether any overlay is open, so a key meant for the page can stand aside. */
+export function overlayOpen(): boolean {
+  return stack.length > 0;
+}

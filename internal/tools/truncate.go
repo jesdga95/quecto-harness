@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bytes"
+	"io"
 	"strconv"
 	"sync"
 	"unicode/utf8"
@@ -104,6 +105,12 @@ type limitBuffer struct {
 	tail  []byte
 	total int
 	keep  int
+
+	// spill receives every byte as well, up to spillCap, so output that is
+	// cut can be read whole afterwards. A failed write drops it.
+	spill    io.Writer
+	spilled  int
+	spillCap int
 }
 
 func newLimitBuffer(capBytes int) *limitBuffer {
@@ -127,6 +134,13 @@ func (b *limitBuffer) Write(p []byte) (int, error) {
 	b.tail = append(b.tail, p...)
 	if len(b.tail) > b.keep {
 		b.tail = append(b.tail[:0], b.tail[len(b.tail)-b.keep:]...)
+	}
+	if b.spill != nil && b.spilled < b.spillCap {
+		chunk := p[:min(len(p), b.spillCap-b.spilled)]
+		if _, err := b.spill.Write(chunk); err != nil {
+			b.spill = nil
+		}
+		b.spilled += len(chunk)
 	}
 	return len(p), nil
 }

@@ -178,6 +178,9 @@ interface ScriptedTurn {
   /** Files written after the tool, each a step of its own, so the file links
       and the panel have something to open. */
   writes?: { path: string; content: string }[];
+  /** Files read before the tool, each a step of its own, so a running turn
+      has enough steps to fold. */
+  reads?: string[];
 }
 
 const MOCK_SVG = [
@@ -299,6 +302,7 @@ const SCRIPT: ScriptedTurn[] = [
     ].join("\n"),
     exit: 0,
     truncated: false,
+    reads: ["AGENTS.md", "go.mod", "Makefile", "cmd/quecto-harness/main.go", "internal/agent/engine.go"],
     writes: [
       { path: "example.svg", content: MOCK_SVG },
       { path: "hello.py", content: MOCK_PY },
@@ -326,6 +330,7 @@ const SCRIPT: ScriptedTurn[] = [
     output: LONG_OUTPUT,
     exit: 2,
     truncated: true,
+    reads: ["internal/agent/loop.go", "internal/llm/client.go", "internal/server/sse.go"],
     reply:
       "The build is broken in four places, all under `internal`.\n\n" +
       "## What failed\n" +
@@ -894,7 +899,8 @@ export class MockApi implements HarnessApi {
     const states: Record<string, TurnStatus> = {};
     for (const [id, t] of this.transcripts) {
       const run = this.running?.session === id;
-      const status = run ? "streaming" : t.status;
+      const held = this.pending?.session === id || this.openQuestion?.session === id;
+      const status = held ? "waiting" : run ? "streaming" : t.status;
       if (status !== "idle") states[id] = status;
     }
     onStates(states, true);
@@ -1030,6 +1036,23 @@ export class MockApi implements HarnessApi {
           truncated: false,
         });
         await this.sleep(260, turn);
+      }
+
+      for (const path of script.reads ?? []) {
+        const id = nextId("t");
+        this.send(session, t, { type: "tool_call", id, name: "read", args: { path } });
+        this.emit(session, { type: "status", status: "running" });
+        this.send(session, t, { type: "tool_start", id, name: "read", timeout_s: null });
+        await this.sleep(700, turn);
+        this.send(session, t, {
+          type: "tool_output",
+          id,
+          output: `     1\t// ${path}\n     2\t\n     3\tpackage main\n`,
+          exit_code: null,
+          truncated: false,
+        });
+        this.emit(session, { type: "status", status: "streaming" });
+        await this.sleep(240, turn);
       }
 
       const callId = nextId("t");

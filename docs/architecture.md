@@ -137,15 +137,25 @@ The package holds ten tool schemas. A `Runner` bound to a symlink-resolved proje
 executes six of them; `agent` executes `todo_write`, `ask_user_question`, `subagent` and
 `send_message`, whose effect is on the session rather than the machine.
 
-- **`read`** numbers lines, takes an offset and a limit, caps bytes, detects binary
-  content, and marks what it left with `… n more lines`.
-- **`grep`** searches inside the project, on the same guard `read` uses.
+- **`read`** numbers lines, takes an offset and a limit, caps bytes and each line at 2000,
+  detects binary content, and marks what it left with `… n more lines`. What it reads is
+  recorded on the session by size and modification time.
+- **`grep`** searches inside the project, on the same guard `read` uses, and skips a link
+  whose target is outside it.
 - **`write`** creates parent directories, replaces atomically, preserves the existing
   file mode, and hands the file as it stood to `Baseline`, which is what the change panel
-  compares against.
-- **`edit`** does the same, for an edit rather than a whole file.
-- **`bash`** starts a fresh shell per call, merges stdout and stderr, kills the
-  process group with SIGKILL after 2 s, and adds an exit-code line and timeout/stop notes.
+  compares against. An existing file is replaced only once the session has read it and
+  only while it is as it was read.
+- **`edit`** does the same, for an edit rather than a whole file. `replace_all` changes
+  every occurrence; without it a repeated `old_string` is refused with the lines it is on.
+  A file with CRLF endings throughout is matched with them folded, the way `read` shows it,
+  and written back with CRLF.
+- **`bash`** starts a fresh shell per call with `NO_COLOR`, `TERM=dumb` and no pager,
+  merges stdout and stderr, kills the process group with SIGKILL after 2 s, and adds an
+  exit-code line and timeout/stop notes. Output past the limit is cut to its head and
+  tail, and the whole of it, up to 16 MiB, is saved under the session's folder in the
+  state directory at a path the result names. `read` and `grep` reach that folder by
+  absolute path, and nothing else in the state directory.
 - **`web_search`** reaches the provider the config names through `internal/search`
   (Exa is the first and only one), the query's whole character budget shared across its
   results, a hit with no address dropped and counted, and the answer truncated to
@@ -155,8 +165,8 @@ Unknown argument fields are **tolerated** (a small model invents one and the cal
 still run); a missing required field is a one-line tool error.
 
 **Path guard.** The argument is resolved to an absolute path and the existing prefix is
-symlinked; anything that falls outside the root is refused with **one identical message for
-every cause**, so a probing model learns nothing from the difference. An inner symlink
+symlinked; anything that falls outside the root, or inside the state directory when the
+project contains it, is refused with **one identical message for every cause**, so a probing model learns nothing from the difference. An inner symlink
 pointing out is refused; a write through a final-component symlink follows the target and
 checks it; the check-then-open race is accepted (the user's own machine, the user's chosen
 directory). Output is truncated to a head and a tail with a marker; `looksBinary` triggers
@@ -175,7 +185,8 @@ unanswered requests after a browser reconnect.
   `send_message` are always allowed: the first two are confined by the path guard, and the
   rest touch the session rather than the machine. `full` allows everything before the tool
   is even named. In `allowlist` mode, `write`, `edit` and `web_search` run
-  free and `bash` runs when it prefix-matches the project allowlist **and** contains
+  free, except a write whose path passes through a `.git` folder, before or after its
+  links are followed, which asks, and `bash` runs when it prefix-matches the project allowlist **and** contains
   no shell operator. `web_search` prompts in `ask` mode: the query leaves the machine and
   the call is billed, and the allowlist holds shell prefixes, which have nothing to say
   about a query, so "allow always" is not offered for it.
@@ -228,9 +239,30 @@ too late to be picked up starts a turn of its own.
 - **One agent.** Selecting or editing the active agent repoints every live conversation and
   clears `n_ctx`, caps and the estimate; a turn already running finishes on the agent it
   started with, and a subagent run stays on the agent it was launched onto.
-- **Compaction** fires when fill crosses the threshold, or manually on an idle session
-  (Stop is refused while it runs). On success it flips every prior entry to *not
-  in-context* and appends one compaction entry carrying the summary.
+- **Compaction** fires when fill crosses the threshold, when the server refuses a request
+  as longer than its window (once per turn, and the request is sent again), or manually on
+  an idle session (Stop is refused while it runs). It keeps the latest 16 % of the
+  context word for word, from an assistant entry so each call stays beside its result,
+  and summarises what comes before under fixed headings. A summary cut off at the token
+  limit is refused. On success every older entry is *not in-context*, and one compaction
+  entry carrying the summary is appended, naming the first kept entry. The summary is sent
+  ahead of the kept entries.
+- **Retries.** A request that fails with a server error, a model still loading, a server
+  not answering, or an empty reply is sent again after 0.5, 1, 2, 4 and 8 s, each attempt
+  noted in the transcript. A stall is not retried. A reply stopped or failed part way is
+  kept as an assistant entry marked `interrupted`, without its unfinished tool calls.
+- **Repeated calls.** The third identical call in a row, and the fifth and every one from
+  the eighth, carry a note in their result telling the model to change course. `todo_write`
+  and `write_plan` neither count nor break a run, and a message from outside the turn
+  resets it.
+- **Carrying on with a plan.** A turn answering an approved plan's kickoff that ends with
+  steps left is sent back to the next one by a message the transcript does not show, and a
+  status line that it does. It stops after 20 rounds, after two in a row complete nothing,
+  and when the reply was cut off at the token limit.
+- **Interrupted calls.** Before a call that can change something runs (`bash`, `write`,
+  `edit`, `subagent`, `send_message`), the assistant entry records it as started and is
+  saved. A session read back from disk with calls unanswered has them closed: a started one
+  as *outcome unknown*, the others as *not run*, under an *Interrupted* status line.
 - **What the model sees.** The UI keeps every entry forever (dimming what dropped out); the
   model sees only `contextMessages()`, which regenerates the system prompt, includes only
   in-context entries, synthesises tool messages for any unanswered assistant call, and
@@ -241,8 +273,11 @@ too late to be picked up starts a turn of its own.
 - **Concurrent turns** are not serialised. llama.cpp queues a request when every slot is
   busy, so a second session sits in `streaming` with no deltas until a slot frees. That is
   documented behaviour, not a defect to work around.
-- **Subagents.** `subagent` creates a session on the named agent and returns its handle
-  without waiting. A subagent runs its own agent, is skipped by `SetAgent`, is offered
+- **Subagents.** `subagent` creates a session on the named agent and waits for its first
+  turn to end; the result is the call's own result, and no message follows it. Waiting calls
+  made together in one reply are started together. With `wait` false it returns the handle,
+  and the result arrives later as a message. A subagent's permission card holds its launcher
+  as `deciding` in the session list. A subagent runs its own agent, is skipped by `SetAgent`, is offered
   neither `subagent` nor `ask_user_question` (depth is one), reports to its launcher, has its
   permission card drawn in the launcher's conversation, rolls its file writes up onto the
   launcher, and is stopped and deleted with it. An agent's `concurrency` bounds how many
@@ -350,10 +385,15 @@ found`.
   `marked` with `highlight.js` and `katex`: markdown, TeX, highlighted code, and SVG
   figures and HTML pages mounted as elements. Half-written output stays literal text rather
   than throwing.
-- **Permission card** renders inline where the request arrived: *Allow once*, *Allow always*
-  (editable prefix, offered for `bash` alone, since the allowlist holds shell
-  prefixes), *Deny* (optional reason). A 200 clears `pending` locally, without
-  waiting for a server event.
+- **Permission card** is docked above the composer while it is open, so it is in reach
+  however far up the transcript is scrolled: *Allow once*, *Allow always* (editable prefix,
+  offered for `bash` alone, since the allowlist holds shell prefixes), *Deny* (optional
+  reason). Enter allows the oldest once and Escape denies it, outside a field or a dialog.
+  The card disables itself once answered, and a 200 clears `pending` locally, without
+  waiting for a server event. A session held on a person reads *Needs you* in the sidebar.
+- **A running turn** folds its steps under a header naming the call under way, or its
+  newest step; opened, the list scrolls inside itself and follows its end. The reply and
+  any card waiting on a person stay outside the fold.
 - **Dialogs.** `Dialog` is the shell both dialogs share: backdrop, focus restore, tab
   trap, overlay stack. `SplitDialog` wraps it in the two-pane geometry, and on top of it
   the agents dialog is a rail of records, one draft per row, while the settings dialog is a

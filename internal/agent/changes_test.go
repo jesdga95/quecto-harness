@@ -24,7 +24,7 @@ func changeFor(t *testing.T, files []FileChange, path string) FileChange {
 // The baseline is the file as the session found it, so two writes to one path
 // still compare against what was there before the first.
 func TestTwoWritesKeepOneBaseline(t *testing.T) {
-	h := newHarness(t, "stream_write_once.txt", "stream_plain.txt",
+	h := newHarness(t, "stream_read.txt", "stream_write_once.txt", "stream_plain.txt",
 		"stream_write_twice.txt", "stream_plain.txt")
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
 	s := h.session(t)
@@ -190,7 +190,7 @@ func pathsOf(files []FileChange) []string {
 // An edit records a baseline the same way a whole-file write does, so a
 // session that only edits still has a change list.
 func TestReplaceInFileRecordsABaseline(t *testing.T) {
-	h := newHarness(t, "stream_replace.txt", "stream_plain.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_read.txt", "stream_replace.txt", "stream_plain.txt", "stream_plain.txt")
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
 	s := h.session(t)
 

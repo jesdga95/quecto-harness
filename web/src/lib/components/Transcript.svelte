@@ -8,7 +8,6 @@
   import Robot from "phosphor-svelte/lib/Robot";
   import Warning from "phosphor-svelte/lib/Warning";
   import CopyButton from "./CopyButton.svelte";
-  import PermissionCard from "./PermissionCard.svelte";
   import Prose from "./Prose.svelte";
   import PlanCard from "./PlanCard.svelte";
   import QuestionCard from "./QuestionCard.svelte";
@@ -19,6 +18,7 @@
   import { app, canResend, resend } from "../state/app.svelte";
   import { bytes, fileKind, fileName, timeOf } from "../format";
   import { followEnd } from "../stream.svelte";
+  import { stepDesc, stepName } from "../steps";
 
   let scroller = $state<HTMLDivElement | null>(null);
   let atBottom = $state(true);
@@ -80,9 +80,9 @@
 
   // A turn is the message that started it and everything after it up to the
   // next one. An approved plan and a compaction start one too: the work after
-  // either reads as its own, and a compaction stays in view. Once a turn is over, everything before its answer
-  // folds under one line, and the answer and what it wrote stay out. A turn
-  // still running, or one holding a card that waits on a person, shows all.
+  // either reads as its own, and a compaction stays in view. The steps fold
+  // under one line, and what a person reads or answers stays out: the reply,
+  // and a card waiting on them. A running turn folds up to its newest step.
   function pending(item: TranscriptItem): boolean {
     if (item.kind === "permission") return item.outcome === null;
     return item.kind === "tool" && item.running && !!item.askId;
@@ -100,6 +100,7 @@
     body: TranscriptItem[];
     fold: TranscriptItem[];
     rest: TranscriptItem[];
+    live: boolean;
   };
   const turns = $derived.by(() => {
     const out: Turn[] = [];
@@ -107,7 +108,7 @@
     for (const item of app.items) {
       const starts = item.kind === "user" || item.kind === "mode" || item.kind === "compaction";
       if (starts || !cur) {
-        cur = { key: item.id, head: null, body: [], fold: [], rest: [] };
+        cur = { key: item.id, head: null, body: [], fold: [], rest: [], live: false };
         out.push(cur);
         if (starts) {
           cur.head = item;
@@ -117,19 +118,20 @@
       cur.body.push(item);
     }
     out.forEach((turn, i) => {
-      const live = (i === out.length - 1 && app.status !== "idle") || turn.body.some(pending);
-      let cut = 0;
-      if (!live) {
-        const lastProcess = lastIndex(turn.body, isProcess);
+      turn.live = (i === out.length - 1 && app.status !== "idle") || turn.body.some(pending);
+      const lastProcess = lastIndex(turn.body, (item) => isProcess(item) && !pending(item));
+      let cut = lastProcess + 1;
+      if (!turn.live) {
         const answer = lastIndex(turn.body, (item) => item.kind === "assistant");
-        cut = answer > lastProcess ? answer : lastProcess + 1;
+        if (answer > lastProcess) cut = answer;
         // Planning ends in the plan being approved rather than in a reply, and
         // the approval line under it says so, so all of it folds.
         const next = out[i + 1]?.head;
         if (next?.kind === "mode" && next.kickoff) cut = turn.body.length;
       }
-      turn.fold = turn.body.slice(0, cut);
-      turn.rest = turn.body.slice(cut);
+      const folded = turn.body.slice(0, cut);
+      turn.fold = folded.filter((item) => !pending(item));
+      turn.rest = [...folded.filter(pending), ...turn.body.slice(cut)];
     });
     return out;
   });
@@ -149,6 +151,38 @@
       else parts.push(`${items.length} ${items.length === 1 ? "step" : "steps"}`);
     }
     return parts.join(", ");
+  }
+
+  // What a running turn is doing now: the newest call still running, or else
+  // its newest step, with a thought read at its latest paragraph.
+  function nowStep(items: TranscriptItem[]): { name: string; desc: string } {
+    const step =
+      items[lastIndex(items, (i) => i.kind === "tool" && i.running)] ??
+      items[lastIndex(items, isProcess)];
+    if (!step) return { name: "", desc: "" };
+    return { name: stepName(step), desc: stepDesc(step, true, app.draft?.title ?? "") };
+  }
+
+  // An opened fold of a running turn scrolls inside itself and keeps to its end
+  // as steps arrive, until the reader scrolls up inside it.
+  function followList(node: HTMLElement, live: boolean) {
+    let on = live;
+    let pinned = true;
+    const onscroll = () => {
+      pinned = node.scrollHeight - node.scrollTop - node.clientHeight < 24;
+    };
+    node.addEventListener("scroll", onscroll);
+    const follow = followEnd(node, () => on && pinned);
+    if (on) node.scrollTop = node.scrollHeight;
+    return {
+      update(next: boolean) {
+        on = next;
+      },
+      destroy() {
+        node.removeEventListener("scroll", onscroll);
+        follow.destroy();
+      },
+    };
   }
 
   // The writes each finished turn made, keyed by the reply that ends it, so the
@@ -370,9 +404,8 @@
       <span class="truncate">{item.message}</span>
     </div>
   {:else if item.kind === "permission" && item.outcome === null}
-    <div class="my-2">
-      <PermissionCard {item} />
-    </div>
+    <!-- An open permission card is docked above the composer, where it stays
+         in reach however far up the reader has scrolled. -->
   {:else if item.kind === "tool" && item.name === "ask_user_question" && item.running && item.askId}
     <div class="my-2">
       <QuestionCard {item} />
@@ -400,11 +433,22 @@
               aria-expanded={openTurns[turn.key] === true}
               onclick={() => (openTurns[turn.key] = !openTurns[turn.key])}
             >
-              <span>{foldLabel(turn.fold)}</span>
+              {#if turn.live}
+                {@const now = nowStep(turn.fold)}
+                <span class="spinner"></span>
+                <span class="fold-now">
+                  <span class="fold-name">{now.name}</span>
+                  <span class="sep">&middot;</span>
+                  {now.desc}
+                </span>
+                <span class="text-[12px]">{foldLabel(turn.fold)}</span>
+              {:else}
+                <span>{foldLabel(turn.fold)}</span>
+              {/if}
               <span class="caret" class:is-open={openTurns[turn.key]}><CaretRight /></span>
             </button>
             {#if openTurns[turn.key]}
-              <div class="fold-list">
+              <div class="fold-list" class:is-live={turn.live} use:followList={turn.live}>
                 {#each turn.fold as item (item.id)}
                   {@render renderItem(item)}
                 {/each}

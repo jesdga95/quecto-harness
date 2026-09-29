@@ -156,8 +156,9 @@ func buildSchemas() []llm.Tool {
 				"type": "object",
 				"properties": ordered{
 					{"path", map[string]any{"type": "string", "description": "Path relative to the project root."}},
-					{"old_string", map[string]any{"type": "string", "description": "The exact text to replace. It must appear once."}},
+					{"old_string", map[string]any{"type": "string", "description": "The exact text to replace. It must appear once unless replace_all is set."}},
 					{"new_string", map[string]any{"type": "string", "description": "What to put in its place. Empty deletes the text."}},
+					{"replace_all", map[string]any{"type": "boolean", "description": "Replace every occurrence rather than exactly one."}},
 				},
 				"required":             []string{"path", "old_string", "new_string"},
 				"additionalProperties": false,
@@ -251,6 +252,7 @@ func buildSchemas() []llm.Tool {
 				"properties": map[string]any{
 					"agent": map[string]any{"type": "string", "description": "The name of the agent to run the task."},
 					"task":  map[string]any{"type": "string", "description": "The whole brief. That agent sees none of this conversation."},
+					"wait":  map[string]any{"type": "boolean", "description": "False starts the agent and carries on without its result, which arrives later as a message. Waits when left out."},
 				},
 				"required":             []string{"agent", "task"},
 				"additionalProperties": false,

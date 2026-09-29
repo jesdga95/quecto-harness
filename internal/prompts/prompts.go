@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md system_plan.md system_execute.md plan.md plan_approved.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md denial.md budget_spent.md
+//go:embed system.md system_plan.md system_execute.md plan.md plan_approved.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md denial.md budget_spent.md repeat.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
 var files embed.FS
 
 var (
@@ -25,7 +25,11 @@ var (
 	imageTmpl      = template.Must(template.New("image").Parse(mustRead("image.md")))
 	titleTmpl      = template.Must(template.New("title").Parse(mustRead("title.md")))
 	messageTmpl    = template.Must(template.New("message").Parse(mustRead("message.md")))
+	compactTmpl    = template.Must(template.New("compact").Parse(mustRead("compact.md")))
+	continueTmpl   = template.Must(template.New("continue").Parse(mustRead("plan_continue.md")))
+	resultTmpl     = template.Must(template.New("result").Parse(mustRead("subagent_result.md")))
 	denialTmpl     = template.Must(template.New("denial").Parse(mustRead("denial.md")))
+	repeatTmpl     = template.Must(template.New("repeat").Parse(mustRead("repeat.md")))
 )
 
 // parseBody parses one mode's body.
@@ -140,11 +144,35 @@ func Plan(v PlanVars) string {
 	return strings.TrimRight(b.String(), " \t\r\n")
 }
 
+// PlanContinue is the message that sends a turn back to an approved plan it
+// stopped short of, naming how much is left and the step to take next.
+func PlanContinue(left, total int, next string) string {
+	var b strings.Builder
+	v := struct {
+		Left, Total int
+		Next        string
+	}{left, total, next}
+	if err := continueTmpl.Execute(&b, v); err != nil {
+		panic("prompts: render plan_continue.md: " + err.Error())
+	}
+	return strings.TrimRight(b.String(), " \t\r\n")
+}
+
 // PlanApproved is the message that starts the turn carrying out a plan.
 func PlanApproved(title string) string {
 	var b strings.Builder
 	if err := approvedTmpl.Execute(&b, struct{ Title string }{title}); err != nil {
 		panic("prompts: render plan_approved.md: " + err.Error())
+	}
+	return strings.TrimRight(b.String(), " \t\r\n")
+}
+
+// Compact asks for the summary a compaction keeps. kept says the latest
+// messages stay as they are, so the summary covers what came before them.
+func Compact(kept bool) string {
+	var b strings.Builder
+	if err := compactTmpl.Execute(&b, struct{ Kept bool }{kept}); err != nil {
+		panic("prompts: render compact.md: " + err.Error())
 	}
 	return strings.TrimRight(b.String(), " \t\r\n")
 }
@@ -181,6 +209,30 @@ func Denial(reason string) string {
 	return strings.TrimRight(b.String(), " \t\r\n")
 }
 
+// Repeat is the note added to the result of a call the model has made count
+// times in a row unchanged. firm adds the line for a model that keeps on.
+func Repeat(tool string, count int, firm bool) string {
+	var b strings.Builder
+	v := struct {
+		Tool  string
+		Count int
+		Firm  bool
+	}{tool, count, firm}
+	if err := repeatTmpl.Execute(&b, v); err != nil {
+		panic("prompts: render repeat.md: " + err.Error())
+	}
+	return strings.TrimRight(b.String(), " \t\r\n")
+}
+
+// SubagentResult is what a subagent call waited for, as its tool result.
+func SubagentResult(agent, text string) string {
+	var b strings.Builder
+	if err := resultTmpl.Execute(&b, struct{ Agent, Text string }{agent, text}); err != nil {
+		panic("prompts: render subagent_result.md: " + err.Error())
+	}
+	return strings.TrimRight(b.String(), " \t\r\n")
+}
+
 // Attachment is one file the user attached, as the model is shown it.
 func Attachment(path, content string) string {
 	var b strings.Builder
@@ -212,8 +264,9 @@ func ToolSubagent() string        { return mustRead("tool_subagent.md") }
 func ToolSendMessage() string     { return mustRead("tool_send_message.md") }
 func ToolExitPlanMode() string    { return mustRead("tool_exit_plan_mode.md") }
 func ToolWritePlan() string       { return mustRead("tool_write_plan.md") }
-func Compact() string             { return mustRead("compact.md") }
 func BudgetSpent() string         { return mustRead("budget_spent.md") }
+func NotRun() string              { return mustRead("not_run.md") }
+func OutcomeUnknown() string      { return mustRead("outcome_unknown.md") }
 
 // Title asks for a name for the task the opening message describes. It carries
 // that message rather than following the conversation, so the request stands on

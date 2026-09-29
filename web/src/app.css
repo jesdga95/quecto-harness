@@ -926,6 +926,31 @@
     flex-direction: column;
     gap: 6px;
   }
+  /* A running turn's header names the step under way, on the same line the
+     settled count takes. */
+  .fold-now {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fold-name {
+    font-weight: 500;
+    color: var(--text);
+  }
+  .fold-head .sep {
+    color: var(--border-2);
+  }
+  /* Opened while the turn runs, the steps scroll in a box of their own. The
+     padding gives back the room a step row takes past each edge. */
+  .fold-list.is-live {
+    max-height: min(400px, 50vh);
+    margin: 0 -8px;
+    padding: 0 8px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
 
   /* The line under a turn's answer. The copy glyph stands on the text edge. */
   .turn-foot {
@@ -1651,6 +1676,25 @@
       animation: none;
     }
   }
+  /* A session held on a person: a still dot where the working mark goes,
+     since nothing moves until someone answers. */
+  .needs-you {
+    position: absolute;
+    left: 7px;
+    top: 50%;
+    display: grid;
+    place-items: center;
+    width: 12px;
+    height: 12px;
+    margin-top: -6px;
+  }
+  .needs-you::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--warn);
+  }
 
   /* What the user sent: the message and everything attached to it, in one
      shape. An attachment sits inside the bubble, above the text it came with. */
@@ -1762,6 +1806,17 @@
   .tile-x svg {
     width: 13px;
     height: 13px;
+  }
+
+  /* Permission cards waiting on a person, stacked over the composer. Several
+     subagents can ask at once, so the stack scrolls past a point. */
+  .perm-dock {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 45vh;
+    margin-bottom: 8px;
+    overflow-y: auto;
   }
 
   /* The plan the model keeps, as the top of the composer: edge to edge across

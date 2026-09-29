@@ -226,7 +226,7 @@ func (e *Engine) submitPlan(ctx context.Context, s *Session, call llm.ToolCall) 
 	draw := func() {
 		e.publish(s.ID, ev("question", map[string]any{"id": q.CallID, "ask": q.ID}))
 	}
-	ans, err := e.asks.ask(ctx, q, draw)
+	ans, err := e.waitOn(ctx, s, q, draw)
 	if err != nil {
 		return tools.Result{Output: "no answer: the session was stopped"}, nil
 	}

@@ -6,14 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"quecto-harness/internal/config"
 )
 
 // ReplaceInFile swaps one exact run of text for another. The match must be
-// unique, since a model that gave too little context would otherwise change
-// whichever occurrence came first.
+// unique unless every occurrence was asked for, since a model that gave too
+// little context would otherwise change whichever occurrence came first.
 func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args ReplaceInFileArgs
 	if err := decodeArgs(raw, &args); err != nil {
@@ -42,6 +43,9 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 	if info.Size() > maxReadableFile {
 		return Result{}, fmt.Errorf("%s is %d MB, too large to edit", args.Path, info.Size()/(1<<20))
 	}
+	if err := r.checkSeen(args.Path, path, info); err != nil {
+		return Result{}, err
+	}
 
 	before := r.snapshot(path)
 	if before.State == SnapshotBinary {
@@ -69,14 +73,20 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 		newString = strings.ReplaceAll(newString, "\r\n", "\n")
 	}
 
-	switch n := strings.Count(old, oldString); {
+	n := strings.Count(old, oldString)
+	switch {
 	case n == 0:
 		return Result{}, fmt.Errorf("old_string is not in %s: read the file and copy the text exactly, whitespace included", args.Path)
-	case n > 1:
-		return Result{}, fmt.Errorf("old_string appears %d times in %s: include more of the surrounding lines so it matches once", n, args.Path)
+	case n > 1 && !args.ReplaceAll:
+		return Result{}, fmt.Errorf("old_string appears %d times in %s, at lines %s: include more of the surrounding lines so it matches once, or set replace_all to change every one",
+			n, args.Path, joinLines(linesOf(old, oldString)))
 	}
 
-	updated := strings.Replace(old, oldString, newString, 1)
+	count := 1
+	if args.ReplaceAll {
+		count = -1
+	}
+	updated := strings.Replace(old, oldString, newString, count)
 	line := lineOf(old, oldString)
 	if crlf {
 		updated = strings.ReplaceAll(updated, "\n", "\r\n")
@@ -87,12 +97,17 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 	if r.Baseline != nil {
 		r.Baseline(before)
 	}
+	r.noteFile(path)
 
+	summary := fmt.Sprintf("edited %s at line %d (-%d +%d)",
+		r.rel(path), line, countLines(oldString), countLines(newString))
+	if n > 1 {
+		summary = fmt.Sprintf("edited %s in %d places, at lines %s", r.rel(path), n, joinLines(linesOf(old, oldString)))
+	}
 	return Result{
-		Output: fmt.Sprintf("edited %s at line %d (-%d +%d)",
-			r.rel(path), line, countLines(oldString), countLines(newString)),
-		Bytes: len(updated),
-		Meta:  lineCounts(before, updated),
+		Output: summary,
+		Bytes:  len(updated),
+		Meta:   lineCounts(before, updated),
 	}, nil
 }
 
@@ -114,6 +129,35 @@ func countLines(s string) int {
 		n++
 	}
 	return n
+}
+
+// linesOf is the 1-based line each match starts on, at most ten of them.
+func linesOf(content, match string) []int {
+	var out []int
+	at, line := 0, 1
+	for len(out) < 10 {
+		i := strings.Index(content[at:], match)
+		if i < 0 {
+			break
+		}
+		line += strings.Count(content[at:at+i], "\n")
+		out = append(out, line)
+		at += i + len(match)
+		line += strings.Count(match, "\n")
+	}
+	return out
+}
+
+// joinLines writes line numbers as a list a sentence can carry.
+func joinLines(lines []int) string {
+	parts := make([]string, len(lines))
+	for i, l := range lines {
+		parts[i] = strconv.Itoa(l)
+	}
+	if len(parts) < 2 {
+		return strings.Join(parts, "")
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
 }
 
 // lineOf is the 1-based line the match starts on.

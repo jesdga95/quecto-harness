@@ -44,11 +44,47 @@ func (r *Runner) resolve(p string) (string, error) {
 		}
 	}
 	resolved := filepath.Join(real, tail)
-	rel, err := filepath.Rel(r.Root, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !within(r.Root, resolved) || (r.Hidden != "" && within(r.Hidden, resolved)) {
 		return "", outsideProject(arg)
 	}
 	return resolved, nil
+}
+
+// resolveRead is resolve for the tools that only read, which also reach the
+// folder cut-off output is saved to, by the absolute path the result named.
+func (r *Runner) resolveRead(p string) (string, error) {
+	if r.Spill != "" && filepath.IsAbs(p) && !strings.ContainsRune(p, 0) {
+		if real := realPath(filepath.Clean(p)); within(r.Spill, real) {
+			return real, nil
+		}
+	}
+	return r.resolve(p)
+}
+
+// reachable reports whether a path the walk came to may be read: inside the
+// project and outside the state directory, or inside the saved output.
+func (r *Runner) reachable(p string) bool {
+	if r.Spill != "" && within(r.Spill, p) {
+		return true
+	}
+	return r.Hidden == "" || !within(r.Hidden, p)
+}
+
+// realPath follows the links in the part of p that exists.
+func realPath(p string) string {
+	prefix, tail := splitExisting(p)
+	real, err := filepath.EvalSymlinks(prefix)
+	if err != nil {
+		return p
+	}
+	return filepath.Join(real, tail)
+}
+
+// within reports whether p is base or lies under it. Both are clean and
+// absolute.
+func within(base, p string) bool {
+	rel, err := filepath.Rel(base, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // splitExisting walks up until a component exists, so a write target under a
@@ -73,8 +109,12 @@ func splitExisting(p string) (prefix, tail string) {
 	}
 }
 
-// rel is the path as the model asked for it, relative to the project root.
+// rel is the path as the model asked for it, relative to the project root. A
+// path outside the project, which only saved output can be, stays absolute.
 func (r *Runner) rel(abs string) string {
+	if !within(r.Root, abs) {
+		return abs
+	}
 	if p, err := filepath.Rel(r.Root, abs); err == nil {
 		return p
 	}

@@ -44,7 +44,7 @@ func (r *Runner) Find(ctx context.Context, raw json.RawMessage) (Result, error) 
 
 	base := r.Root
 	if strings.TrimSpace(args.Path) != "" {
-		p, err := r.resolve(args.Path)
+		p, err := r.resolveRead(args.Path)
 		if err != nil {
 			return Result{}, err
 		}
@@ -111,6 +111,9 @@ func (f *finder) walk(ctx context.Context, base string) error {
 			return nil
 		}
 		if d.IsDir() {
+			if !f.runner.reachable(p) {
+				return fs.SkipDir
+			}
 			if p != base && f.skipping && slices.Contains(skipDirs, d.Name()) {
 				if !slices.Contains(f.skipped, d.Name()) {
 					f.skipped = append(f.skipped, d.Name())
@@ -118,6 +121,13 @@ func (f *finder) walk(ctx context.Context, base string) error {
 				return fs.SkipDir
 			}
 			return nil
+		}
+		// The walk does not follow a link, but opening one does, so a link is
+		// taken only when what it points at is inside the project.
+		if d.Type()&fs.ModeSymlink != 0 {
+			if _, err := f.runner.resolve(p); err != nil {
+				return nil
+			}
 		}
 		if f.name != "" {
 			if ok, _ := filepath.Match(f.name, d.Name()); !ok {

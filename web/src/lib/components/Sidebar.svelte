@@ -17,6 +17,7 @@
     pickAndAddProject,
     selectProject,
     isWorking,
+    needsYou,
     selectSession,
     sessionsOf,
     removeProject,
@@ -269,17 +270,24 @@
                     aria-label="Session name"
                   />
               {:else}
+                {@const held = needsYou(session.id)}
                 <div class="row-wrap">
                   <button
                     class="side-row session-row"
                     class:is-active={session.id === app.sessionId}
                     onclick={() => selectSession(session.id)}
                   >
-                    {#if isWorking(session.id)}
+                    {#if held}
+                      <span class="needs-you" aria-hidden="true"></span>
+                    {:else if isWorking(session.id)}
                       <span class="working" role="status" aria-label="Working"></span>
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{session.title}</span>
-                    <span class="num text-[11px] text-muted">{since(session.updated)}</span>
+                    {#if held}
+                      <span class="text-[11px] font-medium text-warn">Needs you</span>
+                    {:else}
+                      <span class="num text-[11px] text-muted">{since(session.updated)}</span>
+                    {/if}
                   </button>
                   <div class="row-act">
                     <RowMenu

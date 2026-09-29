@@ -22,7 +22,7 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 	if args.Path == "" {
 		return Result{}, errors.New("read needs a path")
 	}
-	path, err := r.resolve(args.Path)
+	path, err := r.resolveRead(args.Path)
 	if err != nil {
 		return Result{}, err
 	}
@@ -37,6 +37,9 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 		return Result{}, fmt.Errorf("%s is %d MB, too large to read: use bash with sed -n to take a range of lines", args.Path, info.Size()/(1<<20))
 	}
 	if info.Size() == 0 {
+		if r.Seen != nil {
+			r.Seen.note(path, info)
+		}
 		return Result{Output: fmt.Sprintf("%s is empty", args.Path)}, nil
 	}
 
@@ -129,6 +132,9 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 	}
 	if emitted == 0 && !stoppedOnBytes {
 		return Result{Output: fmt.Sprintf("%s has no line %d, the file has %d lines", args.Path, offset, lineNo)}, nil
+	}
+	if r.Seen != nil {
+		r.Seen.note(path, info)
 	}
 	return Result{Output: out, Truncated: truncated, Bytes: len(out)}, nil
 }

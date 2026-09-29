@@ -1,14 +1,30 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
-  import type { TranscriptItem } from "../api";
+  import type { PermissionDecision, TranscriptItem } from "../api";
   import { decide } from "../state/app.svelte";
 
-  let { item }: { item: Extract<TranscriptItem, { kind: "permission" }> } = $props();
+  let {
+    item,
+    keys = false,
+  }: {
+    item: Extract<TranscriptItem, { kind: "permission" }>;
+    /** Enter and Escape answer this card, so it says so. */
+    keys?: boolean;
+  } = $props();
 
   let prefix = $state(untrack(() => item.prefix));
   let reason = $state("");
   let asking = $state(false);
+  // Set from the first answer until the harness has it, so a second click
+  // cannot send another.
+  let sent = $state(false);
+
+  function send(decision: PermissionDecision): void {
+    if (sent) return;
+    sent = true;
+    void decide(item, decision).finally(() => (sent = false));
+  }
 
   // What the card says the call is about. The mono block below shows the
   // command, the query or the path, which is what the call is of. A subagent
@@ -38,13 +54,14 @@
   <pre class="mono-block mx-4 mt-2.5">{item.command}</pre>
 
   <div class="flex flex-wrap items-center gap-2 px-4 py-3">
-    <button class="chip chip-brand" onclick={() => decide(item, { decision: "once" })}>
+    <button class="chip chip-brand" disabled={sent} onclick={() => send({ decision: "once" })}>
       Allow once
     </button>
     {#if item.tool === "bash"}
       <button
         class="chip"
-        onclick={() => decide(item, { decision: "always", prefix: prefix.trim() })}
+        disabled={sent}
+        onclick={() => send({ decision: "always", prefix: prefix.trim() })}
       >
         Allow always
       </button>
@@ -52,8 +69,8 @@
     {/if}
     <button
       class="chip chip-plain ml-auto text-muted"
-      onclick={() =>
-        asking ? decide(item, { decision: "deny", reason: reason.trim() }) : (asking = true)}
+      disabled={sent}
+      onclick={() => (asking ? send({ decision: "deny", reason: reason.trim() }) : (asking = true))}
     >
       Deny
     </button>
@@ -65,21 +82,26 @@
         class="input !rounded-full"
         placeholder="Reason, optional"
         bind:value={reason}
-        onkeydown={(e) =>
-          e.key === "Enter" && decide(item, { decision: "deny", reason: reason.trim() })}
+        onkeydown={(e) => e.key === "Enter" && send({ decision: "deny", reason: reason.trim() })}
       />
       <button
         class="chip"
-        onclick={() => decide(item, { decision: "deny", reason: reason.trim() })}
+        disabled={sent}
+        onclick={() => send({ decision: "deny", reason: reason.trim() })}
       >
         Send
       </button>
     </div>
   {/if}
 
-  {#if item.tool === "bash"}
-    <p class="px-4 pb-3 text-[11.5px] text-muted">
-      Always adds the prefix to the allowlist for this project
+  {#if item.tool === "bash" || keys}
+    <p class="flex flex-wrap gap-x-3 px-4 pb-3 text-[11.5px] text-muted">
+      {#if item.tool === "bash"}
+        <span>Always adds the prefix to the allowlist for this project</span>
+      {/if}
+      {#if keys}
+        <span class="ml-auto">Enter allows once, Escape denies</span>
+      {/if}
     </p>
   {/if}
 </div>

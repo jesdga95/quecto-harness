@@ -177,7 +177,8 @@ function freshen(node: HTMLElement, settled: number, stamps: { len: number; at: 
 }
 
 /** Action for a scroller: while pinned says so, it stays at the end as what
-    it holds grows, which a paced reveal does after its source has changed. */
+    it holds grows, which a paced reveal does after its source has changed, and
+    as the scroller itself is made shorter by something growing beside it. */
 export function followEnd(node: HTMLElement, pinned: () => boolean) {
   const stick = () => {
     if (pinned()) node.scrollTop = node.scrollHeight;
@@ -185,6 +186,7 @@ export function followEnd(node: HTMLElement, pinned: () => boolean) {
   const sizes = new ResizeObserver(stick);
   const watch = () => {
     sizes.disconnect();
+    sizes.observe(node);
     for (const child of node.children) sizes.observe(child);
   };
   watch();

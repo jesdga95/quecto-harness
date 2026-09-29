@@ -54,8 +54,8 @@ func TestAskQuestionBlocksUntilAnswered(t *testing.T) {
 	if q.CallID != "call_0" {
 		t.Errorf("call id = %q, want the id of the call that asked", q.CallID)
 	}
-	if s.State() != StateExecuting {
-		t.Errorf("state while waiting = %s, want %s", s.State(), StateExecuting)
+	if s.State() != StateDeciding {
+		t.Errorf("state while waiting = %s, want %s", s.State(), StateDeciding)
 	}
 
 	// The card carries the id to answer, since the row the call drew is what

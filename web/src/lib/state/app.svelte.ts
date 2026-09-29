@@ -216,6 +216,15 @@ function onStates(states: Record<string, TurnStatus>, whole: boolean): void {
   app.states = next;
 }
 
+/** Whether a session is held on a person: a permission card, a question or a
+    plan put up for approval. The open one reads its own cards, which include
+    the ones its subagents raised. Any other reads the feed, which names only
+    the session that asked. */
+export function needsYou(id: string): boolean {
+  if (id === app.sessionId) return openPermissions().length > 0 || pendingQuestion() !== undefined;
+  return app.states[id] === "waiting";
+}
+
 /** Whether a session is working. The open one reads its own stream, which
     the page moves ahead of the feed when a message is sent. */
 export function isWorking(id: string): boolean {
@@ -572,7 +581,9 @@ export async function decide(
   item: TranscriptItem,
   decision: PermissionDecision,
 ): Promise<void> {
-  if (item.kind !== "permission") return;
+  // A card answered from its buttons and from a key in the same moment is
+  // sent once: the outcome is written before the first answer goes out.
+  if (item.kind !== "permission" || item.outcome !== null) return;
   item.outcome = outcomeLabel(decision);
   const done = await guard(() => api.decide(item.id, decision));
   if (done === null) {
@@ -1187,6 +1198,13 @@ async function refreshModels(settled = false): Promise<void> {
   refreshedAt = now;
   const models = await guard(() => api.listModels(settled));
   if (models) app.models = models;
+}
+
+type PermissionItem = Extract<TranscriptItem, { kind: "permission" }>;
+
+/** Every unanswered card, oldest first, whoever raised it. */
+export function openPermissions(): PermissionItem[] {
+  return app.items.filter((i): i is PermissionItem => i.kind === "permission" && i.outcome === null);
 }
 
 /** An unanswered card, whoever raised it. */

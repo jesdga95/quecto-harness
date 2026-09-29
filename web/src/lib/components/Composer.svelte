@@ -7,9 +7,12 @@
   import PermissionChip from "./PermissionChip.svelte";
   import X from "phosphor-svelte/lib/X";
   import FileIcon from "./FileIcon.svelte";
+  import PermissionCard from "./PermissionCard.svelte";
   import PlanPanel from "./PlanPanel.svelte";
   import {
     app,
+    decide,
+    openPermissions,
     pasteFile,
     blockingPermission,
     pendingQuestion,
@@ -20,6 +23,7 @@
     stop,
   } from "../state/app.svelte";
   import { fileKind, fileName } from "../format";
+  import { overlayOpen } from "../overlay";
 
   let {
     placeholder,
@@ -76,6 +80,33 @@
     text;
     grow();
   });
+  // Open permission cards stand above the field, so one is in reach however
+  // far up the transcript is scrolled. The keys answer the oldest.
+  const cards = $derived(openPermissions());
+  let dock = $state<HTMLDivElement | null>(null);
+
+  function answerCard(key: string): void {
+    const card = cards[0];
+    if (!card) return;
+    void decide(card, key === "Enter" ? { decision: "once" } : { decision: "deny", reason: "" });
+  }
+
+  // Enter allows once and Escape denies, from anywhere the key would do nothing
+  // else: not a field, not a control, not an open dialog, and not while the
+  // composer is hidden. The field itself answers when it is empty.
+  function onpagekey(event: KeyboardEvent) {
+    if (event.key !== "Enter" && event.key !== "Escape") return;
+    if (event.defaultPrevented || event.isComposing || event.repeat) return;
+    if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (cards.length === 0 || overlayOpen() || !dock || dock.getClientRects().length === 0) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest("input, textarea, select, button, a, [contenteditable]")) {
+      return;
+    }
+    event.preventDefault();
+    answerCard(event.key);
+  }
+
   // Both cards take their answer on the card itself, so the field waits for
   // whichever one is open.
   const asking = $derived(pendingQuestion() !== undefined);
@@ -214,6 +245,14 @@
       hits = [];
       return;
     }
+    const bare = !event.shiftKey && !event.repeat && !event.isComposing;
+    if (bare && (event.key === "Enter" || event.key === "Escape") && cards.length > 0) {
+      if (!text.trim() && files.length === 0) {
+        event.preventDefault();
+        answerCard(event.key);
+        return;
+      }
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       submit();
@@ -221,7 +260,16 @@
   }
 </script>
 
+<svelte:window onkeydown={onpagekey} />
+
 <div class="w-full">
+  {#if cards.length > 0}
+    <div class="perm-dock" bind:this={dock}>
+      {#each cards as card, i (card.id)}
+        <PermissionCard item={card} keys={i === 0} />
+      {/each}
+    </div>
+  {/if}
   <div
     class="composer composer-main"
     class:is-plan={app.workMode === "plan"}
@@ -279,7 +327,7 @@
       placeholder={asking
         ? "Answer the card above first"
         : blocked
-          ? "Answer the permission card first"
+          ? "Answer the permission card above first"
           : modeHint}
       bind:value={text}
       {onkeydown}

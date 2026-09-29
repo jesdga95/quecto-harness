@@ -38,6 +38,33 @@ type Runner struct {
 	// Baseline receives each written file as it stood before the write, when
 	// something is keeping them. Nil runs the tools with nothing recorded.
 	Baseline func(Snapshot)
+
+	// Seen is what the session has read, which write and edit check a file
+	// against. Nil runs the tools with no such check.
+	Seen *Seen
+
+	// Hidden is the harness's own state directory, which no tool reaches even
+	// when the project contains it: it holds the token and the allowlist.
+	Hidden string
+
+	// Spill is the folder where a command whose output was cut saves all of
+	// it. read and grep reach it by absolute path; empty saves nothing.
+	Spill string
+}
+
+// Hide sets the directory no tool may reach, resolved the way Root is.
+func (r *Runner) Hide(dir string) {
+	if abs, err := filepath.Abs(dir); err == nil {
+		r.Hidden = realPath(abs)
+	}
+}
+
+// SpillTo sets the folder cut-off output is saved to. It may not exist yet;
+// the first command that needs it creates it.
+func (r *Runner) SpillTo(dir string) {
+	if abs, err := filepath.Abs(dir); err == nil {
+		r.Spill = realPath(abs)
+	}
 }
 
 // Result is what the model is told. Output is already truncated and, for
@@ -111,9 +138,10 @@ type WriteFileArgs struct {
 }
 
 type ReplaceInFileArgs struct {
-	Path      string `json:"path"`
-	OldString string `json:"old_string"`
-	NewString string `json:"new_string"`
+	Path       string `json:"path"`
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all"`
 }
 
 type FindArgs struct {

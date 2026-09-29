@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -104,7 +105,7 @@ func New(cfg *config.Store, emit func(string, Request)) *Broker {
 // Evaluate applies the static policy. It never blocks and never asks. ModeFull
 // is answered before the tool name is read, so nothing about the call changes
 // the answer.
-func (b *Broker) Evaluate(project, tool, command string, mode config.Mode) Action {
+func (b *Broker) Evaluate(project, tool, command, path string, mode config.Mode) Action {
 	if mode == config.ModeFull {
 		return ActionAllow
 	}
@@ -121,7 +122,9 @@ func (b *Broker) Evaluate(project, tool, command string, mode config.Mode) Actio
 		// then does draws its own card.
 		return ActionAllow
 	case "write", "edit":
-		if auto {
+		// A file under .git can run code: a hook, or a config that names a
+		// program git starts. It is asked about in every mode but full.
+		if auto && !underGit(project, path) {
 			return ActionAllow
 		}
 		return ActionPrompt
@@ -293,6 +296,32 @@ func without(ids []string, id string) []string {
 		}
 	}
 	return ids
+}
+
+// underGit reports whether a path, before or after its links are followed,
+// passes through a folder named .git.
+func underGit(project, path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(project, path)
+	}
+	path = filepath.Clean(path)
+	candidates := []string{path}
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		candidates = append(candidates, real)
+	} else if dir, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		candidates = append(candidates, filepath.Join(dir, filepath.Base(path)))
+	}
+	for _, c := range candidates {
+		for _, part := range strings.Split(c, string(filepath.Separator)) {
+			if part == ".git" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // operators are the shell metacharacters that let one approved command start

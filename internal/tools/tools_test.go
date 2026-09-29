@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -529,7 +530,7 @@ func TestReplaceInFileRefusesAmbiguityAndMisses(t *testing.T) {
 
 	_, err := r.ReplaceInFile(context.Background(),
 		json.RawMessage(`{"path":"twice.txt","old_string":"x = 1","new_string":"x = 9"}`))
-	if err == nil || !strings.Contains(err.Error(), "appears 2 times") {
+	if err == nil || !strings.Contains(err.Error(), "appears 2 times in twice.txt, at lines 1 and 3") {
 		t.Errorf("ambiguous match = %v", err)
 	}
 	_, err = r.ReplaceInFile(context.Background(),
@@ -567,6 +568,26 @@ func TestReplaceInFileRefusesWhatItCannotEdit(t *testing.T) {
 	}
 }
 
+// replace_all changes every occurrence and says where they were.
+func TestReplaceInFileReplacesAll(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	target := filepath.Join(base, "twice.txt")
+	os.WriteFile(target, []byte("x = 1\ny = 2\nx = 1\n"), 0o644)
+
+	res, err := r.ReplaceInFile(context.Background(),
+		json.RawMessage(`{"path":"twice.txt","old_string":"x = 1","new_string":"x = 9","replace_all":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Output != "edited twice.txt in 2 places, at lines 1 and 3" {
+		t.Errorf("output = %q", res.Output)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "x = 9\ny = 2\nx = 9\n" {
+		t.Errorf("file = %q", got)
+	}
+}
+
 // Deleting a run of text is an edit with an empty new_string.
 func TestReplaceInFileDeletes(t *testing.T) {
 	base := t.TempDir()
@@ -584,6 +605,117 @@ func TestReplaceInFileDeletes(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(target); string(got) != "keep\nkeep too\n" {
 		t.Errorf("file = %q", got)
+	}
+}
+
+// grep skips a link that leads out of the project, and no tool reaches the
+// state directory even when the project contains it.
+func TestToolsStayOutOfLinksAndTheStateDir(t *testing.T) {
+	base := t.TempDir()
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("needle outside\n"), 0o644)
+	os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(base, "link.txt"))
+	os.WriteFile(filepath.Join(base, "inside.txt"), []byte("needle inside\n"), 0o644)
+	state := filepath.Join(base, ".quecto-harness")
+	os.MkdirAll(state, 0o700)
+	os.WriteFile(filepath.Join(state, "token"), []byte("needle token\n"), 0o600)
+	r := testRoot(t, base)
+	r.Hide(state)
+
+	res, err := r.Find(context.Background(), json.RawMessage(`{"text":"needle"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "inside.txt") || strings.Contains(res.Output, "outside") || strings.Contains(res.Output, "token") {
+		t.Errorf("grep = %q, want the file inside only", res.Output)
+	}
+	if _, err := r.ReadFile(context.Background(), json.RawMessage(`{"path":".quecto-harness/token"}`)); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Errorf("read of the state dir = %v, want it refused", err)
+	}
+	if _, err := r.WriteFile(context.Background(), json.RawMessage(`{"path":".quecto-harness/allowlist.json","content":"{}"}`)); err == nil {
+		t.Error("a write into the state dir was allowed")
+	}
+}
+
+// With a read record, a file is changed only after it was read, and not once
+// it has changed since. A new file needs no read.
+func TestWritesNeedAFreshRead(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	r.Seen = NewSeen()
+	target := filepath.Join(base, "file.txt")
+	os.WriteFile(target, []byte("one\n"), 0o644)
+	ctx := context.Background()
+
+	edit := json.RawMessage(`{"path":"file.txt","old_string":"one","new_string":"two"}`)
+	if _, err := r.ReplaceInFile(ctx, edit); err == nil || !strings.Contains(err.Error(), "has not been read") {
+		t.Fatalf("edit before a read = %v", err)
+	}
+	if _, err := r.WriteFile(ctx, json.RawMessage(`{"path":"file.txt","content":"x"}`)); err == nil || !strings.Contains(err.Error(), "has not been read") {
+		t.Fatalf("write over an unread file = %v", err)
+	}
+	if _, err := r.ReadFile(ctx, json.RawMessage(`{"path":"file.txt"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ReplaceInFile(ctx, edit); err != nil {
+		t.Fatalf("edit after a read = %v", err)
+	}
+	// The session's own edit keeps the record current.
+	if _, err := r.ReplaceInFile(ctx, json.RawMessage(`{"path":"file.txt","old_string":"two","new_string":"three"}`)); err != nil {
+		t.Fatalf("second edit = %v", err)
+	}
+	os.WriteFile(target, []byte("changed elsewhere, longer\n"), 0o644)
+	if _, err := r.ReplaceInFile(ctx, json.RawMessage(`{"path":"file.txt","old_string":"changed","new_string":"x"}`)); err == nil || !strings.Contains(err.Error(), "changed since") {
+		t.Fatalf("edit of a file changed since = %v", err)
+	}
+	if _, err := r.WriteFile(ctx, json.RawMessage(`{"path":"new.txt","content":"x"}`)); err != nil {
+		t.Fatalf("a new file = %v", err)
+	}
+}
+
+// A command whose output is cut saves all of it, and read and grep reach the
+// saved file by the path the result names while the rest of the state
+// directory stays out of reach.
+func TestCutOutputIsSaved(t *testing.T) {
+	base := t.TempDir()
+	state := t.TempDir()
+	r := testRoot(t, base)
+	r.OutputLimit = 1024
+	r.Hide(state)
+	r.SpillTo(filepath.Join(state, "sessions", "s.files", "spill"))
+	os.WriteFile(filepath.Join(state, "token"), []byte("secret\n"), 0o600)
+	ctx := context.Background()
+
+	res, err := r.RunShell(ctx, json.RawMessage(`{"command":"seq 1 5000"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`saved to (\S+):`).FindStringSubmatch(res.Output)
+	if m == nil {
+		t.Fatalf("the saved file is not named: %q", tail(res.Output, 200))
+	}
+	saved, _ := os.ReadFile(m[1])
+	if !strings.HasPrefix(string(saved), "1\n2\n") || !strings.HasSuffix(string(saved), "4999\n5000\n") {
+		t.Errorf("the saved file is not the whole output: %d bytes", len(saved))
+	}
+	got, err := r.ReadFile(ctx, json.RawMessage(`{"path":"`+m[1]+`","offset":2500,"limit":1}`))
+	if err != nil || !strings.Contains(got.Output, "2500") {
+		t.Errorf("read of the saved file = %q, %v", got.Output, err)
+	}
+	found, err := r.Find(ctx, json.RawMessage(`{"path":"`+m[1]+`","text":"4321"}`))
+	if err != nil || !strings.Contains(found.Output, "4321") {
+		t.Errorf("grep of the saved file = %q, %v", found.Output, err)
+	}
+	if _, err := r.ReadFile(ctx, json.RawMessage(`{"path":"`+filepath.Join(state, "token")+`"}`)); err == nil {
+		t.Error("the rest of the state directory was readable")
+	}
+
+	short, err := r.RunShell(ctx, json.RawMessage(`{"command":"echo short"}`))
+	if err != nil || strings.Contains(short.Output, "saved to") {
+		t.Errorf("uncut output = %q, %v", short.Output, err)
+	}
+	if entries, _ := os.ReadDir(r.Spill); len(entries) != 1 {
+		t.Errorf("spill folder holds %d files, want only the cut one", len(entries))
 	}
 }
 

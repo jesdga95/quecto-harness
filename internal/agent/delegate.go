@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -203,20 +204,115 @@ func (e *Engine) liveChildren(parentID string) []*Session {
 	return out
 }
 
-// runAgent starts a subagent on the named agent and answers with its handle.
-// It does not wait: the subagent works while this turn carries on, and what it
-// found arrives later as a message.
-func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
+// launch is a subagent started for a call that waits for its result. done
+// receives the result when the subagent's turn ends.
+type launch struct {
+	child *Session
+	agent string
+	err   error
+	done  chan string
+}
+
+// waits reports whether a subagent call waits for its result, which it does
+// unless it says otherwise.
+func waits(call llm.ToolCall) bool {
+	var args struct {
+		Wait *bool `json:"wait"`
+	}
+	if json.Unmarshal([]byte(call.Function.Arguments), &args) != nil {
+		return true
+	}
+	return args.Wait == nil || *args.Wait
+}
+
+// runAgent runs a subagent call. One that waits blocks until the subagent's
+// turn ends and answers with its result; one that does not answers with the
+// handle, and the result arrives later as a message.
+func (e *Engine) runAgent(ctx context.Context, s *Session, call llm.ToolCall) (tools.Result, error) {
+	if l := s.takeLaunch(call.ID); l != nil {
+		return e.awaitAgent(ctx, call, l)
+	}
+	if waits(call) {
+		return e.awaitAgent(ctx, call, e.launch(s, call))
+	}
+	child, target, err := e.startAgent(s, call, nil)
+	if err != nil {
+		return tools.Result{}, err
+	}
+	// The handle is on the entry as well as in the sentence, so a page loaded
+	// later still links the row to the transcript it started.
+	return tools.Result{
+		Output: fmt.Sprintf("started %s (%s)", target.Name, child.ID),
+		Meta:   map[string]any{"session": child.ID, "agent": target.Name},
+	}, nil
+}
+
+// prelaunch starts every waiting subagent call in the run that begins at i,
+// so calls made together in one reply work at the same time. Each call then
+// waits on its own launch when the loop reaches it.
+func (e *Engine) prelaunch(s *Session, calls []llm.ToolCall, i int) {
+	j := i
+	for j < len(calls) && calls[j].Function.Name == "subagent" && waits(calls[j]) {
+		j++
+	}
+	if j-i < 2 {
+		return
+	}
+	for _, call := range calls[i:j] {
+		s.mu.Lock()
+		_, held := s.launches[call.ID]
+		s.mu.Unlock()
+		if held {
+			continue
+		}
+		l := e.launch(s, call)
+		s.mu.Lock()
+		if s.launches == nil {
+			s.launches = map[string]*launch{}
+		}
+		s.launches[call.ID] = l
+		s.mu.Unlock()
+	}
+}
+
+// launch starts a subagent whose result is handed back rather than sent as a
+// message.
+func (e *Engine) launch(s *Session, call llm.ToolCall) *launch {
+	done := make(chan string, 1)
+	child, target, err := e.startAgent(s, call, done)
+	return &launch{child: child, agent: target.Name, err: err, done: done}
+}
+
+// awaitAgent blocks until a launched subagent's turn ends, or this turn is
+// stopped, which stops the subagent with it.
+func (e *Engine) awaitAgent(ctx context.Context, call llm.ToolCall, l *launch) (tools.Result, error) {
+	if l.err != nil {
+		return tools.Result{}, l.err
+	}
+	meta := map[string]any{"session": l.child.ID, "agent": l.agent}
+	select {
+	case text := <-l.done:
+		return tools.Result{Output: prompts.SubagentResult(l.agent, text), Meta: meta}, nil
+	case <-ctx.Done():
+		return tools.Result{Output: fmt.Sprintf("stopped before %s finished", l.agent), Meta: meta}, nil
+	}
+}
+
+// startAgent checks a subagent call and starts the subagent on the named
+// agent. A waiter set here receives the result of its first turn instead of
+// the launcher getting it as a message; it is set before the turn starts, so
+// a turn that ends at once still finds it.
+func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (*Session, config.Agent, error) {
 	var args struct {
 		Agent string `json:"agent"`
 		Task  string `json:"task"`
 	}
 	if err := decodeArgs(call.Function.Arguments, &args); err != nil {
-		return tools.Result{}, fmt.Errorf("subagent: %s", err)
+		return nil, config.Agent{}, fmt.Errorf("subagent: %s", err)
 	}
 	task := strings.TrimSpace(args.Task)
 	if task == "" {
-		return tools.Result{}, errors.New("subagent: task is empty, say what the agent is to do")
+		return nil, config.Agent{}, errors.New("subagent: task is empty, say what the agent is to do")
 	}
 
 	cfg := e.cfg.Config()
@@ -227,16 +323,16 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 
 	target, err := findAgent(cfg, me, args.Agent)
 	if err != nil {
-		return tools.Result{}, err
+		return nil, config.Agent{}, err
 	}
 	if err := usable(target); err != nil {
-		return tools.Result{}, fmt.Errorf("subagent: %s is not ready: %s", target.Name, err)
+		return nil, config.Agent{}, fmt.Errorf("subagent: %s is not ready: %s", target.Name, err)
 	}
 	// The limit belongs to the agent being asked, not to the one asking: what
 	// it counts is requests to one model server. This session is one of them,
 	// so an agent that runs one at a time cannot take work from itself.
 	if live := e.busy(target.ID); target.Concurrency > 0 && live >= target.Concurrency {
-		return tools.Result{}, fmt.Errorf("subagent: %s runs %d at a time and that many are working now: wait for one to finish, or pick another agent",
+		return nil, config.Agent{}, fmt.Errorf("subagent: %s runs %d at a time and that many are working now: wait for one to finish, or pick another agent",
 			target.Name, target.Concurrency)
 	}
 
@@ -247,23 +343,19 @@ func (e *Engine) runAgent(s *Session, call llm.ToolCall) (tools.Result, error) {
 	child.Mode = mode
 	child.Title = store.Title(cut(task, taskTitle))
 	child.Named = true
+	child.waiter = waiter
 	e.mu.Lock()
 	e.live[child.ID] = child
 	e.mu.Unlock()
 	e.save(child)
 
 	if _, err := e.deliverFrom(child, sender{Name: me.Name, Session: s.ID}, task, nil); err != nil {
-		return tools.Result{}, fmt.Errorf("subagent: %s", err)
+		return nil, config.Agent{}, fmt.Errorf("subagent: %s", err)
 	}
 	e.publish(s.ID, ev("child", map[string]any{
 		"call_id": call.ID, "session": child.ID, "agent": target.Name,
 		"title": child.Title, "state": string(StatePreflight)}))
-	// The handle is on the entry as well as in the sentence, so a page loaded
-	// later still links the row to the transcript it started.
-	return tools.Result{
-		Output: fmt.Sprintf("started %s (%s)", target.Name, child.ID),
-		Meta:   map[string]any{"session": child.ID, "agent": target.Name},
-	}, nil
+	return child, target, nil
 }
 
 // sendMessage delivers one agent's message to the other end of a launch. It is
@@ -359,6 +451,16 @@ func (e *Engine) report(child *Session) {
 		limit = 16384
 	}
 	text, _ := tools.Truncate(e.answerOf(child), limit)
+	// A launcher waiting on the call takes the result as its tool result, and
+	// a message on top of it would say the same thing twice.
+	child.mu.Lock()
+	waiter := child.waiter
+	child.waiter = nil
+	child.mu.Unlock()
+	if waiter != nil {
+		waiter <- text
+		return
+	}
 	if _, err := e.deliverFrom(parent, sender{Name: from.Name, Session: child.ID}, text, nil); err != nil {
 		e.publish(parent.ID, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
 	}

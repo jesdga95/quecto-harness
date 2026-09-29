@@ -108,7 +108,14 @@ func (b *openAIBackend) Chat(ctx context.Context, req ChatRequest, on func(Event
 	if err != nil {
 		return Result{}, buildError(err)
 	}
-	return b.c.stream(ctx, chatPath, body, req.Model, newStreamState(), on)
+	res, err := b.c.stream(ctx, chatPath, body, req.Model, newStreamState(), on)
+	return res, markOverflow(err, openAIOverflow)
+}
+
+// openAIOverflow recognises the OpenAI API's refusal of a request longer than
+// the model's window, which both of its endpoints name by error code.
+func openAIOverflow(body string) bool {
+	return errorField(body, "code") == "context_length_exceeded"
 }
 
 // buildOpenAIBody renders the wire request. Thinking travels as

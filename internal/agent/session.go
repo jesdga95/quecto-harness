@@ -90,14 +90,28 @@ type Session struct {
 	// turn switches to execute mode on once its tool calls are answered.
 	approved *store.Plan
 
+	// seen is what this session has read, which write and edit check a file
+	// against. It is not in the document: after a restart a file is read again
+	// before it is changed.
+	seen *tools.Seen
+
+	// waiter receives the result of a subagent's first turn when the call that
+	// launched it waits for one. launches holds the subagents a turn started
+	// ahead of the calls that wait on them.
+	waiter   chan string
+	launches map[string]*launch
+
 	// live is the reply the request under way has streamed so far. It is nil
 	// outside a request and cleared in the same hold that appends the entry
 	// the reply becomes.
 	live *Reply
 
-	state   State
-	cancel  context.CancelFunc
-	turnSeq int
+	state State
+	// announced is the last state published for a subagent run, which is how
+	// its launcher's listing knows a card has closed.
+	announced State
+	cancel    context.CancelFunc
+	turnSeq   int
 	// gone is set when the session has been deleted, so nothing still in
 	// flight writes its file again.
 	gone bool
@@ -146,7 +160,7 @@ func newSession(id, project, agentID, model string) *Session {
 	return &Session{
 		ID: id, Project: project, AgentID: agentID, Model: model,
 		Mode: config.WorkExecute, Created: now, Updated: now,
-		state: StateIdle, lastUsageEntry: -1,
+		state: StateIdle, lastUsageEntry: -1, seen: tools.NewSeen(),
 	}
 }
 
@@ -165,6 +179,7 @@ func fromDoc(d *store.Session) *Session {
 		Todos:          append([]store.Todo(nil), d.Todos...),
 		Baselines:      append([]store.Baseline(nil), d.Baselines...),
 		state:          StateIdle,
+		seen:           tools.NewSeen(),
 		// A reloaded session has no usage anchor, so the next fill is
 		// estimated from the entries rather than trusted from a past turn.
 		lastUsageEntry: -1,
@@ -184,6 +199,22 @@ func (s *Session) doc() *store.Session {
 		Baselines: append([]store.Baseline(nil), s.Baselines...),
 		Entries:   append([]store.Entry(nil), s.Entries...),
 	}
+}
+
+// takeLaunch hands over the subagent started ahead for a call, if any.
+func (s *Session) takeLaunch(callID string) *launch {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l := s.launches[callID]
+	delete(s.launches, callID)
+	return l
+}
+
+// lastAnnounced is the state last published for the session.
+func (s *Session) lastAnnounced() State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.announced
 }
 
 func (s *Session) State() State {
@@ -358,7 +389,7 @@ func (s *Session) firstTurn() bool {
 	}
 	users := 0
 	for _, e := range s.Entries {
-		if e.Kind == "user" {
+		if e.Kind == "user" && e.Meta["continue"] != true {
 			users++
 		}
 	}
@@ -376,11 +407,12 @@ func (s *Session) firstUserMessage() string {
 	return ""
 }
 
-// lastUserEntry is the index of the newest message the user sent, or -1.
-// The caller holds the lock.
+// lastUserEntry is the index of the newest message the user sent, or -1. The
+// harness's own nudge to carry on with a plan is not one of them. The caller
+// holds the lock.
 func (s *Session) lastUserEntry() int {
 	for i := len(s.Entries) - 1; i >= 0; i-- {
-		if s.Entries[i].Kind == "user" {
+		if s.Entries[i].Kind == "user" && s.Entries[i].Meta["continue"] != true {
 			return i
 		}
 	}
@@ -413,6 +445,18 @@ func (s *Session) restoreContext() {
 		if e.Kind == "compaction" {
 			from = i
 			s.Compactions++
+		}
+	}
+	// A compaction keeps the messages it did not summarise, which sit before
+	// it in the transcript and start at the entry it names.
+	if from > 0 {
+		if tail, ok := metaInt(s.Entries[from].Meta["tail"]); ok {
+			for i := 0; i < from; i++ {
+				if s.Entries[i].Seq == tail {
+					from = i
+					break
+				}
+			}
 		}
 	}
 	for i := range s.Entries {
@@ -454,6 +498,56 @@ func (s *Session) restoreTodos() {
 		return
 	}
 	s.Todos = nil
+}
+
+// closeInterrupted answers every call of the last assistant entry that has no
+// result, and says so in the transcript. A call marked as started may have
+// done its work, so its result says to check before running it again. It
+// reports whether anything was added. The caller holds no lock and nothing
+// else holds the session yet.
+func (s *Session) closeInterrupted() bool {
+	last := -1
+	for i := len(s.Entries) - 1; i >= 0; i-- {
+		if s.Entries[i].Kind == "assistant" {
+			last = i
+			break
+		}
+	}
+	if last < 0 || len(s.Entries[last].ToolCalls) == 0 {
+		return false
+	}
+	answered := map[string]bool{}
+	for _, e := range s.Entries[last+1:] {
+		if e.Kind == "tool" {
+			answered[e.ToolCallID] = true
+		}
+	}
+	started := map[string]bool{}
+	marked, _ := s.Entries[last].Meta["started"].([]any)
+	for _, id := range marked {
+		if id, ok := id.(string); ok {
+			started[id] = true
+		}
+	}
+	added := false
+	for _, c := range s.Entries[last].ToolCalls {
+		if answered[c.ID] {
+			continue
+		}
+		content := prompts.NotRun()
+		if started[c.ID] {
+			content = prompts.OutcomeUnknown()
+		}
+		s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: c.ID,
+			ToolName: c.Function.Name, Content: content, InContext: true, Visible: true,
+			Meta: map[string]any{"error": true}})
+		added = true
+	}
+	if added {
+		s.appendEntry(store.Entry{Kind: "status", Content: "Interrupted: the harness stopped while this turn was running",
+			InContext: false, Visible: true})
+	}
+	return added
 }
 
 // argumentsOf returns the arguments of the call a tool entry answers. Tool
@@ -515,8 +609,26 @@ func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) ll
 // with the invariants the wire format requires repaired. images maps a file
 // id to the part built from it.
 func (s *Session) contextMessages(a config.Agent, osName, date string, b brief, images map[string]llm.Part) []llm.Message {
+	return s.contextMessagesUntil(a, osName, date, b, images, len(s.Entries))
+}
+
+// contextMessagesUntil is contextMessages over the entries before end. The
+// summary goes first, ahead of the messages it kept word for word, which sit
+// before it in the transcript. The caller holds the lock.
+func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b brief, images map[string]llm.Part, end int) []llm.Message {
 	msgs := []llm.Message{s.systemMessage(a, osName, date, b)}
-	for i := 0; i < len(s.Entries); i++ {
+	summary := -1
+	for i := 0; i < end; i++ {
+		if s.Entries[i].Kind == "compaction" && s.Entries[i].InContext {
+			summary = i
+		}
+	}
+	if summary >= 0 {
+		e := s.Entries[summary]
+		todos, _ := e.Meta["todos"].(string)
+		msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(e.Content, todos)})
+	}
+	for i := 0; i < end; i++ {
 		e := s.Entries[i]
 		if !e.InContext {
 			continue
@@ -525,8 +637,7 @@ func (s *Session) contextMessages(a config.Agent, osName, date string, b brief, 
 		case "user":
 			msgs = append(msgs, userMessage(e, images))
 		case "compaction":
-			todos, _ := e.Meta["todos"].(string)
-			msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(e.Content, todos)})
+			// Sent above, ahead of the messages it kept.
 		case "assistant":
 			// Thinking from an earlier turn goes back only when the agent asks
 			// for it, whatever the protocol does with the field afterwards.
@@ -596,7 +707,7 @@ func repairToolResults(entries []store.Entry, at int, calls []llm.ToolCall) []ll
 			continue
 		}
 		out = append(out, llm.Message{Role: "tool", ToolCallID: c.ID, Name: c.Function.Name,
-			Content: "not run: the session was interrupted"})
+			Content: prompts.NotRun()})
 	}
 	return out
 }
@@ -617,20 +728,52 @@ func (s *Session) computeFill() int {
 }
 
 // compactFloor is the fewest characters since the last summary that a
-// compaction takes. The summary may run to 400 words, so compacting less than
+// compaction takes. The summary may run to 600 words, so compacting less than
 // this would not shrink the context.
 const compactFloor = 4000
 
+// tailShare is the part of the context a compaction keeps word for word
+// rather than summarising, so the latest request and results survive intact.
+const tailShare = 0.16
+
 // compactable reports whether enough has been said since the last summary to
-// be worth summarising again.
+// be worth summarising again. The messages the last one kept count, since
+// the next one summarises them.
 func (s *Session) compactable() bool {
-	from := -1
-	for i, e := range s.Entries {
-		if e.Kind == "compaction" && e.InContext {
-			from = i
+	total := 0
+	for _, e := range s.Entries {
+		if e.InContext && e.Kind != "compaction" {
+			total += entryChars(e)
 		}
 	}
-	return s.estimateChars(from) >= compactFloor
+	return total >= compactFloor
+}
+
+// tailStart is where the messages a compaction keeps begin: the earliest
+// assistant entry whose run to the end fits in the share. Starting on an
+// assistant keeps each call beside its results, and puts a reply rather than
+// a second user message after the summary. It is len(s.Entries) when nothing
+// fits. The caller holds the lock.
+func (s *Session) tailStart() int {
+	budget := int(tailShare * float64(s.estimateChars(-1)))
+	start, size := len(s.Entries), 0
+	for i := len(s.Entries) - 1; i >= 0; i-- {
+		e := s.Entries[i]
+		if e.Kind == "compaction" && e.InContext {
+			break
+		}
+		if !e.InContext {
+			continue
+		}
+		size += entryChars(e)
+		if size > budget {
+			break
+		}
+		if e.Kind == "assistant" {
+			start = i
+		}
+	}
+	return start
 }
 
 // estimateChars sums the in-context characters after index from, or over the
@@ -641,17 +784,35 @@ func (s *Session) estimateChars(from int) int {
 		if i <= from || !e.InContext {
 			continue
 		}
-		total += len(e.Content) + len(e.Reasoning)
-		if todos, ok := e.Meta["todos"].(string); ok && e.Kind == "compaction" {
-			total += len(todos)
-		}
-		if len(e.ToolCalls) > 0 {
-			if b, err := json.Marshal(e.ToolCalls); err == nil {
-				total += len(b)
-			}
+		total += entryChars(e)
+	}
+	return total
+}
+
+// entryChars is the size of one entry as the prompt carries it.
+func entryChars(e store.Entry) int {
+	total := len(e.Content) + len(e.Reasoning)
+	if todos, ok := e.Meta["todos"].(string); ok && e.Kind == "compaction" {
+		total += len(todos)
+	}
+	if len(e.ToolCalls) > 0 {
+		if b, err := json.Marshal(e.ToolCalls); err == nil {
+			total += len(b)
 		}
 	}
 	return total
+}
+
+// metaInt reads a number kept in an entry's meta, which is an int in memory
+// and a float64 once the session has been read back from disk.
+func metaInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case int:
+		return n, true
+	case float64:
+		return int(n), true
+	}
+	return 0, false
 }
 
 // window is the size this session's context is measured against: the agent's

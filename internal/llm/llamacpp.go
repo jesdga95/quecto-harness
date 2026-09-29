@@ -165,7 +165,14 @@ func (b *llamaBackend) Chat(ctx context.Context, req ChatRequest, on func(Event)
 	if err != nil {
 		return Result{}, buildError(err)
 	}
-	return b.c.stream(ctx, chatPath, body, req.Model, newStreamState(), on)
+	res, err := b.c.stream(ctx, chatPath, body, req.Model, newStreamState(), on)
+	return res, markOverflow(err, llamaOverflow)
+}
+
+// llamaOverflow recognises llama.cpp's refusal of a prompt longer than the
+// slot's context, which it names by error type.
+func llamaOverflow(body string) bool {
+	return errorField(body, "type") == "exceed_context_size_error"
 }
 
 // modelURL builds a model-scoped GET. autoload says whether the server may

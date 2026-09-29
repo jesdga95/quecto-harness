@@ -1195,8 +1195,14 @@ func TestChangesRoute(t *testing.T) {
 	}
 
 	args := `{"path":"hub.go","content":"one\nTWO\nthree\n"}`
-	// The first request asks for the write; everything after it, the title
-	// request included, is a plain reply.
+	// The first request reads the file and the second writes it, since a file
+	// is replaced only once it has been read; everything after them, the
+	// title request included, is a plain reply.
+	f.nextFrames(
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"read","arguments":"{\"path\":\"hub.go\"}"}}]}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	)
 	f.nextFrames(
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"write","arguments":`+strconv.Quote(args)+`}}]}}]}`,
 		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,

@@ -270,7 +270,7 @@ func TestARollUpTellsTheLauncherItsFilesMoved(t *testing.T) {
 	h, _ := launcher(t)
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
 	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
-	h.replay.forModel("Beta-30B", "stream_write_once.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_read.txt", "stream_write_once.txt", "stream_plain.txt")
 
 	s := h.session(t)
 	h.engine.Send(s.ID, "delegate it", nil)
@@ -517,7 +517,7 @@ func TestChildCardIsDrawnInTheLauncher(t *testing.T) {
 func TestLaunchingAnAgentIsNotCarded(t *testing.T) {
 	h, _ := launcher(t)
 	for _, tool := range []string{"subagent", "send_message"} {
-		if got := h.broker.Evaluate(h.project, tool, "", config.ModeAsk); got != perms.ActionAllow {
+		if got := h.broker.Evaluate(h.project, tool, "", "", config.ModeAsk); got != perms.ActionAllow {
 			t.Errorf("%s = %v in ask mode, want allow", tool, got)
 		}
 	}
@@ -585,9 +585,9 @@ func TestDeleteRemovesChildren(t *testing.T) {
 func TestChildBaselinesRollUp(t *testing.T) {
 	h, _ := launcher(t)
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
-	h.replay.forModel("Alpha-12B", "stream_write_once.txt", "stream_plain.txt",
+	h.replay.forModel("Alpha-12B", "stream_read.txt", "stream_write_once.txt", "stream_plain.txt",
 		"stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
-	h.replay.forModel("Beta-30B", "stream_write_once.txt", "stream_write.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_read.txt", "stream_write_once.txt", "stream_write.txt", "stream_plain.txt")
 
 	// The launcher writes file.txt first, so the copy kept is the one from
 	// before either of them touched it.
@@ -989,5 +989,66 @@ func TestAnswerOfNamesACutOffReply(t *testing.T) {
 	child.Entries[0].Meta["finish_reason"] = "stop"
 	if got := e.answerOf(child); got != "half an answer" {
 		t.Errorf("a finished reply = %q, want it as it stands", got)
+	}
+}
+
+// A subagent call waits by default: the result is the call's own result, and
+// nothing arrives as a message on top of it.
+func TestSubagentWaitsForItsResult(t *testing.T) {
+	h, _ := launcher(t)
+	h.replay.forModel("Alpha-12B", "stream_subagent_wait.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "delegate it", nil)
+	child := childOf(t, h, s)
+	waitIdle(t, s)
+	waitIdle(t, child)
+
+	out := toolOutput(t, s, "subagent")
+	if !strings.HasPrefix(out, "Reviewer finished and will do no further work") ||
+		!strings.Contains(out, "The repository has cmd, internal and web.") {
+		t.Errorf("result = %q, want the subagent's answer", out)
+	}
+	doc, _, _, _ := s.Snapshot()
+	for _, e := range doc.Entries {
+		if e.Kind == "user" && e.From == "Reviewer" {
+			t.Errorf("the result also arrived as a message: %q", e.Content)
+		}
+	}
+}
+
+// Waiting subagent calls in one reply run at the same time: both are working
+// before either has answered.
+func TestSiblingSubagentsRunTogether(t *testing.T) {
+	h, reviewer := launcher(t)
+	if _, _, err := h.cfg.UpdateAgent(reviewer.ID, func(a *config.Agent) { a.Concurrency = 2 }); err != nil {
+		t.Fatal(err)
+	}
+	release := h.replay.hold("Beta-30B")
+	h.replay.forModel("Alpha-12B", "stream_subagent_two_wait.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_plain.txt", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "launch two", nil)
+	deadline := time.Now().Add(10 * time.Second)
+	for len(h.engine.liveChildren(s.ID)) < 2 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if n := len(h.engine.liveChildren(s.ID)); n != 2 {
+		t.Fatalf("working subagents = %d, want both before either answered", n)
+	}
+	release()
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	results := 0
+	for _, e := range doc.Entries {
+		if e.Kind == "tool" && e.ToolName == "subagent" && strings.HasPrefix(e.Content, "Reviewer finished") {
+			results++
+		}
+	}
+	if results != 2 {
+		t.Errorf("results = %d, want one per call", results)
 	}
 }

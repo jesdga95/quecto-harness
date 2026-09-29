@@ -24,6 +24,9 @@ const (
 	KindMalformed    ErrKind = "malformed"
 	KindCanceled     ErrKind = "canceled"
 	KindStalled      ErrKind = "stalled"
+	// KindOverflow is a request longer than the model's window. Each backend
+	// recognises its own server's way of saying so.
+	KindOverflow ErrKind = "context_overflow"
 )
 
 // Error is every failure this package returns. Status is 0 when no response
@@ -115,6 +118,31 @@ func classify(op, baseURL, model string, status int, body string, err error) *Er
 		e.Message = "The model server failed: " + fallback(msg, "status "+strconv.Itoa(status))
 	}
 	return e
+}
+
+// markOverflow turns a refused request into an overflow when the backend's
+// match recognises the body as one. Anything else passes through unchanged.
+func markOverflow(err error, match func(body string) bool) error {
+	var e *Error
+	if !errors.As(err, &e) || e.Kind != KindBadRequest || !match(e.Body) {
+		return err
+	}
+	e.Kind = KindOverflow
+	e.Message = "The conversation is longer than the model's context window: compact it or start a new session"
+	return err
+}
+
+// errorField reads one string field of the error object in a response body,
+// the shape llama.cpp and the OpenAI API share.
+func errorField(body, field string) string {
+	var wrapper struct {
+		Error map[string]any `json:"error"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(body)), &wrapper) != nil {
+		return ""
+	}
+	v, _ := wrapper.Error[field].(string)
+	return v
 }
 
 func fallback(s, d string) string {

@@ -4,4 +4,4 @@ Summary of earlier work:
 
 {{if .Todos}}Your todo list when this summary was written:
 {{.Todos}}
-{{end}}Continue.
+{{end}}Take this summary as what you already know, and continue the work without restating it.

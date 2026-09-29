@@ -17,7 +17,7 @@ func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 		"tool_ask_user_question.md": ToolAskUserQuestion,
 		"tool_subagent.md":          ToolSubagent,
 		"tool_send_message.md":      ToolSendMessage,
-		"compact.md":                Compact,
+		"compact.md":                func() string { return Compact(true) },
 		"title.md":                  func() string { return Title("name this") },
 	} {
 		if strings.TrimSpace(get()) == "" {
@@ -320,11 +320,11 @@ func TestSystemCarriesTheApprovedPlan(t *testing.T) {
 }
 
 func TestCompactionCarriesAnOpenPlan(t *testing.T) {
-	if got, want := Compaction("did x", ""), "Summary of earlier work:\n\ndid x\n\nContinue."; got != want {
+	if got, want := Compaction("did x", ""), "Summary of earlier work:\n\ndid x\n\nTake this summary as what you already know, and continue the work without restating it."; got != want {
 		t.Errorf("without a plan = %q, want %q", got, want)
 	}
 	got := Compaction("did x", "1 of 2 done\n- [x] read\n- [ ] write\n")
-	want := "Summary of earlier work:\n\ndid x\n\nYour todo list when this summary was written:\n1 of 2 done\n- [x] read\n- [ ] write\n\nContinue."
+	want := "Summary of earlier work:\n\ndid x\n\nYour todo list when this summary was written:\n1 of 2 done\n- [x] read\n- [ ] write\n\nTake this summary as what you already know, and continue the work without restating it."
 	if got != want {
 		t.Errorf("with a plan = %q, want %q", got, want)
 	}

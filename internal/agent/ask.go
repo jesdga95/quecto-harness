@@ -205,11 +205,20 @@ func (e *Engine) askQuestion(ctx context.Context, s *Session, call llm.ToolCall)
 	draw := func() {
 		e.publish(s.ID, ev("question", map[string]any{"id": q.CallID, "ask": q.ID}))
 	}
-	ans, err := e.asks.ask(ctx, q, draw)
+	ans, err := e.waitOn(ctx, s, q, draw)
 	if err != nil {
 		return tools.Result{Output: "no answer: the session was stopped"}, nil
 	}
 	return tools.Result{Output: renderAnswer(q, ans)}, nil
+}
+
+// waitOn blocks on a card the person has to answer. The session reads as
+// deciding meanwhile, which is the state a permission card holds it in, so
+// anything watching sees that the turn is waiting on a person.
+func (e *Engine) waitOn(ctx context.Context, s *Session, q Question, draw func()) (Answer, error) {
+	e.setState(s, StateDeciding)
+	defer e.setState(s, StateExecuting)
+	return e.asks.ask(ctx, q, draw)
 }
 
 func parseQuestion(raw json.RawMessage) (Question, error) {

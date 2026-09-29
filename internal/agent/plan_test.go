@@ -58,7 +58,8 @@ func waitForNewQuestion(t *testing.T, h *harness, sessionID, answered string) Qu
 // steps as the todo list.
 func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
 	h := newHarness(t, "stream_write_plan.txt", "stream_exit_plan_mode.txt",
-		"stream_write_plan.txt", "stream_exit_plan_mode.txt", "stream_plain.txt")
+		"stream_write_plan.txt", "stream_exit_plan_mode.txt", "stream_plain.txt",
+		"stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
 	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
 		t.Fatal(err)
@@ -136,8 +137,10 @@ func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
 	if n := len(h.rec.ofType("plan_draft")); n != 2 {
 		t.Errorf("plan_draft events = %d, want one per write_plan", n)
 	}
-	if h.replay.Count() != 5 {
-		t.Fatalf("requests = %d, want four plan requests and one execute", h.replay.Count())
+	// The execute reply leaves the plan unfinished, so the turn is sent back
+	// to it twice before it ends.
+	if h.replay.Count() != 7 {
+		t.Fatalf("requests = %d, want four plan requests, one execute and two rounds sent back", h.replay.Count())
 	}
 	exec := h.replay.Body(4)
 	got = sentTools(exec)

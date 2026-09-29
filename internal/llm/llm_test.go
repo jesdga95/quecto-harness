@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -905,6 +906,38 @@ func TestOnlyLlamaCarriesItsOwnSamplingFields(t *testing.T) {
 	for _, key := range []string{"top_k", "repeat_penalty"} {
 		if _, ok := body[key]; ok {
 			t.Errorf("the OpenAI body carried %q, which that API does not define", key)
+		}
+	}
+}
+
+// Each backend recognises its own server's refusal of a prompt longer than the
+// window, and nothing else's. The bodies follow llama.cpp's server source and
+// the OpenAI API reference; neither was captured from a live server.
+func TestChatRecognisesOverflow(t *testing.T) {
+	llama, _ := os.ReadFile("testdata/llamacpp-overflow.json")
+	openai, _ := os.ReadFile("testdata/openai-overflow.json")
+	cases := []struct {
+		protocol Protocol
+		body     []byte
+		want     ErrKind
+	}{
+		{ProtocolLlama, llama, KindOverflow},
+		{ProtocolChat, openai, KindOverflow},
+		{ProtocolResponses, openai, KindOverflow},
+		{ProtocolLlama, openai, KindBadRequest},
+		{ProtocolChat, llama, KindBadRequest},
+		{ProtocolLlama, []byte(`{"error":{"code":400,"message":"bad"}}`), KindBadRequest},
+	}
+	for _, tc := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(400)
+			w.Write(tc.body)
+		}))
+		_, err := New(srv.URL, "", tc.protocol).Chat(context.Background(),
+			ChatRequest{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}}, nil)
+		srv.Close()
+		if Kind(err) != tc.want {
+			t.Errorf("%s with %.40s = %q, want %q", tc.protocol, tc.body, Kind(err), tc.want)
 		}
 	}
 }

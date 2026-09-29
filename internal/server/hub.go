@@ -14,6 +14,7 @@ const (
 	subscriberQ  = 256
 	resyncEvType = "resync"
 	statusEvType = "status"
+	listedEvType = "listed"
 )
 
 // The events a model streams a token at a time. They are the only ones joined
@@ -84,6 +85,12 @@ func (h *Hub) Publish(sessionID string, ev agent.Event) {
 	c := h.channelLocked(sessionID)
 	if ev.Type == deltaEvType || ev.Type == reasoningEvType {
 		h.holdLocked(sessionID, c, ev)
+		return
+	}
+	// A listed state reaches the session list alone: it is what the list
+	// shows for a session, not a change in the session's own turn.
+	if ev.Type == listedEvType {
+		h.tellWatchersLocked(sessionID, ev.Fields["state"])
 		return
 	}
 	h.sendLocked(c)

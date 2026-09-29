@@ -54,6 +54,9 @@ func (r *Runner) WriteFile(ctx context.Context, raw json.RawMessage) (Result, er
 		if info.IsDir() {
 			return Result{}, fmt.Errorf("%s is a directory", args.Path)
 		}
+		if err := r.checkSeen(args.Path, path, info); err != nil {
+			return Result{}, err
+		}
 		verb, perm = "replaced", info.Mode().Perm()
 	}
 	// Read before writing, since after the write the old content is gone.
@@ -69,6 +72,7 @@ func (r *Runner) WriteFile(ctx context.Context, raw json.RawMessage) (Result, er
 	if r.Baseline != nil {
 		r.Baseline(before)
 	}
+	r.noteFile(path)
 
 	lines := strings.Count(args.Content, "\n")
 	if len(args.Content) > 0 && !strings.HasSuffix(args.Content, "\n") {
@@ -79,6 +83,23 @@ func (r *Runner) WriteFile(ctx context.Context, raw json.RawMessage) (Result, er
 		Bytes:  len(data),
 		Meta:   lineCounts(before, args.Content),
 	}, nil
+}
+
+// checkSeen refuses to change a file the session has not read, or one that
+// changed since, so a write from a stale read cannot overwrite someone
+// else's work.
+func (r *Runner) checkSeen(arg, path string, info os.FileInfo) error {
+	if r.Seen == nil {
+		return nil
+	}
+	read, same := r.Seen.check(path, info)
+	switch {
+	case !read:
+		return fmt.Errorf("%s has not been read in this session: read it first, then retry", arg)
+	case !same:
+		return fmt.Errorf("%s changed since it was last read: read it again, then retry", arg)
+	}
+	return nil
 }
 
 // lineCounts is how many lines a write added and removed, for the step row.

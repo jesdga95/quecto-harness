@@ -18,10 +18,10 @@
   import TodoList from "./TodoList.svelte";
   import StreamText from "./StreamText.svelte";
   import WriteDiff from "./WriteDiff.svelte";
-  import type { Todo, TranscriptItem } from "../api";
-  import { clockLabel, describeCommand, firstLine, firstSentence, k, latestSentence, statusLabel } from "../format";
+  import type { TranscriptItem } from "../api";
+  import { clockLabel, statusLabel } from "../format";
   import { asked } from "../question";
-  import { sectionsOf } from "../plan";
+  import { stepDesc, stepFailed, stepName, stringArg, todosOf } from "../steps";
   import { app } from "../state/app.svelte";
 
   // live marks the row the model is still writing into.
@@ -31,99 +31,20 @@
   // A subagent row names the agent it started and follows it, since what that
   // agent is doing is in a transcript of its own.
   const child = $derived(item.kind === "tool" ? item.child : undefined);
-  const task = $derived(
-    item.kind === "tool" && typeof item.args.task === "string" ? item.args.task : "",
-  );
+  const task = $derived(stringArg(item, "task"));
 
   // What a send_message call was given, so expanding the row shows the message
   // rather than the word the model got back for sending it.
   const message = $derived(
-    item.kind === "tool" && item.name === "send_message" && typeof item.args.text === "string"
-      ? item.args.text
-      : "",
+    item.kind === "tool" && item.name === "send_message" ? stringArg(item, "text") : "",
   );
 
-  const command = $derived(
-    item.kind === "tool" && typeof item.args.command === "string" ? item.args.command : "",
-  );
-  const path = $derived(
-    item.kind === "tool" && typeof item.args.path === "string" ? item.args.path : "",
-  );
-
-  // What grep and web_search were asked for, which is the text unless the
-  // call only named files.
-  const query = $derived.by(() => {
-    if (item.kind !== "tool") return "";
-    if (item.name === "grep") {
-      const { text, name } = item.args;
-      if (typeof text === "string" && text !== "") return text;
-      return typeof name === "string" ? name : "";
-    }
-    if (item.name === "web_search") return typeof item.args.query === "string" ? item.args.query : "";
-    return "";
-  });
-
-  // A call that failed before it could run, or that the tool refused, carries
-  // the error as its output. Only bash has an exit code to say so with.
-  const failed = $derived(item.kind === "tool" && !item.running && item.meta?.error === true);
-
-  const name = $derived.by(() => {
-    if (item.kind === "reasoning") return "Think";
-    if (item.kind === "permission") return "Permission";
-    if (item.kind === "compaction") return "Compacted";
-    if (item.kind === "error") return "Error";
-    if (item.kind !== "tool") return "Step";
-    if (item.name === "read") return "Read";
-    if (item.name === "grep") return "Find";
-    if (item.name === "web_search") return "Search";
-    if (item.name === "write") return "Write";
-    if (item.name === "edit") return "Edit";
-    if (item.name === "todo_write") return "Plan";
-    if (item.name === "ask_user_question") return "Question";
-    if (item.name === "exit_plan_mode") return "Plan";
-    if (item.name === "write_plan") return "Draft";
-    if (item.name === "subagent") return "Agent";
-    if (item.name === "send_message") return "Message";
-    return "Shell";
-  });
-
-  const desc = $derived.by(() => {
-    if (item.kind === "reasoning") return live ? latestSentence(item.text) : firstSentence(item.text);
-    if (item.kind === "permission") return item.command;
-    if (item.kind === "compaction") return `${k(item.before)} to ${k(item.after)}`;
-    if (item.kind === "error") return firstSentence(item.message);
-    if (item.kind !== "tool") return "";
-    if (failed) return firstLine(item.output);
-    if (item.name === "todo_write") {
-      const done = todos.filter((t) => t.status === "completed").length;
-      return `${done} of ${todos.length} done`;
-    }
-    if (item.name === "grep" || item.name === "web_search") return query;
-    if (item.name === "ask_user_question") return question.question;
-    if (item.name === "exit_plan_mode") return app.draft?.title ?? "";
-    if (item.name === "write_plan") return sectionsOf(item.args).join(", ");
-    if (item.name === "subagent") {
-      const to = typeof item.args.agent === "string" ? item.args.agent : "";
-      return to === "" ? task : `${to}: ${task}`;
-    }
-    if (item.name === "send_message") return message;
-    return path || describeCommand(command);
-  });
-
-  // The plan is in the call's own arguments, which is what the row draws
-  // rather than the result the model was handed back.
-  const todos = $derived.by<Todo[]>(() => {
-    if (item.kind !== "tool" || item.name !== "todo_write") return [];
-    const raw = item.args.todos;
-    if (!Array.isArray(raw)) return [];
-    return raw
-      .filter((t): t is Record<string, unknown> => typeof t === "object" && t !== null)
-      .map<Todo>((t) => ({
-        content: typeof t.content === "string" ? t.content : "",
-        status: t.status === "in_progress" || t.status === "completed" ? t.status : "pending",
-      }))
-      .filter((t) => t.content !== "");
-  });
+  const command = $derived(stringArg(item, "command"));
+  const path = $derived(stringArg(item, "path"));
+  const failed = $derived(stepFailed(item));
+  const name = $derived(stepName(item));
+  const desc = $derived(stepDesc(item, live, app.draft?.title ?? ""));
+  const todos = $derived(todosOf(item));
 
   // The question is in the call's own arguments and the answer is the result,
   // so the row draws the choice as it was put and what came back.

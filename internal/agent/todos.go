@@ -121,7 +121,7 @@ func (s *Session) carriesTodos() bool {
 		if e.Meta["kickoff"] == true {
 			return s.Plan != nil && renderTodos(seedTodos(*s.Plan)) == current
 		}
-		if e.Kind == "user" && e.From == "" && e.Meta["steer"] != true {
+		if e.Kind == "user" && e.From == "" && e.Meta["steer"] != true && e.Meta["continue"] != true {
 			return false
 		}
 		if e.Kind == "tool" && e.ToolName == "todo_write" && e.Content == current {

@@ -102,6 +102,9 @@ func newHarness(t *testing.T, fixtures ...string) *harness {
 	broker := perms.New(cfg, func(sid string, r perms.Request) { rec.Publish(sid, PermissionEvent(r)) })
 	ctx, cancel := context.WithCancel(context.Background())
 	engine := NewEngine(ctx, cfg, st, blobs, Clients{Pool: llm.NewPool()}, search.NewProviders(), broker, rec)
+	// A retry waits a moment in a test, so a failure fixture is not a
+	// fifteen second test.
+	engine.retry = []time.Duration{time.Millisecond, time.Millisecond}
 	// The temporary home goes away when the test ends, so nothing the engine
 	// started may still be writing sessions into it.
 	t.Cleanup(func() {
@@ -262,10 +265,10 @@ func TestTurnCostIsRecordedOnTheEntryThatEndedIt(t *testing.T) {
 	if last.Meta["requests"] != 2 {
 		t.Errorf("requests = %v, want 2", last.Meta["requests"])
 	}
-	// Input and cache are sums too: 410 and 1950 sent, 384 and 0 reused. A
+	// Input and cache are sums too: 410 and 2950 sent, 384 and 0 reused. A
 	// cache that reused nothing is still a count, so the field is present.
-	if last.Meta["input_tokens"] != 2360 {
-		t.Errorf("input_tokens = %v, want 2360", last.Meta["input_tokens"])
+	if last.Meta["input_tokens"] != 3360 {
+		t.Errorf("input_tokens = %v, want 3360", last.Meta["input_tokens"])
 	}
 	if last.Meta["cached_tokens"] != 384 {
 		t.Errorf("cached_tokens = %v, want 384", last.Meta["cached_tokens"])
@@ -738,8 +741,10 @@ func TestSendWhileBusyIsQueued(t *testing.T) {
 	waitIdle(t, s)
 }
 
+// An upstream failure is retried, each attempt noted, and the turn fails once
+// the retries are spent.
 func TestUpstreamErrorEndsTheTurnInFailed(t *testing.T) {
-	h := newHarness(t, "stream_error.txt")
+	h := newHarness(t, "stream_error.txt", "stream_error.txt", "stream_error.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "go", nil)
 	waitIdle(t, s)
@@ -748,8 +753,20 @@ func TestUpstreamErrorEndsTheTurnInFailed(t *testing.T) {
 	if len(errs) == 0 || !strings.Contains(errs[0].Fields["message"].(string), "context shift is disabled") {
 		t.Errorf("error events = %+v", errs)
 	}
-	// The message belongs to the request that failed, not to the session.
+	if n := h.replay.Count(); n != 3 {
+		t.Errorf("requests = %d, want the first and two retries", n)
+	}
+	retries := 0
 	doc, _, _, _ := s.Snapshot()
+	for _, e := range doc.Entries {
+		if e.Kind == "status" && strings.Contains(e.Content, "Trying again") {
+			retries++
+		}
+	}
+	if retries != 2 {
+		t.Errorf("retry notes = %d, want 2", retries)
+	}
+	// The message belongs to the request that failed, not to the session.
 	for i, e := range doc.Entries {
 		if e.Kind == "error" {
 			t.Errorf("entry %d kept the failure: %+v", i, e)
@@ -1022,10 +1039,18 @@ func TestCompactionCarriesThePlanOfTheRequest(t *testing.T) {
 	if todos == "" {
 		t.Fatalf("compaction entry carries no plan: %+v", entry.Meta)
 	}
+	// The estimate is the summary with its plan, plus the messages the
+	// compaction kept.
 	s.mu.Lock()
 	chars := s.estimateChars(-1)
+	kept := 0
+	for _, e := range s.Entries {
+		if e.InContext && e.Kind != "compaction" {
+			kept += entryChars(e)
+		}
+	}
 	s.mu.Unlock()
-	if want := len(entry.Content) + len(todos); chars != want {
+	if want := len(entry.Content) + len(todos) + kept; chars != want {
 		t.Errorf("estimate = %d chars, want %d with the carried plan", chars, want)
 	}
 
@@ -1142,7 +1167,8 @@ func TestCompactionCarriesThePlanPastAnAgentMessage(t *testing.T) {
 	}
 }
 
-// approvePlan runs a plan turn to its approval and the execute reply after it.
+// approvePlan runs a plan turn to its approval and the execute reply after it,
+// which is sent back to the unfinished plan twice.
 func approvePlan(t *testing.T, h *harness, s *Session) {
 	t.Helper()
 	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
@@ -1157,7 +1183,8 @@ func approvePlan(t *testing.T, h *harness, s *Session) {
 }
 
 func TestCompactionCarriesTheApprovedPlansProgress(t *testing.T) {
-	h := newHarness(t, "stream_write_plan.txt", "stream_exit_plan_mode.txt", "stream_plain.txt", "stream_summary.txt")
+	h := newHarness(t, "stream_write_plan.txt", "stream_exit_plan_mode.txt", "stream_plain.txt",
+		"stream_plain.txt", "stream_plain.txt", "stream_summary.txt")
 	s := h.session(t)
 	approvePlan(t, h, s)
 	if err := h.engine.Compact(s.ID); err != nil {
@@ -1173,7 +1200,7 @@ func TestCompactionCarriesTheApprovedPlansProgress(t *testing.T) {
 
 func TestCompactionLeavesAnApprovedPlanAfterANewRequest(t *testing.T) {
 	h := newHarness(t, "stream_write_plan.txt", "stream_exit_plan_mode.txt", "stream_plain.txt",
-		"stream_plain.txt", "stream_summary.txt")
+		"stream_plain.txt", "stream_plain.txt", "stream_plain.txt", "stream_summary.txt")
 	s := h.session(t)
 	approvePlan(t, h, s)
 	h.engine.Send(s.ID, "now something else", nil)
@@ -1462,8 +1489,58 @@ func TestUnansweredToolCallIsRepaired(t *testing.T) {
 	if last.Role != "tool" || last.ToolCallID != "call_x" {
 		t.Fatalf("last message = %+v, an unanswered call must be paired", last)
 	}
-	if last.Content != "not run: the session was interrupted" {
+	if last.Content != prompts.NotRun() {
 		t.Errorf("content = %q", last.Content)
+	}
+}
+
+// A session read back from disk with calls left unanswered has them closed:
+// one that was marked started may have run, one that was not did not.
+func TestInterruptedCallsAreClosedOnLoad(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	s := h.session(t)
+	s.mu.Lock()
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "go", InContext: true, Visible: true})
+	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
+		Meta: map[string]any{"started": []any{"call_a"}},
+		ToolCalls: []llm.ToolCall{
+			{ID: "call_a", Type: "function", Function: llm.FunctionCall{Name: "bash", Arguments: `{"command":"make"}`}},
+			{ID: "call_b", Type: "function", Function: llm.FunctionCall{Name: "bash", Arguments: `{"command":"ls"}`}},
+		}})
+	doc := s.doc()
+	s.mu.Unlock()
+	if err := h.store.Save(doc); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.mu.Lock()
+	delete(h.engine.live, s.ID)
+	h.engine.mu.Unlock()
+
+	loaded, err := h.engine.Get(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, _, _ := loaded.Snapshot()
+	results := map[string]string{}
+	interrupted := false
+	for _, e := range got.Entries {
+		if e.Kind == "tool" {
+			results[e.ToolCallID] = e.Content
+		}
+		if e.Kind == "status" && strings.HasPrefix(e.Content, "Interrupted") {
+			interrupted = true
+		}
+	}
+	if results["call_a"] != prompts.OutcomeUnknown() || results["call_b"] != prompts.NotRun() {
+		t.Errorf("results = %+v", results)
+	}
+	if !interrupted {
+		t.Error("the transcript does not say the turn was interrupted")
+	}
+	// The repair is saved, so a second load finds nothing to close.
+	saved, _ := h.store.Load(s.ID)
+	if len(saved.Entries) != len(got.Entries) {
+		t.Errorf("saved %d entries, the repaired session has %d", len(saved.Entries), len(got.Entries))
 	}
 }
 
@@ -1546,6 +1623,32 @@ func TestToolCallLimitRefusesThenEnds(t *testing.T) {
 	}
 	if refusals != 4 {
 		t.Errorf("refused calls = %d, want 4 across two replies", refusals)
+	}
+}
+
+// TestRepeatedCallsAreNoted asserts that the third identical call in a row
+// carries a note in its result, and the first two do not.
+func TestRepeatedCallsAreNoted(t *testing.T) {
+	h := newHarness(t, "stream_read.txt", "stream_read.txt", "stream_read.txt", "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "read it", nil)
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	var results []string
+	for _, e := range doc.Entries {
+		if e.Kind == "tool" {
+			results = append(results, e.Content)
+		}
+	}
+	if len(results) != 3 {
+		t.Fatalf("tool results = %d, want 3", len(results))
+	}
+	for i, r := range results {
+		noted := strings.Contains(r, "3 read calls in a row")
+		if noted != (i == 2) {
+			t.Errorf("result %d noted = %v: %q", i, noted, r)
+		}
 	}
 }
 
@@ -1866,6 +1969,16 @@ func TestEndToEndTurn(t *testing.T) {
 	if doc.Compactions != 1 {
 		t.Fatalf("compactions = %d", doc.Compactions)
 	}
+	// The compaction keeps the latest messages, which sit before the divider
+	// from the entry it names; everything older is out of the context.
+	tail := 1 << 30
+	for _, e := range doc.Entries {
+		if e.Kind == "compaction" {
+			if n, ok := metaInt(e.Meta["tail"]); ok {
+				tail = n
+			}
+		}
+	}
 	sawDivider := false
 	for _, e := range doc.Entries {
 		if e.Kind == "compaction" {
@@ -1873,7 +1986,7 @@ func TestEndToEndTurn(t *testing.T) {
 			continue
 		}
 		if !sawDivider {
-			if e.InContext {
+			if e.InContext && e.Seq < tail {
 				t.Errorf("entry %d before the divider is still in context", e.Seq)
 			}
 			if !e.Visible {
@@ -1956,8 +2069,8 @@ func TestContextBreakdownIsEstimatedFromThePrompt(t *testing.T) {
 	if want := schemaChars / charsPerToken; parts.Tools != want {
 		t.Errorf("tools = %d, want %d", parts.Tools, want)
 	}
-	// The turn reported 1950 prompt and 48 completion tokens.
-	if want := 1950 + 48 - parts.System - parts.Tools; parts.Messages != want {
+	// The turn reported 2950 prompt and 48 completion tokens.
+	if want := 2950 + 48 - parts.System - parts.Tools; parts.Messages != want {
 		t.Errorf("messages = %d, want %d", parts.Messages, want)
 	}
 }
@@ -2124,8 +2237,8 @@ func TestContextBreakdownIncludesProjectRules(t *testing.T) {
 	if want := (sysChars - baseChars) / charsPerToken; parts.Rules != want {
 		t.Errorf("rules = %d, want %d", parts.Rules, want)
 	}
-	// The turn reported 1950 prompt and 48 completion tokens.
-	if want := 1950 + 48 - parts.System - parts.Rules - parts.Tools; parts.Messages != want {
+	// The turn reported 2950 prompt and 48 completion tokens.
+	if want := 2950 + 48 - parts.System - parts.Rules - parts.Tools; parts.Messages != want {
 		t.Errorf("messages = %d, want %d", parts.Messages, want)
 	}
 }
@@ -2204,4 +2317,99 @@ func TestForgetDropsWhatWasReadFromAnAgent(t *testing.T) {
 // to and subagent is not sent.
 func topBrief() brief {
 	return brief{offer: tools.Offer{Mode: config.WorkExecute, Ask: true, Message: true}}
+}
+
+// A compaction keeps the latest messages word for word, starting on an
+// assistant entry so a call stays beside its result, and the summary is sent
+// ahead of them. Dropping the summary gives everything back.
+func TestCompactionKeepsTheTail(t *testing.T) {
+	s := newSession("sess_tail", "/p", "a", "m")
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: strings.Repeat("x", 4000), InContext: true, Visible: true})
+	call := s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
+		ToolCalls: []llm.ToolCall{{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "read", Arguments: `{"path":"a.go"}`}}}})
+	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: "call_1", ToolName: "read",
+		Content: strings.Repeat("r", 300), InContext: true, Visible: true})
+	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", Content: "latest words", InContext: true, Visible: true})
+
+	start := s.tailStart()
+	if start != 1 {
+		t.Fatalf("tail starts at %d, want the assistant that made the call", start)
+	}
+	for i := range s.Entries {
+		if i < start {
+			s.Entries[i].InContext = false
+		}
+	}
+	s.appendEntry(store.Entry{Kind: "compaction", Role: "user", Content: "the summary", InContext: true, Visible: true,
+		Meta: map[string]any{"tail": float64(call.Seq)}})
+
+	msgs := s.contextMessages(config.Agent{}, "darwin", "", topBrief(), nil)
+	var roles []string
+	for _, m := range msgs[1:] {
+		roles = append(roles, m.Role)
+	}
+	if strings.Join(roles, ",") != "user,assistant,tool,assistant" || !strings.Contains(msgs[1].Content, "the summary") {
+		t.Errorf("context = %v, want the summary and then the kept messages", roles)
+	}
+	if msgs[len(msgs)-1].Content != "latest words" {
+		t.Errorf("last message = %q", msgs[len(msgs)-1].Content)
+	}
+
+	// A reload rebuilds the same context from the tail the entry names.
+	for i := range s.Entries {
+		s.Entries[i].InContext = false
+	}
+	s.restoreContext()
+	if s.Entries[0].InContext || !s.Entries[1].InContext || !s.Entries[3].InContext {
+		t.Errorf("restored context = %v %v %v", s.Entries[0].InContext, s.Entries[1].InContext, s.Entries[3].InContext)
+	}
+	s.rewindTo(len(s.Entries) - 1)
+	if !s.Entries[0].InContext {
+		t.Error("dropping the compaction did not give back what it summarised")
+	}
+}
+
+// A turn that ends with steps of an approved plan left is sent back to it, and
+// stops being sent back once two rounds in a row complete nothing. The nudge is
+// in the context and not in the transcript.
+func TestTurnCarriesOnWithThePlan(t *testing.T) {
+	h := newHarness(t, "stream_write_plan.txt", "stream_exit_plan_mode.txt",
+		"stream_plain.txt", "stream_plain.txt", "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	approvePlan(t, h, s)
+
+	// Two plan requests, the execute reply, and two rounds sent back.
+	if n := h.replay.Count(); n != 5 {
+		t.Errorf("requests = %d, want the execute reply and two rounds sent back", n)
+	}
+	doc, _, _, _ := s.Snapshot()
+	nudges, notes := 0, 0
+	for _, e := range doc.Entries {
+		if e.Kind == "user" && e.Meta["continue"] == true {
+			nudges++
+			if e.Visible || !e.InContext || !strings.Contains(e.Content, "The next one is: Add the cache") {
+				t.Errorf("nudge = %+v", e)
+			}
+		}
+		if e.Kind == "status" && strings.Contains(e.Content, "carrying on") {
+			notes++
+		}
+	}
+	if nudges != 2 || notes != 2 {
+		t.Errorf("nudges = %d, notes = %d, want 2 of each", nudges, notes)
+	}
+	s.mu.Lock()
+	last := s.lastUserEntry()
+	kickoff := last >= 0 && s.Entries[last].Meta["kickoff"] == true
+	s.mu.Unlock()
+	if !kickoff {
+		t.Error("a nudge stands in for the request the turn answers")
+	}
+
+	// A later request is not pushed back to the old plan.
+	h.engine.Send(s.ID, "now something else", nil)
+	waitIdle(t, s)
+	if n := h.replay.Count(); n != 6 {
+		t.Errorf("requests = %d, want the new request answered once", n)
+	}
 }

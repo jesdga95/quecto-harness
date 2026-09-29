@@ -62,6 +62,9 @@ type Engine struct {
 
 	ctx context.Context
 	os  string
+	// retry is the wait before each retry of a request that failed for a
+	// reason that says nothing about the request itself.
+	retry []time.Duration
 
 	mu   sync.Mutex
 	live map[string]*Session
@@ -74,6 +77,7 @@ func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files
 		cfg: cfg, store: st, files: files, backends: backends, searches: searches,
 		perms: pb, asks: newAsker(), hub: hub,
 		ctx: ctx, os: runtime.GOOS, live: map[string]*Session{},
+		retry: []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second},
 	}
 }
 
@@ -123,6 +127,12 @@ func (e *Engine) today() string {
 // messages builds the prompt for a session. The image bytes are read between
 // the two locks, so nothing does file IO while the session is held.
 func (e *Engine) messages(s *Session, a config.Agent, b brief) []llm.Message {
+	return e.messagesUntil(s, a, b, -1)
+}
+
+// messagesUntil is messages over the entries before end, or over all of them
+// when end is negative.
+func (e *Engine) messagesUntil(s *Session, a config.Agent, b brief, end int) []llm.Message {
 	s.mu.Lock()
 	refs := s.imageRefs()
 	s.mu.Unlock()
@@ -140,7 +150,10 @@ func (e *Engine) messages(s *Session, a config.Agent, b brief) []llm.Message {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.contextMessages(a, e.os, e.today(), b, images)
+	if end < 0 || end > len(s.Entries) {
+		end = len(s.Entries)
+	}
+	return s.contextMessagesUntil(a, e.os, e.today(), b, images, end)
 }
 
 // mimeOf reads the type back off the bytes, so the data URI says what the
@@ -180,9 +193,25 @@ func (e *Engine) setState(s *Session, st State) {
 // here, or the launcher is left holding the last one that did.
 func (e *Engine) announce(s *Session, st State) {
 	e.publish(s.ID, ev("status", map[string]any{"state": string(st)}))
-	if parent := s.Parent; parent != "" {
-		e.publish(parent, ev("child", map[string]any{"session": s.ID, "state": string(st)}))
+	parent := s.Parent
+	if parent == "" {
+		return
 	}
+	e.publish(parent, ev("child", map[string]any{"session": s.ID, "state": string(st)}))
+	// A subagent's card is drawn in its launcher, so the session list shows
+	// the launcher as waiting on a person while the card is open, and as
+	// itself again once it is not.
+	switch {
+	case st == StateDeciding:
+		e.publish(parent, ev("listed", map[string]any{"state": string(StateDeciding)}))
+	case s.lastAnnounced() == StateDeciding:
+		if p, err := e.Get(parent); err == nil {
+			e.publish(parent, ev("listed", map[string]any{"state": string(p.State())}))
+		}
+	}
+	s.mu.Lock()
+	s.announced = st
+	s.mu.Unlock()
 }
 
 func (e *Engine) save(s *Session) {
@@ -256,12 +285,20 @@ func (e *Engine) Get(id string) (*Session, error) {
 			s.turnSeq = entry.Seq
 		}
 	}
+	// A session read from disk runs nothing, so calls still unanswered were
+	// cut off by a harness that stopped. They are closed before anything
+	// else can append.
+	repaired := s.closeInterrupted()
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if existing, ok := e.live[id]; ok {
+		e.mu.Unlock()
 		return existing, nil
 	}
 	e.live[id] = s
+	e.mu.Unlock()
+	if repaired {
+		e.save(s)
+	}
 	return s, nil
 }
 
@@ -298,6 +335,13 @@ func (e *Engine) Busy() map[string]State {
 	for _, s := range held {
 		if st := s.State(); st != StateIdle {
 			out[s.ID] = st
+		}
+	}
+	// A subagent's card is drawn in its launcher, which is listed as waiting
+	// on a person while it is open.
+	for _, s := range held {
+		if s.Parent != "" && out[s.ID] == StateDeciding {
+			out[s.Parent] = StateDeciding
 		}
 	}
 	return out
@@ -1116,6 +1160,11 @@ func (e *Engine) noteCost(s *Session, cost map[string]any) {
 }
 
 func (e *Engine) run(ctx context.Context, s *Session) {
+	// A turn that was stopped part way through a run of subagent calls leaves
+	// launches nobody will wait on.
+	s.mu.Lock()
+	s.launches = nil
+	s.mu.Unlock()
 	a, err := e.ensureReady(ctx, s)
 	if err != nil {
 		e.endWithError(s, err, 0)
@@ -1144,6 +1193,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		return
 	}
 	runner.Baseline = func(sn tools.Snapshot) { e.recordBaseline(s, sn) }
+	runner.Hide(e.cfg.Paths().Home)
+	runner.Seen = s.seen
+	runner.SpillTo(e.store.SpillDir(s.ID))
 	// The provider and the offer both read the same config, so a tool that is
 	// sent and a tool that is built cannot disagree within the turn. A
 	// provider that fails to build leaves Search nil, and the tool answers
@@ -1162,6 +1214,11 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// noted and refused track the spent budget: the note is written once, and a
 	// model that calls tools again after being refused ends the turn.
 	noted, refused := false, false
+	var seen repeats
+	// overflowed is set once a request the server found too long has been
+	// compacted and sent again, so a second overflow ends the turn.
+	overflowed := false
+	carried := newCarry()
 	cost := turnCost{started: time.Now(), agent: a.Name, model: a.Model}
 
 	for iteration := 0; ; iteration++ {
@@ -1169,7 +1226,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		// A message typed during the last step joins the history here, once
 		// the work that was already under way has finished. It lands before
 		// the context is measured, so one large enough to need it compacts.
-		e.absorbSteer(s)
+		if e.absorbSteer(s) {
+			seen.reset()
+		}
 
 		s.mu.Lock()
 		fill := s.computeFill()
@@ -1221,26 +1280,24 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		s.live = &Reply{}
 		s.mu.Unlock()
 
-		// first is when this request began to produce, which is what the
-		// generation rate is measured against. Chat calls on synchronously
-		// from its read loop, so no lock is needed here.
-		var first time.Time
-		sent := time.Now()
-		res, err := back.Chat(ctx, req, func(event llm.Event) error {
-			if first.IsZero() && carriesOutput(event.Kind) {
-				first = time.Now()
+		res, err := e.request(ctx, s, back, req, &cost)
+		if llm.Kind(err) == llm.KindOverflow && !overflowed && s.Compactable() {
+			// The fill is an estimate, so a window can be overrun before the
+			// threshold is reached. Compacting and asking again recovers once.
+			overflowed = true
+			e.dropLive(s)
+			e.setState(s, StateCompacting)
+			if err := e.compact(ctx, s, back, a, b, caps); err != nil {
+				e.endWithError(s, err, iteration)
+				return
 			}
-			e.forward(s, event)
-			return nil
-		})
+			continue
+		}
 		if err != nil {
-			s.mu.Lock()
-			s.live = nil
-			s.mu.Unlock()
+			e.keepPartial(s)
 			e.endWithError(s, err, iteration)
 			return
 		}
-		cost.add(res, sent, first)
 		if res.Dropped > 0 {
 			e.publish(s.ID, ev("error", map[string]any{"kind": "malformed",
 				"message": fmt.Sprintf("The model server sent %d frames that could not be read: some output was lost", res.Dropped)}))
@@ -1273,6 +1330,10 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			// A message that landed while the model was answering makes this
 			// the middle of the turn rather than the end of it.
 			if e.absorbSteer(s) {
+				seen.reset()
+				continue
+			}
+			if ctx.Err() == nil && e.carryOn(s, res, b.offer.Mode, &carried) {
 				continue
 			}
 			e.setState(s, StateFinal)
@@ -1322,7 +1383,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				}))
 				continue
 			}
-			e.setState(s, StateDeciding)
+			note := seen.see(call)
 			decision, record, stopped := e.decide(ctx, s, cfg, a, call)
 			if stopped {
 				e.stopWith(s, call, record)
@@ -1332,8 +1393,17 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			if decision.Kind != perms.DecideDeny {
 				e.publishStarted(s, runner, call, i)
 			}
+			if decision.Kind != perms.DecideDeny {
+				e.markStarted(s, call)
+				if call.Function.Name == "subagent" {
+					e.prelaunch(s, res.ToolCalls, i)
+				}
+			}
 			began := time.Now()
 			entry := e.execute(ctx, s, runner, call, decision, record, i)
+			if note != "" {
+				entry = e.addNote(s, entry, note)
+			}
 			cost.tools += time.Since(began)
 			e.save(s)
 			e.publish(s.ID, ev("tool_output", map[string]any{
@@ -1357,6 +1427,107 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		}
 	}
 
+}
+
+// errEmptyReply is a request that ended normally with nothing in it, which a
+// retry usually fixes and which a chat template may refuse to render later.
+var errEmptyReply = errors.New("The model returned an empty reply: send the message again, or check the model server")
+
+// request sends one request, retrying a failure that says nothing about the
+// request itself: a server error, a model still loading, a server that is not
+// answering yet, or an empty reply. A stall is not retried, since the server
+// is still busy and a new request would queue behind the old one.
+func (e *Engine) request(ctx context.Context, s *Session, back Backend, req llm.ChatRequest, cost *turnCost) (llm.Result, error) {
+	for attempt := 0; ; attempt++ {
+		// first is when this request began to produce, which is what the
+		// generation rate is measured against. Chat calls on synchronously
+		// from its read loop, so no lock is needed here.
+		var first time.Time
+		sent := time.Now()
+		res, err := back.Chat(ctx, req, func(event llm.Event) error {
+			if first.IsZero() && carriesOutput(event.Kind) {
+				first = time.Now()
+			}
+			e.forward(s, event)
+			return nil
+		})
+		if err == nil && res.Content == "" && res.Reasoning == "" && len(res.ToolCalls) == 0 {
+			err = errEmptyReply
+		}
+		if err == nil {
+			cost.add(res, sent, first)
+			return res, nil
+		}
+		if !retryable(err) || attempt >= len(e.retry) || ctx.Err() != nil {
+			return res, err
+		}
+		wait := e.retry[attempt]
+		e.noteRetry(s, err, wait, attempt+1)
+		select {
+		case <-ctx.Done():
+			return res, ctx.Err()
+		case <-time.After(wait):
+		}
+		e.setState(s, StateStreaming)
+	}
+}
+
+// retryable reports whether a failed request is worth sending again as it is.
+func retryable(err error) bool {
+	if errors.Is(err, errEmptyReply) {
+		return true
+	}
+	switch llm.Kind(err) {
+	case llm.KindUpstream, llm.KindModelLoading, llm.KindUnreachable:
+		return true
+	}
+	return false
+}
+
+// noteRetry records a failed attempt in the transcript and drops what it had
+// streamed, so the retry starts from a clean reply. A browser that drew some
+// of it is sent back for the transcript.
+func (e *Engine) noteRetry(s *Session, err error, wait time.Duration, attempt int) {
+	text := fmt.Sprintf("%s. Trying again in %s, attempt %d of %d", strings.TrimRight(err.Error(), "."),
+		wait.Round(100*time.Millisecond), attempt+1, len(e.retry)+1)
+	s.mu.Lock()
+	drew := s.live != nil && (s.live.Content != "" || s.live.Reasoning != "" || len(s.live.ToolCalls) > 0)
+	s.live = &Reply{}
+	entry := s.appendEntry(store.Entry{Kind: "status", Content: text, InContext: false, Visible: true})
+	s.mu.Unlock()
+	e.save(s)
+	if drew {
+		e.publish(s.ID, ev("resync", nil))
+		return
+	}
+	e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
+}
+
+// dropLive forgets the reply a request had streamed.
+func (e *Engine) dropLive(s *Session) {
+	s.mu.Lock()
+	s.live = nil
+	s.mu.Unlock()
+}
+
+// keepPartial keeps what a request had streamed before it was stopped or
+// failed, so the text the reader saw is still there on reload and the model
+// sees what it said. Tool calls cut off mid-way are dropped, and so is a
+// reply with no text, which some chat templates refuse to render.
+func (e *Engine) keepPartial(s *Session) {
+	s.mu.Lock()
+	live := s.live
+	s.live = nil
+	if live == nil || (strings.TrimSpace(live.Content) == "" && strings.TrimSpace(live.Reasoning) == "") {
+		s.mu.Unlock()
+		return
+	}
+	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant",
+		Content: live.Content, Reasoning: live.Reasoning,
+		Meta:      map[string]any{"interrupted": true},
+		InContext: strings.TrimSpace(live.Content) != "", Visible: true})
+	s.mu.Unlock()
+	e.save(s)
 }
 
 // outcomeMeta is what an assistant entry keeps about the request behind it:
@@ -1396,6 +1567,47 @@ func (e *Engine) noteLimit(s *Session, calls int) {
 	s.mu.Unlock()
 	e.save(s)
 	e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
+}
+
+// sideEffects are the tools whose call may have changed something outside the
+// session by the time a crash cut it off.
+var sideEffects = map[string]bool{"bash": true, "write": true, "edit": true, "subagent": true, "send_message": true}
+
+// markStarted records on the assistant entry that a call with side effects is
+// about to run, and saves it first. A harness that stops before the result
+// lands then knows the call may have done its work.
+func (e *Engine) markStarted(s *Session, call llm.ToolCall) {
+	if !sideEffects[call.Function.Name] {
+		return
+	}
+	s.mu.Lock()
+	for i := len(s.Entries) - 1; i >= 0; i-- {
+		if s.Entries[i].Kind != "assistant" {
+			continue
+		}
+		if s.Entries[i].Meta == nil {
+			s.Entries[i].Meta = map[string]any{}
+		}
+		started, _ := s.Entries[i].Meta["started"].([]any)
+		s.Entries[i].Meta["started"] = append(started, call.ID)
+		break
+	}
+	s.mu.Unlock()
+	e.save(s)
+}
+
+// addNote puts a note after the result a tool entry carries, so the model
+// reads it in the result of the call it is about.
+func (e *Engine) addNote(s *Session, entry store.Entry, note string) store.Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.Entries) - 1; i >= 0; i-- {
+		if s.Entries[i].Seq == entry.Seq {
+			s.Entries[i].Content = joinMessages(s.Entries[i].Content, "\n"+note)
+			return s.Entries[i]
+		}
+	}
+	return entry
 }
 
 // refuseCalls answers every call of a reply made after the budget was spent,
@@ -1513,7 +1725,7 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
 
 	policy := cfg.Mode
-	if e.perms.Evaluate(s.Project, tool, command, policy) == perms.ActionAllow {
+	if e.perms.Evaluate(s.Project, tool, command, path, policy) == perms.ActionAllow {
 		// A call skips the card two ways, and the record keeps them apart.
 		// "auto" is a policy that allowed this call, "full" is no policy.
 		record.Decision = "auto"
@@ -1538,6 +1750,9 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 		req.Route, req.Agent = root, a.Name
 	}
 	record.ID = req.ID
+	// Deciding means a person has a card to answer, so a call the policy
+	// allows never enters it.
+	e.setState(s, StateDeciding)
 	d, err := e.perms.Ask(ctx, req)
 	if err != nil {
 		record.Decision = "stopped"
@@ -1611,7 +1826,7 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 		case "ask_user_question":
 			res, err = e.askQuestion(ctx, s, call)
 		case "subagent":
-			res, err = e.runAgent(s, call)
+			res, err = e.runAgent(ctx, s, call)
 		case "send_message":
 			res, err = e.sendMessage(s, call)
 		case "write_plan":
@@ -1712,17 +1927,26 @@ func argSummary(call llm.ToolCall) (command, path string) {
 	return args.Command, args.Path
 }
 
-// compact replaces the in-context set with one summary. A failure leaves the
-// history untouched, so a failed compaction never loses context.
+// compact replaces the in-context set with one summary of everything but the
+// latest messages, which it keeps word for word. A failure leaves the history
+// untouched, so a failed compaction never loses context.
 //
 // The request carries the turn's tools and effort. A chat template renders
 // both at the head of the prompt, so dropping either would miss the server's
-// prompt cache and read the whole conversation again. A tool call is ignored.
+// prompt cache and read the whole conversation again. What it summarises is
+// a prefix of what the server holds, so that part is cached as well. A tool
+// call is ignored.
 func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config.Agent, b brief, caps llm.Caps) error {
-	msgs := append(e.messages(s, a, b), llm.Message{Role: "user", Content: prompts.Compact()})
 	s.mu.Lock()
 	before := s.computeFill()
+	start := s.tailStart()
+	kept := start < len(s.Entries)
+	tailSeq := 0
+	if kept {
+		tailSeq = s.Entries[start].Seq
+	}
 	s.mu.Unlock()
+	msgs := append(e.messagesUntil(s, a, b, start), llm.Message{Role: "user", Content: prompts.Compact(kept)})
 
 	res, err := back.Chat(ctx, llm.ChatRequest{
 		Model: a.Model, Messages: msgs, Tools: tools.Schemas(b.offer), Effort: a.Effort,
@@ -1733,6 +1957,9 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 		return err
 	}
 	summary := strings.TrimSpace(res.Content)
+	if llm.CutOff(res.FinishReason) {
+		return errors.New("The summary was cut off at the token limit: raise the agent's max tokens, or compact sooner")
+	}
 	if summary == "" && len(res.ToolCalls) > 0 {
 		return errors.New("The model called a tool instead of writing a summary: try again or start a new session")
 	}
@@ -1741,11 +1968,18 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	}
 
 	s.mu.Lock()
+	// The kept messages are found again by sequence number, since the turn
+	// may have appended since the request was made.
 	for i := range s.Entries {
-		s.Entries[i].InContext = false
+		if s.Entries[i].Seq < tailSeq || !kept {
+			s.Entries[i].InContext = false
+		}
 	}
 	s.Compactions++
 	meta := map[string]any{"before": before, "n": s.Compactions}
+	if kept {
+		meta["tail"] = tailSeq
+	}
 	// The plan is kept as it stood rather than read live, so the message
 	// does not change under the prompt cache as steps are marked.
 	if s.carriesTodos() {

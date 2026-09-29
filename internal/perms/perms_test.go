@@ -3,6 +3,8 @@ package perms
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -63,7 +65,7 @@ func TestEvaluateMatrix(t *testing.T) {
 		{"unknown_tool", "", config.ModeFull, ActionAllow},
 	}
 	for _, tc := range cases {
-		if got := b.Evaluate("/proj", tc.tool, tc.command, tc.mode); got != tc.want {
+		if got := b.Evaluate("/proj", tc.tool, tc.command, "", tc.mode); got != tc.want {
 			t.Errorf("Evaluate(%s, %q, mode=%s) = %s, want %s", tc.tool, tc.command, tc.mode, got, tc.want)
 		}
 	}
@@ -75,12 +77,32 @@ func TestEvaluateOperatorsAlwaysPrompt(t *testing.T) {
 	b := New(cfg, nil)
 	for _, op := range []string{";", "&", "&&", "|", "||", ">", "<", "`", "$(", "\n", "\r"} {
 		cmd := "go test " + op + " rm -rf /"
-		if got := b.Evaluate("/proj", "bash", cmd, config.ModeAllowlist); got != ActionPrompt {
+		if got := b.Evaluate("/proj", "bash", cmd, "", config.ModeAllowlist); got != ActionPrompt {
 			t.Errorf("operator %q was allowed", op)
 		}
 	}
-	if got := b.Evaluate("/proj", "bash", "go test ${HOME}", config.ModeAllowlist); got != ActionAllow {
+	if got := b.Evaluate("/proj", "bash", "go test ${HOME}", "", config.ModeAllowlist); got != ActionAllow {
 		t.Errorf("parameter expansion prompted, it cannot start a second command")
+	}
+}
+
+// A write under .git can run code on the next git command, so allowlist mode
+// asks about it, whether the path names .git or reaches it through a link.
+func TestEvaluateAsksAboutGit(t *testing.T) {
+	project := t.TempDir()
+	os.MkdirAll(filepath.Join(project, ".git", "hooks"), 0o755)
+	os.Symlink(filepath.Join(project, ".git"), filepath.Join(project, "meta"))
+	b := New(newStore(t), nil)
+	for _, path := range []string{".git/config", ".git/hooks/pre-commit", "sub/../.git/config", "meta/config"} {
+		if got := b.Evaluate(project, "write", "", path, config.ModeAllowlist); got != ActionPrompt {
+			t.Errorf("write to %s = %s, want prompt", path, got)
+		}
+	}
+	if got := b.Evaluate(project, "edit", "", "src/.gitignore", config.ModeAllowlist); got != ActionAllow {
+		t.Errorf("an ordinary file = %s, want allow", got)
+	}
+	if got := b.Evaluate(project, "write", "", ".git/config", config.ModeFull); got != ActionAllow {
+		t.Errorf("full mode = %s, want allow", got)
 	}
 }
 
