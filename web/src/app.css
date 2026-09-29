@@ -1676,8 +1676,9 @@
       animation: none;
     }
   }
-  /* A session held on a person: a still dot where the working mark goes,
-     since nothing moves until someone answers. */
+  /* A session held on a person: the working mark turned on its point in the
+     warn colour, breathing in place rather than turning, since nothing moves
+     until someone answers. */
   .needs-you {
     position: absolute;
     left: 7px;
@@ -1692,8 +1693,26 @@
     content: "";
     width: 7px;
     height: 7px;
-    border-radius: 50%;
+    border-radius: 1.5px;
     background: var(--warn);
+    transform: rotate(45deg);
+    animation: needs-you 1.8s ease-in-out infinite;
+  }
+  @keyframes needs-you {
+    0%,
+    100% {
+      transform: rotate(45deg) scale(1);
+      opacity: 1;
+    }
+    50% {
+      transform: rotate(45deg) scale(0.7);
+      opacity: 0.45;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .needs-you::before {
+      animation: none;
+    }
   }
 
   /* What the user sent: the message and everything attached to it, in one

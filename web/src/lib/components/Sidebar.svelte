@@ -278,13 +278,13 @@
                     onclick={() => selectSession(session.id)}
                   >
                     {#if held}
-                      <span class="needs-you" aria-hidden="true"></span>
+                      <span class="needs-you" role="status" aria-label="Waiting on you"></span>
                     {:else if isWorking(session.id)}
                       <span class="working" role="status" aria-label="Working"></span>
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{session.title}</span>
                     {#if held}
-                      <span class="text-[11px] font-medium text-warn">Needs you</span>
+                      <span class="text-[11px] text-warn">Pending</span>
                     {:else}
                       <span class="num text-[11px] text-muted">{since(session.updated)}</span>
                     {/if}

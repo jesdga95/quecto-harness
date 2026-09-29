@@ -398,7 +398,7 @@ found`.
   offered for `bash` alone, since the allowlist holds shell prefixes), *Deny* (optional
   reason). Enter allows the oldest once and Escape denies it, outside a field or a dialog.
   The card disables itself once answered, and a 200 clears `pending` locally, without
-  waiting for a server event. A session held on a person reads *Needs you* in the sidebar.
+  waiting for a server event. A session held on a person reads *Pending* in the sidebar, beside a yellow mark.
 - **A running turn** folds its steps under a header naming the call under way, or its
   newest step; opened, the list scrolls inside itself and follows its end. The reply and
   any card waiting on a person stay outside the fold.
