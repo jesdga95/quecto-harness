@@ -909,6 +909,16 @@
   .fold-head:hover {
     color: var(--text);
   }
+  /* Nothing under the rail yet, so no hairline to divide it from. */
+  .fold-head.no-rule {
+    border-bottom-color: transparent;
+  }
+  .fold-head.is-static {
+    cursor: default;
+  }
+  .fold-head.is-static:hover {
+    color: var(--muted);
+  }
   .fold-head .caret {
     display: inline-grid;
     place-items: center;

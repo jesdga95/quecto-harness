@@ -136,6 +136,13 @@
     return out;
   });
 
+  // The running turn whose rail shows the wait for the model, when it has one.
+  const waitTurn = $derived.by(() => {
+    const last = turns.at(-1);
+    if (!app.awaitingModel || app.status === "compacting") return undefined;
+    return last && last.fold.length > 0 ? last.key : undefined;
+  });
+
   // Which folded turns the reader has opened. It sticks until closed.
   const openTurns = $state<Record<string, boolean>>({});
 
@@ -298,6 +305,14 @@
   </div>
 {/snippet}
 
+<!-- The clock is aria-hidden: a reader does not need it announced every
+     second. -->
+{#snippet waitClock()}
+  {#if waited >= 2}
+    <span class="num text-[12px]" aria-hidden="true">{clock}</span>
+  {/if}
+{/snippet}
+
 {#snippet renderItem(item: TranscriptItem)}
   {#if item.kind === "user" && editing === item.id}
     <div class="composer mt-4 px-3 pt-3 pb-2">
@@ -430,10 +445,16 @@
           <div class="fold" class:is-open={openTurns[turn.key]}>
             <button
               class="fold-head"
+              class:no-rule={turn.rest.length === 0 && !openTurns[turn.key]}
               aria-expanded={openTurns[turn.key] === true}
               onclick={() => (openTurns[turn.key] = !openTurns[turn.key])}
             >
-              {#if turn.live}
+              {#if turn.live && turn.key === waitTurn}
+                <span class="spinner"></span>
+                <span class="fold-now" aria-live="polite"><span class="fold-name">Working on it</span></span>
+                {@render waitClock()}
+                <span class="text-[12px]">{foldLabel(turn.fold)}</span>
+              {:else if turn.live}
                 {@const now = nowStep(turn.fold)}
                 <span class="spinner"></span>
                 <span class="fold-now">
@@ -462,23 +483,21 @@
       {/each}
 
       <!-- The stretch between asking the model and its first output draws
-           nothing of its own, so the wait is shown where the reply will land,
-           with the seconds it has taken. A compaction gets the squeeze mark,
-           since it rewrites the conversation rather than waiting on a reply. -->
-      {#if app.awaitingModel}
-        <div class="step" aria-live="polite">
-          {#if app.status === "compacting"}
-            <span class="sq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
-            <span class="text-muted">Compacting</span>
-          {:else}
-            <span class="spinner"></span>
-            <span class="text-muted">Working on it</span>
-          {/if}
-          <!-- The clock is aria-hidden: a reader does not need it announced
-               every second. -->
-          {#if waited >= 2}
-            <span class="num text-[12px] text-muted" aria-hidden="true">{clock}</span>
-          {/if}
+           nothing of its own, so the wait takes the rail of the running turn,
+           with the seconds it has taken. Before a turn has a rail, and for a
+           compaction, which gets the squeeze mark, it draws one of its own. -->
+      {#if app.awaitingModel && !waitTurn}
+        <div class="fold">
+          <div class="fold-head no-rule is-static" aria-live="polite">
+            {#if app.status === "compacting"}
+              <span class="sq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+              <span class="fold-now"><span class="fold-name">Compacting</span></span>
+            {:else}
+              <span class="spinner"></span>
+              <span class="fold-now"><span class="fold-name">Working on it</span></span>
+            {/if}
+            {@render waitClock()}
+          </div>
         </div>
       {/if}
 
