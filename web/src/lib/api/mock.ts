@@ -27,6 +27,8 @@ import type {
   Transcript,
   TurnStatus,
   TranscriptItem,
+  ToolSpec,
+  ToolsetDebug,
   Usage,
   WorkMode,
 } from "./types";
@@ -40,6 +42,122 @@ const MOCK_RULES = 287;
 const MOCK_TOOLS = 1026;
 // The fewest message tokens the harness takes a compaction over.
 const MOCK_COMPACT_FLOOR = 1000;
+
+// A representative reading of the toolset debug view, in the order the model
+// sees the tools. Enough to draw the harness pane without a backend.
+const MOCK_TOOL_SPECS: ToolSpec[] = [
+  {
+    name: "read",
+    description: "Read a text file in the project; returns numbered lines.",
+    params: [
+      { name: "path", type: "string", description: "Path relative to the project root.", required: true },
+      { name: "offset", type: "integer", description: "First line to return, 1-based.", required: false, minimum: 1 },
+      { name: "limit", type: "integer", description: "Number of lines to return. Default 400.", required: false, minimum: 1 },
+    ],
+  },
+  {
+    name: "grep",
+    description: "Find files by name and lines by content.",
+    params: [
+      { name: "text", type: "string", description: "Text to look for inside files.", required: false },
+      { name: "name", type: "string", description: "File name pattern, such as *.go.", required: false },
+      { name: "path", type: "string", description: "Folder or file to search.", required: false },
+      { name: "regex", type: "boolean", description: "Treat text as a regular expression.", required: false },
+    ],
+  },
+  {
+    name: "web_search",
+    description: "Search the web; each result carries the part of its page that answers the query.",
+    params: [
+      { name: "query", type: "string", description: "What to search for.", required: true },
+      { name: "results", type: "integer", description: "How many results to return.", required: false, minimum: 1 },
+    ],
+  },
+  {
+    name: "write",
+    description: "Write content to a file, creating or replacing it.",
+    params: [
+      { name: "path", type: "string", description: "Path relative to the project root.", required: true },
+      { name: "content", type: "string", description: "The full file contents.", required: true },
+    ],
+  },
+  {
+    name: "edit",
+    description: "Replace one exact run of text in a file.",
+    params: [
+      { name: "path", type: "string", description: "Path relative to the project root.", required: true },
+      { name: "old_string", type: "string", description: "The exact text to replace.", required: true },
+      { name: "new_string", type: "string", description: "What to put in its place.", required: true },
+    ],
+  },
+  {
+    name: "todo_write",
+    description: "Keep a short plan for the work in hand.",
+    params: [{ name: "todos", type: "array", description: "The whole plan, in order.", required: true }],
+  },
+  {
+    name: "ask_user_question",
+    description: "Ask the user a question and wait for the answer.",
+    params: [
+      { name: "question", type: "string", description: "What is being asked.", required: true },
+      { name: "options", type: "array", description: "The answers to choose from.", required: true },
+    ],
+  },
+  {
+    name: "write_plan",
+    description: "Write sections of a plan draft.",
+    params: [
+      { name: "title", type: "string", description: "The change, in a few words.", required: false },
+      { name: "steps", type: "array", description: "The work in order.", required: false },
+    ],
+  },
+  { name: "exit_plan_mode", description: "Put the plan draft to the user for approval.", params: [] },
+  {
+    name: "subagent",
+    description: "Delegate a task to an agent and wait for its result.",
+    params: [
+      { name: "agent", type: "string", description: "The name of the agent to run.", required: true },
+      { name: "task", type: "string", description: "The whole brief.", required: true },
+    ],
+  },
+  {
+    name: "send_message",
+    description: "Send one message to the agent at the other end of a call.",
+    params: [
+      { name: "to", type: "string", description: "The handle, or parent.", required: true },
+      { name: "text", type: "string", description: "The message.", required: true },
+    ],
+  },
+  {
+    name: "bash",
+    description: "Run a shell command in the project root.",
+    params: [
+      { name: "command", type: "string", description: "The command line to run.", required: true },
+      { name: "timeout_s", type: "integer", description: "Seconds before the command is killed.", required: false, minimum: 1 },
+    ],
+  },
+];
+
+const MOCK_TOOLSET_DEBUG: ToolsetDebug = {
+  tools: MOCK_TOOL_SPECS,
+  sent: {
+    full: MOCK_TOOL_SPECS.map((t) => t.name),
+    minimal: ["read", "write", "edit", "bash"],
+  },
+  prompts: {
+    full:
+      "You are a coding agent working in /Users/jay/Projects/Personal/quecto-harness on darwin.\n" +
+      "Tools: read, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash.\n\n" +
+      "Use the grep tool, not a shell command, to locate files and lines.\n" +
+      "Use the read tool, not cat, head or sed, to read a file.\n" +
+      "Check the exit code of every bash result, and look into a failure before moving on.",
+    minimal:
+      "You are a coding agent working in /Users/jay/Projects/Personal/quecto-harness on darwin.\n" +
+      "Tools: read, write, edit, bash. The rules or this history may name a tool that is not in that list: it is not yours, so do not reach for it.\n\n" +
+      "Use the read tool, not cat, head or sed, to read a file.\n" +
+      "Check the exit code of every bash result, and look into a failure before moving on.",
+  },
+};
 
 /** The split as the harness reports it: three measured parts and the rest. */
 function split(usage: Usage): Usage {
@@ -416,6 +534,7 @@ export class MockApi implements HarnessApi {
     listen: "127.0.0.1:7331",
     agent: "agt_local",
     permissions: "ask",
+    toolset: "full",
     compact_at: 0.8,
     max_tool_calls: 50,
     shell: "/bin/sh",
@@ -794,6 +913,15 @@ export class MockApi implements HarnessApi {
     await this.tick(160);
     this.config = { ...this.config, ...patch };
     return { ...this.config };
+  }
+
+  async getTools(): Promise<ToolsetDebug> {
+    await this.tick(160);
+    return {
+      tools: MOCK_TOOLSET_DEBUG.tools.map((t) => ({ ...t, params: t.params.map((p) => ({ ...p })) })),
+      sent: { full: MOCK_TOOLSET_DEBUG.sent.full.slice(), minimal: MOCK_TOOLSET_DEBUG.sent.minimal.slice() },
+      prompts: { ...MOCK_TOOLSET_DEBUG.prompts },
+    };
   }
 
   async updateSearch(patch: SearchPatch): Promise<SearchConfig> {

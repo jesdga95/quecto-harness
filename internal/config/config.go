@@ -24,6 +24,7 @@ type File struct {
 	Agents           []FileAgent `json:"agents"`
 	Agent            *string     `json:"agent,omitempty"`
 	Permissions      *string     `json:"permissions,omitempty"`
+	Toolset          *string     `json:"toolset,omitempty"`
 	CompactAt        *float64    `json:"compact_at,omitempty"`
 	Shell            *string     `json:"shell,omitempty"`
 	CommandTimeoutS  *int        `json:"command_timeout_s,omitempty"`
@@ -80,8 +81,10 @@ type Config struct {
 	Agents []Agent
 	// AgentID names the active agent. Empty when none is chosen, which is the
 	// state the setup screen answers.
-	AgentID          string
-	Mode             Mode
+	AgentID string
+	Mode    Mode
+	// Toolset names the tools a turn is offered, for every session.
+	Toolset          Toolset
 	CompactAt        float64
 	Shell            string
 	CommandTimeout   time.Duration
@@ -358,6 +361,28 @@ const (
 	ModeFull Mode = "full"
 )
 
+// Toolset is the set of tools a turn is offered, chosen once for the whole
+// harness. Full sends every tool, minimal the four it names.
+type Toolset string
+
+const (
+	ToolsetFull    Toolset = "full"
+	ToolsetMinimal Toolset = "minimal"
+)
+
+// ToolsetNames lists what the toolset field accepts, for the note a rejected
+// value produces.
+const ToolsetNames = "full or minimal"
+
+// ValidToolset reports whether s is one of the two toolsets.
+func ValidToolset(s string) bool {
+	switch Toolset(s) {
+	case ToolsetFull, ToolsetMinimal:
+		return true
+	}
+	return false
+}
+
 // WorkMode is what a session is doing: planning a change or carrying one out.
 // Each sends its own system prompt and its own tools.
 type WorkMode string
@@ -391,6 +416,7 @@ func Defaults() Config {
 		Agents:           nil,
 		AgentID:          "",
 		Mode:             ModeAsk,
+		Toolset:          ToolsetFull,
 		CompactAt:        0.8,
 		Shell:            defaultShell(),
 		CommandTimeout:   120 * time.Second,
@@ -452,6 +478,13 @@ func (f File) Resolve(d Config) (Config, []string) {
 			c.Mode = Mode(*f.Permissions)
 		} else {
 			note("permissions " + strconv.Quote(*f.Permissions) + " is not ask, allowlist or full, using ask")
+		}
+	}
+	if f.Toolset != nil {
+		if ValidToolset(*f.Toolset) {
+			c.Toolset = Toolset(*f.Toolset)
+		} else {
+			note("toolset " + strconv.Quote(*f.Toolset) + " is not " + ToolsetNames + ", using full")
 		}
 	}
 	if f.CompactAt != nil {
@@ -517,6 +550,7 @@ func (f File) Resolve(d Config) (Config, []string) {
 // there is no number to write.
 func (c Config) File() File {
 	listen, mode, compact := c.Listen, string(c.Mode), c.CompactAt
+	toolset := string(c.Toolset)
 	shell := c.Shell
 	timeout, limit := int(c.CommandTimeout/time.Second), c.OutputLimitBytes
 	maxCalls, agent := c.MaxToolCalls, c.AgentID
@@ -573,6 +607,7 @@ func (c Config) File() File {
 		Agents:           agents,
 		Agent:            &agent,
 		Permissions:      &mode,
+		Toolset:          &toolset,
 		CompactAt:        &compact,
 		Shell:            &shell,
 		CommandTimeoutS:  &timeout,

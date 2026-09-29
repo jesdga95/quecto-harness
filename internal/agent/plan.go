@@ -31,6 +31,11 @@ func (e *Engine) SetMode(id string, mode config.WorkMode) error {
 	if !config.ValidWorkMode(string(mode)) {
 		return ErrBadMode
 	}
+	// Plan mode lives on the plan tools, which the toolset may withhold.
+	if mode == config.WorkPlan && !tools.InSet(e.cfg.Config().Toolset, "write_plan") {
+		set := e.cfg.Config().Toolset
+		return fmt.Errorf("Plan mode is not available: the toolset is %s, which does not offer the plan tools", set)
+	}
 	s, err := e.Get(id)
 	if err != nil {
 		return err
@@ -271,11 +276,15 @@ func (e *Engine) takeApproval(s *Session) bool {
 	return true
 }
 
-// unavailable answers a call to a tool this turn's mode did not send. The
-// history can hold calls from an earlier mode, and a model copies what it sees,
-// so the call is answered rather than failed.
-func (e *Engine) unavailable(s *Session, call llm.ToolCall, mode config.WorkMode) store.Entry {
-	content := fmt.Sprintf("%s is not available in %s mode", call.Function.Name, mode)
+// unavailable answers a call to a tool this turn neither sent nor lets run.
+// The history can hold calls from an earlier mode or toolset, and a model
+// copies what it sees, so the call is answered rather than failed.
+func (e *Engine) unavailable(s *Session, call llm.ToolCall, offer tools.Offer) store.Entry {
+	name := call.Function.Name
+	content := fmt.Sprintf("%s is not available in %s mode", name, offer.Mode)
+	if offer.InMode(name) && !offer.InSet(name) {
+		content = fmt.Sprintf("%s is not available: the toolset is %s", name, offer.Set)
+	}
 	s.mu.Lock()
 	entry := s.appendEntry(store.Entry{Kind: "tool", Role: "tool",
 		ToolCallID: call.ID, ToolName: call.Function.Name, Content: content,

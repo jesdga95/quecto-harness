@@ -165,7 +165,7 @@ func TestSystemWithoutRulesIsUnchanged(t *testing.T) {
 // answered from memory. The line names no tool: a subagent that was not sent
 // web_search must still read it, and read it without the promise of one.
 func TestSystemSaysItsKnowledgeIsStale(t *testing.T) {
-	got := System(SystemVars{Project: "/src/x", OS: "darwin"})
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools})
 	if !strings.Contains(got, "goes stale") || !strings.Contains(got, "verify it with a tool") {
 		t.Errorf("prompt does not say its knowledge is stale and what to do about it: %q", got)
 	}
@@ -196,10 +196,11 @@ func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
 }
 
 func TestSystemListsTheAgentsWithTheirRoles(t *testing.T) {
-	got := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, Agents: []AgentBrief{
-		{Name: "Reviewer", Role: "Reviews Go and does not write it."},
-		{Name: "Searcher"},
-	}})
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, Tools: append(append([]string(nil), execTools...), "subagent"),
+		Agents: []AgentBrief{
+			{Name: "Reviewer", Role: "Reviews Go and does not write it."},
+			{Name: "Searcher"},
+		}})
 	for _, want := range []string{"- Reviewer: Reviews Go and does not write it.", "- Searcher"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt omits %q: %q", want, got)
@@ -216,9 +217,10 @@ func TestSystemListsTheAgentsWithTheirRoles(t *testing.T) {
 // An agent is chosen on what it is for, so what it runs is not in the prompt.
 // The list carries a name and a description and nothing else.
 func TestSystemDoesNotNameTheModelBehindAnAgent(t *testing.T) {
-	got := System(SystemVars{Project: "/src/x", OS: "darwin", Agents: []AgentBrief{
-		{Name: "Reviewer", Role: "Reviews Go and does not write it."},
-	}})
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: append(append([]string(nil), execTools...), "subagent"),
+		Agents: []AgentBrief{
+			{Name: "Reviewer", Role: "Reviews Go and does not write it."},
+		}})
 	if !strings.Contains(got, "- Reviewer: Reviews Go and does not write it.\n") {
 		t.Errorf("the line is not the name and the description alone: %q", got)
 	}
@@ -228,6 +230,7 @@ func TestSystemDoesNotNameTheModelBehindAnAgent(t *testing.T) {
 // inside one is text.
 func TestSystemDoesNotParseAgentNames(t *testing.T) {
 	got := System(SystemVars{Project: "/src/x", OS: "darwin",
+		Tools:    append(append([]string(nil), execTools...), "subagent", "send_message"),
 		Agents:   []AgentBrief{{Name: "{{.Project}}", Role: "{{if"}},
 		Launcher: "{{range}}"})
 	for _, want := range []string{"{{.Project}}", "{{if", "{{range}}"} {
@@ -240,7 +243,7 @@ func TestSystemDoesNotParseAgentNames(t *testing.T) {
 // The panel that draws a written page or figure is in the UI that shows the
 // person's conversation, so only a session with no launcher is told about it.
 func TestSystemNamesDrawingsOnlyForTheMainAgent(t *testing.T) {
-	main := System(SystemVars{Project: "/src/x", OS: "darwin"})
+	main := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools})
 	for _, want := range []string{"prototype", "write", ".html", ".svg", "backticks"} {
 		if !strings.Contains(main, want) {
 			t.Errorf("prompt does not say %q about showing a file: %q", want, main)
@@ -270,6 +273,9 @@ func TestSystemWithoutAgentsIsUnchanged(t *testing.T) {
 
 // execTools is the list an execute turn with nothing optional sends.
 var execTools = []string{"read", "grep", "write", "edit", "todo_write", "bash"}
+
+// allTools is the full toolset, in the order the model sees it.
+var allTools = []string{"read", "grep", "web_search", "write", "edit", "todo_write", "ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash"}
 
 // Plan mode's rules are a message of their own, so the system prompt is the
 // same in both modes, and they name exit_plan_mode only when it is offered.
@@ -322,5 +328,35 @@ func TestCompactionCarriesAnOpenPlan(t *testing.T) {
 	want := "Summary of earlier work:\n\ndid x\n\nYour todo list when this summary was written:\n1 of 2 done\n- [x] read\n- [ ] write\n\nTake this summary as what you already know, and continue the work without restating it."
 	if got != want {
 		t.Errorf("with a plan = %q, want %q", got, want)
+	}
+}
+
+// A withheld tool is not named: the prompt speaks only of the tools the turn
+// sends, so a minimal toolset loses the search guidance. And when the list is
+// short, the prompt says that the rules and the history may still name the
+// tools it does not have, since the rules arrive verbatim and are not gated.
+func TestThePromptNamesOnlyTheToolsItSends(t *testing.T) {
+	const note = "The rules or this history may name a tool that is not in that list: it is not yours, so do not reach for it."
+	minimal := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: []string{"read", "write", "edit", "bash"}, NotAllTools: true})
+	if !strings.Contains(minimal, "Tools: read, write, edit, bash.") {
+		t.Errorf("the minimal prompt does not name its tools: %q", minimal)
+	}
+	if !strings.Contains(minimal, note) {
+		t.Errorf("a short list does not warn that the rules may name the rest: %q", minimal)
+	}
+	for _, withheld := range []string{"grep", "web_search", "ask_user_question", "todo_write", "subagent"} {
+		if strings.Contains(minimal, withheld) {
+			t.Errorf("the minimal prompt names %s, which it does not send: %q", withheld, minimal)
+		}
+	}
+	if strings.Contains(minimal, "todo_write plan") {
+		t.Errorf("the minimal prompt keeps the todo line: %q", minimal)
+	}
+	full := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: allTools})
+	if !strings.Contains(full, "Tools: read, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash.") {
+		t.Errorf("the full prompt does not name every tool: %q", full)
+	}
+	if strings.Contains(full, note) {
+		t.Errorf("the full list carries the warning for a short one: %q", full)
 	}
 }

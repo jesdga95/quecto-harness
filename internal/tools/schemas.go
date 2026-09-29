@@ -12,9 +12,10 @@ import (
 // re-encoding them.
 var schemas = buildSchemas()
 
-// Offer says which tools belong in this turn's request, and which of them the
-// session's mode lets run.
+// Offer says which tools belong in this turn's request, which of them the
+// harness toolset offers at all, and which of those the session's mode lets run.
 type Offer struct {
+	Set     config.Toolset
 	Mode    config.WorkMode
 	Ask     bool
 	Agents  bool
@@ -31,6 +32,14 @@ var modeTools = map[config.WorkMode][]string{
 		"subagent", "send_message", "write_plan", "exit_plan_mode", "bash"},
 	config.WorkExecute: {"read", "grep", "web_search", "write", "edit",
 		"todo_write", "ask_user_question", "subagent", "send_message", "bash"},
+}
+
+// setTools is the fixed list each harness toolset offers. A set outside it is
+// a call that is answered rather than run, whatever the mode.
+var setTools = map[config.Toolset][]string{
+	config.ToolsetFull: {"read", "grep", "web_search", "write", "edit", "todo_write",
+		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash"},
+	config.ToolsetMinimal: {"read", "write", "edit", "bash"},
 }
 
 // Schemas returns the tool definitions in the order the model sees them,
@@ -54,6 +63,11 @@ func Names(o Offer) []string {
 	return out
 }
 
+// AllCount is the number of tools the harness knows, which is the ceiling a
+// turn's list can reach. A list short of it means the rules or the history
+// may name a tool the model cannot reach.
+func AllCount() int { return len(schemas) }
+
 // Known reports whether a tool of that name exists in any mode.
 func Known(name string) bool {
 	for _, t := range schemas {
@@ -75,9 +89,30 @@ func (o Offer) InMode(name string) bool {
 	return false
 }
 
+// InSet reports whether a toolset offers a tool at all, whatever the mode. A
+// set that withholds a tool keeps it out of the request. An empty set stands
+// at full, since a caller that leaves it unset gets the harness's default
+// rather than a turn that quietly drops every tool.
+func InSet(set config.Toolset, name string) bool {
+	if set == "" {
+		set = config.ToolsetFull
+	}
+	for _, n := range setTools[set] {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (o Offer) InSet(name string) bool { return InSet(o.Set, name) }
+
 // Sends reports whether a tool is in this turn's request, which depends on
-// what the session is offered and not on its mode.
+// what the harness offers and what the session is offered, and not on its mode.
 func (o Offer) Sends(name string) bool {
+	if !o.InSet(name) {
+		return false
+	}
 	switch name {
 	case "ask_user_question", "write_plan", "exit_plan_mode":
 		return o.Ask

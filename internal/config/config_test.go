@@ -73,6 +73,7 @@ func TestResolveClamps(t *testing.T) {
 		{"top_p", oneAgent(FileAgent{TopP: ptr(-0.1)}), func(c Config) bool { return c.Agents[0].TopP == nil }, "top_p"},
 		{"concurrency", oneAgent(FileAgent{Concurrency: ptr(0)}), func(c Config) bool { return c.Agents[0].Concurrency == DefaultConcurrency }, "concurrency"},
 		{"max_context", oneAgent(FileAgent{MaxContext: ptr(64)}), func(c Config) bool { return c.Agents[0].MaxContext == nil }, "max_context"},
+		{"toolset", File{Toolset: ptr("everything")}, func(c Config) bool { return c.Toolset == ToolsetFull }, "toolset"},
 		{"selection", File{Agent: ptr("agt_gone")}, func(c Config) bool { return c.AgentID == "" }, "agt_gone"},
 		{"project", File{Projects: []string{"relative/path"}}, func(c Config) bool { return len(c.Projects) == 0 }, "project"},
 	}
@@ -99,6 +100,39 @@ func oneAgent(a FileAgent) File {
 		a.Name = ptr("Local")
 	}
 	return File{Agents: []FileAgent{a}}
+}
+
+// A toolset value resolves, is written into the file, and reads back as the
+// same value; an absent one stands at full.
+func TestToolsetRoundTrip(t *testing.T) {
+	d := Defaults()
+	for _, want := range []Toolset{ToolsetFull, ToolsetMinimal} {
+		c, notes := File{Toolset: ptr(string(want))}.Resolve(d)
+		if len(notes) != 0 || c.Toolset != want {
+			t.Fatalf("%s resolved as %v with notes %v", want, c.Toolset, notes)
+		}
+		b, err := json.Marshal(c.File())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var written struct {
+			Toolset *string `json:"toolset"`
+		}
+		if err := json.Unmarshal(b, &written); err != nil {
+			t.Fatal(err)
+		}
+		if written.Toolset == nil || *written.Toolset != string(want) {
+			t.Fatalf("written %v, want %s", written.Toolset, want)
+		}
+		back, notes := File{Toolset: written.Toolset}.Resolve(d)
+		if len(notes) != 0 || back.Toolset != want {
+			t.Fatalf("read back as %v with notes %v", back.Toolset, notes)
+		}
+	}
+	c, notes := File{}.Resolve(d)
+	if len(notes) != 0 || c.Toolset != ToolsetFull {
+		t.Errorf("absent toolset resolved as %v with notes %v", c.Toolset, notes)
+	}
 }
 
 // Sampling is the one setting with no default of its own: what is not set is

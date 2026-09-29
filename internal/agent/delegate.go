@@ -101,11 +101,11 @@ func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	if parent != "" {
 		// A subagent hands work to nobody and asks nobody, but it still
 		// searches: research delegated down is what web_search is for.
-		b.offer = tools.Offer{Mode: mode, Message: true, Search: cfg.Search.Enabled()}
+		b.offer = tools.Offer{Set: cfg.Toolset, Mode: mode, Message: true, Search: cfg.Search.Enabled()}
 		b.launcher = parent
 		return b
 	}
-	b.offer = tools.Offer{Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}
+	b.offer = tools.Offer{Set: cfg.Toolset, Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}
 	me, _ := cfg.AgentByID(mine)
 	// What is named is what the caller may hand work to, so a list that names
 	// nothing offers the tool at all, the way a roster with no enabled agents

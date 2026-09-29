@@ -1402,6 +1402,34 @@ func TestPutConfig(t *testing.T) {
 	}
 }
 
+// The harness pane's debug view lists every tool with its parameters and
+// renders the system prompt of each toolset it sends.
+func TestTheToolsDebugView(t *testing.T) {
+	f := newFixture(t)
+	body := decode(t, f.do(t, "GET", "/api/tools", nil))
+	list, _ := body["tools"].([]any)
+	if len(list) != 12 {
+		t.Fatalf("the view lists %d tools, want 12", len(list))
+	}
+	sent, _ := body["sent"].(map[string]any)
+	minimal, _ := sent["minimal"].([]any)
+	if len(minimal) != 4 || minimal[0] != "read" || minimal[3] != "bash" {
+		t.Errorf("sent minimal = %v", minimal)
+	}
+	prompts, _ := body["prompts"].(map[string]any)
+	p, _ := prompts["minimal"].(string)
+	if !strings.Contains(p, "Tools: read, write, edit, bash.") {
+		t.Errorf("the minimal prompt does not name its tools: %q", p)
+	}
+	if strings.Contains(p, "grep") {
+		t.Errorf("the minimal prompt names a tool it does not send: %q", p)
+	}
+	p, _ = prompts["full"].(string)
+	if !strings.Contains(p, "Tools: read, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash.") {
+		t.Errorf("the full prompt does not name every tool: %q", p)
+	}
+}
+
 // A model is a property of the agent, so the config route must not be a second
 // way to set one.
 func TestPutConfigIgnoresTheModel(t *testing.T) {

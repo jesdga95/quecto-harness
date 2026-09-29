@@ -1141,6 +1141,42 @@ func TestSchemasAreTheSameInEveryMode(t *testing.T) {
 	}
 }
 
+// A tool the toolset withholds is neither sent nor run, whatever the mode
+// runs. An empty set stands at full.
+func TestTheToolsetWithholdsItsTools(t *testing.T) {
+	names := func(o Offer) []string {
+		var out []string
+		for _, s := range Schemas(o) {
+			out = append(out, s.Function.Name)
+		}
+		return out
+	}
+
+	minimal := Offer{Set: config.ToolsetMinimal, Mode: config.WorkExecute}
+	want := []string{"read", "write", "edit", "bash"}
+	if !slices.Equal(names(minimal), want) {
+		t.Errorf("minimal sent %v, want %v", names(minimal), want)
+	}
+	for _, withheld := range []string{"grep", "web_search", "todo_write", "ask_user_question", "subagent"} {
+		if minimal.InSet(withheld) {
+			t.Errorf("%s escaped the minimal toolset", withheld)
+		}
+	}
+
+	// A tool the mode withholds stays withheld in the full toolset, and a tool
+	// the full toolset offers is offered in execute.
+	full := Offer{Set: config.ToolsetFull, Mode: config.WorkExecute, Ask: true, Message: true}
+	if full.InMode("write_plan") || !full.InSet("read") {
+		t.Errorf("full offer: write_plan in mode %v, read in set %v", full.InMode("write_plan"), full.InSet("read"))
+	}
+	if !InSet(config.ToolsetFull, "send_message") {
+		t.Error("InSet answered against the wrong list")
+	}
+	if !InSet("", "grep") {
+		t.Error("an empty set withheld the full toolset")
+	}
+}
+
 // A model writes arguments in the order the schema lists them, and the file
 // panel can only draw a write once it has the path, so path comes first.
 func TestWriteSchemasListThePathFirst(t *testing.T) {

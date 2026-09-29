@@ -125,11 +125,39 @@ export interface Probe {
     nothing checked. */
 export type PermMode = "ask" | "allowlist" | "full";
 
+/** Which tools the harness offers a turn, for every session. */
+export type Toolset = "full" | "minimal";
+
+/** One argument a tool takes, as the settings pane lists it. */
+export interface ToolParam {
+  name: string;
+  type: string;
+  description: string;
+  required: boolean;
+  minimum?: number;
+}
+
+/** One tool with its parameters, as the settings pane lists it. */
+export interface ToolSpec {
+  name: string;
+  description: string;
+  params: ToolParam[];
+}
+
+/** What the harness pane's debug view draws: every tool, which tools each
+    toolset sends, and the system prompt each one renders. */
+export interface ToolsetDebug {
+  tools: ToolSpec[];
+  sent: Record<Toolset, string[]>;
+  prompts: Record<Toolset, string>;
+}
+
 export interface Config {
   listen: string;
   /** The id of the agent answering. Empty when none is chosen. */
   agent: string;
   permissions: PermMode;
+  toolset: Toolset;
   compact_at: number;
   /** Tool calls one turn may make. Zero is no limit. */
   max_tool_calls: number;
@@ -593,6 +621,9 @@ export interface HarnessApi {
   probeSearch(at: { provider: string; url: string; key: string }): Promise<SearchProbe>;
   listAllowlist(project: string): Promise<string[]>;
   removeAllowed(project: string, prefix: string): Promise<string[]>;
+  /** Every tool the harness offers, which tools each toolset sends, and the
+      system prompt each one renders, for the harness pane's debug view. */
+  getTools(): Promise<ToolsetDebug>;
   /** Subscribes to the session stream. The returned function closes it. */
   events(session: string, onEvent: EventHandler): () => void;
   /** Follows every session's status, open or not. The returned function

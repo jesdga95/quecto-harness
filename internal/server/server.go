@@ -133,6 +133,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/agents/{id}/select", s.selectAgent)
 	mux.HandleFunc("POST /api/permissions/{id}", s.postPermission)
 	mux.HandleFunc("POST /api/questions/{id}", s.postQuestion)
+	mux.HandleFunc("GET /api/tools", s.getTools)
 	mux.HandleFunc("PUT /api/config", s.putConfig)
 	mux.HandleFunc("PUT /api/search", s.putSearch)
 	mux.HandleFunc("POST /api/search/probe", s.probeSearch)

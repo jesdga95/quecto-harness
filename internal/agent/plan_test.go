@@ -225,6 +225,58 @@ func TestSetModeDropsThePlanAndRefusesAnUnknownMode(t *testing.T) {
 	}
 }
 
+// Plan mode lives on the plan tools, which a toolset may withhold, so a
+// switch to plan is refused before it changes the session.
+func TestSetModeRefusesPlanWithoutThePlanTools(t *testing.T) {
+	h := newHarness(t)
+	s := h.session(t)
+	if _, err := h.cfg.Update(func(c *config.Config) { c.Toolset = config.ToolsetMinimal }); err != nil {
+		t.Fatal(err)
+	}
+	err := h.engine.SetMode(s.ID, config.WorkPlan)
+	if err == nil {
+		t.Fatal("plan was set under the minimal toolset")
+	}
+	if !strings.Contains(err.Error(), "minimal") {
+		t.Errorf("the refusal does not name the toolset: %v", err)
+	}
+	if s.WorkMode() != config.WorkExecute {
+		t.Errorf("the refusal moved the session to %q", s.WorkMode())
+	}
+}
+
+// A session left in plan mode under a toolset without the plan tools cannot
+// finish its plan, so the next turn runs in execute, the draft goes, and the
+// switch is published.
+func TestAPlanTurnDowngradesWhenTheToolsetLosesThePlanTools(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	s := h.session(t)
+	if _, err := h.cfg.Update(func(c *config.Config) { c.Toolset = config.ToolsetMinimal }); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.Mode = config.WorkPlan
+	s.Draft = &store.Plan{Title: "T"}
+	s.mu.Unlock()
+
+	h.engine.Send(s.ID, "go", nil)
+	waitIdle(t, s)
+
+	if s.WorkMode() != config.WorkExecute {
+		t.Errorf("the turn left the session in %q, want execute", s.WorkMode())
+	}
+	s.mu.Lock()
+	draft := s.Draft
+	s.mu.Unlock()
+	if draft != nil {
+		t.Errorf("the downgrade kept the draft: %+v", *draft)
+	}
+	modes := h.rec.ofType("mode")
+	if len(modes) == 0 || modes[len(modes)-1].Fields["mode"] != string(config.WorkExecute) {
+		t.Errorf("no mode event announced the drop: %v", modes)
+	}
+}
+
 // write_plan replaces the sections it sends and keeps the rest, and names
 // what is still missing.
 func TestWritePlanMergesSections(t *testing.T) {

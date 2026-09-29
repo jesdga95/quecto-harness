@@ -15,6 +15,7 @@ import (
 	"quecto-harness/internal/config"
 	"quecto-harness/internal/llm"
 	"quecto-harness/internal/perms"
+	"quecto-harness/internal/prompts"
 	"quecto-harness/internal/store"
 	"quecto-harness/internal/tools"
 )
@@ -54,6 +55,7 @@ func (p *patch[T]) UnmarshalJSON(b []byte) error {
 type configJSON struct {
 	Agent            string  `json:"agent"`
 	Permissions      string  `json:"permissions"`
+	Toolset          string  `json:"toolset"`
 	CompactAt        float64 `json:"compact_at"`
 	Shell            string  `json:"shell"`
 	CommandTimeoutS  int     `json:"command_timeout_s"`
@@ -65,7 +67,7 @@ type configJSON struct {
 
 func toConfigJSON(c config.Config) configJSON {
 	return configJSON{
-		Agent: c.AgentID, Permissions: string(c.Mode), CompactAt: c.CompactAt,
+		Agent: c.AgentID, Permissions: string(c.Mode), Toolset: string(c.Toolset), CompactAt: c.CompactAt,
 		Shell: c.Shell, CommandTimeoutS: int(c.CommandTimeout / time.Second),
 		OutputLimitBytes: c.OutputLimitBytes, MaxToolCalls: c.MaxToolCalls, Listen: c.Listen,
 	}
@@ -878,9 +880,51 @@ func (s *Server) postQuestion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// getTools answers the harness pane's debug view with the tools each toolset
+// sends and the system prompt each renders. The render is representative: it
+// takes the first project and today's date, and leaves out the rules and the
+// agent instructions a real turn adds.
+func (s *Server) getTools(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfg.Config()
+	project := "(no project)"
+	if len(cfg.Projects) > 0 {
+		project = cfg.Projects[0]
+	}
+	day := time.Now().Format("2006-01-02")
+	offer := func(set config.Toolset) tools.Offer {
+		return tools.Offer{Set: set, Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true}
+	}
+	sent := map[string][]string{}
+	rendered := map[string]string{}
+	for _, set := range []config.Toolset{config.ToolsetFull, config.ToolsetMinimal} {
+		names := tools.Names(offer(set))
+		sent[string(set)] = names
+		rendered[string(set)] = prompts.System(prompts.SystemVars{
+			Project:     project,
+			OS:          runtime.GOOS,
+			Date:        day,
+			CanAsk:      true,
+			CanMessage:  true,
+			CanSearch:   true,
+			Tools:       names,
+			NotAllTools: len(names) < tools.AllCount(),
+		})
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Tools   []tools.ToolDebug   `json:"tools"`
+		Sent    map[string][]string `json:"sent"`
+		Prompts map[string]string   `json:"prompts"`
+	}{
+		Tools:   tools.DebugTools(offer(config.ToolsetFull)),
+		Sent:    sent,
+		Prompts: rendered,
+	})
+}
+
 func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Permissions      *string  `json:"permissions"`
+		Toolset          *string  `json:"toolset"`
 		CompactAt        *float64 `json:"compact_at"`
 		Shell            *string  `json:"shell"`
 		CommandTimeoutS  *int     `json:"command_timeout_s"`
@@ -899,10 +943,17 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Permissions \""+*body.Permissions+"\" is not ask, allowlist or full")
 		return
 	}
+	if body.Toolset != nil && !config.ValidToolset(*body.Toolset) {
+		writeError(w, http.StatusBadRequest, "Toolset \""+*body.Toolset+"\" is not "+config.ToolsetNames)
+		return
+	}
 	before := s.cfg.Config()
 	cfg, err := s.cfg.Update(func(c *config.Config) {
 		if body.Permissions != nil {
 			c.Mode = config.Mode(*body.Permissions)
+		}
+		if body.Toolset != nil {
+			c.Toolset = config.Toolset(*body.Toolset)
 		}
 		if body.CompactAt != nil {
 			c.CompactAt = *body.CompactAt

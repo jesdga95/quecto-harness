@@ -1178,6 +1178,17 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// cost a reprocess of everything before it. A change made meanwhile is used
 	// by the next turn.
 	caps := e.turnCaps(s)
+	// A session left in plan mode under a toolset without the plan tools cannot
+	// finish its plan, so the turn runs in execute and the draft goes with the
+	// mode. The event lands before the turn, so the reader sees the drop.
+	if s.WorkMode() == config.WorkPlan && !tools.InSet(cfg.Toolset, "write_plan") {
+		s.mu.Lock()
+		s.Mode = config.WorkExecute
+		s.Draft = nil
+		s.mu.Unlock()
+		e.save(s)
+		e.publish(s.ID, ev("mode", map[string]any{"mode": string(config.WorkExecute)}))
+	}
 	b := e.briefFor(s, cfg)
 	back := e.backends.For(a)
 	// A subagent is filed under the task it was given, so nothing is spent
@@ -1387,8 +1398,12 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				continue
 			}
 			calls++
-			if tools.Known(call.Function.Name) && !b.offer.InMode(call.Function.Name) {
-				entry := e.unavailable(s, call, b.offer.Mode)
+			// A tool the mode does not run or the toolset does not offer is
+			// answered here; a tool withheld from this session alone reaches
+			// its own tool, which says why it is not taken.
+			if tools.Known(call.Function.Name) &&
+				(!b.offer.InMode(call.Function.Name) || !b.offer.InSet(call.Function.Name)) {
+				entry := e.unavailable(s, call, b.offer)
 				e.save(s)
 				e.publish(s.ID, ev("tool_output", map[string]any{
 					"index": i, "id": call.ID, "name": call.Function.Name,
@@ -1830,7 +1845,7 @@ func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, calls
 	n := 0
 	for _, call := range calls[i:] {
 		name := call.Function.Name
-		if !readTools[name] || !offer.InMode(name) {
+		if !readTools[name] || !offer.InMode(name) || !offer.InSet(name) {
 			break
 		}
 		command, path := argSummary(call)

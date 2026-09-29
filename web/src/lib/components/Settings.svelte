@@ -3,10 +3,12 @@
   import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
   import Sliders from "phosphor-svelte/lib/Sliders";
+  import Wrench from "phosphor-svelte/lib/Wrench";
   import type { Config, SearchConfig } from "../api";
   import { app, saveConfig, saveSearch } from "../state/app.svelte";
   import { confirm } from "../state/confirm.svelte";
   import SettingsGeneral from "./SettingsGeneral.svelte";
+  import SettingsHarness from "./SettingsHarness.svelte";
   import SettingsPermissions from "./SettingsPermissions.svelte";
   import SettingsProjects from "./SettingsProjects.svelte";
   import SettingsSearch from "./SettingsSearch.svelte";
@@ -14,7 +16,7 @@
 
   let { onclose }: { onclose: () => void } = $props();
 
-  type Pane = "general" | "permissions" | "search" | "projects";
+  type Pane = "general" | "permissions" | "harness" | "search" | "projects";
   type PaneRef = { flush: () => void };
   interface Draft {
     config: Config;
@@ -24,6 +26,7 @@
   const PANELS: { id: Pane; label: string; line: string }[] = [
     { id: "general", label: "General", line: "How the harness listens, runs commands and spends its context." },
     { id: "permissions", label: "Permissions", line: "What a tool call may do before it is shown." },
+    { id: "harness", label: "Harness", line: "Which tools the model can reach for, in every session." },
     { id: "search", label: "Search", line: "Where a web search goes, and what it may cost." },
     { id: "projects", label: "Projects", line: "The folders the harness works in." },
   ];
@@ -39,6 +42,7 @@
       listen: "",
       agent: "",
       permissions: "ask",
+      toolset: "full",
       compact_at: 0.8,
       max_tool_calls: 50,
       shell: "/bin/sh",
@@ -106,6 +110,7 @@
   const CONFIG_FIELDS = [
     "listen",
     "permissions",
+    "toolset",
     "compact_at",
     "shell",
     "command_timeout_s",
@@ -160,6 +165,8 @@
             <Sliders size={15} class="shrink-0" />
           {:else if panel.id === "permissions"}
             <ShieldCheck size={15} class="shrink-0" />
+          {:else if panel.id === "harness"}
+            <Wrench size={15} class="shrink-0" />
           {:else if panel.id === "search"}
             <MagnifyingGlass size={15} class="shrink-0" />
           {:else}
@@ -188,6 +195,8 @@
         <SettingsGeneral bind:this={current} config={draft.config} onchange={editConfig} onmanage={manage} />
       {:else if pane === "permissions"}
         <SettingsPermissions bind:this={current} config={draft.config} onchange={editConfig} />
+      {:else if pane === "harness"}
+        <SettingsHarness bind:this={current} config={draft.config} onchange={editConfig} />
       {:else if pane === "search"}
         <SettingsSearch bind:this={current} search={draft.search} onchange={editSearch} />
       {:else}

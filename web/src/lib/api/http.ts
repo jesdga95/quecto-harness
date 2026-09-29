@@ -31,6 +31,8 @@ import type {
   Transcript,
   TranscriptItem,
   TurnCost,
+  Toolset,
+  ToolsetDebug,
   ProjectFile,
   ProjectDir,
   TurnStatus,
@@ -70,6 +72,7 @@ interface WireModel {
 interface WireConfig {
   agent?: string;
   permissions?: string;
+  toolset?: string;
   compact_at?: number;
   max_tool_calls?: number;
   shell?: string;
@@ -343,6 +346,7 @@ const STATUSES: ModelStatus[] = [
 const EFFORTS: Effort[] = ["auto", "off", "low", "medium", "high", "xhigh"];
 const PROTOCOLS: Protocol[] = ["llamacpp", "chat", "responses"];
 const PERM_MODES: PermMode[] = ["ask", "allowlist", "full"];
+const TOOLSETS: Toolset[] = ["full", "minimal"];
 
 /** The harness reports where a context number came from. These are the ones
     the server stated; anything else was worked out from its launch arguments. */
@@ -432,6 +436,11 @@ function toProtocol(value: string | undefined): Protocol {
 // An unreadable policy reads as ask.
 function toPermMode(value: string | undefined): PermMode {
   return PERM_MODES.find((m) => m === value) ?? "ask";
+}
+
+// An unreadable toolset reads as full, the harness's own default.
+function toToolset(value: string | undefined): Toolset {
+  return TOOLSETS.find((s) => s === value) ?? "full";
 }
 
 function toStatus(value: string | undefined): TurnStatus {
@@ -723,6 +732,7 @@ function toConfig(c: WireConfig): Config {
     listen: c.listen ?? "",
     agent: c.agent ?? "",
     permissions: toPermMode(c.permissions),
+    toolset: toToolset(c.toolset),
     compact_at: c.compact_at ?? 0.8,
     max_tool_calls: c.max_tool_calls ?? 50,
     shell: c.shell ?? "/bin/sh",
@@ -745,6 +755,44 @@ function toSearch(s: WireSearch): SearchConfig {
     })),
     known: s.known ?? [],
     ready: s.ready ?? false,
+  };
+}
+
+interface WireToolParam {
+  name?: string;
+  type?: string;
+  description?: string;
+  required?: boolean;
+  minimum?: number;
+}
+
+interface WireTool {
+  name?: string;
+  description?: string;
+  params?: WireToolParam[];
+}
+
+interface WireToolsetDebug {
+  tools?: WireTool[];
+  sent?: Record<string, string[]>;
+  prompts?: Record<string, string>;
+}
+
+function toToolsetDebug(w: WireToolsetDebug): ToolsetDebug {
+  return {
+    tools: (w.tools ?? []).map((t) => ({
+      name: t.name ?? "",
+      description: t.description ?? "",
+      params: (t.params ?? []).map((p) => ({
+        name: p.name ?? "",
+        type: p.type ?? "",
+        description: p.description ?? "",
+        required: p.required ?? false,
+        minimum: p.minimum,
+      })),
+    })),
+    sent: { full: w.sent?.full ?? [], minimal: w.sent?.minimal ?? [] },
+    prompts: { full: w.prompts?.full ?? "", minimal: w.prompts?.minimal ?? "" },
   };
 }
 
@@ -1353,6 +1401,11 @@ class HttpApi implements HarnessApi {
     const { projects: _drop, ...body } = patch;
     const wire = await call<WireConfig>("/config", "PUT", body);
     return toConfig(wire);
+  }
+
+  async getTools(): Promise<ToolsetDebug> {
+    const wire = await call<WireToolsetDebug>("/tools");
+    return toToolsetDebug(wire);
   }
 
   async updateSearch(patch: SearchPatch): Promise<SearchConfig> {

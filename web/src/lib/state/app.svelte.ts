@@ -24,6 +24,8 @@ import type {
   Session,
   Steer,
   Todo,
+  Toolset,
+  ToolsetDebug,
   TranscriptItem,
   TurnStatus,
   Usage,
@@ -111,6 +113,10 @@ export const app = $state({
   // on a person.
   awaitingModel: false,
   allowlist: [] as string[],
+  // The harness pane's debug view: every tool, which tools each toolset sends,
+  // and the prompt each renders. Kept here so a refetch on each visit draws
+  // the last answer while the new one is in flight.
+  toolDebug: null as ToolsetDebug | null,
   sidebar: true,
   error: "",
   connected: true,
@@ -187,6 +193,7 @@ export async function refreshState(): Promise<boolean> {
   app.modelsError = state.modelsError ?? "";
   app.modelsKind = state.modelsKind ?? "";
   app.config = state.config;
+  syncWorkMode();
   app.search = state.search;
   app.agents = state.agents;
   app.projects = state.projects;
@@ -506,8 +513,14 @@ function modeChange(): TranscriptItem | null {
   return { kind: "mode", id: nextId("m"), mode: app.workMode, kickoff: false, title: "" };
 }
 
-/** Sets the mode of the next turn. A turn already running keeps its own. */
+/** Sets the mode of the next turn. A turn already running keeps its own.
+    Plan mode lives on the plan tools, so a toolset without them keeps the
+    session on execute and says so. */
 export async function setWorkMode(mode: WorkMode): Promise<void> {
+  if (mode === "plan" && toolset() !== "full") {
+    toast("Plan mode needs the full toolset", "info");
+    return;
+  }
   const before = app.workMode;
   app.workMode = mode;
   if (!app.sessionId) return;
@@ -678,6 +691,7 @@ export async function saveConfig(patch: Partial<Config>): Promise<boolean> {
   const config = await guard(() => api.updateConfig(patch));
   if (!config) return false;
   app.config = config;
+  syncWorkMode();
   return true;
 }
 
@@ -759,6 +773,28 @@ export function nextToolCallLimit(): void {
 
 export function permMode(): PermMode {
   return app.config?.permissions ?? "ask";
+}
+
+export function toolset(): Toolset {
+  return app.config?.toolset ?? "full";
+}
+
+/** What the harness pane's debug view draws: every tool, the tools each
+    toolset sends, and the prompt each renders. It fails quietly and keeps the
+    last answer, since the pane is a second view of what the server sends. */
+export async function loadToolDebug(): Promise<void> {
+  try {
+    app.toolDebug = await api.getTools();
+  } catch {
+    // Keep the last answer.
+  }
+}
+
+/** A plan choice a toolset can no longer offer would ride on every message
+    sent, and the harness would refuse it, so the reader is pulled back to
+    execute wherever the config lands. */
+function syncWorkMode(): void {
+  if (app.config?.toolset !== "full" && app.workMode === "plan") app.workMode = "execute";
 }
 
 const FULL_AUTO_WARNING = {

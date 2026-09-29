@@ -590,13 +590,15 @@ func (s *Session) imageRefs() []string {
 // sends one goes through here, so a turn, a compaction and the estimate of the
 // fixed context all carry the same text. The caller holds the lock.
 func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) llm.Message {
+	names := tools.Names(b.offer)
 	content := prompts.System(prompts.SystemVars{
 		Project: s.Project, OS: osName, Date: date,
 		CanAsk: b.offer.Ask, CanMessage: b.offer.Message, CanSearch: b.offer.Search,
 		Agents: b.agents, Launcher: b.launcher,
 		Rules: b.rules, RulesName: b.rulesName,
 		Instructions: a.Instructions,
-		Tools:        tools.Names(b.offer),
+		Tools:        names,
+		NotAllTools:  len(names) < tools.AllCount(),
 	})
 	return llm.Message{Role: "system", Content: content}
 }

@@ -12,9 +12,21 @@ import (
 //go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md denial.md budget_spent.md repeat.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
 var files embed.FS
 
+// hasTool is the has the prompt templates take: whether the tools a turn sends
+// include one the template is about to name. A tool the turn does not send is
+// not named, or the model reaches for it and reads a denial.
+var hasTool = template.FuncMap{"has": func(tool string, list []string) bool {
+	for _, n := range list {
+		if n == tool {
+			return true
+		}
+	}
+	return false
+}}
+
 var (
-	systemTmpl     = template.Must(template.New("system").Parse(mustRead("system.md")))
-	bodyTmpl       = template.Must(template.New("execute").Parse(mustRead("system_execute.md")))
+	systemTmpl     = template.Must(template.New("system").Funcs(hasTool).Parse(mustRead("system.md")))
+	bodyTmpl       = template.Must(template.New("execute").Funcs(hasTool).Parse(mustRead("system_execute.md")))
 	modePlanTmpl   = template.Must(template.New("mode_plan").Parse(mustRead("mode_plan.md")))
 	carriedTmpl    = template.Must(template.New("carried").Parse(mustRead("plan_carried.md")))
 	planTmpl       = template.Must(template.New("plan").Parse(mustRead("plan.md")))
@@ -83,6 +95,9 @@ type SystemVars struct {
 	RulesName string
 	// Tools names the tools this turn's request carries, in the order sent.
 	Tools []string
+	// NotAllTools says the list above is short of every tool the harness
+	// knows, so the rules or the history may name one the model cannot reach.
+	NotAllTools bool
 }
 
 // System renders the shared head around the body. It is the same in every
@@ -98,8 +113,8 @@ func System(v SystemVars) string {
 	}
 	head := struct {
 		SystemVars
-		Tools string
-		Body  string
+		ToolsLine string
+		Body      string
 	}{v, strings.Join(v.Tools, ", "), strings.TrimRight(bb.String(), " \t\r\n")}
 	var b strings.Builder
 	if err := systemTmpl.Execute(&b, head); err != nil {
