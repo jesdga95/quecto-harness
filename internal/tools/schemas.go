@@ -12,8 +12,8 @@ import (
 // re-encoding them.
 var schemas = buildSchemas()
 
-// Offer says which tools belong in this turn's request: the mode's own list,
-// less the ones this session is not offered.
+// Offer says which tools belong in this turn's request, and which of them the
+// session's mode lets run.
 type Offer struct {
 	Mode    config.WorkMode
 	Ask     bool
@@ -22,8 +22,10 @@ type Offer struct {
 	Search  bool
 }
 
-// modeTools is the fixed list each mode may send. Plan holds no tool that
-// writes a file, and write_plan and exit_plan_mode are sent in plan mode alone.
+// modeTools is the fixed list each mode may run. Plan holds no tool that
+// writes a file, and write_plan and exit_plan_mode run in plan mode alone.
+// Every mode sends the same tools, so a mode switch leaves the head of the
+// prompt as it was; a call outside the mode's list is answered, not run.
 var modeTools = map[config.WorkMode][]string{
 	config.WorkPlan: {"read", "grep", "web_search", "ask_user_question",
 		"subagent", "send_message", "write_plan", "exit_plan_mode", "bash"},
@@ -62,8 +64,8 @@ func Known(name string) bool {
 	return false
 }
 
-// InMode reports whether the offer's mode sends a tool at all, whatever the
-// session is offered. A call to a tool outside it is not run.
+// InMode reports whether the offer's mode runs a tool, whatever the session is
+// offered. A call to a tool outside it is answered and not run.
 func (o Offer) InMode(name string) bool {
 	for _, n := range modeTools[o.Mode] {
 		if n == name {
@@ -73,11 +75,9 @@ func (o Offer) InMode(name string) bool {
 	return false
 }
 
-// Sends reports whether a tool is in this turn's request.
+// Sends reports whether a tool is in this turn's request, which depends on
+// what the session is offered and not on its mode.
 func (o Offer) Sends(name string) bool {
-	if !o.InMode(name) {
-		return false
-	}
 	switch name {
 	case "ask_user_question", "write_plan", "exit_plan_mode":
 		return o.Ask

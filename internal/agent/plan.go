@@ -259,7 +259,7 @@ func (e *Engine) takeApproval(s *Session) bool {
 	s.Plan = plan
 	s.Todos = seedTodos(*plan)
 	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user",
-		Content: prompts.PlanApproved(plan.Title), InContext: true, Visible: true,
+		Content: prompts.PlanApproved(plan.Title, renderPlan(*plan)), InContext: true, Visible: true,
 		Meta: map[string]any{"mode": string(config.WorkExecute), "kickoff": true}})
 	todos := append([]store.Todo(nil), s.Todos...)
 	s.mu.Unlock()

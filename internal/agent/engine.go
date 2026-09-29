@@ -1372,7 +1372,20 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			continue
 		}
 
-		for i, call := range res.ToolCalls {
+		for i := 0; i < len(res.ToolCalls); i++ {
+			call := res.ToolCalls[i]
+			// Calls that only read and need no card, made one after another,
+			// run at the same time.
+			if run := e.readRun(s, cfg, b.offer, res.ToolCalls, i); run > 1 {
+				calls += run
+				e.runReads(ctx, s, cfg, a, runner, res.ToolCalls[i:i+run], i, &seen, &cost)
+				i += run - 1
+				if ctx.Err() != nil {
+					e.markStopped(s)
+					return
+				}
+				continue
+			}
 			calls++
 			if tools.Known(call.Function.Name) && !b.offer.InMode(call.Function.Name) {
 				entry := e.unavailable(s, call, b.offer.Mode)
@@ -1796,14 +1809,84 @@ func (e *Engine) publishStarted(s *Session, runner *tools.Runner, call llm.ToolC
 // pairs with the assistant message.
 func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 	call llm.ToolCall, d perms.Decision, record *store.PermissionRecord, index int) store.Entry {
-	content := ""
-	var exitCode *int
-	truncated := false
-	var meta map[string]any
+	return e.appendTool(s, call, record, e.runTool(ctx, s, runner, call, d))
+}
 
+// outcome is what one tool call produced, before it is appended.
+type outcome struct {
+	content   string
+	exitCode  *int
+	truncated bool
+	meta      map[string]any
+}
+
+// readTools read and change nothing, so a run of them in one reply can go at
+// once.
+var readTools = map[string]bool{"read": true, "grep": true, "web_search": true}
+
+// readRun is how many calls from i on only read and would run without a card,
+// so they can run at the same time.
+func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, calls []llm.ToolCall, i int) int {
+	n := 0
+	for _, call := range calls[i:] {
+		name := call.Function.Name
+		if !readTools[name] || !offer.InMode(name) {
+			break
+		}
+		command, path := argSummary(call)
+		if e.perms.Evaluate(s.Project, name, command, path, cfg.Mode) != perms.ActionAllow {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// runReads runs calls that only read at the same time, and appends their
+// results in the order the model made them.
+func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a config.Agent,
+	runner *tools.Runner, calls []llm.ToolCall, first int, seen *repeats, cost *turnCost) {
+	notes := make([]string, len(calls))
+	records := make([]*store.PermissionRecord, len(calls))
+	for k, call := range calls {
+		notes[k] = seen.see(call)
+		// The policy allows each of these, so deciding asks nobody.
+		_, records[k], _ = e.decide(ctx, s, cfg, a, call)
+		e.publishStarted(s, runner, call, first+k)
+	}
+	e.setState(s, StateExecuting)
+	outs := make([]outcome, len(calls))
+	began := time.Now()
+	var wg sync.WaitGroup
+	for k, call := range calls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			outs[k] = e.runTool(ctx, s, runner, call, perms.Decision{Kind: perms.DecideOnce})
+		}()
+	}
+	wg.Wait()
+	cost.tools += time.Since(began)
+	for k, call := range calls {
+		entry := e.appendTool(s, call, records[k], outs[k])
+		if notes[k] != "" {
+			entry = e.addNote(s, entry, notes[k])
+		}
+		e.save(s)
+		e.publish(s.ID, ev("tool_output", map[string]any{
+			"index": first + k, "id": call.ID, "name": call.Function.Name,
+			"output": entry.Content, "exit_code": entry.ExitCode, "truncated": entry.Truncated,
+			"meta": entry.Meta,
+		}))
+	}
+}
+
+// runTool runs one call, or writes its denial.
+func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, call llm.ToolCall, d perms.Decision) outcome {
+	var o outcome
 	switch {
 	case d.Kind == perms.DecideDeny:
-		content = perms.DenialContent(d.Reason)
+		o.content = perms.DenialContent(d.Reason)
 	default:
 		args := json.RawMessage(call.Function.Arguments)
 		var res tools.Result
@@ -1839,19 +1922,22 @@ func (e *Engine) execute(ctx context.Context, s *Session, runner *tools.Runner,
 		if err != nil {
 			// The flag is what lets the row say the call failed, since only
 			// bash has an exit code to say it with.
-			content, meta = err.Error(), map[string]any{"error": true}
+			o.content, o.meta = err.Error(), map[string]any{"error": true}
 		} else {
-			content, exitCode, truncated, meta = res.Output, res.ExitCode, res.Truncated, res.Meta
+			o.content, o.exitCode, o.truncated, o.meta = res.Output, res.ExitCode, res.Truncated, res.Meta
 		}
 	}
+	return o
+}
 
+// appendTool appends the tool entry that pairs a call with its result.
+func (e *Engine) appendTool(s *Session, call llm.ToolCall, record *store.PermissionRecord, o outcome) store.Entry {
 	s.mu.Lock()
-	entry := s.appendEntry(store.Entry{Kind: "tool", Role: "tool",
-		ToolCallID: call.ID, ToolName: call.Function.Name, Content: content,
-		ExitCode: exitCode, Truncated: truncated, Permission: record, Meta: meta,
+	defer s.mu.Unlock()
+	return s.appendEntry(store.Entry{Kind: "tool", Role: "tool",
+		ToolCallID: call.ID, ToolName: call.Function.Name, Content: o.content,
+		ExitCode: o.exitCode, Truncated: o.truncated, Permission: record, Meta: o.meta,
 		InContext: true, Visible: true})
-	s.mu.Unlock()
-	return entry
 }
 
 // recordBaseline keeps one file as it stood before this session first wrote
@@ -1979,6 +2065,14 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	meta := map[string]any{"before": before, "n": s.Compactions}
 	if kept {
 		meta["tail"] = tailSeq
+	}
+	// The summarised messages may hold what the work still needs: the rules
+	// of the mode they were sent in, or the plan being carried out. Both are
+	// kept as they stood, so the message does not change under the cache.
+	mode := s.modeAt(tailSeq, kept)
+	meta["mode"] = string(mode)
+	if carry := s.carryFor(mode, b, tailSeq, kept); carry != "" {
+		meta["carry"] = carry
 	}
 	// The plan is kept as it stood rather than read live, so the message
 	// does not change under the prompt cache as steps are marked.

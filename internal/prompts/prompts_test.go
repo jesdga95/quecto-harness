@@ -271,31 +271,29 @@ func TestSystemWithoutAgentsIsUnchanged(t *testing.T) {
 // execTools is the list an execute turn with nothing optional sends.
 var execTools = []string{"read", "grep", "write", "edit", "todo_write", "bash"}
 
-// Plan mode's body replaces execute's under the same head, and names
-// exit_plan_mode only when it was sent.
-func TestSystemRendersThePlanBody(t *testing.T) {
-	exec := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools})
-	plan := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, Mode: "plan",
-		Tools: []string{"read", "grep", "ask_user_question", "write_plan", "exit_plan_mode", "bash"}})
-	head := "Use the grep tool, not a shell command, to locate files and lines."
-	if !strings.Contains(exec, head) || !strings.Contains(plan, head) {
-		t.Fatal("the shared head is missing from a mode")
+// Plan mode's rules are a message of their own, so the system prompt is the
+// same in both modes, and they name exit_plan_mode only when it is offered.
+func TestPlanModeRulesAreAMessage(t *testing.T) {
+	sys := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools})
+	if strings.Contains(sys, "plan mode") {
+		t.Errorf("the system prompt speaks of plan mode: %q", sys)
 	}
-	if !strings.Contains(plan, "plan mode") || !strings.Contains(plan, "exit_plan_mode") || !strings.Contains(plan, "write_plan") {
-		t.Errorf("the plan body is missing: %q", plan)
+	rules := ModePlan(true, false)
+	if !strings.Contains(rules, "plan mode") || !strings.Contains(rules, "exit_plan_mode") || !strings.Contains(rules, "write_plan") {
+		t.Errorf("the plan rules are missing: %q", rules)
 	}
-	if strings.Contains(plan, "edit changes part of a file") {
-		t.Errorf("plan mode carries execute's body: %q", plan)
-	}
-	child := System(SystemVars{Project: "/src/x", OS: "darwin", Mode: "plan",
-		Launcher: "sess_aaaaaaaaaaaaaaaa", Tools: []string{"read", "grep", "bash"}})
+	child := ModePlan(false, false)
 	if strings.Contains(child, "exit_plan_mode") || strings.Contains(child, "write_plan") {
 		t.Errorf("a subagent in plan mode is told to submit a plan: %q", child)
 	}
+	if !strings.Contains(ModeExecute(), "execute mode") {
+		t.Errorf("the execute line = %q", ModeExecute())
+	}
 }
 
-// An approved plan is carried in execute's prompt, and only there.
-func TestSystemCarriesTheApprovedPlan(t *testing.T) {
+// An approved plan is carried in the message that approved it, and past a
+// compaction on its own.
+func TestTheApprovedPlanIsCarried(t *testing.T) {
 	plan := Plan(PlanVars{Title: "Sort the list", Goal: "Newest first.",
 		Code: []string{"list.go: reverse the sort"}, Tests: []string{"list_test.go: newest is first"},
 		Validation: []string{"go test ./..."}, Migration: "None", Risks: []string{"Callers that expect oldest first"},
@@ -307,23 +305,20 @@ func TestSystemCarriesTheApprovedPlan(t *testing.T) {
 			t.Errorf("the plan does not carry %q:\n%s", want, plan)
 		}
 	}
-	got := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools, Plan: plan})
-	if !strings.Contains(got, "The user approved this plan.") || !strings.Contains(got, plan) {
-		t.Errorf("execute did not carry the plan: %q", got)
-	}
-	if strings.Contains(System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools}), "approved") {
-		t.Error("a prompt with no plan speaks of one")
-	}
-	if got := PlanApproved("Sort the list"); !strings.Contains(got, `"Sort the list"`) {
+	got := PlanApproved("Sort the list", plan)
+	if !strings.Contains(got, `"Sort the list"`) || !strings.Contains(got, plan) {
 		t.Errorf("the kickoff message = %q", got)
+	}
+	if got := PlanCarried(plan); !strings.Contains(got, plan) {
+		t.Errorf("the carried plan = %q", got)
 	}
 }
 
 func TestCompactionCarriesAnOpenPlan(t *testing.T) {
-	if got, want := Compaction("did x", ""), "Summary of earlier work:\n\ndid x\n\nTake this summary as what you already know, and continue the work without restating it."; got != want {
+	if got, want := Compaction("did x", "", ""), "Summary of earlier work:\n\ndid x\n\nTake this summary as what you already know, and continue the work without restating it."; got != want {
 		t.Errorf("without a plan = %q, want %q", got, want)
 	}
-	got := Compaction("did x", "1 of 2 done\n- [x] read\n- [ ] write\n")
+	got := Compaction("did x", "1 of 2 done\n- [x] read\n- [ ] write\n", "")
 	want := "Summary of earlier work:\n\ndid x\n\nYour todo list when this summary was written:\n1 of 2 done\n- [x] read\n- [ ] write\n\nTake this summary as what you already know, and continue the work without restating it."
 	if got != want {
 		t.Errorf("with a plan = %q, want %q", got, want)

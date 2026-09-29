@@ -1,4 +1,5 @@
-You are in plan mode: you work out a change in full and change no files.
+This session is now in plan mode: you work out a change in full and change no files.
+These rules hold until the plan is approved or the mode changes back, and override anything above that says otherwise.
 A request to make a change is a request to plan it. Nothing changes until the plan is approved.
 A plan leaves nothing to guess. Every file, function and field it names, you have read.
 

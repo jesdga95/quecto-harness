@@ -9,15 +9,14 @@ import (
 	"text/template"
 )
 
-//go:embed system.md system_plan.md system_execute.md plan.md plan_approved.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md denial.md budget_spent.md repeat.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
+//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md denial.md budget_spent.md repeat.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
 var files embed.FS
 
 var (
-	systemTmpl = template.Must(template.New("system").Parse(mustRead("system.md")))
-	bodyTmpls  = map[string]*template.Template{
-		"plan":    parseBody("plan", "system_plan.md"),
-		"execute": parseBody("execute", "system_execute.md"),
-	}
+	systemTmpl     = template.Must(template.New("system").Parse(mustRead("system.md")))
+	bodyTmpl       = template.Must(template.New("execute").Parse(mustRead("system_execute.md")))
+	modePlanTmpl   = template.Must(template.New("mode_plan").Parse(mustRead("mode_plan.md")))
+	carriedTmpl    = template.Must(template.New("carried").Parse(mustRead("plan_carried.md")))
 	planTmpl       = template.Must(template.New("plan").Parse(mustRead("plan.md")))
 	approvedTmpl   = template.Must(template.New("approved").Parse(mustRead("plan_approved.md")))
 	compactionTmpl = template.Must(template.New("compaction").Parse(mustRead("compaction.md")))
@@ -31,12 +30,6 @@ var (
 	denialTmpl     = template.Must(template.New("denial").Parse(mustRead("denial.md")))
 	repeatTmpl     = template.Must(template.New("repeat").Parse(mustRead("repeat.md")))
 )
-
-// parseBody parses one mode's body.
-func parseBody(name, file string) *template.Template {
-	t := template.Must(template.New(name).Parse(mustRead(file)))
-	return t
-}
 
 func mustRead(name string) string {
 	b, err := files.ReadFile(name)
@@ -88,27 +81,20 @@ type SystemVars struct {
 	// possible.
 	Rules     string
 	RulesName string
-	// Mode picks the body: plan or execute. Anything else is execute.
-	Mode string
 	// Tools names the tools this turn's request carries, in the order sent.
 	Tools []string
-	// Plan is an approved plan as Plan renders it, for execute mode. Empty is
-	// none.
-	Plan string
 }
 
-// System renders the shared head around the body for the session's mode. The
-// body is rendered first and inserted as a value. Rules are trimmed, so a
-// file of whitespace alone leaves the prompt the one sent without it.
+// System renders the shared head around the body. It is the same in every
+// mode, so a mode switch leaves the head of the prompt as it was; plan mode's
+// rules arrive in the message sent in it. The body is rendered first and
+// inserted as a value. Rules are trimmed, so a file of whitespace alone leaves
+// the prompt the one sent without it.
 func System(v SystemVars) string {
 	v.Rules = strings.TrimSpace(v.Rules)
-	body, ok := bodyTmpls[v.Mode]
-	if !ok {
-		body = bodyTmpls["execute"]
-	}
 	var bb strings.Builder
-	if err := body.Execute(&bb, v); err != nil {
-		panic("prompts: render the " + v.Mode + " body: " + err.Error())
+	if err := bodyTmpl.Execute(&bb, v); err != nil {
+		panic("prompts: render the execute body: " + err.Error())
 	}
 	head := struct {
 		SystemVars
@@ -158,14 +144,41 @@ func PlanContinue(left, total int, next string) string {
 	return strings.TrimRight(b.String(), " \t\r\n")
 }
 
-// PlanApproved is the message that starts the turn carrying out a plan.
-func PlanApproved(title string) string {
+// PlanApproved is the message that starts the turn carrying out a plan. It
+// carries the plan as Plan renders it, so the plan is in the history from the
+// point it was approved.
+func PlanApproved(title, plan string) string {
 	var b strings.Builder
-	if err := approvedTmpl.Execute(&b, struct{ Title string }{title}); err != nil {
+	if err := approvedTmpl.Execute(&b, struct{ Title, Plan string }{title, plan}); err != nil {
 		panic("prompts: render plan_approved.md: " + err.Error())
 	}
 	return strings.TrimRight(b.String(), " \t\r\n")
 }
+
+// PlanCarried is an approved plan carried past the compaction that summarised
+// the message it was approved in.
+func PlanCarried(plan string) string {
+	var b strings.Builder
+	if err := carriedTmpl.Execute(&b, struct{ Plan string }{plan}); err != nil {
+		panic("prompts: render plan_carried.md: " + err.Error())
+	}
+	return strings.TrimRight(b.String(), " \t\r\n")
+}
+
+// ModePlan is plan mode's rules, carried in the first message sent in it.
+// canAsk and canSearch say whether ask_user_question, write_plan and
+// exit_plan_mode, and web_search, are offered.
+func ModePlan(canAsk, canSearch bool) string {
+	var b strings.Builder
+	if err := modePlanTmpl.Execute(&b, struct{ CanAsk, CanSearch bool }{canAsk, canSearch}); err != nil {
+		panic("prompts: render mode_plan.md: " + err.Error())
+	}
+	return strings.TrimRight(b.String(), " \t\r\n")
+}
+
+// ModeExecute is the line carried in the first message sent after plan mode
+// was left without an approval.
+func ModeExecute() string { return mustRead("mode_execute.md") }
 
 // Compact asks for the summary a compaction keeps. kept says the latest
 // messages stay as they are, so the summary covers what came before them.
@@ -178,10 +191,12 @@ func Compact(kept bool) string {
 }
 
 // Compaction is the message the summary is sent back as, so the entry keeps
-// the summary alone and the framing lives here with the other prompts.
-func Compaction(summary, todos string) string {
+// the summary alone and the framing lives here with the other prompts. carry
+// is what the summarised messages held that the work still needs: plan mode's
+// rules, or the approved plan.
+func Compaction(summary, todos, carry string) string {
 	var b strings.Builder
-	if err := compactionTmpl.Execute(&b, struct{ Summary, Todos string }{summary, todos}); err != nil {
+	if err := compactionTmpl.Execute(&b, struct{ Summary, Todos, Carry string }{summary, todos, carry}); err != nil {
 		panic("prompts: render compaction.md: " + err.Error())
 	}
 	return b.String()

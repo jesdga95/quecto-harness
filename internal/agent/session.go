@@ -590,17 +590,13 @@ func (s *Session) imageRefs() []string {
 // sends one goes through here, so a turn, a compaction and the estimate of the
 // fixed context all carry the same text. The caller holds the lock.
 func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) llm.Message {
-	plan := ""
-	if b.offer.Mode == config.WorkExecute && s.Plan != nil {
-		plan = renderPlan(*s.Plan)
-	}
 	content := prompts.System(prompts.SystemVars{
 		Project: s.Project, OS: osName, Date: date,
 		CanAsk: b.offer.Ask, CanMessage: b.offer.Message, CanSearch: b.offer.Search,
 		Agents: b.agents, Launcher: b.launcher,
 		Rules: b.rules, RulesName: b.rulesName,
 		Instructions: a.Instructions,
-		Mode:         string(b.offer.Mode), Tools: tools.Names(b.offer), Plan: plan,
+		Tools:        tools.Names(b.offer),
 	})
 	return llm.Message{Role: "system", Content: content}
 }
@@ -623,10 +619,16 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 			summary = i
 		}
 	}
+	// mode is the mode the messages so far were sent in. A message sent in
+	// another carries that mode's rules in front of it, so the rules enter the
+	// history where the mode changed and the head of the prompt never moves.
+	mode := config.WorkExecute
 	if summary >= 0 {
 		e := s.Entries[summary]
 		todos, _ := e.Meta["todos"].(string)
-		msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(e.Content, todos)})
+		carry, _ := e.Meta["carry"].(string)
+		mode = entryMode(e)
+		msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(e.Content, todos, carry)})
 	}
 	for i := 0; i < end; i++ {
 		e := s.Entries[i]
@@ -635,7 +637,13 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 		}
 		switch e.Kind {
 		case "user":
-			msgs = append(msgs, userMessage(e, images))
+			switched := ""
+			if m := entryMode(e); e.Meta["kickoff"] == true {
+				mode = m
+			} else if m != mode {
+				switched, mode = modeRules(m, b), m
+			}
+			msgs = append(msgs, userMessage(e, images, switched))
 		case "compaction":
 			// Sent above, ahead of the messages it kept.
 		case "assistant":
@@ -656,11 +664,65 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 	return msgs
 }
 
+// modeAt is the mode the messages a compaction summarises were sent in: that
+// of the latest message before the ones it keeps. The caller holds the lock.
+func (s *Session) modeAt(tailSeq int, kept bool) config.WorkMode {
+	mode := config.WorkExecute
+	for _, e := range s.Entries {
+		if kept && e.Seq >= tailSeq {
+			break
+		}
+		if e.Kind == "user" {
+			mode = entryMode(e)
+		}
+	}
+	return mode
+}
+
+// carryFor is what a compaction carries past the messages it summarises:
+// plan mode's rules while in it, or the approved plan when the message that
+// approved it is not among the ones kept. The caller holds the lock.
+func (s *Session) carryFor(mode config.WorkMode, b brief, tailSeq int, kept bool) string {
+	if mode == config.WorkPlan {
+		return prompts.ModePlan(b.offer.Ask, b.offer.Search)
+	}
+	if s.Plan == nil {
+		return ""
+	}
+	for _, e := range s.Entries {
+		if kept && e.Seq >= tailSeq && e.Meta["kickoff"] == true {
+			return ""
+		}
+	}
+	return prompts.PlanCarried(renderPlan(*s.Plan))
+}
+
+// entryMode is the mode an entry was written in, execute when it names none.
+func entryMode(e store.Entry) config.WorkMode {
+	if m, _ := e.Meta["mode"].(string); m == string(config.WorkPlan) {
+		return config.WorkPlan
+	}
+	return config.WorkExecute
+}
+
+// modeRules is what the first message sent in a mode carries in front of it.
+func modeRules(m config.WorkMode, b brief) string {
+	if m == config.WorkPlan {
+		return prompts.ModePlan(b.offer.Ask, b.offer.Search)
+	}
+	return prompts.ModeExecute()
+}
+
 // userMessage is the message as typed, with each attached text file under it
-// and each image beside it. A message with an image is an array of parts,
-// which is the only shape that carries one.
-func userMessage(e store.Entry, images map[string]llm.Part) llm.Message {
+// and each image beside it, and rules for a mode it was the first sent in
+// ahead of it. A message with an image is an array of parts, which is the only
+// shape that carries one.
+func userMessage(e store.Entry, images map[string]llm.Part, rules string) llm.Message {
 	var b strings.Builder
+	if rules != "" {
+		b.WriteString(rules)
+		b.WriteString("\n\n")
+	}
 	// A message from a person and one from another agent arrive on the same
 	// role, so the sender is named in the text or the model cannot tell them
 	// apart.

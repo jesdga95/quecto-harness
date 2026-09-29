@@ -396,8 +396,8 @@ func TestLooksBinary(t *testing.T) {
 
 func TestSchemasMatchTheDescriptions(t *testing.T) {
 	s := Schemas(Offer{Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true})
-	names := []string{"read", "grep", "web_search", "write", "edit",
-		"todo_write", "ask_user_question", "subagent", "send_message", "bash"}
+	names := []string{"read", "grep", "web_search", "write", "edit", "todo_write",
+		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash"}
 	if len(s) != len(names) {
 		t.Fatalf("got %d schemas, want %d", len(s), len(names))
 	}
@@ -1080,18 +1080,23 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 			t.Errorf("an empty offer left out %s, which every session has", want)
 		}
 	}
+	// Asking a person also sends the plan tools, since each puts a card to one.
 	for name, only := range optional {
 		got := names(only)
 		if !slices.Contains(got, name) {
 			t.Errorf("%s was offered and not sent: %v", name, got)
 		}
-		if len(got) != len(base)+1 {
+		extra := 1
+		if name == "ask_user_question" {
+			extra = 3
+		}
+		if len(got) != len(base)+extra {
 			t.Errorf("offering %s sent %v", name, got)
 		}
 	}
 
 	all := names(Offer{Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true})
-	if len(all) != len(base)+len(optional) {
+	if len(all) != len(base)+len(optional)+2 {
 		t.Errorf("every offer sent %v", all)
 	}
 	// The order the model sees is the order they are declared, whichever are
@@ -1110,35 +1115,29 @@ func indexOf(in []string, want string) int {
 	return -1
 }
 
-// Plan mode sends no tool that writes a file, and is the only mode that sends
-// exit_plan_mode. A tool the offer leaves out is still in its mode, so a call to
-// it is refused by the tool rather than by the mode.
-func TestSchemasFollowTheMode(t *testing.T) {
+// Every mode sends the same tools, so a mode switch keeps the head of the
+// prompt. What a mode runs is narrower: plan mode runs no tool that writes a
+// file, and is the only mode that runs write_plan and exit_plan_mode.
+func TestSchemasAreTheSameInEveryMode(t *testing.T) {
 	every := Offer{Ask: true, Agents: true, Message: true, Search: true}
 	plan, exec := every, every
 	plan.Mode, exec.Mode = config.WorkPlan, config.WorkExecute
 
-	got := Names(plan)
-	want := []string{"read", "grep", "web_search", "ask_user_question", "write_plan", "exit_plan_mode",
-		"subagent", "send_message", "bash"}
-	if !slices.Equal(got, want) {
-		t.Errorf("plan sent %v, want %v", got, want)
+	if !slices.Equal(Names(plan), Names(exec)) {
+		t.Errorf("plan sent %v, execute sent %v", Names(plan), Names(exec))
 	}
 	for _, name := range []string{"write", "edit", "todo_write"} {
-		if plan.InMode(name) {
-			t.Errorf("plan mode holds %s", name)
+		if plan.InMode(name) || !exec.InMode(name) {
+			t.Errorf("%s runs in plan %v, in execute %v", name, plan.InMode(name), exec.InMode(name))
 		}
 	}
 	for _, name := range []string{"write_plan", "exit_plan_mode"} {
-		if slices.Contains(Names(exec), name) {
-			t.Errorf("execute mode sent %s", name)
+		if !plan.InMode(name) || exec.InMode(name) {
+			t.Errorf("%s runs in plan %v, in execute %v", name, plan.InMode(name), exec.InMode(name))
 		}
 	}
 	if !(Offer{Mode: config.WorkExecute}).InMode("subagent") {
 		t.Error("subagent left the mode when the offer left it out")
-	}
-	if len(Names(Offer{})) != 0 {
-		t.Error("an offer with no mode sent tools")
 	}
 }
 

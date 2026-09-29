@@ -9,9 +9,4 @@ To show, draw, preview or prototype something, write it to a file with the write
 - A .html file with a whole document runs as a page: inline scripts and styles, no network.
 - A .svg file draws a figure. It needs a viewBox and takes no script or image.
 Name each file you wrote in your reply, in backticks.
-{{end}}{{if .Plan}}
-The user approved this plan. Your todo list holds its steps: mark each one in_progress, then completed, with todo_write.
-Follow the steps in order, and say where the work leaves the plan.
-
-{{.Plan}}
 {{end}}

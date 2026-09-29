@@ -44,13 +44,14 @@ Nothing is written into a project folder.
   its own address, key, protocol (llama.cpp, OpenAI chat or OpenAI responses),
   model, reasoning effort, sampling, context and instructions. Picking a model
   loads nothing: it loads on the first message that needs it.
-- **Plan and execute.** A session runs in one of the two modes. Plan offers no
+- **Plan and execute.** A session runs in one of the two modes. Plan runs no
   tool that writes a file: the agent reads, searches and asks, then submits a
   plan. The card offers to approve it and switch to execute, or to keep
-  planning.
+  planning. Both modes send the same prompt head and tools, so approving a
+  plan keeps the model server's cache.
 - **Tools.** `read`, `grep`, `write`, `edit`, `bash`,
   `todo_write`, `ask_user_question`, `web_search`, `subagent` and `send_message`,
-  plus `write_plan` and `exit_plan_mode` in plan mode.
+  plus `write_plan` and `exit_plan_mode`, which run in plan mode alone.
 - **Permissions.** The card offers Allow once, Allow always and Deny, the
   denial carrying an optional reason back to the model. An always on a shell
   command writes its prefix to the project's allowlist, and a command with a

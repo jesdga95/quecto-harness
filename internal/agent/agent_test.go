@@ -2413,3 +2413,32 @@ func TestTurnCarriesOnWithThePlan(t *testing.T) {
 		t.Errorf("requests = %d, want the new request answered once", n)
 	}
 }
+
+// Reads made together in one reply run at once and land in the order the
+// model made them, each paired with its own call.
+func TestReadsInOneReplyRunTogether(t *testing.T) {
+	h := newHarness(t, "stream_two_reads.txt", "stream_plain.txt", "stream_plain.txt")
+	if err := os.WriteFile(filepath.Join(h.project, "other.txt"), []byte("other contents\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := h.session(t)
+	h.engine.Send(s.ID, "read both", nil)
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	var got []store.Entry
+	for _, e := range doc.Entries {
+		if e.Kind == "tool" {
+			got = append(got, e)
+		}
+	}
+	if len(got) != 2 || got[0].ToolCallID != "call_0" || got[1].ToolCallID != "call_1" {
+		t.Fatalf("tool entries = %+v", got)
+	}
+	if !strings.Contains(got[0].Content, "one") || !strings.Contains(got[1].Content, "other contents") {
+		t.Errorf("results = %q, %q", got[0].Content, got[1].Content)
+	}
+	if len(h.rec.ofType("tool_start")) != 2 || len(h.rec.ofType("tool_output")) != 2 {
+		t.Errorf("tool events: %d started, %d output", len(h.rec.ofType("tool_start")), len(h.rec.ofType("tool_output")))
+	}
+}

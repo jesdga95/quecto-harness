@@ -127,7 +127,12 @@ fails the build, and a template parse error panics at init, which the package te
 
 `System` renders the project, the OS, whether `ask_user_question`, `send_message` and
 `web_search` were sent, the agents this session may hand work to and the handle of the one
-that launched it. It then appends the agent's instructions as a **value, never parsed**:
+that launched it. It is the same in both modes, and so is the tool list, so a mode switch
+and a plan approval leave the head of the prompt, and the server's cache of it, as they
+were. Plan mode's rules ride in front of the first message sent in it, a return to execute
+carries one line, and the approved plan is written into the message that approves it. A
+compaction carries plan mode's rules while in it, or the approved plan once that message is
+summarised. A call to a tool the mode does not run is answered and not run. It then appends the agent's instructions as a **value, never parsed**:
 a stray `{{` survives, the agent's text wins where it disagrees with the built-in
 guidance, and an empty value renders byte-for-byte unchanged.
 
@@ -251,6 +256,9 @@ too late to be picked up starts a turn of its own.
   not answering, or an empty reply is sent again after 0.5, 1, 2, 4 and 8 s, each attempt
   noted in the transcript. A stall is not retried. A reply stopped or failed part way is
   kept as an assistant entry marked `interrupted`, without its unfinished tool calls.
+- **Reads together.** Consecutive `read`, `grep` and `web_search` calls that the policy
+  allows without a card run at the same time, and their results are appended in the order
+  the model made them.
 - **Repeated calls.** The third identical call in a row, and the fifth and every one from
   the eighth, carry a note in their result telling the model to change course. `todo_write`
   and `write_plan` neither count nor break a run, and a message from outside the turn

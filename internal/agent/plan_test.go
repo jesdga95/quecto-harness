@@ -37,6 +37,21 @@ func systemOf(body map[string]any) string {
 	return text
 }
 
+// usersOf is the text of every user message a request carried, in order.
+func usersOf(body map[string]any) []string {
+	msgs, _ := body["messages"].([]any)
+	var out []string
+	for _, m := range msgs {
+		msg, _ := m.(map[string]any)
+		if msg["role"] != "user" {
+			continue
+		}
+		text, _ := msg["content"].(string)
+		out = append(out, text)
+	}
+	return out
+}
+
 // waitForNewQuestion blocks until the turn waits on a question other than the
 // one already answered.
 func waitForNewQuestion(t *testing.T, h *harness, sessionID, answered string) Question {
@@ -72,12 +87,17 @@ func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
 	}
 	body := h.replay.Body(0)
 	got := sentTools(body)
-	if !slices.Contains(got, "exit_plan_mode") || !slices.Contains(got, "write_plan") ||
-		slices.Contains(got, "write") || slices.Contains(got, "edit") {
+	if !slices.Contains(got, "exit_plan_mode") || !slices.Contains(got, "write_plan") {
 		t.Errorf("plan turn sent %v", got)
 	}
-	if !strings.Contains(systemOf(body), "plan mode") {
+	// Plan mode's rules ride on the message sent in it, not on the system
+	// message, which stays the one execute sends.
+	if strings.Contains(systemOf(body), "plan mode") {
 		t.Errorf("plan turn's system message = %q", systemOf(body))
+	}
+	if users := usersOf(body); len(users) == 0 || !strings.Contains(users[0], "now in plan mode") ||
+		!strings.HasSuffix(users[0], "cache the list") {
+		t.Errorf("plan turn's message = %q", users)
 	}
 
 	if err := h.engine.Answer(first.ID, Answer{Options: []int{1}, Text: "add a test"}); err != nil {
@@ -113,7 +133,7 @@ func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
 	for _, e := range doc.Entries {
 		if e.Kind == "user" && e.Meta["kickoff"] == true {
 			kickoff = true
-			if e.Content != prompts.PlanApproved("Cache the list") || e.Meta["mode"] != "execute" {
+			if e.Content != prompts.PlanApproved("Cache the list", renderPlan(*doc.Plan)) || e.Meta["mode"] != "execute" {
 				t.Errorf("kickoff entry = %+v", e)
 			}
 		}
@@ -142,14 +162,16 @@ func TestAPlanIsRevisedThenApprovedAndCarriedOut(t *testing.T) {
 	if h.replay.Count() != 7 {
 		t.Fatalf("requests = %d, want four plan requests, one execute and two rounds sent back", h.replay.Count())
 	}
+	// The approval changes nothing at the head of the prompt: the same tools
+	// and system message, with the plan in the message that approved it.
 	exec := h.replay.Body(4)
-	got = sentTools(exec)
-	if slices.Contains(got, "exit_plan_mode") || !slices.Contains(got, "write") {
-		t.Errorf("execute request sent %v", got)
+	if !slices.Equal(sentTools(exec), got) || systemOf(exec) != systemOf(body) {
+		t.Errorf("execute request sent %v and a different system message", sentTools(exec))
 	}
-	if sys := systemOf(exec); !strings.Contains(sys, "The user approved this plan.") ||
-		!strings.Contains(sys, "Plan: Cache the list") || !strings.Contains(sys, "Migration: None") {
-		t.Errorf("execute system message = %q", sys)
+	users := usersOf(exec)
+	if kickoff := users[len(users)-1]; !strings.Contains(kickoff, "plan mode is over") ||
+		!strings.Contains(kickoff, "Plan: Cache the list") || !strings.Contains(kickoff, "Migration: None") {
+		t.Errorf("execute kickoff message = %q", kickoff)
 	}
 }
 
@@ -268,7 +290,36 @@ func TestASubagentKeepsItsLaunchersMode(t *testing.T) {
 	b := h.engine.briefFor(child, h.cfg.Config())
 	names := tools.Names(b.offer)
 	if b.offer.Mode != config.WorkPlan || slices.Contains(names, "exit_plan_mode") ||
-		slices.Contains(names, "write_plan") || slices.Contains(names, "write") {
+		slices.Contains(names, "write_plan") || b.offer.InMode("write") {
 		t.Errorf("a planning subagent was sent %v in %q", names, b.offer.Mode)
+	}
+}
+
+// A compaction carries what the messages it summarised held: plan mode's rules
+// while the session is in it, and the approved plan once the message that
+// approved it is summarised away.
+func TestCompactionCarriesTheModeAndThePlan(t *testing.T) {
+	s := newSession("sess_carry", "/p", "a", "m")
+	b := brief{offer: tools.Offer{Mode: config.WorkPlan, Ask: true}}
+	s.appendEntry(store.Entry{Kind: "user", Content: "plan it", Meta: map[string]any{"mode": "plan"}})
+	if mode := s.modeAt(0, false); mode != config.WorkPlan {
+		t.Fatalf("mode = %s, want plan", mode)
+	}
+	if carry := s.carryFor(config.WorkPlan, b, 0, false); !strings.Contains(carry, "now in plan mode") {
+		t.Errorf("carry in plan mode = %q", carry)
+	}
+
+	plan := store.Plan{Title: "Cache the list", Steps: []string{"Add it"}}
+	s.Plan = &plan
+	kickoff := s.appendEntry(store.Entry{Kind: "user", Content: "approved",
+		Meta: map[string]any{"mode": "execute", "kickoff": true}})
+	if mode := s.modeAt(0, false); mode != config.WorkExecute {
+		t.Fatalf("mode after the approval = %s, want execute", mode)
+	}
+	if carry := s.carryFor(config.WorkExecute, b, 0, false); !strings.Contains(carry, "Plan: Cache the list") {
+		t.Errorf("carry once the approval is summarised = %q", carry)
+	}
+	if carry := s.carryFor(config.WorkExecute, b, kickoff.Seq, true); carry != "" {
+		t.Errorf("carry with the approval kept = %q, want nothing", carry)
 	}
 }
