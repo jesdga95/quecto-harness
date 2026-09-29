@@ -21,6 +21,7 @@
     setWorkMode,
     send,
     stop,
+    toolset,
   } from "../state/app.svelte";
   import { fileKind, fileName } from "../format";
   import { overlayOpen } from "../overlay";
@@ -219,10 +220,13 @@
   // Enter sends, Shift and Enter makes a line. While the file list is open,
   // the arrows move through it and Enter or Tab takes the one marked.
   function onkeydown(event: KeyboardEvent) {
-    // Shift and Tab moves between planning and carrying out.
+    // Shift and Tab moves between planning and carrying out, where the
+    // toolset offers the plan tools.
     if (event.key === "Tab" && event.shiftKey) {
-      event.preventDefault();
-      void setWorkMode(app.workMode === "plan" ? "execute" : "plan");
+      if (toolset() === "full") {
+        event.preventDefault();
+        void setWorkMode(app.workMode === "plan" ? "execute" : "plan");
+      }
       return;
     }
     if (mention && hits.length > 0) {
@@ -341,7 +345,9 @@
 
     <div class="mt-3 flex items-center gap-1.5">
       <AddMenu up onattach={attach} canAttach={!disabled && files.length < maxFiles} />
-      <ModeChip />
+      {#if toolset() === "full"}
+        <ModeChip />
+      {/if}
       <PermissionChip />
 
       <div class="ml-auto flex items-center gap-2">
