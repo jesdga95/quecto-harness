@@ -2323,7 +2323,7 @@ func topBrief() brief {
 // assistant entry so a call stays beside its result, and the summary is sent
 // ahead of them. Dropping the summary gives everything back.
 func TestCompactionKeepsTheTail(t *testing.T) {
-	s := newSession("sess_tail", "/p", "a", "m")
+	s := newSession("sess_tail", "/p", "a", "m", config.ToolsetFull)
 	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: strings.Repeat("x", 4000), InContext: true, Visible: true})
 	call := s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
 		ToolCalls: []llm.ToolCall{{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "read", Arguments: `{"path":"a.go"}`}}}})

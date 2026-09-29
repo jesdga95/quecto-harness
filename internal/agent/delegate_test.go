@@ -673,7 +673,7 @@ func TestUnknownAgentIsAToolError(t *testing.T) {
 func TestBriefFollowsTheParent(t *testing.T) {
 	h, _ := launcher(t)
 	cfg := h.cfg.Config()
-	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B")
+	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
 	// Two agents are configured, and the one answering is spending its only
 	// slot on this turn, so the one it can hand work to is the other.
 	b := h.engine.briefFor(top, cfg)
@@ -683,7 +683,7 @@ func TestBriefFollowsTheParent(t *testing.T) {
 	if len(b.agents) != 1 || b.agents[0].Name != "Reviewer" {
 		t.Errorf("the agents it may hand work to = %+v", b.agents)
 	}
-	child := newSession("sess_kid", h.project, h.agent.ID, "Alpha-12B")
+	child := newSession("sess_kid", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
 	child.Parent = "sess_top"
 	child.Entries = []store.Entry{{Kind: "user", From: "Local", Content: "do it"}}
 	b = h.engine.briefFor(child, cfg)
@@ -701,7 +701,7 @@ func TestBriefListsTheCallerWhenASlotIsFree(t *testing.T) {
 	h := newHarness(t)
 	mine := h.setAgent(t, func(a *config.Agent) { a.Calls = []string{a.ID} })
 	cfg := h.cfg.Config()
-	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B")
+	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
 	b := h.engine.briefFor(top, cfg)
 	if len(b.agents) != 0 || b.offer.Agents {
 		t.Errorf("a single-slot agent is offered to itself: %+v", b.agents)
@@ -755,8 +755,8 @@ func TestCutStopsOnAWord(t *testing.T) {
 // nothing done to it stays empty.
 func TestRollUpSkipsAMissingBlob(t *testing.T) {
 	h, _ := launcher(t)
-	parent := newSession(store.NewID(), h.project, h.agent.ID, "Alpha-12B")
-	child := newSession(store.NewID(), h.project, h.agent.ID, "Beta-30B")
+	parent := newSession(store.NewID(), h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
+	child := newSession(store.NewID(), h.project, h.agent.ID, "Beta-30B", config.ToolsetFull)
 	child.Parent = parent.ID
 	child.Baselines = []store.Baseline{{Path: "gone.txt", State: store.BaselineText, Blob: store.BlobName("gone.txt")}}
 	h.engine.rollUp(child, parent)
@@ -790,7 +790,7 @@ func TestADisabledAgentTakesNoWork(t *testing.T) {
 	}
 	cfg := h.cfg.Config()
 
-	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B")
+	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
 	b := h.engine.briefFor(top, cfg)
 	if len(b.agents) != 0 || b.offer.Agents {
 		t.Errorf("the agents it may hand work to = %+v, want none", b.agents)
@@ -819,7 +819,7 @@ func TestAnAgentOffTheListTakesNoWork(t *testing.T) {
 	cfg := h.cfg.Config()
 
 	// The list names nothing, so the brief offers no subagent at all.
-	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B")
+	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
 	b := h.engine.briefFor(top, cfg)
 	if len(b.agents) != 0 || b.offer.Agents {
 		t.Errorf("the agents it may hand work to = %+v, want none", b.agents)
@@ -979,7 +979,7 @@ func textsFor(h *harness, model string) (system, message string) {
 // rather than passing the cut-off text on as a finished answer.
 func TestAnswerOfNamesACutOffReply(t *testing.T) {
 	e := &Engine{}
-	child := newSession("sess_child", "/p", "a", "m")
+	child := newSession("sess_child", "/p", "a", "m", config.ToolsetFull)
 	child.Entries = []store.Entry{{Kind: "assistant", Content: "half an answer",
 		Meta: map[string]any{"finish_reason": "length"}}}
 	got := e.answerOf(child)

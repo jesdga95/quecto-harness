@@ -31,14 +31,13 @@ func (e *Engine) SetMode(id string, mode config.WorkMode) error {
 	if !config.ValidWorkMode(string(mode)) {
 		return ErrBadMode
 	}
-	// Plan mode lives on the plan tools, which the toolset may withhold.
-	if mode == config.WorkPlan && !tools.InSet(e.cfg.Config().Toolset, "write_plan") {
-		set := e.cfg.Config().Toolset
-		return fmt.Errorf("Plan mode is not available: the toolset is %s, which does not offer the plan tools", set)
-	}
 	s, err := e.Get(id)
 	if err != nil {
 		return err
+	}
+	// Plan mode lives on the plan tools, which the toolset may withhold.
+	if mode == config.WorkPlan && !tools.InSet(s.Toolset, "write_plan") {
+		return fmt.Errorf("Plan mode is not available: the toolset is %s, which does not offer the plan tools", s.Toolset)
 	}
 	s.mu.Lock()
 	changed := s.Mode != mode

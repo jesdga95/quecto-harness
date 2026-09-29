@@ -83,7 +83,9 @@ type Config struct {
 	// state the setup screen answers.
 	AgentID string
 	Mode    Mode
-	// Toolset names the tools a turn is offered, for every session.
+	// Toolset is the one a new session is created with. A session keeps its
+	// own, since a list that changes mid-session invalidates the prompt cache
+	// and leaves calls in the history to tools no longer sent.
 	Toolset          Toolset
 	CompactAt        float64
 	Shell            string
@@ -361,8 +363,8 @@ const (
 	ModeFull Mode = "full"
 )
 
-// Toolset is the set of tools a turn is offered, chosen once for the whole
-// harness. Full sends every tool, minimal the four it names.
+// Toolset is the set of tools a turn is offered. Full sends every tool,
+// minimal the four it names.
 type Toolset string
 
 const (

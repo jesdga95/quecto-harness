@@ -48,6 +48,8 @@ type Session struct {
 	// Mode is the work mode the next turn runs in. A turn reads it once, at
 	// its start, and holds it for the turn.
 	Mode config.WorkMode
+	// Toolset is fixed at creation and never written after.
+	Toolset config.Toolset
 	// Plan is the last plan the user approved, which execute mode carries in
 	// its system prompt.
 	Plan *store.Plan
@@ -155,11 +157,11 @@ func (s *Session) reopen() {
 	}
 }
 
-func newSession(id, project, agentID, model string) *Session {
+func newSession(id, project, agentID, model string, set config.Toolset) *Session {
 	now := time.Now().UTC()
 	return &Session{
 		ID: id, Project: project, AgentID: agentID, Model: model,
-		Mode: config.WorkExecute, Created: now, Updated: now,
+		Mode: config.WorkExecute, Toolset: set, Created: now, Updated: now,
 		state: StateIdle, lastUsageEntry: -1, seen: tools.NewSeen(),
 	}
 }
@@ -167,7 +169,7 @@ func newSession(id, project, agentID, model string) *Session {
 func fromDoc(d *store.Session) *Session {
 	return &Session{
 		ID: d.ID, Project: d.Project, AgentID: d.Agent, Parent: d.Parent, Model: d.Model,
-		Mode: d.Mode, Plan: d.Plan, Draft: d.Draft,
+		Mode: d.Mode, Toolset: d.Toolset, Plan: d.Plan, Draft: d.Draft,
 		Created: d.Created, Updated: d.Updated, Title: d.Title, Named: d.Named,
 		Entries:        append([]store.Entry(nil), d.Entries...),
 		NCtx:           d.NCtx,
@@ -190,7 +192,7 @@ func fromDoc(d *store.Session) *Session {
 func (s *Session) doc() *store.Session {
 	return &store.Session{
 		ID: s.ID, Project: s.Project, Agent: s.AgentID, Parent: s.Parent,
-		Model: s.Model, Mode: s.Mode, Plan: s.Plan, Draft: s.Draft, Title: s.Title, Named: s.Named,
+		Model: s.Model, Mode: s.Mode, Toolset: s.Toolset, Plan: s.Plan, Draft: s.Draft, Title: s.Title, Named: s.Named,
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, LastUsage: s.LastUsage,

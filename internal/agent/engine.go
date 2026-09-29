@@ -241,7 +241,7 @@ func (e *Engine) Create(project string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := newSession(store.NewID(), project, a.ID, a.Model)
+	s := newSession(store.NewID(), project, a.ID, a.Model, e.cfg.Config().Toolset)
 	e.mu.Lock()
 	e.live[s.ID] = s
 	e.mu.Unlock()
@@ -1178,17 +1178,6 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// cost a reprocess of everything before it. A change made meanwhile is used
 	// by the next turn.
 	caps := e.turnCaps(s)
-	// A session left in plan mode under a toolset without the plan tools cannot
-	// finish its plan, so the turn runs in execute and the draft goes with the
-	// mode. The event lands before the turn, so the reader sees the drop.
-	if s.WorkMode() == config.WorkPlan && !tools.InSet(cfg.Toolset, "write_plan") {
-		s.mu.Lock()
-		s.Mode = config.WorkExecute
-		s.Draft = nil
-		s.mu.Unlock()
-		e.save(s)
-		e.publish(s.ID, ev("mode", map[string]any{"mode": string(config.WorkExecute)}))
-	}
 	b := e.briefFor(s, cfg)
 	back := e.backends.For(a)
 	// A subagent is filed under the task it was given, so nothing is spent

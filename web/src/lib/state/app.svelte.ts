@@ -70,6 +70,9 @@ export const app = $state({
   // The mode the next turn runs in. With no session open it is held here and
   // sent with the message that creates one.
   workMode: "execute" as WorkMode,
+  // The toolset the open session was created with. With none open, the
+  // configured one is what the next session gets.
+  sessionToolset: null as Toolset | null,
   // The plan plan mode is writing, or the one last approved.
   draft: null as Plan | null,
   changes: { files: [], added: 0, removed: 0 } as Changes,
@@ -283,6 +286,7 @@ function clearSession(): void {
   app.todos = [];
   app.steer = null;
   app.workMode = "execute";
+  app.sessionToolset = null;
   app.draft = null;
   app.status = "idle";
   app.awaitingModel = false;
@@ -322,6 +326,7 @@ export async function selectSession(id: string): Promise<void> {
   app.todos = t.todos;
   app.steer = t.steer;
   app.workMode = t.mode;
+  app.sessionToolset = t.toolset;
   app.draft = t.draft;
   // A session opened while its turn runs is running, and the snapshot is the
   // only thing that says so. A model being read and a compaction both draw
@@ -775,8 +780,10 @@ export function permMode(): PermMode {
   return app.config?.permissions ?? "ask";
 }
 
+/** The toolset of the open session, or the one a new session is created
+    with. */
 export function toolset(): Toolset {
-  return app.config?.toolset ?? "full";
+  return app.sessionToolset ?? app.config?.toolset ?? "full";
 }
 
 /** What the harness pane's debug view draws: every tool, the tools each
@@ -794,7 +801,7 @@ export async function loadToolDebug(): Promise<void> {
     sent, and the harness would refuse it, so the reader is pulled back to
     execute wherever the config lands. */
 function syncWorkMode(): void {
-  if (app.config?.toolset !== "full" && app.workMode === "plan") app.workMode = "execute";
+  if (toolset() !== "full" && app.workMode === "plan") app.workMode = "execute";
 }
 
 const FULL_AUTO_WARNING = {

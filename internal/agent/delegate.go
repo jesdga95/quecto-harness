@@ -93,7 +93,7 @@ func readRules(project string) (content, name, note string) {
 // outside the lock, like the image bytes a message carries.
 func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	s.mu.Lock()
-	parent, mine, mode, project := s.Parent, s.AgentID, s.Mode, s.Project
+	parent, mine, mode, project, set := s.Parent, s.AgentID, s.Mode, s.Project, s.Toolset
 	s.mu.Unlock()
 	rules, rulesName, note := readRules(project)
 	e.showRulesNote(s, note)
@@ -101,11 +101,11 @@ func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	if parent != "" {
 		// A subagent hands work to nobody and asks nobody, but it still
 		// searches: research delegated down is what web_search is for.
-		b.offer = tools.Offer{Set: cfg.Toolset, Mode: mode, Message: true, Search: cfg.Search.Enabled()}
+		b.offer = tools.Offer{Set: set, Mode: mode, Message: true, Search: cfg.Search.Enabled()}
 		b.launcher = parent
 		return b
 	}
-	b.offer = tools.Offer{Set: cfg.Toolset, Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}
+	b.offer = tools.Offer{Set: set, Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}
 	me, _ := cfg.AgentByID(mine)
 	// What is named is what the caller may hand work to, so a list that names
 	// nothing offers the tool at all, the way a roster with no enabled agents
@@ -336,7 +336,9 @@ func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (
 			target.Name, target.Concurrency)
 	}
 
-	child := newSession(store.NewID(), project, target.ID, target.Model)
+	// A subagent keeps its launcher's toolset, so it is never sent a tool the
+	// launcher was not.
+	child := newSession(store.NewID(), project, target.ID, target.Model, s.Toolset)
 	child.Parent = s.ID
 	// A subagent works in the mode of the session that launched it, so a
 	// planner's researcher changes no files either.

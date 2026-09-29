@@ -117,6 +117,9 @@ type Session struct {
 	Model  string `json:"model"`
 	// Mode is the work mode the next turn runs in.
 	Mode config.WorkMode `json:"mode"`
+	// Toolset is the set every turn is offered, fixed when the session was
+	// created. Empty reads as full.
+	Toolset config.Toolset `json:"toolset"`
 	// Plan is the last plan the user approved, or nil.
 	Plan *Plan `json:"plan,omitempty"`
 	// Draft is the plan being written in plan mode, or nil. It stays after

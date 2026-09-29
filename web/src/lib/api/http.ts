@@ -233,6 +233,7 @@ interface WireSnapshot {
   children?: { id?: string; title?: string; agent?: string; state?: string }[] | null;
   steer?: WireSteer | null;
   mode?: string;
+  toolset?: string;
   draft?: unknown;
   last_seq?: number;
   reply?: {
@@ -950,6 +951,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
     steer: toSteer(snap.steer),
     status: toStatus(snap.state),
     mode: toWorkMode(snap.mode),
+    toolset: toToolset(snap.toolset),
     draft: toPlan(snap.draft),
   };
 }

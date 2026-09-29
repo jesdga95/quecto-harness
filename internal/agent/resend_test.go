@@ -250,7 +250,7 @@ func TestResendRefusesAnEmptyMessage(t *testing.T) {
 // entries it summarised back in context, and takes the plan back to the one
 // the surviving entries left.
 func TestRewindRestoresContextAndPlan(t *testing.T) {
-	s := newSession(store.NewID(), "/p", "agt_test", "Alpha-12B")
+	s := newSession(store.NewID(), "/p", "agt_test", "Alpha-12B", config.ToolsetFull)
 	todos := func(id, plan string) store.Entry {
 		return store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
 			ToolCalls: []llm.ToolCall{{ID: id, Type: "function",
@@ -309,7 +309,7 @@ func TestRewindRestoresContextAndPlan(t *testing.T) {
 // A rewind past the only compaction leaves no plan when nothing surviving set
 // one.
 func TestRewindClearsAPlanNothingSurvivingSet(t *testing.T) {
-	s := newSession(store.NewID(), "/p", "agt_test", "Alpha-12B")
+	s := newSession(store.NewID(), "/p", "agt_test", "Alpha-12B", config.ToolsetFull)
 	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "one", InContext: true, Visible: true})
 	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
 		ToolCalls: []llm.ToolCall{{ID: "call_1", Type: "function",

@@ -545,6 +545,9 @@ export interface Transcript {
   steer: Steer | null;
   /** The mode the next turn runs in. */
   mode: WorkMode;
+  /** The toolset the session was created with, which every turn of it is
+      offered. */
+  toolset: Toolset;
   /** The plan being written, or the one last approved. */
   draft: Plan | null;
 }

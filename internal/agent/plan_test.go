@@ -229,10 +229,10 @@ func TestSetModeDropsThePlanAndRefusesAnUnknownMode(t *testing.T) {
 // switch to plan is refused before it changes the session.
 func TestSetModeRefusesPlanWithoutThePlanTools(t *testing.T) {
 	h := newHarness(t)
-	s := h.session(t)
 	if _, err := h.cfg.Update(func(c *config.Config) { c.Toolset = config.ToolsetMinimal }); err != nil {
 		t.Fatal(err)
 	}
+	s := h.session(t)
 	err := h.engine.SetMode(s.ID, config.WorkPlan)
 	if err == nil {
 		t.Fatal("plan was set under the minimal toolset")
@@ -245,35 +245,29 @@ func TestSetModeRefusesPlanWithoutThePlanTools(t *testing.T) {
 	}
 }
 
-// A session left in plan mode under a toolset without the plan tools cannot
-// finish its plan, so the next turn runs in execute, the draft goes, and the
-// switch is published.
-func TestAPlanTurnDowngradesWhenTheToolsetLosesThePlanTools(t *testing.T) {
+// The toolset is read when a session is created, so a setting changed later
+// reaches new sessions and leaves this one as it was.
+func TestASessionKeepsTheToolsetItWasCreatedWith(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt")
 	s := h.session(t)
 	if _, err := h.cfg.Update(func(c *config.Config) { c.Toolset = config.ToolsetMinimal }); err != nil {
 		t.Fatal(err)
 	}
-	s.mu.Lock()
-	s.Mode = config.WorkPlan
-	s.Draft = &store.Plan{Title: "T"}
-	s.mu.Unlock()
-
 	h.engine.Send(s.ID, "go", nil)
 	waitIdle(t, s)
 
-	if s.WorkMode() != config.WorkExecute {
-		t.Errorf("the turn left the session in %q, want execute", s.WorkMode())
+	var sent []string
+	for _, tool := range h.replay.LastBody()["tools"].([]any) {
+		sent = append(sent, tool.(map[string]any)["function"].(map[string]any)["name"].(string))
 	}
-	s.mu.Lock()
-	draft := s.Draft
-	s.mu.Unlock()
-	if draft != nil {
-		t.Errorf("the downgrade kept the draft: %+v", *draft)
+	if !slices.Contains(sent, "grep") {
+		t.Errorf("tools sent = %v, want the full set the session started with", sent)
 	}
-	modes := h.rec.ofType("mode")
-	if len(modes) == 0 || modes[len(modes)-1].Fields["mode"] != string(config.WorkExecute) {
-		t.Errorf("no mode event announced the drop: %v", modes)
+	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
+		t.Errorf("plan refused to a session created under full: %v", err)
+	}
+	if later := h.session(t); later.Toolset != config.ToolsetMinimal {
+		t.Errorf("a new session has %q, want minimal", later.Toolset)
 	}
 }
 
@@ -336,7 +330,7 @@ func TestSubmitPlanRefusesAnIncompleteDraft(t *testing.T) {
 // sent exit_plan_mode: its result goes to the launcher.
 func TestASubagentKeepsItsLaunchersMode(t *testing.T) {
 	h, _ := launcher(t)
-	child := newSession("sess_kid", h.project, h.agent.ID, "Alpha-12B")
+	child := newSession("sess_kid", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
 	child.Parent = "sess_top"
 	child.Mode = config.WorkPlan
 	b := h.engine.briefFor(child, h.cfg.Config())
@@ -351,7 +345,7 @@ func TestASubagentKeepsItsLaunchersMode(t *testing.T) {
 // while the session is in it, and the approved plan once the message that
 // approved it is summarised away.
 func TestCompactionCarriesTheModeAndThePlan(t *testing.T) {
-	s := newSession("sess_carry", "/p", "a", "m")
+	s := newSession("sess_carry", "/p", "a", "m", config.ToolsetFull)
 	b := brief{offer: tools.Offer{Mode: config.WorkPlan, Ask: true}}
 	s.appendEntry(store.Entry{Kind: "user", Content: "plan it", Meta: map[string]any{"mode": "plan"}})
 	if mode := s.modeAt(0, false); mode != config.WorkPlan {

@@ -40,8 +40,8 @@
   <div class="flex flex-col gap-1.5">
     <h4 class="field-head">Harness mode</h4>
     <span class="text-[11.5px] text-muted">
-      Which tools the model can reach for, in every session of this harness. applies from the next turn. a
-      turn already running keeps the tools it started with.
+      Which tools the model can reach for. Applies to new sessions: a session keeps the tools it was
+      started with.
     </span>
     <OptionPicker
       value={config.toolset}
