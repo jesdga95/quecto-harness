@@ -10,6 +10,8 @@ const CATCH_UP = 0.3;
 const MIN_RATE = 90;
 // Matches the .fresh animation in prose.css.
 const FADE = 420;
+// How long the source must be still before a word at its end counts as whole.
+const HOLD = 350;
 
 const still = () =>
   typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -31,6 +33,8 @@ export class Streamed {
   #settled = 0;
   // What a view opened on is old text, drawn plain: only what arrives after fades.
   #opened = true;
+  // The source has been still for HOLD, so its last word is shown too.
+  #quiet = false;
 
   #busy: boolean;
 
@@ -57,6 +61,7 @@ export class Streamed {
         this.shown = len;
       }
       if (live) this.#wasLive = true;
+      this.#quiet = false;
       const at = untrack(() => this.shown);
       if (still() || (!live && !this.#wasLive) || at > len) {
         this.shown = len;
@@ -68,17 +73,28 @@ export class Streamed {
       }
       let last = performance.now();
       let frame = 0;
+      let hold = 0;
       const step = (now: number) => {
         const dt = Math.min(now - last, 64) / 1000;
         last = now;
         const moved = this.#advance(dt);
         const caught = this.shown >= this.#source().length;
         if (caught && !this.#live()) this.#wasLive = false;
-        // A held word waits for the next change to the source, which runs this again.
         frame = caught || !moved ? 0 : requestAnimationFrame(step);
+        // A held word waits for the next change to the source, which runs this
+        // again, or for the source to go still.
+        if (!caught && !moved) hold = setTimeout(release, HOLD);
+      };
+      const release = () => {
+        this.#quiet = true;
+        last = performance.now();
+        frame = requestAnimationFrame(step);
       };
       frame = requestAnimationFrame(step);
-      return () => cancelAnimationFrame(frame);
+      return () => {
+        cancelAnimationFrame(frame);
+        clearTimeout(hold);
+      };
     });
 
     // The last words finish fading before the text is drawn plain again.
@@ -98,9 +114,10 @@ export class Streamed {
     const from = this.shown;
     const rate = Math.max(MIN_RATE, (src.length - from) / CATCH_UP);
     let next = Math.min(src.length, from + Math.max(1, Math.round(rate * dt)));
-    // Whole words only, and a word still arriving waits for the rest of it.
+    // Whole words only, and a word still arriving waits for the rest of it
+    // until the source goes still.
     while (next < src.length && !/\s/.test(src[next] ?? "")) next += 1;
-    if (next === src.length && this.#live() && !/\s$/.test(src)) {
+    if (next === src.length && this.#live() && !this.#quiet && !/\s$/.test(src)) {
       const gap = Math.max(src.lastIndexOf(" ", next - 1), src.lastIndexOf("\n", next - 1));
       if (gap + 1 <= from) return false;
       next = gap + 1;
