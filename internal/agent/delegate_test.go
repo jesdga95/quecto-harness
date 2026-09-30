@@ -131,8 +131,8 @@ func TestRunAgentDoesNotWaitAndReportsBack(t *testing.T) {
 	}
 }
 
-// A subagent stays on the agent it was named with, and is filed under its task
-// rather than costing a request for a title.
+// A subagent stays on the agent it was named with, and is filed under the
+// title its call gave rather than costing a request for one.
 func TestChildRunsOnItsNamedAgent(t *testing.T) {
 	h, reviewer := launcher(t)
 	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
@@ -149,8 +149,8 @@ func TestChildRunsOnItsNamedAgent(t *testing.T) {
 	if agentID != reviewer.ID || model != "Beta-30B" {
 		t.Errorf("the subagent ran on %s/%s, want %s/Beta-30B", agentID, model, reviewer.ID)
 	}
-	if !named || !strings.Contains(title, "review internal/llm") {
-		t.Errorf("title = %q named = %v, want it cut from the task", title, named)
+	if !named || title != "Review internal/llm" {
+		t.Errorf("title = %q named = %v, want the title the call gave", title, named)
 	}
 
 	// Moving the chip must not move work already under way.
@@ -742,12 +742,68 @@ func TestDescriptionOutranksTheInstructions(t *testing.T) {
 	}
 }
 
-func TestCutStopsOnAWord(t *testing.T) {
-	if got := cut("review internal/llm and say what is wrong here", 20); got != "review internal/llm" {
-		t.Errorf("cut = %q", got)
+// A title that is missing, blank or too long is refused before anything
+// starts, and one that passes is filed with its whitespace collapsed.
+func TestTitleIsRequiredAndBounded(t *testing.T) {
+	h, _ := launcher(t)
+	s := h.session(t)
+	call := func(args string) llm.ToolCall {
+		return llm.ToolCall{ID: "call_t", Type: "function", Function: llm.FunctionCall{Name: "subagent", Arguments: args}}
 	}
-	if got := cut("short", 20); got != "short" {
-		t.Errorf("cut = %q", got)
+	for _, tc := range []struct{ args, want string }{
+		{`{"agent":"Reviewer","task":"look"}`, "title is empty"},
+		{`{"agent":"Reviewer","title":"  \n ","task":"look"}`, "title is empty"},
+		{`{"agent":"Reviewer","title":"` + strings.Repeat("é", maxTitle+1) + `","task":"look"}`, "the most is 60"},
+	} {
+		if _, _, err := h.engine.startAgent(s, call(tc.args), nil); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s answered %v, want %q", tc.args, err, tc.want)
+		}
+	}
+	for _, live := range h.engine.liveSessions() {
+		if live.Parent == s.ID {
+			t.Fatal("a refused title started an agent")
+		}
+	}
+
+	h.replay.forModel("Alpha-12B", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_plain.txt")
+	child, _, err := h.engine.startAgent(s, call(`{"agent":"Reviewer","title":"  Review\n  the   llm package ","task":"look"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.mu.Lock()
+	title := child.Title
+	child.mu.Unlock()
+	if title != "Review the llm package" {
+		t.Errorf("title = %q, want it trimmed and collapsed", title)
+	}
+	waitForEntryFrom(t, s, "Reviewer")
+	waitIdle(t, s)
+}
+
+// A call with no title is a tool error the turn carries on from, and the task
+// is not taken as a name in its place.
+func TestAnUntitledCallIsAToolError(t *testing.T) {
+	h, _ := launcher(t)
+	h.replay.forModel("Alpha-12B", "stream_subagent_untitled.txt", "stream_plain.txt", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "delegate it", nil)
+	waitIdle(t, s)
+
+	if out := toolOutput(t, s, "subagent"); !strings.Contains(out, "title is empty") {
+		t.Errorf("subagent answered %q, want the missing title named", out)
+	}
+	for _, live := range h.engine.liveSessions() {
+		if live.Parent == s.ID {
+			t.Error("an untitled call started an agent anyway")
+		}
+	}
+	s.mu.Lock()
+	last := s.Entries[len(s.Entries)-1]
+	s.mu.Unlock()
+	if last.Kind != "assistant" {
+		t.Errorf("the turn ended on a %s entry, want it to have carried on", last.Kind)
 	}
 }
 

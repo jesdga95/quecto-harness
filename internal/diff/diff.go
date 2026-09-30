@@ -5,12 +5,17 @@
 package diff
 
 import (
+	"strings"
+
 	"github.com/aymanbagabas/go-udiff"
 )
 
 // contextLines is how many unchanged lines surround a change. Three is what
 // every unified diff uses, so a hunk reads the way a patch reads.
 const contextLines = 3
+
+// sectionWidth bounds the heading a hunk carries, which is one line of code.
+const sectionWidth = 80
 
 // Kind is what happened to one line.
 type Kind string
@@ -28,10 +33,12 @@ type Line struct {
 }
 
 // Hunk is a run of changed lines with their context, at a position in each
-// version of the file.
+// version of the file. Section is the nearest line above it that starts at
+// the left margin, as git's hunk headers show, and is empty when none is.
 type Hunk struct {
 	OldStart int    `json:"old_start"`
 	NewStart int    `json:"new_start"`
+	Section  string `json:"section,omitempty"`
 	Lines    []Line `json:"lines"`
 }
 
@@ -63,8 +70,9 @@ func Compute(old, new string, maxLines int) Result {
 
 	res := Result{Hunks: []Hunk{}}
 	emitted := 0
+	oldLines := strings.Split(old, "\n")
 	for _, h := range u.Hunks {
-		hunk := Hunk{OldStart: h.FromLine, NewStart: h.ToLine, Lines: []Line{}}
+		hunk := Hunk{OldStart: h.FromLine, NewStart: h.ToLine, Section: section(oldLines, h.FromLine), Lines: []Line{}}
 		for _, l := range h.Lines {
 			kind := Context
 			switch l.Kind {
@@ -87,6 +95,27 @@ func Compute(old, new string, maxLines int) Result {
 		}
 	}
 	return res
+}
+
+// section finds the heading for a hunk starting at line from, 1-based: the
+// closest line before it that begins with a letter, an underscore or a dollar
+// sign, the rule git uses when a language gives it no better one.
+func section(lines []string, from int) string {
+	for i := min(from-2, len(lines)-1); i >= 0; i-- {
+		line := trimEOL(lines[i])
+		if line == "" {
+			continue
+		}
+		c := line[0]
+		if c == '_' || c == '$' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			line = strings.TrimRight(line, " \t")
+			if len(line) > sectionWidth {
+				line = line[:sectionWidth]
+			}
+			return line
+		}
+	}
+	return ""
 }
 
 // trimEOL drops the line terminator go-udiff keeps on each line, since the

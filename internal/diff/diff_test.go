@@ -106,3 +106,27 @@ func TestHunkPositions(t *testing.T) {
 		t.Fatalf("the first hunk starts at line %d, which is not a line number", r.Hunks[0].OldStart)
 	}
 }
+
+func TestHunkSection(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("package tools\n\nfunc (p *Proc) pump() {\n")
+	for i := 0; i < 20; i++ {
+		b.WriteString("\tstep()\n")
+	}
+	b.WriteString("}\n")
+	old := b.String()
+	changed := strings.Replace(old, "\tstep()\n\tstep()\n}", "\tstep()\n\tdone()\n}", 1)
+	r := Compute(old, changed, 0)
+	if len(r.Hunks) != 1 {
+		t.Fatalf("got %d hunks, want 1", len(r.Hunks))
+	}
+	if got := r.Hunks[0].Section; got != "func (p *Proc) pump() {" {
+		t.Fatalf("section = %q, want the enclosing func line", got)
+	}
+
+	// A change at the top of a file has nothing above it to name.
+	r = Compute("a\nb\n", "x\nb\n", 0)
+	if got := r.Hunks[0].Section; got != "" {
+		t.Fatalf("section = %q for a hunk at the first line, want empty", got)
+	}
+}

@@ -465,6 +465,8 @@ export interface DiffLine {
 export interface DiffHunk {
   old_start: number;
   new_start: number;
+  /** The line above the hunk that names where it is, when one does. */
+  section?: string;
   lines: DiffLine[];
 }
 

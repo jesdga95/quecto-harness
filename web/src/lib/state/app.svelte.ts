@@ -48,9 +48,9 @@ import { confirm } from "./confirm.svelte";
 // The panel holds the same window of a command's output the harness sends.
 const TAIL_LINES = 200;
 
-// The dock's four sections. They are always there; what the conversation opens
+// The dock's five sections. They are always there; what the conversation opens
 // joins the one it belongs to.
-export type Section = "files" | "changes" | "agents" | "processes";
+export type Section = "files" | "changes" | "agents" | "processes" | "context";
 
 // Every screen reads this one object. It holds what the server would hold plus
 // the little the browser owns, like which panel is open and whether the last
@@ -922,29 +922,10 @@ export function closePanel(): void {
   closeRuns();
 }
 
-/** The header's panel button. An empty dock opens on what is newest: an
-    artifact, else the changes, else the agents, else a running command, else
-    the folder. */
-export function togglePanel(): void {
-  if (app.panel) {
-    closePanel();
-    return;
-  }
-  const last = artifactList.at(-1);
-  if (last) {
-    showArtifact(last.id);
-    return;
-  }
-  const section: Section =
-    app.changes.files.length > 0
-      ? "changes"
-      : app.runs.length > 0
-        ? "agents"
-        : app.procs.some((p) => p.status === "running")
-          ? "processes"
-          : "files";
+/** Opens the panel on a section, Files on the folder when nothing is open in it. */
+export function openSection(section: Section): void {
   showSection(section);
-  if (section === "files") void browse("");
+  if (section === "files" && app.artifactId === "") void browse("");
 }
 
 export function showChanges(): void {
@@ -1370,6 +1351,16 @@ export function pendingQuestion(): TranscriptItem | undefined {
 }
 
 /** Turns and steps, for the line under the composer. */
+/** How full the context is. With no window known, the fill is a count of
+    tokens rather than a share, and ratio and percent are zero. */
+export function contextUse(): { fill: number; limited: boolean; ratio: number; percent: number; measured: boolean } {
+  const fill = app.usage.prompt_tokens + app.usage.completion_tokens;
+  const limited = app.usage.n_ctx > 0;
+  const ratio = limited ? fill / app.usage.n_ctx : 0;
+  const percent = limited ? Math.min(100, Math.round(ratio * 100)) : 0;
+  return { fill, limited, ratio, percent, measured: limited || fill > 0 };
+}
+
 export function turnStats(): { turns: number; steps: number } {
   let turns = 0;
   let steps = 0;

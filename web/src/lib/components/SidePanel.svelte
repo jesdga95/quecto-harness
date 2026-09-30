@@ -3,22 +3,23 @@
   import ArrowsIn from "phosphor-svelte/lib/ArrowsIn";
   import ArrowsOut from "phosphor-svelte/lib/ArrowsOut";
   import Browser from "phosphor-svelte/lib/Browser";
+  import ChartDonut from "phosphor-svelte/lib/ChartDonut";
+  import FolderOpen from "phosphor-svelte/lib/FolderOpen";
+  import GitDiff from "phosphor-svelte/lib/GitDiff";
+  import Terminal from "phosphor-svelte/lib/Terminal";
+  import UsersThree from "phosphor-svelte/lib/UsersThree";
   import Code from "phosphor-svelte/lib/Code";
   import Eye from "phosphor-svelte/lib/Eye";
   import DownloadSimple from "phosphor-svelte/lib/DownloadSimple";
   import FileCode from "phosphor-svelte/lib/FileCode";
   import Folder from "phosphor-svelte/lib/Folder";
-  import FolderOpen from "phosphor-svelte/lib/FolderOpen";
-  import GitDiff from "phosphor-svelte/lib/GitDiff";
   import ListChecks from "phosphor-svelte/lib/ListChecks";
   import PenNib from "phosphor-svelte/lib/PenNib";
-  import Robot from "phosphor-svelte/lib/Robot";
-  import Terminal from "phosphor-svelte/lib/Terminal";
-  import UsersThree from "phosphor-svelte/lib/UsersThree";
   import X from "phosphor-svelte/lib/X";
   import ArtifactPage from "./ArtifactPage.svelte";
   import ArtifactSvg from "./ArtifactSvg.svelte";
   import ChangesView from "./ChangesView.svelte";
+  import ContextView from "./ContextView.svelte";
   import CopyButton from "./CopyButton.svelte";
   import FileIcon from "./FileIcon.svelte";
   import PlanView from "./PlanView.svelte";
@@ -26,6 +27,7 @@
   import Prose from "./Prose.svelte";
   import RunsView from "./RunsView.svelte";
   import type { Artifact } from "../artifacts";
+  import { level } from "../format";
   import { escapeHtml, sourceHtml } from "../highlight";
   import { Streamed } from "../stream.svelte";
   import {
@@ -33,14 +35,13 @@
     artifacts,
     browse,
     closePanel,
+    contextUse,
     closeTab,
     fileUrl,
     loadFile,
     openFile,
-    openRun,
+    openSection,
     showArtifact,
-    showProcesses,
-    showSection,
     toggleArtifactsWide,
     type Section,
   } from "../state/app.svelte";
@@ -62,56 +63,24 @@
       : undefined,
   );
 
-  type Stacked = {
-    id: string;
-    label: string;
-    on: boolean;
-    artifact?: Artifact;
-  };
-
-  // The tabs never change: four sections, each with what is in it.
+  // The tabs never change: five sections, named short so all five fit a narrow
+  // dock. Files carries no count, since its own tabs sit right under it; the
+  // rest count what they hold, when anything, and Context its share.
   const sections = $derived([
-    { id: "files" as Section, label: "Files", count: app.tabs.length },
-    { id: "changes" as Section, label: "Changes", count: app.changes.files.length },
+    { id: "files" as Section, label: "Files", count: 0 },
+    { id: "changes" as Section, label: "Diff", count: app.changes.files.length },
     { id: "agents" as Section, label: "Agents", count: app.runs.length },
-    { id: "processes" as Section, label: "Processes", count: app.procs.length },
+    { id: "processes" as Section, label: "Shell", count: app.procs.length },
+    { id: "context" as Section, label: "Context", count: 0 },
   ]);
+  const use = $derived(contextUse());
+  const tone = $derived(level(use.ratio));
 
-  // The stack: what is open in the section the tabs are on. Files keeps the
-  // project folder before it, outside the list.
-  const stack = $derived.by((): Stacked[] => {
-    if (app.section === "files") {
-      return app.tabs
-        .map((id) => list.find((a) => a.id === id))
-        .filter((a) => a !== undefined)
-        .map((a) => ({ id: a.id, label: a.title, on: a.id === shown?.id, artifact: a }));
-    }
-    // Changes lists its files in the panel itself, so nothing stacks here.
-    if (app.section === "changes") return [];
-    if (app.section === "agents") {
-      return app.runs.map((r) => ({
-        id: r.id,
-        label: r.agent || "Agent",
-        on: r.id === app.runId,
-      }));
-    }
-    return app.procs.map((p) => ({
-      id: p.id,
-      label: p.command,
-      on: p.id === (app.procId || app.procs.at(-1)?.id),
-    }));
-  });
-
-  function openSection(id: Section): void {
-    showSection(id);
-    if (id === "files" && app.artifactId === "") void browse("");
-  }
-
-  function openStacked(item: Stacked): void {
-    if (app.section === "files") showArtifact(item.id);
-    else if (app.section === "agents") void openRun(item.id);
-    else showProcesses(item.id);
-  }
+  // The files open in the Files section, read through the list, since a
+  // resend can drop the reply one came from.
+  const opened = $derived(
+    app.tabs.map((id) => list.find((a) => a.id === id)).filter((a) => a !== undefined),
+  );
 
   // A page over this size is shown as its source.
   const big = $derived(shown?.kind === "page" && shown.source.length > LIMIT);
@@ -270,16 +239,22 @@
         onclick={() => openSection(section.id)}
       >
         {#if section.id === "files"}
-          <FolderOpen size={16} weight="fill" class="shrink-0" />
+          <FolderOpen size={15} weight="fill" class="tab-icon" />
         {:else if section.id === "changes"}
-          <GitDiff size={16} class="shrink-0" />
+          <GitDiff size={15} class="tab-icon" />
         {:else if section.id === "agents"}
-          <UsersThree size={16} class="shrink-0" />
+          <UsersThree size={15} class="tab-icon" />
+        {:else if section.id === "processes"}
+          <Terminal size={15} class="tab-icon" />
         {:else}
-          <Terminal size={16} class="shrink-0" />
+          <ChartDonut size={15} class="tab-icon" />
         {/if}
         <span class="tab-label">{section.label}</span>
-        <span class="tab-count num">{section.count}</span>
+        {#if section.id === "context" && use.limited}
+          <span class="tab-count" class:is-warn={tone === "warn"} class:is-crit={tone === "crit"}>{use.percent}%</span>
+        {:else if section.count > 0}
+          <span class="tab-count">{section.count}</span>
+        {/if}
       </button>
     {/each}
     <div class="ml-auto flex shrink-0 items-center gap-0.5">
@@ -298,38 +273,28 @@
   </nav>
 
   <div class="panel">
-    {#if app.section === "files" || stack.length}
+    {#if app.section === "files"}
       <div class="panel-stack">
-        {#if app.section === "files"}
-          <button
-            class="stack-home"
-            class:is-on={browsing}
-            aria-label="Project"
-            title="Project"
-            onclick={() => void browse("")}
-          >
-            <Folder size={15} />
-          </button>
-        {/if}
+        <button
+          class="stack-home"
+          class:is-on={browsing}
+          aria-label="Project"
+          title="Project"
+          onclick={() => void browse("")}
+        >
+          <Folder size={15} />
+        </button>
         <div class="stack-tabs">
-          {#each stack as item (item.id)}
-            <div class="stack-tab" class:is-on={item.on}>
-              <button class="stack-tab-main" title={item.artifact?.path ?? item.label} onclick={() => openStacked(item)}>
-                {#if item.artifact}
-                  {@render fileIcon(item.artifact)}
-                {:else if app.section === "agents"}
-                  <Robot size={14} class="shrink-0" />
-                {:else}
-                  <Terminal size={14} class="shrink-0" />
-                {/if}
-                <span class="truncate">{item.label}</span>
-                {#if item.artifact && !item.artifact.complete}<span class="spinner shrink-0"></span>{/if}
+          {#each opened as artifact (artifact.id)}
+            <div class="stack-tab" class:is-on={artifact.id === shown?.id}>
+              <button class="stack-tab-main" title={artifact.path ?? artifact.title} onclick={() => showArtifact(artifact.id)}>
+                {@render fileIcon(artifact)}
+                <span class="truncate">{artifact.title}</span>
+                {#if !artifact.complete}<span class="spinner shrink-0"></span>{/if}
               </button>
-              {#if item.artifact}
-                <button class="stack-tab-x" aria-label="Close {item.label}" onclick={() => closeTab(item.id)}>
-                  <X size={12} />
-                </button>
-              {/if}
+              <button class="stack-tab-x" aria-label="Close {artifact.title}" onclick={() => closeTab(artifact.id)}>
+                <X size={12} />
+              </button>
             </div>
           {/each}
         </div>
@@ -342,6 +307,8 @@
       <RunsView />
     {:else if app.section === "processes"}
       <ProcessesView />
+    {:else if app.section === "context"}
+      <ContextView />
     {:else}
       <div class="panel-path">
         <div class="panel-crumbs">

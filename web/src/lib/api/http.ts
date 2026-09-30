@@ -826,6 +826,7 @@ function toChanges(wire: WireChanges): Changes {
     hunks: (f.hunks ?? []).map((h) => ({
       old_start: h.old_start ?? 0,
       new_start: h.new_start ?? 0,
+      section: typeof h.section === "string" && h.section !== "" ? h.section : undefined,
       lines: h.lines ?? [],
     })),
   }));

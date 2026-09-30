@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"quecto-harness/internal/config"
 	"quecto-harness/internal/llm"
@@ -17,9 +18,8 @@ import (
 	"quecto-harness/internal/tools"
 )
 
-// taskTitle bounds the name a subagent run is filed under, which is cut from
-// the task rather than asked of the model.
-const taskTitle = 60
+// maxTitle bounds, in characters, the name a subagent run is filed under.
+const maxTitle = 60
 
 // rulesFile is the project's own rules. It is read once per turn and carried
 // in the system prompt, which is what makes its cost a fixed part of every
@@ -305,10 +305,18 @@ func (e *Engine) awaitAgent(ctx context.Context, call llm.ToolCall, l *launch) (
 func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (*Session, config.Agent, error) {
 	var args struct {
 		Agent string `json:"agent"`
+		Title string `json:"title"`
 		Task  string `json:"task"`
 	}
 	if err := decodeArgs(call.Function.Arguments, &args); err != nil {
 		return nil, config.Agent{}, fmt.Errorf("subagent: %s", err)
+	}
+	title := strings.Join(strings.Fields(args.Title), " ")
+	if title == "" {
+		return nil, config.Agent{}, errors.New("subagent: title is empty, name the task in a few words")
+	}
+	if n := utf8.RuneCountInString(title); n > maxTitle {
+		return nil, config.Agent{}, fmt.Errorf("subagent: title is %d characters, the most is %d", n, maxTitle)
 	}
 	task := strings.TrimSpace(args.Task)
 	if task == "" {
@@ -343,7 +351,7 @@ func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (
 	// A subagent works in the mode of the session that launched it, so a
 	// planner's researcher changes no files either.
 	child.Mode = mode
-	child.Title = store.Title(cut(task, taskTitle))
+	child.Title = title
 	child.Named = true
 	child.waiter = waiter
 	e.mu.Lock()
@@ -574,18 +582,6 @@ func findAgent(cfg config.Config, me config.Agent, name string) (config.Agent, e
 	}
 	return config.Agent{}, fmt.Errorf("subagent: no agent named %q. There is %s",
 		want, strings.Join(names, ", "))
-}
-
-// cut shortens text to n characters on a word boundary where there is one.
-func cut(text string, n int) string {
-	if len(text) <= n {
-		return text
-	}
-	head := text[:n]
-	if i := strings.LastIndexByte(head, ' '); i > n/2 {
-		head = head[:i]
-	}
-	return head
 }
 
 // decodeArgs reads a call's arguments, tolerating a field the model invented.

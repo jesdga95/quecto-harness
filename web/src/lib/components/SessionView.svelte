@@ -3,7 +3,6 @@
   import Composer from "./Composer.svelte";
   import PanelButton from "./PanelButton.svelte";
   import SidePanel from "./SidePanel.svelte";
-  import ContextChip from "./ContextChip.svelte";
   import Transcript from "./Transcript.svelte";
   import { activeSession, app, selectSession } from "../state/app.svelte";
   import { shortPath } from "../format";
@@ -13,11 +12,6 @@
   const showPanel = $derived(app.panel);
   // Hidden rather than removed, so a message being typed survives the expand.
   const hideMain = $derived(showPanel && app.artifactsWide);
-  // The chip draws once there is something to draw: a window to measure
-  // against, or tokens counted where no window is known.
-  const measured = $derived(
-    app.usage.n_ctx > 0 || app.usage.prompt_tokens + app.usage.completion_tokens > 0,
-  );
 </script>
 
 <div class="flex min-h-0 flex-1">
@@ -40,12 +34,12 @@
           <span class="truncate text-[12.5px] text-muted">{shortPath(app.projectPath)}</span>
         {/if}
       </div>
-      <div class="ml-auto flex shrink-0 items-center gap-2">
-        <PanelButton />
-        {#if measured}
-          <ContextChip />
-        {/if}
-      </div>
+      <!-- The panel's own tabs say the same once it is open. -->
+      {#if !showPanel}
+        <div class="ml-auto flex shrink-0 items-center gap-2">
+          <PanelButton />
+        </div>
+      {/if}
     </header>
 
     <Transcript />

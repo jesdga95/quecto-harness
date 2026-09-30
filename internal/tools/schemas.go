@@ -286,10 +286,11 @@ func buildSchemas() []llm.Tool {
 				"type": "object",
 				"properties": map[string]any{
 					"agent": map[string]any{"type": "string", "description": "The name of the agent to run the task."},
+					"title": map[string]any{"type": "string", "description": "The task in a few words, in sentence case. The run is listed under it."},
 					"task":  map[string]any{"type": "string", "description": "The whole brief. That agent sees none of this conversation."},
 					"wait":  map[string]any{"type": "boolean", "description": "False starts the agent and carries on without its result, which arrives later as a message. Waits when left out."},
 				},
-				"required":             []string{"agent", "task"},
+				"required":             []string{"agent", "title", "task"},
 				"additionalProperties": false,
 			}),
 		}},

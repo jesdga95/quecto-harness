@@ -106,8 +106,8 @@ export function stepDesc(item: TranscriptItem, live: boolean, planTitle: string)
       return sectionsOf(item.args).join(", ");
     case "subagent": {
       const to = stringArg(item, "agent");
-      const task = stringArg(item, "task");
-      return to === "" ? task : `${to}: ${task}`;
+      const title = stringArg(item, "title");
+      return to === "" ? title : `${to}: ${title}`;
     }
     case "send_message":
       return stringArg(item, "text");

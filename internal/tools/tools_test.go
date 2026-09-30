@@ -1300,3 +1300,28 @@ func TestWriteSchemasListThePathFirst(t *testing.T) {
 		}
 	}
 }
+
+// A subagent run is filed under the title its call gives, so the call cannot
+// leave it out.
+func TestSubagentRequiresATitle(t *testing.T) {
+	for _, tool := range Schemas(Offer{Mode: config.WorkExecute, Agents: true}) {
+		if tool.Function.Name != "subagent" {
+			continue
+		}
+		var params struct {
+			Properties map[string]map[string]any `json:"properties"`
+			Required   []string                  `json:"required"`
+		}
+		if err := json.Unmarshal(tool.Function.Parameters, &params); err != nil {
+			t.Fatal(err)
+		}
+		if params.Properties["title"]["type"] != "string" {
+			t.Errorf("title is %v, want a string", params.Properties["title"])
+		}
+		if !slices.Equal(params.Required, []string{"agent", "title", "task"}) {
+			t.Errorf("required = %v, want agent, title and task", params.Required)
+		}
+		return
+	}
+	t.Fatal("no subagent schema was offered")
+}
