@@ -73,9 +73,10 @@ func (s *Server) getEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// getSessionEvents streams every session's status. It opens with the sessions
-// that are not idle and then sends each change, so a stream reopened after a
-// drop starts from a list that is current.
+// getSessionEvents streams every session's status and how many of its commands
+// are still running. It opens with the sessions that are doing something and
+// then sends each change, so a stream reopened after a drop starts from a list
+// that is current.
 func (s *Server) getSessionEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -86,18 +87,19 @@ func (s *Server) getSessionEvents(w http.ResponseWriter, r *http.Request) {
 	// sent again rather than missed.
 	ch, cancel := s.hub.Watch()
 	defer cancel()
-	busy := map[string]string{}
+	states := map[string]string{}
 	for id, st := range s.engine.Busy() {
-		busy[id] = string(st)
+		states[id] = string(st)
 	}
-	states, _ := json.Marshal(map[string]any{"states": busy})
+	// A command still running counts even when the turn that started it is idle.
+	list, _ := json.Marshal(map[string]any{"states": states, "running": s.engine.Background()})
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "event: states\ndata: %s\n\n", states)
+	fmt.Fprintf(w, "event: states\ndata: %s\n\n", list)
 	flusher.Flush()
 
 	ping := time.NewTicker(pingInterval)

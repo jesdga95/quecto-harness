@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md denial.md budget_spent.md repeat.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
+//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md image.md denial.md budget_spent.md repeat.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
 var files embed.FS
 
 // hasTool is the has the prompt templates take: whether the tools a turn sends
@@ -288,6 +288,7 @@ func ToolWebSearch() string       { return mustRead("tool_web_search.md") }
 func ToolWrite() string           { return mustRead("tool_write.md") }
 func ToolEdit() string            { return mustRead("tool_edit.md") }
 func ToolBash() string            { return mustRead("tool_bash.md") }
+func ToolProcesses() string       { return mustRead("tool_processes.md") }
 func ToolTodoWrite() string       { return mustRead("tool_todo_write.md") }
 func ToolAskUserQuestion() string { return mustRead("tool_ask_user_question.md") }
 func ToolSubagent() string        { return mustRead("tool_subagent.md") }

@@ -1,0 +1,8 @@
+: shape from llama.cpp b10812-8b4b3558f
+data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"bash","arguments":"{\"command\":\"sleep 30\",\"background\":true}"}}]}}],"created":1757141666,"id":"chatcmpl-3","model":"Alpha-12B","object":"chat.completion.chunk"}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"created":1757141666,"id":"chatcmpl-3","model":"Alpha-12B","object":"chat.completion.chunk"}
+
+data: {"choices":[],"created":1757141666,"id":"chatcmpl-3","model":"Alpha-12B","usage":{"completion_tokens":12,"prompt_tokens":402,"total_tokens":414,"prompt_tokens_details":{"cached_tokens":384}}}
+
+data: [DONE]

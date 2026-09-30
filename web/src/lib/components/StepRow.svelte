@@ -22,7 +22,7 @@
   import { clockLabel, statusLabel } from "../format";
   import { asked } from "../question";
   import { stepDesc, stepFailed, stepName, stringArg, todosOf } from "../steps";
-  import { app } from "../state/app.svelte";
+  import { app, showProcesses } from "../state/app.svelte";
 
   // live marks the row the model is still writing into.
   let { item, live = false }: { item: TranscriptItem; live?: boolean } = $props();
@@ -102,6 +102,12 @@
   );
 
   const isPath = $derived(item.kind === "tool" && item.name !== "grep" && path !== "");
+  // A background bash call has no output to show, only the process it started.
+  const proc = $derived(
+    item.kind === "tool" && item.name === "bash" && typeof item.meta?.process === "string"
+      ? item.meta.process
+      : "",
+  );
   // A compaction with no summary is a divider and nothing more.
   const expandable = $derived(item.kind !== "compaction" || item.summary !== "");
 </script>
@@ -139,6 +145,10 @@
     <span class="name">{name}</span>
     <span class="sep">&middot;</span>
     <span class="desc" class:path={isPath && !failed} class:text-crit={failed}>{desc}</span>
+
+    {#if proc}
+      <span class="text-[12px] text-muted">Background</span>
+    {/if}
 
     {#if edit && wrote && (edit.counts.added > 0 || edit.counts.removed > 0)}
       <span class="num text-[12px]">
@@ -204,12 +214,19 @@
           <p class="step-text">{item.output}</p>
         {/if}
       {:else if item.kind === "tool" && item.name === "bash"}
-        <TerminalCard
-          {command}
-          output={item.output}
-          exitCode={item.exitCode}
-          truncated={item.truncated}
-        />
+        {#if proc}
+          <p class="step-text">
+            Running in the background.
+            <button class="proc-more" onclick={() => showProcesses(proc)}>Open its tail</button>
+          </p>
+        {:else}
+          <TerminalCard
+            {command}
+            output={item.output}
+            exitCode={item.exitCode}
+            truncated={item.truncated}
+          />
+        {/if}
       {:else if item.kind === "tool" && item.name === "subagent"}
         {#if task}
           <p class="step-text">{task}</p>

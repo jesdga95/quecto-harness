@@ -17,6 +17,7 @@
     pickAndAddProject,
     selectProject,
     isWorking,
+    hasBackground,
     needsYou,
     selectSession,
     sessionsOf,
@@ -271,6 +272,7 @@
                   />
               {:else}
                 {@const held = needsYou(session.id)}
+                {@const back = hasBackground(session.id)}
                 <div class="row-wrap">
                   <button
                     class="side-row session-row"
@@ -279,12 +281,16 @@
                   >
                     {#if held}
                       <span class="needs-you" role="status" aria-label="Waiting on you"></span>
+                    {:else if back}
+                      <span class="background" role="status" aria-label="Running in the background"></span>
                     {:else if isWorking(session.id)}
                       <span class="working" role="status" aria-label="Working"></span>
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{session.title}</span>
                     {#if held}
                       <span class="text-[11px] text-warn">Pending</span>
+                    {:else if back}
+                      <span class="text-[11px] text-tools">Background</span>
                     {:else}
                       <span class="num text-[11px] text-muted">{since(session.updated)}</span>
                     {/if}

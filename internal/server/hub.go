@@ -15,6 +15,7 @@ const (
 	resyncEvType = "resync"
 	statusEvType = "status"
 	listedEvType = "listed"
+	procsEvType  = "procs"
 )
 
 // The events a model streams a token at a time. They are the only ones joined
@@ -87,23 +88,27 @@ func (h *Hub) Publish(sessionID string, ev agent.Event) {
 		h.holdLocked(sessionID, c, ev)
 		return
 	}
-	// A listed state reaches the session list alone: it is what the list
-	// shows for a session, not a change in the session's own turn.
-	if ev.Type == listedEvType {
-		h.tellWatchersLocked(sessionID, ev.Fields["state"])
+	// A listed state and a process count reach the session list alone: they are
+	// what the sidebar shows for a session, not a change in its own turn.
+	if ev.Type == listedEvType || ev.Type == procsEvType {
+		h.tellWatchersLocked(sessionID, ev.Fields)
 		return
 	}
 	h.sendLocked(c)
 	h.emitLocked(c, ev.Type, ev.Fields)
 	if ev.Type == statusEvType {
-		h.tellWatchersLocked(sessionID, ev.Fields["state"])
+		h.tellWatchersLocked(sessionID, ev.Fields)
 	}
 }
 
-// tellWatchersLocked sends one session's status to every watcher. A watcher
+// tellWatchersLocked sends one session's record to every watcher. A watcher
 // that cannot keep up is closed, and the list it reopens with is current.
-func (h *Hub) tellWatchersLocked(sessionID string, state any) {
-	data, _ := json.Marshal(map[string]any{"session": sessionID, "state": state})
+func (h *Hub) tellWatchersLocked(sessionID string, fields map[string]any) {
+	out := map[string]any{"session": sessionID}
+	for k, v := range fields {
+		out[k] = v
+	}
+	data, _ := json.Marshal(out)
 	for id, ch := range h.watchers {
 		select {
 		case ch <- data:

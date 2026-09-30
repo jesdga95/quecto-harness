@@ -328,6 +328,19 @@ export type HarnessEvent =
       title?: string;
     }
   | { type: "error"; message: string }
+  /** A command the harness started in the background. */
+  | { type: "proc_start"; proc: Process }
+  /** Lines a background command printed since the last frame. */
+  | { type: "proc_output"; id: string; lines: string[]; bytes: number }
+  /** A background command ended, on its own or because it was stopped. */
+  | {
+      type: "proc_end";
+      id: string;
+      status: "done" | "stopped";
+      exitCode: number | null;
+      bytes: number;
+      endedAt: number;
+    }
   | { type: "done"; cost?: TurnCost }
   /** The stream fell too far behind to replay, so it carries a fresh snapshot. */
   | { type: "resync"; transcript: Transcript }
@@ -471,6 +484,27 @@ export interface Changes {
   removed: number;
 }
 
+/** One command the harness started in the background. tail is the last lines
+    it has printed, oldest first. */
+export interface Process {
+  id: string;
+  /** The tool call that started it. */
+  call: string;
+  command: string;
+  pid: number;
+  status: "running" | "done" | "stopped";
+  startedAt: number;
+  endedAt?: number;
+  exitCode: number | null;
+  /** Bytes printed so far, whole rather than the tail's share of them. */
+  bytes: number;
+  tail: string[];
+  /** The tail is a window, so lines older than it are gone from it. */
+  tailCut: boolean;
+  /** Where the whole output is saved, empty when nothing is. */
+  spill: string;
+}
+
 /** The four parts of the context, each measured rather than estimated. It is
  *  absent until the fixed parts have been measured against the model. */
 export interface Breakdown {
@@ -554,9 +588,13 @@ export interface Transcript {
 
 export type EventHandler = (event: HarnessEvent) => void;
 
-/** Receives what sessions are doing: the whole list of those not idle when
-    whole is set, otherwise one session that changed. */
-export type SessionStatesHandler = (states: Record<string, TurnStatus>, whole: boolean) => void;
+/** One session as the session list sees it: the turn's state and the commands
+    still running. A change frame carries only what moved. */
+export type SessionFeed = { state?: TurnStatus; running?: number };
+
+/** Receives what sessions are doing: the whole list of those doing something
+    when whole is set, otherwise one session that changed. */
+export type SessionFeedHandler = (feed: Record<string, SessionFeed>, whole: boolean) => void;
 
 export interface HarnessApi {
   getState(): Promise<State>;
@@ -593,6 +631,12 @@ export interface HarnessApi {
   /** Every file the session wrote, against the copy kept before its first
       write and the file on disk now. */
   getChanges(id: string): Promise<Changes>;
+  /** The commands this session started in the background, oldest first. */
+  listProcesses(id: string): Promise<Process[]>;
+  /** Ends one of them. A command that already went is not an error. */
+  stopProcess(id: string, proc: string): Promise<void>;
+  /** One command's output, cut to the panel's limit. */
+  processOutput(id: string, proc: string): Promise<{ output: string; truncated: boolean }>;
   /** One file in the session's project. Rejects with the harness's message
       for a path outside the project, a folder, or a file that is not there. */
   readFile(id: string, path: string): Promise<ProjectFile>;
@@ -631,5 +675,5 @@ export interface HarnessApi {
   events(session: string, onEvent: EventHandler): () => void;
   /** Follows every session's status, open or not. The returned function
       closes it. */
-  watchSessions(onStates: SessionStatesHandler): () => void;
+  watchSessions(onFeed: SessionFeedHandler): () => void;
 }

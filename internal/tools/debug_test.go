@@ -43,9 +43,9 @@ func TestTheDebugViewSpellsOutTheParameters(t *testing.T) {
 			t.Errorf("bash's timeout_s = %v, want optional with a floor of 1", p)
 		}
 	}
-	// A minimal toolset spells out only its four.
+	// A minimal toolset spells out only its five.
 	min := DebugTools(Offer{Set: config.ToolsetMinimal, Mode: config.WorkExecute})
-	if len(min) != 4 {
-		t.Errorf("the minimal view lists %d tools, want 4", len(min))
+	if len(min) != 5 {
+		t.Errorf("the minimal view lists %d tools, want 5", len(min))
 	}
 }

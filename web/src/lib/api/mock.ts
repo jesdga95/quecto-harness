@@ -14,6 +14,7 @@ import type {
   Model,
   PermissionDecision,
   Probe,
+  Process,
   Protocol,
   Project,
   SearchConfig,
@@ -21,11 +22,11 @@ import type {
   SearchProbe,
   Sent,
   Session,
-  SessionStatesHandler,
+  SessionFeed,
+  SessionFeedHandler,
   State,
   Todo,
   Transcript,
-  TurnStatus,
   TranscriptItem,
   ToolSpec,
   ToolsetDebug,
@@ -134,7 +135,13 @@ const MOCK_TOOL_SPECS: ToolSpec[] = [
     params: [
       { name: "command", type: "string", description: "The command line to run.", required: true },
       { name: "timeout_s", type: "integer", description: "Seconds before the command is killed.", required: false, minimum: 1 },
+      { name: "background", type: "boolean", description: "Run it in the background and return at once.", required: false },
     ],
+  },
+  {
+    name: "processes",
+    description: "List the commands running in the background for this session.",
+    params: [],
   },
 ];
 
@@ -142,18 +149,18 @@ const MOCK_TOOLSET_DEBUG: ToolsetDebug = {
   tools: MOCK_TOOL_SPECS,
   sent: {
     full: MOCK_TOOL_SPECS.map((t) => t.name),
-    minimal: ["read", "write", "edit", "bash"],
+    minimal: ["read", "write", "edit", "bash", "processes"],
   },
   prompts: {
     full:
       "You are a coding agent working in /Users/jay/Projects/Personal/quecto-harness on darwin.\n" +
-      "Tools: read, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash.\n\n" +
+      "Tools: read, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash, processes.\n\n" +
       "Use the grep tool, not a shell command, to locate files and lines.\n" +
       "Use the read tool, not cat, head or sed, to read a file.\n" +
       "Check the exit code of every bash result, and look into a failure before moving on.",
     minimal:
       "You are a coding agent working in /Users/jay/Projects/Personal/quecto-harness on darwin.\n" +
-      "Tools: read, write, edit, bash. The rules or this history may name a tool that is not in that list: it is not yours, so do not reach for it.\n\n" +
+      "Tools: read, write, edit, bash, processes. The rules or this history may name a tool that is not in that list: it is not yours, so do not reach for it.\n\n" +
       "Use the read tool, not cat, head or sed, to read a file.\n" +
       "Check the exit code of every bash result, and look into a failure before moving on.",
   },
@@ -563,7 +570,7 @@ export class MockApi implements HarnessApi {
   private sessions: Session[] = [];
   private transcripts = new Map<string, Transcript>();
   private handlers = new Map<string, EventHandler>();
-  private watchers = new Set<SessionStatesHandler>();
+  private watchers = new Set<SessionFeedHandler>();
   private allowlist = new Map<string, string[]>([
     ["/Users/jay/Projects/Personal/quecto-harness", ["git status", "go vet"]],
   ]);
@@ -586,6 +593,11 @@ export class MockApi implements HarnessApi {
     ["AGENTS.md", "# Working in this repo\n\nAnswer in as few words as the question needs.\n"],
     ["cmd/quecto-harness/main.go", 'package main\n\nfunc main() {\n\tprintln("quecto")\n}\n'],
   ]);
+  // Commands the mock started in the background. One is still printing, so the
+  // panel has a tail that moves and a Stop that does something.
+  private procs: { proc: Process; session: string; lines: string[] }[] = [];
+  private procTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private procSeq = 0;
 
   constructor() {
     this.seed();
@@ -801,6 +813,41 @@ export class MockApi implements HarnessApi {
       added: files.reduce((n, f) => n + f.added, 0),
       removed: files.reduce((n, f) => n + f.removed, 0),
     };
+  }
+
+  async listProcesses(id: string): Promise<Process[]> {
+    await this.tick();
+    if (!this.transcripts.has(id)) throw new Error(`session ${id} not found`);
+    return this.procs
+      .filter((p) => p.session === id)
+      .map((p) => ({ ...p.proc, tail: [...p.proc.tail] }));
+  }
+
+  async stopProcess(id: string, proc: string): Promise<void> {
+    await this.tick();
+    const state = this.procs.find((p) => p.session === id && p.proc.id === proc);
+    if (!state || state.proc.status !== "running") return;
+    const timer = this.procTimers.get(proc);
+    if (timer) clearInterval(timer);
+    this.procTimers.delete(proc);
+    state.proc.status = "stopped";
+    state.proc.exitCode = 130;
+    state.proc.endedAt = Date.now();
+    this.emit(id, {
+      type: "proc_end",
+      id: proc,
+      status: "stopped",
+      exitCode: 130,
+      bytes: state.proc.bytes,
+      endedAt: state.proc.endedAt,
+    });
+  }
+
+  async processOutput(id: string, proc: string): Promise<{ output: string; truncated: boolean }> {
+    await this.tick();
+    const state = this.procs.find((p) => p.session === id && p.proc.id === proc);
+    if (!state) throw new Error(`No such process: ${proc}`);
+    return { output: state.lines.join("\n"), truncated: false };
   }
 
   async readFile(id: string, path: string): Promise<ProjectFile> {
@@ -1024,17 +1071,21 @@ export class MockApi implements HarnessApi {
     };
   }
 
-  watchSessions(onStates: SessionStatesHandler): () => void {
-    this.watchers.add(onStates);
-    const states: Record<string, TurnStatus> = {};
+  watchSessions(onFeed: SessionFeedHandler): () => void {
+    this.watchers.add(onFeed);
+    const feed: Record<string, SessionFeed> = {};
     for (const [id, t] of this.transcripts) {
       const run = this.running?.session === id;
       const held = this.pending?.session === id || this.openQuestion?.session === id;
       const status = held ? "waiting" : run ? "streaming" : t.status;
-      if (status !== "idle") states[id] = status;
+      if (status !== "idle") feed[id] = { state: status };
     }
-    onStates(states, true);
-    return () => this.watchers.delete(onStates);
+    for (const p of this.procs) {
+      if (p.proc.status !== "running") continue;
+      feed[p.session] = { ...feed[p.session], running: (feed[p.session]?.running ?? 0) + 1 };
+    }
+    onFeed(feed, true);
+    return () => this.watchers.delete(onFeed);
   }
 
   async sendMessage(
@@ -1371,10 +1422,64 @@ export class MockApi implements HarnessApi {
     this.emit(session, event);
   }
 
+  /** A background command the mock is running. Its lines arrive in chunks, the
+      way a real tail coalesces, and it ends when they are all out. */
+  private startProc(session: string, command: string, lines: string[]): void {
+    this.procSeq += 1;
+    const id = `p-${this.procSeq}`;
+    const state = {
+      proc: {
+        id,
+        call: nextId("t"),
+        command,
+        pid: 4100 + this.procSeq * 37,
+        status: "running",
+        startedAt: Date.now() - 24000,
+        exitCode: null,
+        bytes: 0,
+        tail: [],
+        tailCut: false,
+        spill: `/Users/jay/.quecto-harness/spill/bash-${id}.txt`,
+      } as Process,
+      session,
+      lines,
+    };
+    this.procs.push(state);
+    this.emit(session, { type: "proc_start", proc: { ...state.proc } });
+    let sent = 0;
+    const timer = setInterval(() => {
+      const take = state.lines.slice(sent, sent + 3);
+      sent += take.length;
+      state.proc.tail = [...state.proc.tail, ...take].slice(-200);
+      state.proc.bytes += take.reduce((n, line) => n + line.length + 1, 0);
+      this.emit(session, { type: "proc_output", id, lines: take, bytes: state.proc.bytes });
+      if (sent >= state.lines.length) {
+        clearInterval(timer);
+        this.procTimers.delete(id);
+        state.proc.status = "done";
+        state.proc.exitCode = 0;
+        state.proc.endedAt = Date.now();
+        this.emit(session, {
+          type: "proc_end",
+          id,
+          status: "done",
+          exitCode: 0,
+          bytes: state.proc.bytes,
+          endedAt: state.proc.endedAt,
+        });
+      }
+    }, 900);
+    this.procTimers.set(id, timer);
+  }
+
   private emit(session: string, event: HarnessEvent): void {
     this.handlers.get(session)?.(event);
     if (event.type === "status") {
-      for (const watch of this.watchers) watch({ [session]: event.status }, false);
+      for (const watch of this.watchers) watch({ [session]: { state: event.status } }, false);
+    }
+    if (event.type === "proc_start" || event.type === "proc_end") {
+      const running = this.procs.filter((p) => p.session === session && p.proc.status === "running").length;
+      for (const watch of this.watchers) watch({ [session]: { running } }, false);
     }
   }
 
@@ -1525,6 +1630,45 @@ export class MockApi implements HarnessApi {
     ];
     this.sessions.push(first, second, third, worker, auditor);
     this.turnIndex.set(first.id, 2);
+
+    // One command that finished and one still printing, so the panel has a row
+    // that says how it ended and a tail that moves.
+    const buildLines = [
+      "npm ci",
+      "vite build",
+      "internal/web/dist/index.html written",
+    ];
+    this.procs.push({
+      session: first.id,
+      lines: buildLines,
+      proc: {
+        id: "p-0",
+        call: "t-seed",
+        command: "make web",
+        pid: 3988,
+        status: "done",
+        startedAt: Date.now() - 180000,
+        endedAt: Date.now() - 150000,
+        exitCode: 0,
+        bytes: buildLines.reduce((n, line) => n + line.length + 1, 0),
+        tail: buildLines,
+        tailCut: false,
+        spill: "/Users/jay/.quecto-harness/spill/bash-p-0.txt",
+      },
+    });
+    this.startProc(
+      first.id,
+      "go test -race ./...",
+      [
+        "?  quecto-harness/cmd/quecto-harness\t[no test files]",
+        "ok  quecto-harness/internal/agent\t1.412s",
+        "ok  quecto-harness/internal/llm\t0.884s",
+        "ok  quecto-harness/internal/perms\t0.301s",
+        "ok  quecto-harness/internal/prompts\t0.102s",
+        "ok  quecto-harness/internal/server\t2.117s",
+        "ok  quecto-harness/internal/tools\t1.043s",
+      ],
+    );
 
     const auditorItems: TranscriptItem[] = [];
     pushUser(auditorItems, "check every handler for a missing context and report what you find",
@@ -1731,6 +1875,7 @@ function title(text: string): string {
 function seededEvents(): HarnessEvent[] {
   const call = nextId("t");
   const search = nextId("t");
+  const bg = nextId("t");
   return [
     {
       type: "reasoning",
@@ -1810,6 +1955,25 @@ function seededEvents(): HarnessEvent[] {
       ].join("\n"),
       exit_code: 0,
       truncated: true,
+    },
+    {
+      type: "tool_call",
+      id: bg,
+      name: "bash",
+      args: { command: "go test -race ./...", background: true },
+    },
+    {
+      type: "tool_output",
+      id: bg,
+      output: "Running in the background as p-1 (pid 4137). The tail is in the Processes panel.",
+      exit_code: null,
+      truncated: false,
+      meta: {
+        command: "go test -race ./...",
+        process: "p-1",
+        background: true,
+        spill: "/Users/jay/.quecto-harness/spill/bash-p-1.txt",
+      },
     },
     {
       type: "delta",

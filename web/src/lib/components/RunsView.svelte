@@ -1,11 +1,9 @@
 <script lang="ts">
   import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
-  import Robot from "phosphor-svelte/lib/Robot";
   import Prose from "./Prose.svelte";
   import StepRow from "./StepRow.svelte";
   import { app, openRun, selectSession } from "../state/app.svelte";
   import { followEnd } from "../stream.svelte";
-  import { statusLabel } from "../format";
 
   let scroller = $state<HTMLDivElement | null>(null);
   let atBottom = $state(true);
@@ -61,23 +59,6 @@
 </div>
 
 <div class="artifact-body">
-  <div class="shrink-0 border-b border-hair px-2.5 py-2">
-    {#each app.runs as run (run.id)}
-      <button
-        class="run-row"
-        class:is-on={run.id === app.runId}
-        onclick={() => void openRun(run.id)}
-      >
-        <Robot size={14} class="shrink-0" />
-        <span class="truncate">{run.agent || "Agent"}</span>
-        <span class="ml-auto shrink-0 text-[12px] text-muted">{statusLabel(run.status)}</span>
-        {#if run.status !== "idle"}
-          <span class="spinner"></span>
-        {/if}
-      </button>
-    {/each}
-  </div>
-
   <div
     bind:this={scroller}
     {onscroll}

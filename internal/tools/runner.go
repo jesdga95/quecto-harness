@@ -154,6 +154,9 @@ type FindArgs struct {
 type RunShellArgs struct {
 	Command  string `json:"command"`
 	TimeoutS *int   `json:"timeout_s"`
+	// Background starts the command and returns at once. It then has no
+	// deadline, and its output is read as it arrives.
+	Background bool `json:"background"`
 }
 
 // decodeArgs is lenient about unknown fields, since a small model routinely

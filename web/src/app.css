@@ -44,6 +44,7 @@
   --color-warn-bg: var(--warn-bg);
   --color-crit: var(--crit);
   --color-crit-bg: var(--crit-bg);
+  --color-tools: var(--c-tools);
 
   --font-sans:
     "Poppins", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -909,7 +910,7 @@
   .fold-head:hover {
     color: var(--text);
   }
-  /* Nothing under the rail yet, so no hairline to divide it from. */
+  /* Nothing under the fold yet, so no hairline to divide it from. */
   .fold-head.no-rule {
     border-bottom-color: transparent;
   }
@@ -1686,10 +1687,12 @@
       animation: none;
     }
   }
-  /* A session held on a person: the working mark turned on its point in the
-     warn colour, breathing in place rather than turning, since nothing moves
-     until someone answers. */
-  .needs-you {
+  /* A session held on a person, or one with a command still running: the
+     working mark turned on its point and breathing in place, in warn for the
+     one that needs an answer and in the tools blue for the one that is busy on
+     its own. */
+  .needs-you,
+  .background {
     position: absolute;
     left: 7px;
     top: 50%;
@@ -1699,16 +1702,22 @@
     height: 12px;
     margin-top: -6px;
   }
-  .needs-you::before {
+  .needs-you::before,
+  .background::before {
     content: "";
     width: 7px;
     height: 7px;
     border-radius: 1.5px;
-    background: var(--warn);
     transform: rotate(45deg);
-    animation: needs-you 1.8s ease-in-out infinite;
+    animation: breathe 1.8s ease-in-out infinite;
   }
-  @keyframes needs-you {
+  .needs-you::before {
+    background: var(--warn);
+  }
+  .background::before {
+    background: var(--c-tools);
+  }
+  @keyframes breathe {
     0%,
     100% {
       transform: rotate(45deg) scale(1);
@@ -1720,7 +1729,8 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .needs-you::before {
+    .needs-you::before,
+    .background::before {
       animation: none;
     }
   }
@@ -1948,6 +1958,9 @@
   .term-bad {
     color: var(--term-bad);
   }
+  .term-muted {
+    color: var(--term-muted);
+  }
   /* Held out of the scrolling area: it measures the run rather than belonging
      to the output. */
   .term-foot {
@@ -1968,8 +1981,8 @@
     color: var(--term-ink);
   }
 
-  /* The column beside the transcript, scrolling on its own. The changes and
-     the agents working share it, since the two never open at once. */
+  /* The column beside the transcript, scrolling on its own. Four tabs across
+     the top hold it, and the panel below shows what is inside the one it is on. */
   .dock {
     width: 460px;
     flex: none;
@@ -1979,41 +1992,7 @@
     border-left: 1px solid var(--hair);
     background: var(--panel);
   }
-  /* The same height as the session header beside it, so the two headings sit
-     on one line. */
-  .dock-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 56px;
-    padding: 0 16px;
-  }
 
-  /* One subagent run in the strip at the top of the agents dock. */
-  .run-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 7px 10px;
-    /* Clear of the row below, so the one under the pointer and the one being
-       read are two backgrounds rather than one block. */
-    margin-bottom: 4px;
-    border: 0;
-    border-radius: 9px;
-    background: none;
-    text-align: left;
-    font-size: 12.5px;
-    color: var(--text);
-    cursor: pointer;
-  }
-  .run-row:hover {
-    background: color-mix(in oklab, var(--text) 5%, transparent);
-  }
-  .run-row.is-on {
-    background: color-mix(in oklab, var(--text) 16%, transparent);
-    font-weight: 500;
-  }
   /* What the launcher told the subagent: its task, and anything sent after.
      Full width rather than a bubble, since the dock is a narrow column. */
   .run-said {
@@ -2024,6 +2003,28 @@
     line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  /* A background command's row, and the line that measures it. */
+  .proc-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .proc-id {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--accent);
+  }
+  .proc-more {
+    border: 0;
+    background: none;
+    font-size: 12px;
+    color: var(--text-2);
+    cursor: pointer;
+  }
+  .proc-more:hover {
+    color: var(--text);
   }
   /* The artifacts dock needs room for a page, so it takes a share of the
      window rather than the fixed width of the other docks. Full hides the
@@ -2045,70 +2046,142 @@
     max-height: 280px;
     overflow-y: auto;
   }
-  /* The panel's tabs: what the reader has open, the file browser among them.
-     The strip scrolls sideways once it is full. */
-  .panel-tabs {
+  /* The dock's tabs: four sections, always there, each with what sits in it.
+     The active one is underlined on the hairline the panel sits below. */
+  .dock-tabs {
     display: flex;
     align-items: center;
-    gap: 8px;
-    height: 52px;
-    padding: 0 12px 0 10px;
+    gap: 2px;
+    padding: 6px 10px 0;
+    border-bottom: 1px solid var(--hair);
   }
-  .panel-tab-strip {
+  .tab {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 7px;
+    padding: 9px 10px 8px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: none;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .tab:hover {
+    color: var(--text);
+  }
+  .tab.is-on {
+    color: var(--text);
+    font-weight: 500;
+    border-bottom-color: var(--accent);
+  }
+  .tab-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tab-count {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .tab.is-on .tab-count {
+    color: var(--text-2);
+  }
+  .panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+  /* The stack: what the reader has opened inside the section, as editor
+     tabs flush to the hairline. The open one takes the page's surface. Files
+     keeps the project folder at the start, where scrolling cannot move it. */
+  .panel-stack {
+    display: flex;
+    align-items: stretch;
+    height: 36px;
+    flex: none;
+    border-bottom: 1px solid var(--hair);
+  }
+  .stack-home {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    flex: none;
+    border: 0;
+    border-right: 1px solid var(--hair);
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .stack-home:hover,
+  .stack-home.is-on {
+    color: var(--text);
+  }
+  .stack-home.is-on {
+    background: var(--page);
+  }
+  .stack-tabs {
+    display: flex;
+    flex: 1;
     min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
   }
-  .panel-tab {
+  .stack-tab {
     display: flex;
     align-items: center;
     flex: none;
     max-width: 200px;
-    border-radius: 9px;
-    color: var(--text-2);
+    border-right: 1px solid var(--hair);
+    color: var(--muted);
   }
-  .panel-tab:hover {
-    background: rgb(100 116 139 / 0.12);
-  }
-  .panel-tab.is-on {
-    background: rgb(100 116 139 / 0.18);
+  .stack-tab:hover {
     color: var(--text);
   }
-  .panel-tab-main {
+  .stack-tab.is-on {
+    background: var(--page);
+    color: var(--text);
+  }
+  .stack-tab-main {
     display: flex;
     align-items: center;
+    align-self: stretch;
     gap: 7px;
     min-width: 0;
-    padding: 6px 4px 6px 10px;
+    padding: 0 6px 0 12px;
     border: 0;
     background: none;
-    font-size: 13px;
+    font: inherit;
+    font-size: 12.5px;
     color: inherit;
     cursor: pointer;
   }
-  .panel-tab-x {
+  .stack-tab:not(:has(.stack-tab-x)) .stack-tab-main {
+    padding-right: 12px;
+  }
+  .stack-tab-x {
     display: grid;
     place-items: center;
-    width: 20px;
-    height: 20px;
-    margin-right: 5px;
+    width: 18px;
+    height: 18px;
+    margin-right: 6px;
+    flex: none;
     border: 0;
-    border-radius: 6px;
+    border-radius: 5px;
     background: none;
     color: var(--muted);
     cursor: pointer;
-    opacity: 0;
+    visibility: hidden;
   }
-  .panel-tab:hover .panel-tab-x,
-  .panel-tab.is-on .panel-tab-x,
-  .panel-tab-x:focus-visible {
-    opacity: 1;
+  .stack-tab:hover .stack-tab-x,
+  .stack-tab.is-on .stack-tab-x,
+  .stack-tab-x:focus-visible {
+    visibility: visible;
   }
-  .panel-tab-x:hover {
-    background: var(--border);
+  .stack-tab-x:hover {
+    background: var(--surface-2);
     color: var(--text);
   }
   /* Where the tab's file lives, each folder a way into the browser, and how
@@ -2118,7 +2191,7 @@
     align-items: center;
     gap: 8px;
     min-height: 38px;
-    padding: 0 12px 6px 16px;
+    padding: 8px 12px 8px 16px;
     border-bottom: 1px solid var(--hair);
   }
   .panel-crumbs {
@@ -2153,6 +2226,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     color: var(--text);
+  }
+  .crumb.ellipsis {
+    color: var(--muted);
   }
   .crumb-sep {
     flex: none;
@@ -2189,13 +2265,13 @@
     flex: 1;
     min-height: 0;
   }
-  /* Drawings and pages are coloured for paper, so they get paper rather than
-     the theme background. */
+  /* Drawings and images sit on the theme background. Pages keep white paper,
+     since one that sets no colours draws black text. */
   .artifact-paper {
     position: relative;
     flex: 1;
     min-height: 0;
-    background: #ffffff;
+    background: var(--page);
   }
   .artifact-svg {
     position: absolute;

@@ -29,17 +29,17 @@ type Offer struct {
 // prompt as it was; a call outside the mode's list is answered, not run.
 var modeTools = map[config.WorkMode][]string{
 	config.WorkPlan: {"read", "grep", "web_search", "ask_user_question",
-		"subagent", "send_message", "write_plan", "exit_plan_mode", "bash"},
+		"subagent", "send_message", "write_plan", "exit_plan_mode", "bash", "processes"},
 	config.WorkExecute: {"read", "grep", "web_search", "write", "edit",
-		"todo_write", "ask_user_question", "subagent", "send_message", "bash"},
+		"todo_write", "ask_user_question", "subagent", "send_message", "bash", "processes"},
 }
 
 // setTools is the fixed list each harness toolset offers. A set outside it is
 // a call that is answered rather than run, whatever the mode.
 var setTools = map[config.Toolset][]string{
 	config.ToolsetFull: {"read", "grep", "web_search", "write", "edit", "todo_write",
-		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash"},
-	config.ToolsetMinimal: {"read", "write", "edit", "bash"},
+		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash", "processes"},
+	config.ToolsetMinimal: {"read", "write", "edit", "bash", "processes"},
 }
 
 // Schemas returns the tool definitions in the order the model sees them,
@@ -312,10 +312,20 @@ func buildSchemas() []llm.Tool {
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"command":   map[string]any{"type": "string", "description": "The command line to run."},
-					"timeout_s": map[string]any{"type": "integer", "description": "Seconds before the command is killed. Default 120.", "minimum": 1},
+					"command":    map[string]any{"type": "string", "description": "The command line to run."},
+					"timeout_s":  map[string]any{"type": "integer", "description": "Seconds before the command is killed. Default 120.", "minimum": 1},
+					"background": map[string]any{"type": "boolean", "description": "Start the command and return at once, with no deadline. Default false."},
 				},
 				"required":             []string{"command"},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llm.FunctionSpec{
+			Name:        "processes",
+			Description: prompts.ToolProcesses(),
+			Parameters: mustSchema(map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
 				"additionalProperties": false,
 			}),
 		}},

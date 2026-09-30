@@ -111,11 +111,12 @@ func (b *Broker) Evaluate(project, tool, command, path string, mode config.Mode)
 	}
 	auto := mode == config.ModeAllowlist
 	switch tool {
-	case "read", "grep", "todo_write", "write_plan", "ask_user_question", "exit_plan_mode", "subagent", "send_message":
+	case "read", "grep", "processes", "todo_write", "write_plan", "ask_user_question", "exit_plan_mode", "subagent", "send_message":
 		// grep reads inside the project and nothing else, on the same guard
-		// read uses. todo_write changes the session's own plan and touches
-		// nothing on the machine, so there is nothing to decide, and neither
-		// does write_plan.
+		// read uses. processes lists the session's own background commands
+		// and cannot start or stop one. todo_write changes the session's own
+		// plan and touches nothing on the machine, so there is nothing to
+		// decide, and neither does write_plan.
 		// ask_user_question and exit_plan_mode put their own card to the user,
 		// and a card in front of either would ask twice. subagent and
 		// send_message touch nothing on the machine; what the agent they reach

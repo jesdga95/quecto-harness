@@ -10,7 +10,7 @@
   import { arriveComposer } from "../firstsend";
 
   const session = $derived(activeSession());
-  const showPanel = $derived(app.panel && app.tabs.length > 0);
+  const showPanel = $derived(app.panel);
   // Hidden rather than removed, so a message being typed survives the expand.
   const hideMain = $derived(showPanel && app.artifactsWide);
   // The chip draws once there is something to draw: a window to measure

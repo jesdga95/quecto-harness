@@ -1408,24 +1408,24 @@ func TestTheToolsDebugView(t *testing.T) {
 	f := newFixture(t)
 	body := decode(t, f.do(t, "GET", "/api/tools", nil))
 	list, _ := body["tools"].([]any)
-	if len(list) != 12 {
-		t.Fatalf("the view lists %d tools, want 12", len(list))
+	if len(list) != 13 {
+		t.Fatalf("the view lists %d tools, want 13", len(list))
 	}
 	sent, _ := body["sent"].(map[string]any)
 	minimal, _ := sent["minimal"].([]any)
-	if len(minimal) != 4 || minimal[0] != "read" || minimal[3] != "bash" {
+	if len(minimal) != 5 || minimal[0] != "read" || minimal[4] != "processes" {
 		t.Errorf("sent minimal = %v", minimal)
 	}
 	prompts, _ := body["prompts"].(map[string]any)
 	p, _ := prompts["minimal"].(string)
-	if !strings.Contains(p, "Tools: read, write, edit, bash.") {
+	if !strings.Contains(p, "Tools: read, write, edit, bash, processes.") {
 		t.Errorf("the minimal prompt does not name its tools: %q", p)
 	}
 	if strings.Contains(p, "grep") {
 		t.Errorf("the minimal prompt names a tool it does not send: %q", p)
 	}
 	p, _ = prompts["full"].(string)
-	if !strings.Contains(p, "Tools: read, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash.") {
+	if !strings.Contains(p, "Tools: read, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash, processes.") {
 		t.Errorf("the full prompt does not name every tool: %q", p)
 	}
 }
@@ -1882,6 +1882,34 @@ func TestSessionFeedReportsEverySession(t *testing.T) {
 		t.Errorf("feed = %v, want the stop to reach it", got)
 	}
 	f.waitIdle(t, busy)
+}
+
+// A process count reaches the watchers and not the session's own stream.
+func TestWatcherFeedCarriesProcessCounts(t *testing.T) {
+	f := newFixture(t)
+	session := f.newSession(t)
+	go func() {
+		for {
+			f.hub.mu.Lock()
+			n := len(f.hub.watchers)
+			f.hub.mu.Unlock()
+			if n > 0 {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		f.hub.Publish(session, agent.Event{Type: "procs", Fields: map[string]any{"running": 2}})
+	}()
+
+	got := f.readStreamUntil(t, "/api/events/sessions", func(e map[string]any) bool {
+		return e["session"] == session && e["running"] == 2
+	})
+	if _, ok := got[0]["running"]; !ok {
+		t.Errorf("opening list = %v, want a running map", got[0])
+	}
+	if len(got) < 2 {
+		t.Errorf("feed = %v, want the process count in it", got)
+	}
 }
 
 func TestSSENeedsASession(t *testing.T) {

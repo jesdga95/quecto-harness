@@ -512,6 +512,44 @@ func (s *Server) getChanges(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// getProcesses lists the commands this session started in the background.
+func (s *Server) getProcesses(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"processes": s.engine.Processes(sess.ID)})
+}
+
+// stopProcess ends one background command. A process that already went is not
+// an error, since the browser may be closing a panel that raced with its exit.
+func (s *Server) stopProcess(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	if err := s.engine.StopProcess(sess.ID, r.PathValue("proc")); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// getProcessOutput is one command's output, cut to the same limit the file
+// panel reads a file at.
+func (s *Server) getProcessOutput(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	pr, out, trunc, found := s.engine.ProcessOutput(sess.ID, r.PathValue("proc"), viewLimit)
+	if !found {
+		writeError(w, http.StatusNotFound, "No such process: check the process list")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"process": pr, "output": out, "truncated": trunc})
+}
+
 // viewLimit is the most text the file panel is sent, and rawLimit the largest
 // image it is served.
 const (

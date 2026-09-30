@@ -13,6 +13,7 @@ import type {
   PermMode,
   PermissionDecision,
   Probe,
+  Process,
   Protocol,
   Project,
   ProjectFile,
@@ -22,6 +23,7 @@ import type {
   SearchProbe,
   ServerMode,
   Session,
+  SessionFeed,
   Steer,
   Todo,
   Toolset,
@@ -42,6 +44,13 @@ import {
 import { inProject } from "../files";
 import type { Plan } from "../plan";
 import { confirm } from "./confirm.svelte";
+
+// The panel holds the same window of a command's output the harness sends.
+const TAIL_LINES = 200;
+
+// The dock's four sections. They are always there; what the conversation opens
+// joins the one it belongs to.
+export type Section = "files" | "changes" | "agents" | "processes";
 
 // Every screen reads this one object. It holds what the server would hold plus
 // the little the browser owns, like which panel is open and whether the last
@@ -76,8 +85,10 @@ export const app = $state({
   // The plan plan mode is writing, or the one last approved.
   draft: null as Plan | null,
   changes: { files: [], added: 0, removed: 0 } as Changes,
-  // Whether the tabbed panel beside the transcript is open.
+  // Whether the dock beside the transcript is open.
   panel: false,
+  // The section the dock is showing.
+  section: "files" as Section,
   // The subagent runs this session launched, newest first, with what each is
   // doing now. The chip counts them and the panel lists them.
   runs: [] as Child[],
@@ -86,6 +97,13 @@ export const app = $state({
   // no stream.
   runId: "",
   runItems: [] as TranscriptItem[],
+  // The commands this session started in the background, oldest first, with the
+  // tail the harness last sent for each.
+  procs: [] as Process[],
+  // The process the panel has open, and the whole output it asked for.
+  procId: "",
+  procOutput: {} as Record<string, { output: string; truncated: boolean }>,
+  procErrors: {} as Record<string, string>,
   // The artifact the panel shows. Pinned means the reader chose it, and the
   // panel stops moving to each new one. Dismissed means the panel was closed
   // during this turn, so a new artifact does not open it again. Wide hides
@@ -109,6 +127,9 @@ export const app = $state({
   // What every session that is not idle is doing, open or not, from the
   // harness's feed of session statuses.
   states: {} as Record<string, TurnStatus>,
+  // How many background commands each session still has running, from the same
+  // feed. Only sessions with at least one appear.
+  running: {} as Record<string, number>,
   // The model has been asked and nothing has come back yet. True from the
   // moment a turn starts, again after each tool result while the model reads
   // it, and for the whole of a compaction, which are the stretches that draw
@@ -209,7 +230,7 @@ let unwatch: (() => void) | null = null;
 export async function init(): Promise<void> {
   if (!(await refreshState())) return;
   await loadSessions();
-  unwatch ??= api.watchSessions(onStates);
+  unwatch ??= api.watchSessions(onFeed);
   app.ready = true;
   // The first project is named so the empty screen has one, and its most
   // recent conversation is opened if it has one.
@@ -217,13 +238,21 @@ export async function init(): Promise<void> {
   if (first) await selectProject(first.path);
 }
 
-function onStates(states: Record<string, TurnStatus>, whole: boolean): void {
-  const next = whole ? {} : { ...app.states };
-  for (const [id, status] of Object.entries(states)) {
-    if (status === "idle") delete next[id];
-    else next[id] = status;
+function onFeed(feed: Record<string, SessionFeed>, whole: boolean): void {
+  const states = whole ? {} : { ...app.states };
+  const running = whole ? {} : { ...app.running };
+  for (const [id, item] of Object.entries(feed)) {
+    if (item.state !== undefined) {
+      if (item.state === "idle") delete states[id];
+      else states[id] = item.state;
+    }
+    if (item.running !== undefined) {
+      if (item.running === 0) delete running[id];
+      else running[id] = item.running;
+    }
   }
-  app.states = next;
+  app.states = states;
+  app.running = running;
 }
 
 /** Whether a session is held on a person: a permission card, a question or a
@@ -240,6 +269,13 @@ export function needsYou(id: string): boolean {
 export function isWorking(id: string): boolean {
   if (id === app.sessionId) return app.status !== "idle";
   return (app.states[id] ?? "idle") !== "idle";
+}
+
+/** Whether a session has a command running in the background. The open one
+    reads its own process list, the rest the feed. */
+export function hasBackground(id: string): boolean {
+  if (id === app.sessionId) return app.procs.some((p) => p.status === "running");
+  return (app.running[id] ?? 0) > 0;
 }
 
 async function loadSessions(): Promise<void> {
@@ -291,6 +327,10 @@ function clearSession(): void {
   app.status = "idle";
   app.awaitingModel = false;
   app.changes = { files: [], added: 0, removed: 0 };
+  app.procs = [];
+  app.procId = "";
+  app.procOutput = {};
+  app.procErrors = {};
   closePanel();
   app.runs = [];
   resetArtifacts();
@@ -334,18 +374,23 @@ export async function selectSession(id: string): Promise<void> {
   app.status = t.status;
   app.awaitingModel = WAITING.has(t.status);
   app.changes = { files: [], added: 0, removed: 0 };
+  app.procs = [];
+  app.procId = "";
+  app.procOutput = {};
+  app.procErrors = {};
   // A reloaded page reads which subagents are still working from the snapshot,
   // since their state only reaches the launcher's stream when it changes.
   // The changes tab stays open across sessions; the others were this one's.
   closeRuns();
-  const keepChanges = app.panel && app.artifactId === CHANGES_ID;
+  const keepChanges = app.panel && app.section === "changes";
   app.runs = t.session.children;
   resetArtifacts();
-  if (keepChanges) showTab(CHANGES_ID);
+  if (keepChanges) showSection("changes");
   else app.panel = false;
   markAnnounced();
   unsubscribe = api.events(id, onEvent);
   void loadChanges();
+  void loadProcesses();
 }
 
 /** Clears the screen for a new conversation. The harness is told about it when
@@ -843,20 +888,27 @@ export async function loadChanges(): Promise<void> {
   }
 }
 
-// The panel's fixed tabs. Everything else in the tab list is an artifact id.
-export const BROWSE_ID = "panel:files";
-export const CHANGES_ID = "panel:changes";
-export const RUNS_ID = "panel:runs";
+/** Refetches the process list. It fails quietly: a command still running
+    reports its tail on the stream, so the only thing a stale list is missing is
+    one that ended while the page was away. */
+export async function loadProcesses(): Promise<void> {
+  const id = app.sessionId;
+  if (!id) return;
+  try {
+    const procs = await api.listProcesses(id);
+    if (app.sessionId === id) app.procs = procs;
+  } catch {
+    // Keep what was there.
+  }
+}
 
 function addTab(id: string): void {
   if (!app.tabs.includes(id)) app.tabs.push(id);
 }
 
-/** Shows one tab, opening the panel on it. */
-export function showTab(id: string): void {
-  addTab(id);
-  app.artifactId = id;
-  app.artifactPinned = true;
+/** Shows one section, opening the dock on it. */
+export function showSection(section: Section): void {
+  app.section = section;
   app.artifactsDismissed = false;
   app.panel = true;
 }
@@ -870,37 +922,63 @@ export function closePanel(): void {
   closeRuns();
 }
 
-/** The header's panel button. An empty panel opens on what is newest: an
-    artifact, else the changes, else the agents, else the files. */
+/** The header's panel button. An empty dock opens on what is newest: an
+    artifact, else the changes, else the agents, else a running command, else
+    the folder. */
 export function togglePanel(): void {
   if (app.panel) {
     closePanel();
     return;
   }
-  if (app.tabs.length === 0) {
-    const last = artifactList.at(-1);
-    const first = last
-      ? last.id
-      : app.changes.files.length > 0
-        ? CHANGES_ID
-        : app.runs.length > 0
-          ? RUNS_ID
-          : BROWSE_ID;
-    showTab(first);
-    if (first === BROWSE_ID) void browse("");
+  const last = artifactList.at(-1);
+  if (last) {
+    showArtifact(last.id);
     return;
   }
-  if (!app.tabs.includes(app.artifactId)) app.artifactId = app.tabs[0]!;
-  app.artifactsDismissed = false;
-  app.panel = true;
+  const section: Section =
+    app.changes.files.length > 0
+      ? "changes"
+      : app.runs.length > 0
+        ? "agents"
+        : app.procs.some((p) => p.status === "running")
+          ? "processes"
+          : "files";
+  showSection(section);
+  if (section === "files") void browse("");
 }
 
 export function showChanges(): void {
-  showTab(CHANGES_ID);
+  showSection("changes");
 }
 
 export function showRuns(): void {
-  showTab(RUNS_ID);
+  showSection("agents");
+}
+
+/** Opens the Processes section, on one command if an id is given. */
+export function showProcesses(id = ""): void {
+  showSection("processes");
+  if (id) app.procId = id;
+}
+
+/** Ends one background command. A command that already went is not an error. */
+export async function stopProcess(id: string): Promise<void> {
+  if (!app.sessionId) return;
+  await guard(() => api.stopProcess(app.sessionId, id));
+}
+
+/** Reads a command's whole output as it stands now and keeps it for the tab.
+    Each call fetches again, since a running command keeps printing. */
+export async function loadProcessOutput(id: string): Promise<void> {
+  const session = app.sessionId;
+  if (!session) return;
+  delete app.procErrors[id];
+  try {
+    const out = await api.processOutput(session, id);
+    if (app.sessionId === session) app.procOutput[id] = out;
+  } catch (err) {
+    if (app.sessionId === session) app.procErrors[id] = err instanceof Error ? err.message : String(err);
+  }
 }
 
 /** Lets go of the agent the panel was following. The tab stays, and follows
@@ -912,32 +990,21 @@ function closeRuns(): void {
   app.runItems = [];
 }
 
-/** Takes a tab out of the panel. The one beside it takes its place, and the
-    panel closes with its last tab. */
+/** Takes an artifact out of the Files stack. The one beside it takes its place. */
 export function closeTab(id: string): void {
   const at = app.tabs.indexOf(id);
   if (at === -1) return;
   app.tabs.splice(at, 1);
-  if (id === BROWSE_ID) {
-    app.browseDir = null;
-    app.browseError = "";
-  }
-  if (id === RUNS_ID) closeRuns();
   if (app.artifactId !== id) return;
   const next = app.tabs[at] ?? app.tabs[at - 1];
-  if (next) {
-    app.artifactId = next;
-    app.artifactPinned = true;
-  } else {
-    app.artifactId = "";
-    app.artifactPinned = false;
-    closePanel();
-  }
+  app.artifactId = next ?? "";
+  app.artifactPinned = next !== undefined;
 }
 
-/** Opens the file browser tab on a folder, the project root by default. */
+/** Shows the project folder in the Files section. */
 export async function browse(path = app.browseDir?.path ?? ""): Promise<void> {
-  showTab(BROWSE_ID);
+  showSection("files");
+  app.artifactId = "";
   const id = app.sessionId;
   if (!id) return;
   try {
@@ -950,10 +1017,11 @@ export async function browse(path = app.browseDir?.path ?? ""): Promise<void> {
   }
 }
 
-/** Shows one artifact in the panel. Choosing the newest goes back to following
-    whatever comes next. */
+/** Shows one artifact in the Files section. Choosing the newest goes back to
+    following whatever comes next. */
 export function showArtifact(id: string): void {
   addTab(id);
+  app.section = "files";
   app.artifactId = id;
   app.artifactPinned = artifactList.at(-1)?.id !== id;
   app.artifactsDismissed = false;
@@ -1001,6 +1069,7 @@ function resetArtifacts(): void {
   app.fileErrors = {};
   app.openFiles = [];
   app.tabs = [];
+  app.section = "files";
   app.browseDir = null;
   app.browseError = "";
   app.artifactId = "";
@@ -1018,6 +1087,7 @@ function announceArtifacts(): void {
     announced.add(artifact.id);
     if (!app.artifactPinned) {
       addTab(artifact.id);
+      app.section = "files";
       app.artifactId = artifact.id;
     }
     if (!app.artifactsDismissed && !app.panel) app.panel = true;
@@ -1168,6 +1238,31 @@ function onEvent(event: HarnessEvent): void {
   // again on its status event.
   if (event.type === "delta" || event.type === "reasoning" || event.type === "tool_call") {
     app.awaitingModel = false;
+  }
+
+  // A background command's tail arrives in chunks. The transcript only ever
+  // says that the command started, so the panel keeps the running text itself.
+  if (event.type === "proc_start") {
+    if (!app.procs.some((p) => p.id === event.proc.id)) app.procs.push(event.proc);
+    return;
+  }
+  if (event.type === "proc_output") {
+    const proc = app.procs.find((p) => p.id === event.id);
+    if (proc) {
+      proc.tail = [...proc.tail, ...event.lines].slice(-TAIL_LINES);
+      proc.bytes = event.bytes;
+    }
+    return;
+  }
+  if (event.type === "proc_end") {
+    const proc = app.procs.find((p) => p.id === event.id);
+    if (proc) {
+      proc.status = event.status;
+      proc.exitCode = event.exitCode;
+      proc.bytes = event.bytes;
+      proc.endedAt = event.endedAt;
+    }
+    return;
   }
 
   applyEvent(app.items, event);

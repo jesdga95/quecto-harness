@@ -59,6 +59,7 @@ type Engine struct {
 	perms    *perms.Broker
 	asks     *asker
 	hub      Publisher
+	procs    *Registry
 
 	ctx context.Context
 	os  string
@@ -73,12 +74,25 @@ type Engine struct {
 
 func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files *store.Files,
 	backends Backends, searches Searches, pb *perms.Broker, hub Publisher) *Engine {
-	return &Engine{
+	e := &Engine{
 		cfg: cfg, store: st, files: files, backends: backends, searches: searches,
 		perms: pb, asks: newAsker(), hub: hub,
 		ctx: ctx, os: runtime.GOOS, live: map[string]*Session{},
 		retry: []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second},
 	}
+	e.procs = NewRegistry(
+		func(session string, event Event) { e.publish(session, event) },
+		func(session string, text string) {
+			s, err := e.Get(session)
+			if err != nil {
+				return
+			}
+			if _, err := e.deliverFrom(s, sender{Name: "Background process"}, text, nil); err != nil {
+				e.publish(session, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
+			}
+		},
+	)
+	return e
 }
 
 // usable reports what stops an agent answering, so a message is refused where
@@ -674,6 +688,10 @@ func (e *Engine) Stop(id string) (State, error) {
 	if err != nil {
 		return StateIdle, err
 	}
+	// A background command outlives the turn that started it, so a stop ends
+	// them whether or not a turn is running. It goes first, so a turn that an
+	// exit notice started just before is read below and stopped with the rest.
+	e.StopProcesses(id, true)
 	s.mu.Lock()
 	cancel := s.cancel
 	state := s.state
@@ -847,6 +865,7 @@ func (e *Engine) Delete(id string) error {
 		return ErrBusy
 	}
 	s.forget()
+	e.StopProcesses(id, true)
 	doc, _, _, _ := s.Snapshot()
 	if err := e.store.Delete(id); err != nil {
 		return err
@@ -882,6 +901,9 @@ func (e *Engine) Wait(d time.Duration) {
 	select {
 	case <-done:
 	case <-time.After(d):
+	}
+	for _, s := range e.liveSessions() {
+		e.procs.StopAll(s.ID, true)
 	}
 }
 
@@ -1803,8 +1825,12 @@ func (e *Engine) publishDecided(s *Session, r *store.PermissionRecord) {
 func (e *Engine) publishStarted(s *Session, runner *tools.Runner, call llm.ToolCall, index int) {
 	fields := map[string]any{"index": index, "id": call.ID, "name": call.Function.Name}
 	if call.Function.Name == "bash" {
-		timeout := runner.ShellTimeout(json.RawMessage(call.Function.Arguments))
-		fields["timeout_s"] = int(timeout / time.Second)
+		raw := json.RawMessage(call.Function.Arguments)
+		if runner.ShellBackground(raw) {
+			fields["background"] = true
+		} else {
+			fields["timeout_s"] = int(runner.ShellTimeout(raw) / time.Second)
+		}
 	}
 	e.publish(s.ID, ev("tool_start", fields))
 }
@@ -1907,7 +1933,9 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 		case "edit":
 			res, err = runner.ReplaceInFile(ctx, args)
 		case "bash":
-			res, err = runner.RunShell(ctx, args)
+			res, err = e.runBash(ctx, s, runner, call)
+		case "processes":
+			res, err = e.listProcesses(s)
 		case "todo_write":
 			res, err = e.writeTodos(s, args)
 		case "ask_user_question":
@@ -1921,7 +1949,7 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 		case "exit_plan_mode":
 			res, err = e.submitPlan(ctx, s, call)
 		default:
-			err = fmt.Errorf("no tool named %s: use read, grep, web_search, write, edit, bash, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read, grep, web_search, write, edit, bash, processes, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
 		}
 		if err != nil {
 			// The flag is what lets the row say the call failed, since only
@@ -1932,6 +1960,60 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 		}
 	}
 	return o
+}
+
+// runBash runs a shell call. A call marked background starts the command and
+// answers with the process the browser can watch, since the output is not in
+// yet.
+func (e *Engine) runBash(ctx context.Context, s *Session, runner *tools.Runner, call llm.ToolCall) (tools.Result, error) {
+	raw := json.RawMessage(call.Function.Arguments)
+	var args tools.RunShellArgs
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return tools.Result{}, fmt.Errorf("the arguments are not valid JSON: %w", err)
+	}
+	if !args.Background {
+		return runner.RunShell(ctx, raw)
+	}
+	pr, err := e.procs.Start(e.ctx, runner, s.ID, call.ID, args)
+	if err != nil {
+		return tools.Result{}, err
+	}
+	out := fmt.Sprintf("Running in the background as %s (pid %d). The tail is in the Processes panel.", pr.ID, pr.PID)
+	if pr.Spill != "" {
+		out += " The whole output is at " + pr.Spill + "."
+	}
+	return tools.Result{
+		Output: out,
+		Meta:   map[string]any{"command": args.Command, "process": pr.ID, "background": true, "spill": pr.Spill},
+	}, nil
+}
+
+// listProcesses reports the background commands of a session and the last
+// lines of each.
+func (e *Engine) listProcesses(s *Session) (tools.Result, error) {
+	procs := e.procs.List(s.ID)
+	if len(procs) == 0 {
+		return tools.Result{Output: "No commands are running in the background."}, nil
+	}
+	var b strings.Builder
+	for _, pr := range procs {
+		b.WriteString(fmt.Sprintf("%s: %s (pid %d) %s", pr.ID, pr.Command, pr.PID, pr.Status))
+		if pr.Status == "running" {
+			b.WriteString(fmt.Sprintf(", running for %s, %d bytes",
+				time.Since(time.UnixMilli(pr.StartedAt)).Truncate(time.Second), pr.Bytes))
+		} else if pr.ExitCode != nil {
+			b.WriteString(fmt.Sprintf(", exit %d, %d bytes", *pr.ExitCode, pr.Bytes))
+		}
+		b.WriteString("\n")
+		tail := pr.Tail
+		if len(tail) > 20 {
+			tail = tail[len(tail)-20:]
+		}
+		for _, line := range tail {
+			b.WriteString("  " + line + "\n")
+		}
+	}
+	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}, nil
 }
 
 // appendTool appends the tool entry that pairs a call with its result.

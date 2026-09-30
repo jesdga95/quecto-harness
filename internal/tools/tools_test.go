@@ -304,6 +304,110 @@ func TestRunShellStopped(t *testing.T) {
 	}
 }
 
+// A background command carries no deadline, reports its lines as they arrive,
+// and keeps its whole output on disk.
+func TestSpawnShellRunsOn(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	r.SpillTo(filepath.Join(base, "spill"))
+	var lines []string
+	p, err := r.SpawnShell(context.Background(), RunShellArgs{Command: "echo a; sleep 6; echo b", Background: true},
+		func(line string) { lines = append(lines, line) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.PID() == 0 {
+		t.Error("the process has no pid")
+	}
+	code, timedOut, _, _ := p.Wait()
+	if code != 0 || timedOut {
+		t.Errorf("exit code %d, timed out %v, want 0 and no deadline", code, timedOut)
+	}
+	if strings.Join(lines, "\n") != "a\nb" {
+		t.Errorf("lines = %v, want a then b", lines)
+	}
+	if p.SpillPath() == "" {
+		t.Error("a background command keeps its output file")
+	}
+	data, err := os.ReadFile(p.SpillPath())
+	if err != nil || !strings.Contains(string(data), "b") {
+		t.Errorf("spill file %q: %v", p.SpillPath(), err)
+	}
+}
+
+// A line longer than any buffer is still read to the end: the command
+// finishes, every byte is counted and saved, and onLine gets it in pieces.
+func TestShellDrainsALineOverOneMegabyte(t *testing.T) {
+	const size = 3000000
+	cmd := fmt.Sprintf("head -c %d /dev/zero | tr '\\0' a", size)
+	base := t.TempDir()
+	r := testRoot(t, base)
+	r.SpillTo(filepath.Join(base, "spill"))
+
+	res, err := r.RunShell(context.Background(), json.RawMessage(`{"command":`+mustJSON(cmd)+`,"timeout_s":20}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode == nil || *res.ExitCode != 0 {
+		t.Errorf("exit code = %v, want 0: %q", res.ExitCode, tail(res.Output, 200))
+	}
+	if res.Bytes != size {
+		t.Errorf("bytes = %d, want %d", res.Bytes, size)
+	}
+
+	got := 0
+	p, err := r.SpawnShell(context.Background(), RunShellArgs{Command: cmd, Background: true},
+		func(line string) {
+			if len(line) > maxLine {
+				t.Errorf("a piece of %d bytes, want at most %d", len(line), maxLine)
+			}
+			got += len(line)
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int, 1)
+	go func() {
+		code, _, _, _ := p.Wait()
+		done <- code
+	}()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("exit code = %d, want 0", code)
+		}
+	case <-time.After(20 * time.Second):
+		_ = p.Stop()
+		t.Fatal("the background command never finished")
+	}
+	if p.Total() != size || got != size {
+		t.Errorf("total = %d, onLine saw %d, want %d", p.Total(), got, size)
+	}
+	if info, err := os.Stat(p.SpillPath()); err != nil || info.Size() != size {
+		t.Errorf("spill file = %v, %v, want %d bytes", info, err, size)
+	}
+}
+
+// Stop ends a background command's process group.
+func TestSpawnShellStop(t *testing.T) {
+	r := testRoot(t, t.TempDir())
+	p, err := r.SpawnShell(context.Background(), RunShellArgs{Command: "sleep 30", Background: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	code, _, _, _ := p.Wait()
+	if elapsed := time.Since(start); elapsed > 8*time.Second {
+		t.Errorf("took %v, the stop did not end the command", elapsed)
+	}
+	if code >= 0 {
+		t.Errorf("exit code %d, a stopped command reports a signal", code)
+	}
+}
+
 // The clamp is what the command runs under and what the turn publishes before
 // it starts, so the two cannot disagree about how long a call has.
 func TestRunShellTimeoutIsClamped(t *testing.T) {
@@ -397,7 +501,7 @@ func TestLooksBinary(t *testing.T) {
 func TestSchemasMatchTheDescriptions(t *testing.T) {
 	s := Schemas(Offer{Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true})
 	names := []string{"read", "grep", "web_search", "write", "edit", "todo_write",
-		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash"}
+		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash", "processes"}
 	if len(s) != len(names) {
 		t.Fatalf("got %d schemas, want %d", len(s), len(names))
 	}
@@ -1063,7 +1167,7 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 		}
 		return out
 	}
-	base := []string{"read", "grep", "write", "edit", "todo_write", "bash"}
+	base := []string{"read", "grep", "write", "edit", "todo_write", "bash", "processes"}
 	optional := map[string]Offer{
 		"ask_user_question": {Mode: config.WorkExecute, Ask: true},
 		"subagent":          {Mode: config.WorkExecute, Agents: true},
@@ -1153,7 +1257,7 @@ func TestTheToolsetWithholdsItsTools(t *testing.T) {
 	}
 
 	minimal := Offer{Set: config.ToolsetMinimal, Mode: config.WorkExecute}
-	want := []string{"read", "write", "edit", "bash"}
+	want := []string{"read", "write", "edit", "bash", "processes"}
 	if !slices.Equal(names(minimal), want) {
 		t.Errorf("minimal sent %v, want %v", names(minimal), want)
 	}

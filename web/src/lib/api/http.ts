@@ -16,6 +16,7 @@ import type {
   PermMode,
   PermissionDecision,
   Probe,
+  Process,
   Project,
   Sent,
   Protocol,
@@ -24,7 +25,8 @@ import type {
   SearchProbe,
   ServerMode,
   Session,
-  SessionStatesHandler,
+  SessionFeed,
+  SessionFeedHandler,
   State,
   Steer,
   Todo,
@@ -264,6 +266,15 @@ interface WireEvent {
   exit_code?: number | null;
   timeout_s?: number | null;
   truncated?: boolean;
+  pid?: number;
+  status?: string;
+  call?: string;
+  tail?: string[] | null;
+  lines?: string[] | null;
+  bytes?: number;
+  started_at?: number;
+  ended_at?: number;
+  spill?: string;
   decision?: string;
   reason?: string;
   ask?: string;
@@ -821,6 +832,25 @@ function toChanges(wire: WireChanges): Changes {
   return { files, added: wire.added ?? 0, removed: wire.removed ?? 0 };
 }
 
+/** One background command, as the process list and the stream both send it. */
+function toProcess(wire: WireEvent): Process {
+  const status = wire.status;
+  return {
+    id: wire.id ?? "",
+    call: wire.call ?? "",
+    command: wire.command ?? "",
+    pid: wire.pid ?? 0,
+    status: status === "done" || status === "stopped" ? status : "running",
+    startedAt: wire.started_at ?? 0,
+    endedAt: wire.ended_at,
+    exitCode: wire.exit_code ?? null,
+    bytes: wire.bytes ?? 0,
+    tail: wire.tail ?? [],
+    tailCut: wire.truncated ?? false,
+    spill: wire.spill ?? "",
+  };
+}
+
 function toAttached(wire: WireAttachment[] | undefined): Attached[] {
   return (wire ?? []).map((a) => ({
     path: a.path ?? "",
@@ -989,6 +1019,9 @@ const EVENT_NAMES = [
   "message",
   "child",
   "changed",
+  "proc_start",
+  "proc_output",
+  "proc_end",
   "done",
   "resync",
 ];
@@ -1138,6 +1171,31 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           callId: ev.call_id,
           agent: ev.agent,
           title: ev.title,
+        },
+      ];
+
+    case "proc_start":
+      return [{ type: "proc_start", proc: toProcess(ev) }];
+
+    case "proc_output":
+      return [
+        {
+          type: "proc_output",
+          id: ev.id ?? "",
+          lines: ev.lines ?? [],
+          bytes: ev.bytes ?? 0,
+        },
+      ];
+
+    case "proc_end":
+      return [
+        {
+          type: "proc_end",
+          id: ev.id ?? "",
+          status: ev.status === "stopped" ? "stopped" : "done",
+          exitCode: ev.exit_code ?? null,
+          bytes: ev.bytes ?? 0,
+          endedAt: ev.ended_at ?? 0,
         },
       ];
 
@@ -1309,6 +1367,27 @@ class HttpApi implements HarnessApi {
   async getChanges(id: string): Promise<Changes> {
     const wire = await call<WireChanges>(`/sessions/${encodeURIComponent(id)}/changes`);
     return toChanges(wire);
+  }
+
+  async listProcesses(id: string): Promise<Process[]> {
+    const wire = await call<{ processes?: WireEvent[] | null }>(
+      `/sessions/${encodeURIComponent(id)}/processes`,
+    );
+    return (wire.processes ?? []).map(toProcess);
+  }
+
+  async stopProcess(id: string, proc: string): Promise<void> {
+    await call<unknown>(
+      `/sessions/${encodeURIComponent(id)}/processes/${encodeURIComponent(proc)}/stop`,
+      "POST",
+    );
+  }
+
+  async processOutput(id: string, proc: string): Promise<{ output: string; truncated: boolean }> {
+    const wire = await call<{ output?: string; truncated?: boolean }>(
+      `/sessions/${encodeURIComponent(id)}/processes/${encodeURIComponent(proc)}/output`,
+    );
+    return { output: wire.output ?? "", truncated: wire.truncated ?? false };
   }
 
   async readFile(id: string, path: string): Promise<ProjectFile> {
@@ -1598,23 +1677,35 @@ class HttpApi implements HarnessApi {
     };
   }
 
-  watchSessions(onStates: SessionStatesHandler): () => void {
+  watchSessions(onFeed: SessionFeedHandler): () => void {
     const es = new EventSource(`${BASE}/events/sessions`);
     // Each opening, a reconnect included, starts with the whole list.
     es.addEventListener("states", (ev) => {
       try {
-        const wire = JSON.parse((ev as MessageEvent<string>).data) as { states?: Record<string, string> };
-        const states: Record<string, TurnStatus> = {};
-        for (const [id, state] of Object.entries(wire.states ?? {})) states[id] = toStatus(state);
-        onStates(states, true);
+        const wire = JSON.parse((ev as MessageEvent<string>).data) as {
+          states?: Record<string, string>;
+          running?: Record<string, number>;
+        };
+        const feed: Record<string, SessionFeed> = {};
+        for (const [id, state] of Object.entries(wire.states ?? {})) feed[id] = { state: toStatus(state) };
+        for (const [id, running] of Object.entries(wire.running ?? {})) feed[id] = { ...feed[id], running };
+        onFeed(feed, true);
       } catch {
         // A list that cannot be read leaves the last one standing.
       }
     });
     es.addEventListener("state", (ev) => {
       try {
-        const wire = JSON.parse((ev as MessageEvent<string>).data) as { session?: string; state?: string };
-        if (wire.session) onStates({ [wire.session]: toStatus(wire.state) }, false);
+        const wire = JSON.parse((ev as MessageEvent<string>).data) as {
+          session?: string;
+          state?: string;
+          running?: number;
+        };
+        if (!wire.session) return;
+        const item: SessionFeed = {};
+        if (wire.state !== undefined) item.state = toStatus(wire.state);
+        if (wire.running !== undefined) item.running = wire.running;
+        onFeed({ [wire.session]: item }, false);
       } catch {
         // One change that cannot be read is dropped.
       }
