@@ -156,7 +156,7 @@
           </span>
         </div>
         <p class="ctxv-sub">
-          {#if last?.model}{last.model}{#if last.agent} on {last.agent}{/if}.{/if}
+          {#if last?.model}{last.model}{last.agent ? ` on ${last.agent}` : ""}.{/if}
           {#if threshold > 0}
             Compacts at {Math.round(compactAt * 100)}%{#if threshold > use.fill}, {k(threshold - use.fill)} tokens from now{/if}.
           {/if}
