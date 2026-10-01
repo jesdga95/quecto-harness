@@ -98,10 +98,9 @@ const MOCK_TOOL_SPECS: ToolSpec[] = [
   },
   {
     name: "ask_user_question",
-    description: "Ask the user a question and wait for the answer.",
+    description: "Ask the user one or more questions and wait for the answers.",
     params: [
-      { name: "question", type: "string", description: "What is being asked.", required: true },
-      { name: "options", type: "array", description: "The answers to choose from.", required: true },
+      { name: "questions", type: "array", description: "One question, or several together.", required: true },
     ],
   },
   {
@@ -298,9 +297,9 @@ interface ScriptedTurn {
   truncated: boolean;
   reply: string;
   denied: string;
-  /** A choice put to the user before the tool runs, on the turns that have
-      one, so the card is on screen with no harness behind it. */
-  question?: Asked;
+  /** Choices put to the user before the tool runs, on the turns that have
+      them, so the card is on screen with no harness behind it. */
+  questions?: Asked[];
   /** Files written after the tool, each a step of its own, so the file links
       and the panel have something to open. */
   writes?: { path: string; content: string }[];
@@ -473,14 +472,33 @@ const SCRIPT: ScriptedTurn[] = [
       "The tests are the only thing that says whether the parser still works " +
       "after the change. How much to run is the user's call, so ask.",
     preface: "One thing before I run them.\n\n",
-    question: {
-      question: "How much of the suite should I run?",
-      options: [
-        { label: "The package I touched", description: "Seconds, and covers the change" },
-        { label: "The whole tree", description: "A minute, and catches what the change reached" },
-      ],
-      multi: false,
-    },
+    questions: [
+      {
+        question: "How much of the suite should I run?",
+        options: [
+          { label: "The package I touched", description: "Seconds, and covers the change" },
+          { label: "The whole tree", description: "A minute, and catches what the change reached" },
+        ],
+        multi: false,
+      },
+      {
+        question: "Which checks should run with it?",
+        options: [
+          { label: "Race detector", description: "Slower, and finds unsynchronised access" },
+          { label: "Vet", description: "Catches suspicious constructs" },
+          { label: "Coverage", description: "Reports which lines the tests reach" },
+        ],
+        multi: true,
+      },
+      {
+        question: "What should I do if a test fails?",
+        options: [
+          { label: "Fix it", description: "Change the code until it passes" },
+          { label: "Report it", description: "Stop and say what failed" },
+        ],
+        multi: false,
+      },
+    ],
     tool: "bash",
     args: { command: "go test ./internal/llm", timeout_s: 120 },
     command: "go test ./internal/llm",
@@ -1193,27 +1211,35 @@ export class MockApi implements HarnessApi {
       this.emit(session, { type: "status", status: "streaming" });
       await this.stream(session, t, script.preface, turn);
 
-      if (script.question) {
+      if (script.questions) {
+        const qs = script.questions;
         const askCall = nextId("t");
-        const askId = nextId("ask");
         this.send(session, t, {
           type: "tool_call",
           id: askCall,
           name: "ask_user_question",
           args: {
-            question: script.question.question,
-            options: script.question.options,
-            multi_select: script.question.multi,
+            questions: qs.map((q) => ({
+              question: q.question,
+              options: q.options,
+              multi_select: q.multi,
+            })),
           },
         });
         this.emit(session, { type: "status", status: "waiting" });
-        this.send(session, t, { type: "question", id: askCall, ask: askId });
-        const chosen = await this.askQuestion(askId, session, turn);
+        const lines: string[] = [];
+        for (const [index, q] of qs.entries()) {
+          const askId = nextId("ask");
+          this.send(session, t, { type: "question", id: askCall, ask: askId, index });
+          const chosen = await this.askQuestion(askId, session, turn);
+          const text = answerText(q.options, chosen.options, chosen.text);
+          lines.push(qs.length === 1 ? text : `${index + 1}. ${q.question} ${text}`);
+        }
         this.emit(session, { type: "status", status: "running" });
         this.send(session, t, {
           type: "tool_output",
           id: askCall,
-          output: answerText(script.question.options, chosen.options, chosen.text),
+          output: lines.join("\n"),
           exit_code: null,
           truncated: false,
         });
@@ -2009,10 +2035,14 @@ function seededEvents(): HarnessEvent[] {
       id: `${call}_ask`,
       name: "ask_user_question",
       args: {
-        question: "Which tab should keep the channel when the last one closes?",
-        options: [
-          { label: "Close it", description: "The next tab opens a fresh one" },
-          { label: "Keep it", description: "Events buffer until a tab comes back" },
+        questions: [
+          {
+            question: "Which tab should keep the channel when the last one closes?",
+            options: [
+              { label: "Close it", description: "The next tab opens a fresh one" },
+              { label: "Keep it", description: "Events buffer until a tab comes back" },
+            ],
+          },
         ],
       },
     },

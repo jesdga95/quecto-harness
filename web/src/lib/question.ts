@@ -12,20 +12,28 @@ export interface Asked {
   multi: boolean;
 }
 
-export function asked(args: Record<string, unknown>): Asked {
-  const raw = Array.isArray(args.options) ? args.options : [];
-  const options = raw
-    .filter((o): o is Record<string, unknown> => typeof o === "object" && o !== null)
-    .map<Option>((o) => ({
-      label: typeof o.label === "string" ? o.label : "",
-      description: typeof o.description === "string" ? o.description : "",
-    }))
-    .filter((o) => o.label !== "");
-  return {
-    question: typeof args.question === "string" ? args.question : "",
-    options,
-    multi: args.multi_select === true,
-  };
+/** The call's questions, in order. A call asks one, or several together that
+    the card answers as a set. */
+export function asked(args: Record<string, unknown>): Asked[] {
+  const raw = Array.isArray(args.questions) ? args.questions : [];
+  return raw
+    .filter((q): q is Record<string, unknown> => typeof q === "object" && q !== null)
+    .map((q): Asked => {
+      const opts = Array.isArray(q.options) ? q.options : [];
+      const options = opts
+        .filter((o): o is Record<string, unknown> => typeof o === "object" && o !== null)
+        .map((o): Option => ({
+          label: typeof o.label === "string" ? o.label : "",
+          description: typeof o.description === "string" ? o.description : "",
+        }))
+        .filter((o) => o.label !== "");
+      return {
+        question: typeof q.question === "string" ? q.question : "",
+        options,
+        multi: q.multi_select === true,
+      };
+    })
+    .filter((q) => q.question !== "");
 }
 
 /** The answer as the harness hands it to the model: the labels that were

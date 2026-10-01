@@ -100,8 +100,10 @@ export function stepDesc(item: TranscriptItem, live: boolean, planTitle: string)
     case "grep":
     case "web_search":
       return searchQuery(item);
-    case "ask_user_question":
-      return asked(item.args).question;
+    case "ask_user_question": {
+      const qs = asked(item.args);
+      return qs.length > 1 ? `${qs.length} questions` : (qs[0]?.question ?? "");
+    }
     case "exit_plan_mode":
       return planTitle;
     case "write_plan":

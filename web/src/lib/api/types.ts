@@ -284,8 +284,9 @@ export type HarnessEvent =
   /** The card was answered, or a stop answered it, and every tab closes it. */
   | { type: "permission_done"; id: string; outcome: string }
   /** A tool call is waiting on an answer. The row the call drew is the card,
-      so this carries the id to answer rather than the question again. */
-  | { type: "question"; id: string; ask: string }
+      so this carries the id to answer rather than the question again. index is
+      the question's place in a call that asked several. */
+  | { type: "question"; id: string; ask: string; index: number }
   | {
       type: "usage";
       prompt_tokens: number;
@@ -392,6 +393,9 @@ export type TranscriptItem =
       /** Set on an ask_user_question call that is still waiting, and is the id its
           answer is posted to. */
       askId?: string;
+      /** The question a waiting ask_user_question call is on, in a call that
+          asked several. */
+      askIndex?: number;
       /** Set on a subagent call: the subagent it started and where that
           subagent has got to. */
       child?: { session: string; agent: string; status: TurnStatus };

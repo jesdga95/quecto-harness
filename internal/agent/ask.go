@@ -18,6 +18,10 @@ import (
 // choice and the model should be reading the project instead.
 const maxOptions = 4
 
+// maxQuestions bounds a call. Past five the stepper stops being a set of
+// choices and the model should be asking them one at a time.
+const maxQuestions = 5
+
 var (
 	ErrNoSuchQuestion = errors.New("That question is no longer open: the turn moved on")
 	ErrNotMultiSelect = errors.New("That question takes one answer")
@@ -32,11 +36,14 @@ type Option struct {
 }
 
 // Question is one open question. CallID names the tool call it belongs to, so
-// the browser can attach it to the row that call already drew.
+// the browser can attach it to the row that call already drew. Index is its
+// place in the call that asked it, so a page that reloads mid-call resumes the
+// stepper at the question that is open.
 type Question struct {
 	ID        string   `json:"id"`
 	SessionID string   `json:"session"`
 	CallID    string   `json:"call_id"`
+	Index     int      `json:"index"`
 	Text      string   `json:"question"`
 	Options   []Option `json:"options"`
 	Multi     bool     `json:"multi_select,omitempty"`
@@ -188,28 +195,34 @@ func (e *Engine) PendingQuestion(sessionID string) *Question {
 	return e.asks.pending(sessionID)
 }
 
-// askQuestion puts a choice to the user and blocks the turn until it is
-// answered. The answer is the tool result, so the turn carries on with it
-// rather than ending and waiting for a new message.
+// askQuestion puts one or more choices to the user and blocks the turn until
+// they are answered. The answers are the tool result, so the turn carries on
+// with them rather than ending and waiting for a new message.
 func (e *Engine) askQuestion(ctx context.Context, s *Session, call llm.ToolCall) (tools.Result, error) {
-	q, err := parseQuestion(json.RawMessage(call.Function.Arguments))
+	qs, err := parseQuestions(json.RawMessage(call.Function.Arguments))
 	if err != nil {
 		return tools.Result{}, err
 	}
-	q.ID = newQuestionID()
-	q.SessionID = s.ID
-	q.CallID = call.ID
-
-	// The row the call already drew is what becomes the card, so the event
-	// carries the id to answer rather than the question a second time.
-	draw := func() {
-		e.publish(s.ID, ev("question", map[string]any{"id": q.CallID, "ask": q.ID}))
+	// The call is one card that reveals its questions one at a time, so the
+	// row the call drew stays the card throughout and the event carries the
+	// question's place in the set rather than the question a second time.
+	answers := make([]Answer, len(qs))
+	for i, q := range qs {
+		q.ID = newQuestionID()
+		q.SessionID = s.ID
+		q.CallID = call.ID
+		q.Index = i
+		idx := i
+		draw := func() {
+			e.publish(s.ID, ev("question", map[string]any{"id": q.CallID, "ask": q.ID, "index": idx}))
+		}
+		ans, err := e.waitOn(ctx, s, q, draw)
+		if err != nil {
+			return tools.Result{Output: "no answer: the session was stopped"}, nil
+		}
+		answers[i] = ans
 	}
-	ans, err := e.waitOn(ctx, s, q, draw)
-	if err != nil {
-		return tools.Result{Output: "no answer: the session was stopped"}, nil
-	}
-	return tools.Result{Output: renderAnswer(q, ans)}, nil
+	return tools.Result{Output: renderAnswers(qs, answers)}, nil
 }
 
 // waitOn blocks on a card the person has to answer. The session reads as
@@ -221,40 +234,52 @@ func (e *Engine) waitOn(ctx context.Context, s *Session, q Question, draw func()
 	return e.asks.ask(ctx, q, draw)
 }
 
-func parseQuestion(raw json.RawMessage) (Question, error) {
+func parseQuestions(raw json.RawMessage) ([]Question, error) {
 	var args struct {
-		Question string `json:"question"`
-		Options  []struct {
-			Label       string `json:"label"`
-			Description string `json:"description"`
-		} `json:"options"`
-		Multi bool `json:"multi_select"`
+		Questions []struct {
+			Question string `json:"question"`
+			Options  []struct {
+				Label       string `json:"label"`
+				Description string `json:"description"`
+			} `json:"options"`
+			Multi bool `json:"multi_select"`
+		} `json:"questions"`
 	}
 	if len(raw) == 0 {
-		return Question{}, errors.New("ask_user_question: the arguments were empty")
+		return nil, errors.New("ask_user_question: the arguments were empty")
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
-		return Question{}, fmt.Errorf("ask_user_question: the arguments are not valid JSON: %s", err)
+		return nil, fmt.Errorf("ask_user_question: the arguments are not valid JSON: %s", err)
 	}
-	text := strings.TrimSpace(args.Question)
-	if text == "" {
-		return Question{}, errors.New("ask_user_question: question is empty, say what is being asked")
+	if len(args.Questions) == 0 {
+		return nil, errors.New("ask_user_question: give one to five questions")
 	}
-	var opts []Option
-	for _, o := range args.Options {
-		label := strings.TrimSpace(o.Label)
-		if label == "" {
-			continue
+	if len(args.Questions) > maxQuestions {
+		return nil, fmt.Errorf("ask_user_question: %d questions, give at most %d", len(args.Questions), maxQuestions)
+	}
+	qs := make([]Question, 0, len(args.Questions))
+	for i, in := range args.Questions {
+		text := strings.TrimSpace(in.Question)
+		if text == "" {
+			return nil, errors.New("ask_user_question: question is empty, say what is being asked")
 		}
-		opts = append(opts, Option{Label: label, Description: strings.TrimSpace(o.Description)})
+		var opts []Option
+		for _, o := range in.Options {
+			label := strings.TrimSpace(o.Label)
+			if label == "" {
+				continue
+			}
+			opts = append(opts, Option{Label: label, Description: strings.TrimSpace(o.Description)})
+		}
+		if len(opts) < 2 {
+			return nil, errors.New("ask_user_question: give two to four options, each with a label")
+		}
+		if len(opts) > maxOptions {
+			return nil, fmt.Errorf("ask_user_question: %d options, give at most %d", len(opts), maxOptions)
+		}
+		qs = append(qs, Question{Text: text, Options: opts, Multi: in.Multi, Index: i})
 	}
-	if len(opts) < 2 {
-		return Question{}, errors.New("ask_user_question: give two to four options, each with a label")
-	}
-	if len(opts) > maxOptions {
-		return Question{}, fmt.Errorf("ask_user_question: %d options, give at most %d", len(opts), maxOptions)
-	}
-	return Question{Text: text, Options: opts, Multi: args.Multi}, nil
+	return qs, nil
 }
 
 // renderAnswer is the answer as the model is handed it. A typed answer is the
@@ -276,6 +301,23 @@ func renderAnswer(q Question, ans Answer) string {
 		return text
 	}
 	return "no answer"
+}
+
+// renderAnswers is a call's answer as the model is handed it. One question is
+// the answer alone, as it always was; several are one line each, in the order
+// they were asked.
+func renderAnswers(qs []Question, ans []Answer) string {
+	if len(qs) == 1 {
+		return renderAnswer(qs[0], ans[0])
+	}
+	var b strings.Builder
+	for i, q := range qs {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "%d. %s %s", i+1, q.Text, renderAnswer(q, ans[i]))
+	}
+	return b.String()
 }
 
 var idEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)

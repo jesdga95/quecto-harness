@@ -1,6 +1,6 @@
 : shape from llama.cpp b10812-8b4b3558f
 
-data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"ask_user_question","arguments":"{\"question\":\"Ship it?\",\"options\":[{\"label\":\"Yes\"}]}"}}]}}],"created":1757141666,"id":"chatcmpl-12","model":"Alpha-12B","object":"chat.completion.chunk"}
+data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"ask_user_question","arguments":"{\"questions\":[{\"question\":\"Ship it?\",\"options\":[{\"label\":\"Yes\"}]}]}"}}]}}],"created":1757141666,"id":"chatcmpl-12","model":"Alpha-12B","object":"chat.completion.chunk"}
 
 data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"created":1757141666,"id":"chatcmpl-12","model":"Alpha-12B","object":"chat.completion.chunk"}
 

@@ -53,12 +53,10 @@
   const desc = $derived(stepDesc(item, live, app.draft?.title ?? ""));
   const todos = $derived(todosOf(item));
 
-  // The question is in the call's own arguments and the answer is the result,
-  // so the row draws the choice as it was put and what came back.
-  const question = $derived(
-    item.kind === "tool" && item.name === "ask_user_question"
-      ? asked(item.args)
-      : { question: "", options: [], multi: false },
+  // The questions are in the call's own arguments and the answer is the result,
+  // so the row draws each choice as it was put and what came back.
+  const questions = $derived(
+    item.kind === "tool" && item.name === "ask_user_question" ? asked(item.args) : [],
   );
 
   // The result is the labels that were chosen, or words nobody offered, so a
@@ -206,15 +204,21 @@
       {:else if item.kind === "tool" && item.name === "todo_write"}
         <TodoList {todos} />
       {:else if item.kind === "tool" && item.name === "ask_user_question"}
-        <ul class="flex flex-col gap-1">
-          {#each question.options as option (option.label)}
-            <li class="todo" class:is-doing={chosen.has(option.label)}>
-              <span>{option.label}</span>
-            </li>
-          {/each}
-        </ul>
-        {#if item.output}
-          <p class="text-[13px] text-ink-2">Answered {item.output}</p>
+        {#if questions.length > 1}
+          {#if item.output}
+            <div class="text-[13px] text-ink-2 whitespace-pre-wrap">{item.output}</div>
+          {/if}
+        {:else}
+          <ul class="flex flex-col gap-1">
+            {#each (questions[0]?.options ?? []) as option (option.label)}
+              <li class="todo" class:is-doing={chosen.has(option.label)}>
+                <span>{option.label}</span>
+              </li>
+            {/each}
+          </ul>
+          {#if item.output}
+            <p class="text-[13px] text-ink-2">Answered {item.output}</p>
+          {/if}
         {/if}
       {:else if item.kind === "tool" && item.name === "exit_plan_mode"}
         {#if item.output.startsWith("not approved: ")}

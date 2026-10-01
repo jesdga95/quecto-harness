@@ -10,7 +10,6 @@
   import CopyButton from "./CopyButton.svelte";
   import Prose from "./Prose.svelte";
   import PlanCard from "./PlanCard.svelte";
-  import QuestionCard from "./QuestionCard.svelte";
   import StepRow from "./StepRow.svelte";
   import TurnFiles from "./TurnFiles.svelte";
   import TurnFooter from "./TurnFooter.svelte";
@@ -18,6 +17,7 @@
   import { app, canResend, resend } from "../state/app.svelte";
   import { bytes, fileKind, fileName, timeOf } from "../format";
   import { followEnd } from "../stream.svelte";
+  import { asked } from "../question";
   import { stepDesc, stepName } from "../steps";
 
   let scroller = $state<HTMLDivElement | null>(null);
@@ -85,7 +85,11 @@
   // and a card waiting on them. A running turn folds up to its newest step.
   function pending(item: TranscriptItem): boolean {
     if (item.kind === "permission") return item.outcome === null;
-    return item.kind === "tool" && item.running && !!item.askId;
+    if (item.kind !== "tool" || !item.running) return false;
+    // A multi-question call holds its card for the whole batch, so it is pending
+    // for as long as it runs, even between the sub-questions.
+    if (item.name === "ask_user_question" && asked(item.args).length > 1) return true;
+    return item.askId !== undefined;
   }
   function isProcess(item: TranscriptItem): boolean {
     return item.kind === "tool" || item.kind === "reasoning" || item.kind === "permission";
@@ -419,12 +423,9 @@
       <span class="truncate">{item.message}</span>
     </div>
   {:else if item.kind === "permission" && item.outcome === null}
-    <!-- An open permission card is docked above the composer, where it stays
-         in reach however far up the reader has scrolled. -->
-  {:else if item.kind === "tool" && item.name === "ask_user_question" && item.running && item.askId}
-    <div class="my-2">
-      <QuestionCard {item} />
-    </div>
+    <!-- An open permission card is docked above the composer, and an open
+         question takes the composer's place, where either stays in reach
+         however far up the reader has scrolled. -->
   {:else if item.kind === "tool" && item.name === "exit_plan_mode" && item.running && item.askId}
     <div class="my-2">
       <PlanCard {item} />

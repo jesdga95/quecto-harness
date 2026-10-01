@@ -1082,7 +1082,7 @@ func TestQuestionRoute(t *testing.T) {
 	f := newFixture(t)
 	id := f.newSession(t)
 
-	args := `{"question":"Where should the cache live?","options":[{"label":"In memory"},{"label":"On disk"}]}`
+	args := `{"questions":[{"question":"Where should the cache live?","options":[{"label":"In memory"},{"label":"On disk"}]}]}`
 	f.nextFrames(
 		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"ask_user_question","arguments":`+strconv.Quote(args)+`}}]}}]}`,
 		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
@@ -1113,7 +1113,7 @@ func TestQuestionRoute(t *testing.T) {
 	// question itself is already on the row the call drew.
 	snap := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
 	question, _ := snap["question"].(map[string]any)
-	if question["id"] != ask || question["call_id"] != "call_1" {
+	if question["id"] != ask || question["call_id"] != "call_1" || question["index"] != float64(0) {
 		t.Errorf("snapshot question = %v", snap["question"])
 	}
 

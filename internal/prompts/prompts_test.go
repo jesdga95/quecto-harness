@@ -87,7 +87,7 @@ func TestToolDescriptionsNameTheirArguments(t *testing.T) {
 	if !strings.Contains(ToolEdit(), "old_string") || !strings.Contains(ToolEdit(), "new_string") {
 		t.Errorf("edit description omits its arguments: %q", ToolEdit())
 	}
-	if !strings.Contains(ToolAskUserQuestion(), "question") || !strings.Contains(ToolAskUserQuestion(), "options") ||
+	if !strings.Contains(ToolAskUserQuestion(), "questions") || !strings.Contains(ToolAskUserQuestion(), "options") ||
 		!strings.Contains(ToolAskUserQuestion(), "multi_select") {
 		t.Errorf("ask_user_question description omits its arguments: %q", ToolAskUserQuestion())
 	}

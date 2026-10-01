@@ -8,6 +8,7 @@
   import X from "phosphor-svelte/lib/X";
   import FileIcon from "./FileIcon.svelte";
   import PermissionCard from "./PermissionCard.svelte";
+  import QuestionCard from "./QuestionCard.svelte";
   import PlanPanel from "./PlanPanel.svelte";
   import {
     app,
@@ -109,8 +110,12 @@
   }
 
   // Both cards take their answer on the card itself, so the field waits for
-  // whichever one is open.
+  // whichever one is open. A question takes the composer's place outright.
   const asking = $derived(pendingQuestion() !== undefined);
+  const question = $derived.by(() => {
+    const item = pendingQuestion();
+    return item?.kind === "tool" && item.name === "ask_user_question" ? item : undefined;
+  });
   const blocked = $derived(asking || blockingPermission() !== undefined);
   // A compaction holds the session but is not offered a stop: it draws nothing
   // to take back. The send button stays, and what it takes joins the queue.
@@ -282,98 +287,102 @@
   >
     <!-- The model's todo list is the top of the same box while it has one. -->
     <PlanPanel />
-    {#if files.length > 0}
-      <div class="tiles mb-3">
-        {#each files as path (path)}
-          <span class="tile tile-doc" title={path}>
-            <span class="tile-kind">{fileKind(path)}</span>
-            <span class="tile-name">{fileName(path)}</span>
-            <button
-              class="tile-x"
-              aria-label="Remove {fileName(path)}"
-              onclick={() => (files = files.filter((f) => f !== path))}
-            >
-              <X />
-            </button>
-          </span>
-        {/each}
-      </div>
-    {/if}
-
-    <div class="relative">
-    {#if mention && hits.length > 0}
-      <div class="popover mention-list absolute right-0 bottom-full left-0 z-40 mb-3" role="listbox">
-        {#each hits as path, i (path)}
-          <button
-            class="popover-item"
-            class:is-on={i === pick}
-            role="option"
-            aria-selected={i === pick}
-            onmousedown={(e) => {
-              e.preventDefault();
-              choose(path);
-            }}
-            onmouseenter={() => (pick = i)}
-          >
-            <FileIcon {path} size={15} />
-            <span class="truncate">{path.split("/").pop()}</span>
-            {#if path.includes("/")}
-              <span class="ml-auto truncate pl-3 text-[12px] text-muted">{path.slice(0, path.lastIndexOf("/"))}</span>
-            {/if}
-          </button>
-        {/each}
-      </div>
-    {/if}
-    <textarea
-      bind:this={field}
-      class="textarea field-main"
-      rows="1"
-      placeholder={asking
-        ? "Answer the card above first"
-        : blocked
-          ? "Answer the permission card above first"
-          : modeHint}
-      bind:value={text}
-      {onkeydown}
-      {onpaste}
-      oninput={readMention}
-      onclick={readMention}
-      onblur={() => (mention = null)}
-      {disabled}
-    ></textarea>
-    </div>
-
-    <div class="mt-3 flex items-center gap-1.5">
-      <AddMenu up onattach={attach} canAttach={!disabled && files.length < maxFiles} />
-      {#if toolset() === "full"}
-        <ModeChip />
+    {#if question}
+      <QuestionCard item={question} />
+    {:else}
+      {#if files.length > 0}
+        <div class="tiles mb-3">
+          {#each files as path (path)}
+            <span class="tile tile-doc" title={path}>
+              <span class="tile-kind">{fileKind(path)}</span>
+              <span class="tile-name">{fileName(path)}</span>
+              <button
+                class="tile-x"
+                aria-label="Remove {fileName(path)}"
+                onclick={() => (files = files.filter((f) => f !== path))}
+              >
+                <X />
+              </button>
+            </span>
+          {/each}
+        </div>
       {/if}
-      <PermissionChip />
 
-      <div class="ml-auto flex items-center gap-2">
-        <AgentChip />
-        <!-- Stop keeps its place while a turn runs, and a message typed
-             against that turn is sent from the button beside it. -->
-        {#if running && (text.trim() || files.length > 0)}
-          <button class="round" aria-label="Send" onclick={submit}>
-            <ArrowUp />
-          </button>
-        {/if}
-        {#if running}
-          <button class="round send is-stop" aria-label="Stop" onclick={() => stop()}>
-            <Square weight="fill" />
-          </button>
-        {:else}
-          <button
-            class="round send"
-            aria-label="Send"
-            onclick={submit}
-            disabled={disabled || (!text.trim() && files.length === 0)}
-          >
-            <ArrowUp />
-          </button>
-        {/if}
+      <div class="relative">
+      {#if mention && hits.length > 0}
+        <div class="popover mention-list absolute right-0 bottom-full left-0 z-40 mb-3" role="listbox">
+          {#each hits as path, i (path)}
+            <button
+              class="popover-item"
+              class:is-on={i === pick}
+              role="option"
+              aria-selected={i === pick}
+              onmousedown={(e) => {
+                e.preventDefault();
+                choose(path);
+              }}
+              onmouseenter={() => (pick = i)}
+            >
+              <FileIcon {path} size={15} />
+              <span class="truncate">{path.split("/").pop()}</span>
+              {#if path.includes("/")}
+                <span class="ml-auto truncate pl-3 text-[12px] text-muted">{path.slice(0, path.lastIndexOf("/"))}</span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      {/if}
+      <textarea
+        bind:this={field}
+        class="textarea field-main"
+        rows="1"
+        placeholder={asking
+          ? "Answer the card above first"
+          : blocked
+            ? "Answer the permission card above first"
+            : modeHint}
+        bind:value={text}
+        {onkeydown}
+        {onpaste}
+        oninput={readMention}
+        onclick={readMention}
+        onblur={() => (mention = null)}
+        {disabled}
+      ></textarea>
       </div>
-    </div>
+
+      <div class="mt-3 flex items-center gap-1.5">
+        <AddMenu up onattach={attach} canAttach={!disabled && files.length < maxFiles} />
+        {#if toolset() === "full"}
+          <ModeChip />
+        {/if}
+        <PermissionChip />
+
+        <div class="ml-auto flex items-center gap-2">
+          <AgentChip />
+          <!-- Stop keeps its place while a turn runs, and a message typed
+               against that turn is sent from the button beside it. -->
+          {#if running && (text.trim() || files.length > 0)}
+            <button class="round" aria-label="Send" onclick={submit}>
+              <ArrowUp />
+            </button>
+          {/if}
+          {#if running}
+            <button class="round send is-stop" aria-label="Stop" onclick={() => stop()}>
+              <Square weight="fill" />
+            </button>
+          {:else}
+            <button
+              class="round send"
+              aria-label="Send"
+              onclick={submit}
+              disabled={disabled || (!text.trim() && files.length === 0)}
+            >
+              <ArrowUp />
+            </button>
+          {/if}
+        </div>
+      </div>
+    {/if}
   </div>
 </div>

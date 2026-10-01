@@ -174,7 +174,10 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
         .find(
           (i) => i.kind === "tool" && (i.id === event.id || i.id.startsWith(`${event.id}#`)),
         );
-      if (item && item.kind === "tool") item.askId = event.ask;
+      if (item && item.kind === "tool") {
+        item.askId = event.ask;
+        item.askIndex = event.index;
+      }
       break;
     }
     case "permission": {

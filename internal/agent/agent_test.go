@@ -266,10 +266,10 @@ func TestTurnCostIsRecordedOnTheEntryThatEndedIt(t *testing.T) {
 	if last.Meta["requests"] != 2 {
 		t.Errorf("requests = %v, want 2", last.Meta["requests"])
 	}
-	// Input and cache are sums too: 410 and 2950 sent, 384 and 0 reused. A
+	// Input and cache are sums too: 410 and 3950 sent, 384 and 0 reused. A
 	// cache that reused nothing is still a count, so the field is present.
-	if last.Meta["input_tokens"] != 3360 {
-		t.Errorf("input_tokens = %v, want 3360", last.Meta["input_tokens"])
+	if last.Meta["input_tokens"] != 4360 {
+		t.Errorf("input_tokens = %v, want 4360", last.Meta["input_tokens"])
 	}
 	if last.Meta["cached_tokens"] != 384 {
 		t.Errorf("cached_tokens = %v, want 384", last.Meta["cached_tokens"])
@@ -2100,8 +2100,8 @@ func TestContextBreakdownIsEstimatedFromThePrompt(t *testing.T) {
 	if want := schemaChars / charsPerToken; parts.Tools != want {
 		t.Errorf("tools = %d, want %d", parts.Tools, want)
 	}
-	// The turn reported 2950 prompt and 48 completion tokens.
-	if want := 2950 + 48 - parts.System - parts.Tools; parts.Messages != want {
+	// The turn reported 3950 prompt and 48 completion tokens.
+	if want := 3950 + 48 - parts.System - parts.Tools; parts.Messages != want {
 		t.Errorf("messages = %d, want %d", parts.Messages, want)
 	}
 }
@@ -2268,8 +2268,8 @@ func TestContextBreakdownIncludesProjectRules(t *testing.T) {
 	if want := (sysChars - baseChars) / charsPerToken; parts.Rules != want {
 		t.Errorf("rules = %d, want %d", parts.Rules, want)
 	}
-	// The turn reported 2950 prompt and 48 completion tokens.
-	if want := 2950 + 48 - parts.System - parts.Rules - parts.Tools; parts.Messages != want {
+	// The turn reported 3950 prompt and 48 completion tokens.
+	if want := 3950 + 48 - parts.System - parts.Rules - parts.Tools; parts.Messages != want {
 		t.Errorf("messages = %d, want %d", parts.Messages, want)
 	}
 }

@@ -1,0 +1,7 @@
+: shape from llama.cpp b10812-8b4b3558f
+
+data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"ask_user_question","arguments":"{\"questions\":[{\"question\":\"Where should the cache live?\",\"options\":[{\"label\":\"In memory\"},{\"label\":\"On disk\"}]},{\"question\":\"Which checks before the commit?\",\"options\":[{\"label\":\"gofmt\"},{\"label\":\"go vet\"}]},{\"question\":\"What is the default context window?\",\"options\":[{\"label\":\"8k\"},{\"label\":\"16k\"}]},{\"question\":\"Allow web search in execute turns?\",\"options\":[{\"label\":\"Yes\"},{\"label\":\"No\"}]},{\"question\":\"Name the session now?\",\"options\":[{\"label\":\"A\"},{\"label\":\"B\"}]},{\"question\":\"Keep the plan open?\",\"options\":[{\"label\":\"Yes\"},{\"label\":\"No\"}]}]}"}}]}}],"created":1757141666,"id":"chatcmpl-12","model":"Alpha-12B","object":"chat.completion.chunk"}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"created":1757141666,"id":"chatcmpl-12","model":"Alpha-12B","object":"chat.completion.chunk"}
+
+data: [DONE]

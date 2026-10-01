@@ -229,7 +229,7 @@ interface WireSnapshot {
   entries?: WireEntry[];
   todos?: { text?: string; status?: string }[] | null;
   pending?: WirePermission[];
-  question?: { id?: string; call_id?: string } | null;
+  question?: { id?: string; call_id?: string; index?: number } | null;
   state?: string;
   parent?: string;
   children?: { id?: string; title?: string; agent?: string; state?: string }[] | null;
@@ -933,7 +933,10 @@ function toTranscript(snap: WireSnapshot): Transcript {
         (i) =>
           i.kind === "tool" && (i.name === "ask_user_question" || i.name === "exit_plan_mode") && i.running,
       );
-    if (row?.kind === "tool") row.askId = asked.id;
+    if (row?.kind === "tool") {
+      row.askId = asked.id;
+      if (asked.index !== undefined) row.askIndex = asked.index;
+    }
   }
 
   uniqueIds(items);
@@ -1210,7 +1213,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       ];
 
     case "question":
-      return [{ type: "question", id: ev.id ?? "", ask: ev.ask ?? "" }];
+      return [{ type: "question", id: ev.id ?? "", ask: ev.ask ?? "", index: ev.index ?? 0 }];
 
     case "usage": {
       const prompt = ev.prompt_tokens ?? 0;

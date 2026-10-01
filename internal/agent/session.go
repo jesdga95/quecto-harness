@@ -190,6 +190,20 @@ func fromDoc(d *store.Session) *Session {
 
 // doc renders the on-disk shape. The caller holds the session lock.
 func (s *Session) doc() *store.Session {
+	// The entries are copied, not shared: a save marshals this after the lock
+	// is dropped, so a field a live turn still mutates under the lock must not
+	// be read out from underneath it.
+	entries := make([]store.Entry, len(s.Entries))
+	for i, e := range s.Entries {
+		if e.Meta != nil {
+			meta := make(map[string]any, len(e.Meta))
+			for k, v := range e.Meta {
+				meta[k] = v
+			}
+			e.Meta = meta
+		}
+		entries[i] = e
+	}
 	return &store.Session{
 		ID: s.ID, Project: s.Project, Agent: s.AgentID, Parent: s.Parent,
 		Model: s.Model, Mode: s.Mode, Toolset: s.Toolset, Plan: s.Plan, Draft: s.Draft, Title: s.Title, Named: s.Named,
@@ -199,7 +213,7 @@ func (s *Session) doc() *store.Session {
 		LastToolTokens: s.LastToolTokens, ContextBase: s.ContextBase,
 		Todos:     append([]store.Todo(nil), s.Todos...),
 		Baselines: append([]store.Baseline(nil), s.Baselines...),
-		Entries:   append([]store.Entry(nil), s.Entries...),
+		Entries:   entries,
 	}
 }
 

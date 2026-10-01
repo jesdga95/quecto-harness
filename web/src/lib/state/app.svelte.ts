@@ -34,6 +34,7 @@ import type {
   WorkMode,
 } from "../api";
 import { applyEvent, nextId, outcomeLabel, pushUser } from "../transcript";
+import { asked } from "../question";
 import {
   fileArtifactId,
   projectArtifacts,
@@ -1341,13 +1342,14 @@ export function blockingPermission(): TranscriptItem | undefined {
 /** A question blocks it the same way, on its own card. The id is what makes
     the card answerable, so a row without one blocks nothing. */
 export function pendingQuestion(): TranscriptItem | undefined {
-  return app.items.find(
-    (i) =>
-      i.kind === "tool" &&
-      (i.name === "ask_user_question" || i.name === "exit_plan_mode") &&
-      i.running &&
-      i.askId !== undefined,
-  );
+  return app.items.find((i) => {
+    if (i.kind !== "tool" || !i.running) return false;
+    if (i.name !== "ask_user_question" && i.name !== "exit_plan_mode") return false;
+    // A multi-question call holds the composer for the whole batch, so it is
+    // pending while running even between the sub-questions.
+    if (i.name === "ask_user_question" && asked(i.args).length > 1) return true;
+    return i.askId !== undefined;
+  });
 }
 
 /** Turns and steps, for the line under the composer. */
