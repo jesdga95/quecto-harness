@@ -385,14 +385,6 @@ func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 	if err != nil {
 		return Sent{}, err
 	}
-	// A model that cannot read pictures refuses the message where it was
-	// typed, rather than when the turn picks the message up. The check is
-	// against the agent answering now, which is the one that will take it.
-	if a, err := e.active(); err == nil {
-		if err := e.checkImages(a, attachments); err != nil {
-			return Sent{}, err
-		}
-	}
 	return e.deliver(s, text, attachments)
 }
 
@@ -524,29 +516,11 @@ func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 		return 0, err
 	}
 	s.mu.Lock()
-	i := s.lastUserEntry()
-	if i < 0 || s.Entries[i].Seq != seq {
-		s.mu.Unlock()
-		return 0, ErrNotLast
-	}
-	attachments := s.Entries[i].Attachments
-	s.mu.Unlock()
-
-	// The message was accepted once, but the harness may have been pointed at
-	// another agent since, and its model may not read pictures.
-	if a, err := e.active(); err == nil {
-		if err := e.checkImages(a, attachments); err != nil {
-			return 0, err
-		}
-	}
-
-	s.mu.Lock()
 	if s.state != StateIdle {
 		s.mu.Unlock()
 		return 0, ErrBusy
 	}
-	// The lock was dropped for the check, so the message is found again.
-	i = s.lastUserEntry()
+	i := s.lastUserEntry()
 	if i < 0 || s.Entries[i].Seq != seq {
 		s.mu.Unlock()
 		return 0, ErrNotLast
@@ -637,39 +611,6 @@ func (e *Engine) readAttachments(paths []string) ([]store.Attachment, error) {
 		out = append(out, a)
 	}
 	return out, nil
-}
-
-// checkImages asks the model server what the model takes before an image is
-// sent to it, since a model with no vision answers a request carrying one
-// with an error that says nothing about the picture.
-func (e *Engine) checkImages(a config.Agent, attachments []store.Attachment) error {
-	images := false
-	for _, a := range attachments {
-		if a.Kind == "image" {
-			images = true
-		}
-	}
-	if !images {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
-	defer cancel()
-	models, err := e.backends.For(a).Models(ctx)
-	if err != nil {
-		return fmt.Errorf("Ask %s what %s takes: %w", a.Name, a.Model, err)
-	}
-	for _, m := range models {
-		if m.ID != a.Model {
-			continue
-		}
-		for _, mod := range m.Modalities {
-			if mod == "image" {
-				return nil
-			}
-		}
-		return fmt.Errorf("%s does not take images: choose a model that does", a.Model)
-	}
-	return fmt.Errorf("%s is not on %s: choose another model for this agent", a.Model, a.Name)
 }
 
 // Stop cancels the turn. It never appends: the loop reaches stopped and
@@ -1848,11 +1789,13 @@ type outcome struct {
 	exitCode  *int
 	truncated bool
 	meta      map[string]any
+	// images are the pictures the result carries, already in the file store.
+	images []store.Attachment
 }
 
 // readTools read and change nothing, so a run of them in one reply can go at
 // once.
-var readTools = map[string]bool{"read": true, "grep": true, "web_search": true}
+var readTools = map[string]bool{"read": true, "read_image": true, "grep": true, "web_search": true}
 
 // readRun is how many calls from i on only read and would run without a card,
 // so they can run at the same time.
@@ -1924,6 +1867,8 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 		switch call.Function.Name {
 		case "read":
 			res, err = runner.ReadFile(ctx, args)
+		case "read_image":
+			res, err = runner.ReadImage(ctx, args)
 		case "grep":
 			res, err = runner.Find(ctx, args)
 		case "web_search":
@@ -1949,7 +1894,7 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 		case "exit_plan_mode":
 			res, err = e.submitPlan(ctx, s, call)
 		default:
-			err = fmt.Errorf("no tool named %s: use read, grep, web_search, write, edit, bash, processes, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read, read_image, grep, web_search, write, edit, bash, processes, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
 		}
 		if err != nil {
 			// The flag is what lets the row say the call failed, since only
@@ -1958,8 +1903,28 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 		} else {
 			o.content, o.exitCode, o.truncated, o.meta = res.Output, res.ExitCode, res.Truncated, res.Meta
 		}
+		if err == nil && res.Image != nil {
+			e.keepImage(&o, res.Image)
+		}
 	}
 	return o
+}
+
+// keepImage copies a result's picture into the file store, so every later
+// request sends the bytes that were read rather than the file as it stands.
+// The id goes in the meta as well, which is how the transcript finds it.
+func (e *Engine) keepImage(o *outcome, img *tools.Image) {
+	id, size, err := e.files.Put(img.Abs)
+	if err != nil {
+		o.content = fmt.Sprintf("%s could not be kept for the model: %s", img.Path, err)
+		o.meta = map[string]any{"error": true}
+		return
+	}
+	o.images = append(o.images, store.Attachment{Path: img.Path, Kind: "image", Mime: img.Mime, Bytes: size, File: id})
+	if o.meta == nil {
+		o.meta = map[string]any{}
+	}
+	o.meta["image"] = id
 }
 
 // runBash runs a shell call. A call marked background starts the command and
@@ -2023,7 +1988,7 @@ func (e *Engine) appendTool(s *Session, call llm.ToolCall, record *store.Permiss
 	return s.appendEntry(store.Entry{Kind: "tool", Role: "tool",
 		ToolCallID: call.ID, ToolName: call.Function.Name, Content: o.content,
 		ExitCode: o.exitCode, Truncated: o.truncated, Permission: record, Meta: o.meta,
-		InContext: true, Visible: true})
+		Attachments: o.images, InContext: true, Visible: true})
 }
 
 // recordBaseline keeps one file as it stood before this session first wrote

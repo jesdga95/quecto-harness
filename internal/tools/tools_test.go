@@ -500,7 +500,7 @@ func TestLooksBinary(t *testing.T) {
 
 func TestSchemasMatchTheDescriptions(t *testing.T) {
 	s := Schemas(Offer{Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true})
-	names := []string{"read", "grep", "web_search", "write", "edit", "todo_write",
+	names := []string{"read", "read_image", "grep", "web_search", "write", "edit", "todo_write",
 		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash", "processes"}
 	if len(s) != len(names) {
 		t.Fatalf("got %d schemas, want %d", len(s), len(names))
@@ -1167,7 +1167,7 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 		}
 		return out
 	}
-	base := []string{"read", "grep", "write", "edit", "todo_write", "bash", "processes"}
+	base := []string{"read", "read_image", "grep", "write", "edit", "todo_write", "bash", "processes"}
 	optional := map[string]Offer{
 		"ask_user_question": {Mode: config.WorkExecute, Ask: true},
 		"subagent":          {Mode: config.WorkExecute, Agents: true},
@@ -1324,4 +1324,40 @@ func TestSubagentRequiresATitle(t *testing.T) {
 		return
 	}
 	t.Fatal("no subagent schema was offered")
+}
+
+func TestReadImage(t *testing.T) {
+	r := testRoot(t, t.TempDir())
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 'I', 'H', 'D', 'R'}
+	if err := os.WriteFile(filepath.Join(r.Root, "sub", "shot.png"), png, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The name says image and the bytes do not, which is what is believed.
+	if err := os.WriteFile(filepath.Join(r.Root, "fake.png"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := r.ReadImage(context.Background(), json.RawMessage(`{"path":"sub/shot.png"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Image == nil || res.Image.Mime != "image/png" || res.Image.Bytes != len(png) || res.Image.Path != "sub/shot.png" {
+		t.Fatalf("image = %+v", res.Image)
+	}
+	if res.Output != "sub/shot.png, PNG, 1 KB." {
+		t.Errorf("output = %q", res.Output)
+	}
+
+	for _, c := range []struct{ path, says string }{
+		{"fake.png", "not a PNG, JPEG, GIF or WebP"},
+		{"file.txt", "use read"},
+		{"sub", "is a directory"},
+		{"gone.png", "no such file"},
+		{"link_out/hosts", "outside"},
+	} {
+		raw, _ := json.Marshal(ReadImageArgs{Path: c.path})
+		if _, err := r.ReadImage(context.Background(), raw); err == nil || !strings.Contains(err.Error(), c.says) {
+			t.Errorf("%s: err = %v, want it to say %q", c.path, err, c.says)
+		}
+	}
 }

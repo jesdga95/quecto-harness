@@ -8,6 +8,7 @@ import (
 func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 	for name, get := range map[string]func() string{
 		"tool_read.md":              ToolRead,
+		"tool_read_image.md":        ToolReadImage,
 		"tool_grep.md":              ToolGrep,
 		"tool_web_search.md":        ToolWebSearch,
 		"tool_write.md":             ToolWrite,

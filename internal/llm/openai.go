@@ -58,7 +58,7 @@ func listOpenAIModels(ctx context.Context, c *Client) ([]Model, error) {
 		if id == "" {
 			continue
 		}
-		m := Model{ID: id, Status: StatusLoaded, Modalities: []string{}}
+		m := Model{ID: id, Status: StatusLoaded}
 		if n := derefOr(e.MaxModelLen, deref(e.ContextLength)); n > 0 {
 			m.CtxHint, m.CtxSource = n, "models"
 		}

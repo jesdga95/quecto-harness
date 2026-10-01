@@ -272,3 +272,19 @@ func TestResponsesImagePartsAreRenamed(t *testing.T) {
 		t.Errorf("image_url = %v, want the data URI as a plain string", b["image_url"])
 	}
 }
+
+// A tool result with a picture keeps it in the call's output.
+func TestResponsesToolOutputCarriesAnImage(t *testing.T) {
+	got := body(t, ChatRequest{Model: "m", Messages: []Message{{Role: "tool", ToolCallID: "c1", Parts: []Part{
+		TextPart("shot.png"), ImagePart("image/png", []byte{1, 2, 3}),
+	}}}})
+	items, _ := got["input"].([]any)
+	first, _ := items[0].(map[string]any)
+	parts, _ := first["output"].([]any)
+	if first["type"] != "function_call_output" || len(parts) != 2 {
+		t.Fatalf("item = %v", first)
+	}
+	if b, _ := parts[1].(map[string]any); b["type"] != "input_image" {
+		t.Errorf("second part = %v, want input_image", b)
+	}
+}

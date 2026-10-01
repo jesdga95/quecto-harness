@@ -54,6 +54,8 @@ export function stepName(item: TranscriptItem): string {
   switch (item.name) {
     case "read":
       return "Read";
+    case "read_image":
+      return "View";
     case "grep":
       return "Find";
     case "web_search":

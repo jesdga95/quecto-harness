@@ -145,7 +145,7 @@ func toResponsesInput(msgs []Message) (string, []map[string]any) {
 			items = append(items, map[string]any{
 				"type":    "function_call_output",
 				"call_id": m.ToolCallID,
-				"output":  m.Content,
+				"output":  userContent(m),
 			})
 		case "assistant":
 			if m.Content != "" {
@@ -170,7 +170,7 @@ func toResponsesInput(msgs []Message) (string, []map[string]any) {
 }
 
 // userContent is the text of a message, or the parts of one carrying an
-// image. The part types are this endpoint's own: what the chat endpoint calls
+// image. A call's output takes the same parts as a message does. The part types are this endpoint's own: what the chat endpoint calls
 // text and image_url are input_text and input_image here.
 func userContent(m Message) any {
 	if len(m.Parts) == 0 {

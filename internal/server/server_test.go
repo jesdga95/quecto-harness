@@ -1408,8 +1408,8 @@ func TestTheToolsDebugView(t *testing.T) {
 	f := newFixture(t)
 	body := decode(t, f.do(t, "GET", "/api/tools", nil))
 	list, _ := body["tools"].([]any)
-	if len(list) != 13 {
-		t.Fatalf("the view lists %d tools, want 13", len(list))
+	if len(list) != 14 {
+		t.Fatalf("the view lists %d tools, want 14", len(list))
 	}
 	sent, _ := body["sent"].(map[string]any)
 	minimal, _ := sent["minimal"].([]any)
@@ -1425,7 +1425,7 @@ func TestTheToolsDebugView(t *testing.T) {
 		t.Errorf("the minimal prompt names a tool it does not send: %q", p)
 	}
 	p, _ = prompts["full"].(string)
-	if !strings.Contains(p, "Tools: read, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash, processes.") {
+	if !strings.Contains(p, "Tools: read, read_image, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash, processes.") {
 		t.Errorf("the full prompt does not name every tool: %q", p)
 	}
 }

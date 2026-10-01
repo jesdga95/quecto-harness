@@ -3,6 +3,7 @@
   import Brain from "phosphor-svelte/lib/Brain";
   import CaretRight from "phosphor-svelte/lib/CaretRight";
   import FileText from "phosphor-svelte/lib/FileText";
+  import ImageSquare from "phosphor-svelte/lib/ImageSquare";
   import ListChecks from "phosphor-svelte/lib/ListChecks";
   import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
@@ -37,6 +38,12 @@
   // rather than the word the model got back for sending it.
   const message = $derived(
     item.kind === "tool" && item.name === "send_message" ? stringArg(item, "text") : "",
+  );
+
+  // read_image keeps its own copy of the picture, which the row shows rather
+  // than the file as it stands now.
+  const image = $derived(
+    item.kind === "tool" && typeof item.meta?.image === "string" ? item.meta.image : "",
   );
 
   const command = $derived(stringArg(item, "command"));
@@ -124,6 +131,8 @@
       <WarningCircle class="text-crit" />
     {:else if item.kind === "tool" && item.name === "read"}
       <FileText />
+    {:else if item.kind === "tool" && item.name === "read_image"}
+      <ImageSquare />
     {:else if item.kind === "tool" && item.name === "grep"}
       <MagnifyingGlass />
     {:else if item.kind === "tool" && item.name === "web_search"}
@@ -241,6 +250,10 @@
         {#if item.output}
           <span class="text-[11.5px] text-muted">{item.output}</span>
         {/if}
+      {:else if item.kind === "tool" && item.name === "read_image" && image}
+        <a class="step-shot" href="/api/files/{image}" target="_blank" rel="noopener noreferrer" title={path}>
+          <img src="/api/files/{image}" alt={path} />
+        </a>
       {:else if item.kind === "tool" && item.name === "read" && item.output}
         <FileBlock {path} output={item.output} />
       {:else if item.kind === "tool" && item.name === "web_search"}

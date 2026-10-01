@@ -659,7 +659,7 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 			}
 			msgs = append(msgs, llm.Message{Role: "assistant", Content: e.Content,
 				ReasoningContent: reasoning, ToolCalls: e.ToolCalls})
-			msgs = append(msgs, repairToolResults(s.Entries, i, e.ToolCalls)...)
+			msgs = append(msgs, repairToolResults(s.Entries, i, e.ToolCalls, images)...)
 		case "tool":
 			// Tool results are emitted beside their assistant, so a tool
 			// message that lost its assistant is dropped rather than sent.
@@ -756,7 +756,7 @@ func userMessage(e store.Entry, images map[string]llm.Part, rules string) llm.Me
 
 // repairToolResults returns one tool message per call, synthesising the ones
 // a crash left unanswered so the history stays valid.
-func repairToolResults(entries []store.Entry, at int, calls []llm.ToolCall) []llm.Message {
+func repairToolResults(entries []store.Entry, at int, calls []llm.ToolCall, images map[string]llm.Part) []llm.Message {
 	answered := map[string]store.Entry{}
 	for j := at + 1; j < len(entries); j++ {
 		if entries[j].Kind == "assistant" {
@@ -769,13 +769,30 @@ func repairToolResults(entries []store.Entry, at int, calls []llm.ToolCall) []ll
 	out := make([]llm.Message, 0, len(calls))
 	for _, c := range calls {
 		if e, ok := answered[c.ID]; ok {
-			out = append(out, llm.Message{Role: "tool", ToolCallID: c.ID, Name: e.ToolName, Content: e.Content})
+			out = append(out, toolMessage(c.ID, e, images))
 			continue
 		}
 		out = append(out, llm.Message{Role: "tool", ToolCallID: c.ID, Name: c.Function.Name,
 			Content: prompts.NotRun()})
 	}
 	return out
+}
+
+// toolMessage is one result as the model reads it. A result with a picture is
+// an array of parts, its text first; a picture whose file has gone is left
+// out, and the text still names it.
+func toolMessage(id string, e store.Entry, images map[string]llm.Part) llm.Message {
+	m := llm.Message{Role: "tool", ToolCallID: id, Name: e.ToolName, Content: e.Content}
+	var parts []llm.Part
+	for _, a := range e.Attachments {
+		if part, ok := images[a.File]; ok && a.Kind == "image" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) > 0 {
+		m.Parts = append([]llm.Part{llm.TextPart(e.Content)}, parts...)
+	}
+	return m
 }
 
 // charsPerToken is the rough ratio a token cost is estimated at wherever a

@@ -1,4 +1,4 @@
-// Package tools executes read, grep, web_search, write,
+// Package tools executes read, read_image, grep, web_search, write,
 // edit and bash. It knows nothing about who approved a call;
 // the path guard is its only policy, and web_search has no path to guard,
 // since it leaves the project rather than reading it.
@@ -77,6 +77,8 @@ type Result struct {
 	// Meta is what the transcript needs about the call that the sentence the
 	// model reads does not carry.
 	Meta map[string]any
+	// Image is a picture sent to the model with Output, nil for text alone.
+	Image *Image
 }
 
 // NewRunner resolves the root once, which is what makes the path guard work

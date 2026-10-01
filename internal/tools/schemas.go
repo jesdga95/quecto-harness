@@ -28,16 +28,16 @@ type Offer struct {
 // Every mode sends the same tools, so a mode switch leaves the head of the
 // prompt as it was; a call outside the mode's list is answered, not run.
 var modeTools = map[config.WorkMode][]string{
-	config.WorkPlan: {"read", "grep", "web_search", "ask_user_question",
+	config.WorkPlan: {"read", "read_image", "grep", "web_search", "ask_user_question",
 		"subagent", "send_message", "write_plan", "exit_plan_mode", "bash", "processes"},
-	config.WorkExecute: {"read", "grep", "web_search", "write", "edit",
+	config.WorkExecute: {"read", "read_image", "grep", "web_search", "write", "edit",
 		"todo_write", "ask_user_question", "subagent", "send_message", "bash", "processes"},
 }
 
 // setTools is the fixed list each harness toolset offers. A set outside it is
 // a call that is answered rather than run, whatever the mode.
 var setTools = map[config.Toolset][]string{
-	config.ToolsetFull: {"read", "grep", "web_search", "write", "edit", "todo_write",
+	config.ToolsetFull: {"read", "read_image", "grep", "web_search", "write", "edit", "todo_write",
 		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash", "processes"},
 	config.ToolsetMinimal: {"read", "write", "edit", "bash", "processes"},
 }
@@ -137,6 +137,18 @@ func buildSchemas() []llm.Tool {
 					"path":   map[string]any{"type": "string", "description": "Path relative to the project root."},
 					"offset": map[string]any{"type": "integer", "description": "First line to return, 1-based.", "minimum": 1},
 					"limit":  map[string]any{"type": "integer", "description": "Number of lines to return. Default 400.", "minimum": 1},
+				},
+				"required":             []string{"path"},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llm.FunctionSpec{
+			Name:        "read_image",
+			Description: prompts.ToolReadImage(),
+			Parameters: mustSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string", "description": "Path relative to the project root."},
 				},
 				"required":             []string{"path"},
 				"additionalProperties": false,

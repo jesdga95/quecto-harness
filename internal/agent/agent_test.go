@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -1846,21 +1847,51 @@ func TestImageReachesThePromptAsParts(t *testing.T) {
 	}
 }
 
-// TestImageNeedsAModelThatTakesOne asserts the message is refused before it
-// is written, rather than failing inside the turn.
-func TestImageNeedsAModelThatTakesOne(t *testing.T) {
-	h := newHarness(t, "stream_plain.txt")
-	s := h.sessionWith(t, "No-Such-Model")
-	png := filepath.Join(t.TempDir(), "shot.png")
+// TestReadImageSendsThePicture asserts that read_image keeps a copy in the
+// file store and that the next request carries it in the tool message, as the
+// bytes that were read rather than the file as it stands.
+func TestReadImageSendsThePicture(t *testing.T) {
+	h := newHarness(t, "stream_read_image.txt", "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	png := filepath.Join(h.project, "shot.png")
 	if err := os.WriteFile(png, onePixelPNG(), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.engine.Send(s.ID, "look", []string{png}); err == nil {
-		t.Fatal("an image went to a model the server does not have")
-	}
+	h.engine.Send(s.ID, "look at it", nil)
+	waitIdle(t, s)
+
 	doc, _, _, _ := s.Snapshot()
-	if len(doc.Entries) != 0 {
-		t.Errorf("the refused message was written: %+v", doc.Entries)
+	var tool store.Entry
+	for _, e := range doc.Entries {
+		if e.Kind == "tool" {
+			tool = e
+		}
+	}
+	if len(tool.Attachments) != 1 || tool.Attachments[0].File == "" || tool.Meta["image"] != tool.Attachments[0].File {
+		t.Fatalf("tool entry = %+v", tool)
+	}
+	if !strings.Contains(tool.Content, "shot.png, PNG") {
+		t.Errorf("result = %q", tool.Content)
+	}
+
+	// Changing the file afterwards changes nothing the model is sent.
+	if err := os.WriteFile(png, []byte("not an image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	msgs, _ := h.replay.Body(1)["messages"].([]any)
+	last, _ := msgs[len(msgs)-1].(map[string]any)
+	if last["role"] != "tool" || last["tool_call_id"] != "call_i" {
+		t.Fatalf("last message = %v", last)
+	}
+	parts, ok := last["content"].([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("tool content = %v", last["content"])
+	}
+	image, _ := parts[1].(map[string]any)
+	url, _ := image["image_url"].(map[string]any)
+	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(onePixelPNG())
+	if image["type"] != "image_url" || url["url"] != want {
+		t.Errorf("image part = %v", image)
 	}
 }
 
