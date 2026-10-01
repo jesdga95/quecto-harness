@@ -49,6 +49,18 @@
   color: var(--text-2);
 }
 
+/* A note written between steps, in a closed fold: small and in the muted ink. */
+.fold-note-text .prose {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.fold-note-text .prose :is(h1, h2, h3, h4, h5, h6) {
+  margin: 8px 0 2px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
 /* Line breaks are markup now, so the text wraps normally. */
 .prose p {
   margin: 0 0 10px;

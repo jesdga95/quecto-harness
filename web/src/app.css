@@ -953,6 +953,69 @@
     flex-direction: column;
     gap: 6px;
   }
+  /* A closed fold keeps the notes written between its steps, small, each with
+     a count of the steps after it that opens them in place. The mark sits on
+     the first line: the note's 20 px line height less the mark's 13 px. */
+  .fold-notes {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .fold-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .fold-note > svg {
+    flex: none;
+    width: 13px;
+    height: 13px;
+    margin-top: 3.5px;
+    color: var(--accent);
+  }
+  .fold-note-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .fold-tally {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 3px;
+    padding: 0 2px 0 6px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    font-size: 11.5px;
+    line-height: 20px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .fold-tally:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .fold-tally .caret {
+    display: inline-grid;
+    place-items: center;
+    transition: transform 120ms ease;
+  }
+  .fold-tally .caret.is-open {
+    transform: rotate(90deg);
+  }
+  .fold-tally .caret svg {
+    width: 10px;
+    height: 10px;
+  }
+  /* The steps a note led to, set in under its text. */
+  .fold-note-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-left: 21px;
+  }
   /* A running turn's header names the step under way, on the same line the
      settled count takes. */
   .fold-now {

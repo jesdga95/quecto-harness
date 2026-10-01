@@ -3,6 +3,7 @@
   import ArrowDown from "phosphor-svelte/lib/ArrowDown";
   import ArrowsLeftRight from "phosphor-svelte/lib/ArrowsLeftRight";
   import CaretRight from "phosphor-svelte/lib/CaretRight";
+  import ChatText from "phosphor-svelte/lib/ChatText";
   import CheckCircle from "phosphor-svelte/lib/CheckCircle";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
   import Robot from "phosphor-svelte/lib/Robot";
@@ -98,21 +99,38 @@
     for (let i = items.length - 1; i >= 0; i--) if (test(items[i]!)) return i;
     return -1;
   }
+  type Note = { item: Extract<TranscriptItem, { kind: "assistant" }>; steps: TranscriptItem[] };
   type Turn = {
     key: string;
     head: TranscriptItem | null;
     body: TranscriptItem[];
     fold: TranscriptItem[];
+    notes: Note[];
     rest: TranscriptItem[];
     live: boolean;
   };
+
+  // A closed fold still shows the text the model wrote between its steps, each
+  // block with the steps that followed it. Steps before the first block go with
+  // that block, and a block with no text is not one.
+  function notesOf(items: TranscriptItem[]): Note[] {
+    const out: Note[] = [];
+    const lead: TranscriptItem[] = [];
+    for (const item of items) {
+      if (item.kind === "assistant") {
+        if (item.text.trim()) out.push({ item, steps: [] });
+      } else (out.at(-1)?.steps ?? lead).push(item);
+    }
+    out[0]?.steps.unshift(...lead);
+    return out;
+  }
   const turns = $derived.by(() => {
     const out: Turn[] = [];
     let cur: Turn | null = null;
     for (const item of app.items) {
       const starts = item.kind === "user" || item.kind === "mode" || item.kind === "compaction";
       if (starts || !cur) {
-        cur = { key: item.id, head: null, body: [], fold: [], rest: [], live: false };
+        cur = { key: item.id, head: null, body: [], fold: [], notes: [], rest: [], live: false };
         out.push(cur);
         if (starts) {
           cur.head = item;
@@ -135,6 +153,7 @@
       }
       const folded = turn.body.slice(0, cut);
       turn.fold = folded.filter((item) => !pending(item));
+      turn.notes = notesOf(turn.fold);
       turn.rest = [...folded.filter(pending), ...turn.body.slice(cut)];
     });
     return out;
@@ -147,21 +166,26 @@
     return last && last.fold.length > 0 ? last.key : undefined;
   });
 
-  // Which folded turns the reader has opened. It sticks until closed.
+  // Which folded turns, and which notes in them, the reader has opened. Each
+  // sticks until closed.
   const openTurns = $state<Record<string, boolean>>({});
+  const openNotes = $state<Record<string, boolean>>({});
 
   function foldLabel(items: TranscriptItem[]): string {
     const tools = items.filter((i) => i.kind === "tool").length;
-    const messages = items.filter((i) => i.kind === "assistant").length;
-    const parts: string[] = [];
-    if (tools > 0) parts.push(`Used ${tools} ${tools === 1 ? "tool" : "tools"}`);
-    if (messages > 0) parts.push(`${messages} ${messages === 1 ? "note" : "notes"} on the way`);
-    if (parts.length === 0) {
-      const thoughts = items.filter((i) => i.kind === "reasoning").length;
-      if (thoughts > 0) parts.push(`${thoughts} ${thoughts === 1 ? "thought" : "thoughts"}`);
-      else parts.push(`${items.length} ${items.length === 1 ? "step" : "steps"}`);
-    }
-    return parts.join(", ");
+    if (tools > 0) return `Used ${tools} ${tools === 1 ? "tool" : "tools"}`;
+    const thoughts = items.filter((i) => i.kind === "reasoning").length;
+    if (thoughts > 0) return `${thoughts} ${thoughts === 1 ? "thought" : "thoughts"}`;
+    const steps = items.filter((i) => i.kind !== "assistant").length;
+    return `${steps} ${steps === 1 ? "step" : "steps"}`;
+  }
+
+  // The count on the right of a note, of the steps that followed it.
+  function tally(steps: TranscriptItem[]): string {
+    const tools = steps.filter((i) => i.kind === "tool").length;
+    if (tools > 0) return `${tools} ${tools === 1 ? "tool" : "tools"}`;
+    if (steps.some((i) => i.kind === "reasoning")) return "Thought";
+    return steps.length > 0 ? `${steps.length} ${steps.length === 1 ? "step" : "steps"}` : "";
   }
 
   // What a running turn is doing now: the newest call still running, or else
@@ -446,7 +470,7 @@
           <div class="fold" class:is-open={openTurns[turn.key]}>
             <button
               class="fold-head"
-              class:no-rule={turn.rest.length === 0 && !openTurns[turn.key]}
+              class:no-rule={turn.rest.length === 0 && turn.notes.length === 0 && !openTurns[turn.key]}
               aria-expanded={openTurns[turn.key] === true}
               onclick={() => (openTurns[turn.key] = !openTurns[turn.key])}
             >
@@ -473,6 +497,34 @@
               <div class="fold-list" class:is-live={turn.live} use:followList={turn.live}>
                 {#each turn.fold as item (item.id)}
                   {@render renderItem(item)}
+                {/each}
+              </div>
+            {:else if turn.notes.length > 0}
+              <div class="fold-notes">
+                {#each turn.notes as note (note.item.id)}
+                  {@const label = tally(note.steps)}
+                  {@const id = note.item.id}
+                  <div class="fold-note">
+                    <ChatText />
+                    <div class="fold-note-text"><Prose text={note.item.text} streaming={note.item.streaming} /></div>
+                    {#if label}
+                      <button
+                        class="fold-tally"
+                        aria-expanded={openNotes[id] === true}
+                        onclick={() => (openNotes[id] = !openNotes[id])}
+                      >
+                        {label}
+                        <span class="caret" class:is-open={openNotes[id]}><CaretRight /></span>
+                      </button>
+                    {/if}
+                  </div>
+                  {#if openNotes[id] && label}
+                    <div class="fold-note-steps">
+                      {#each note.steps as item (item.id)}
+                        {@render renderItem(item)}
+                      {/each}
+                    </div>
+                  {/if}
                 {/each}
               </div>
             {/if}
