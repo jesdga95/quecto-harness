@@ -1,1 +1,0 @@
-Attached image {{.Path}}.

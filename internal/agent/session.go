@@ -752,10 +752,11 @@ func userMessage(e store.Entry, images map[string]llm.Part, rules string) llm.Me
 	var parts []llm.Part
 	for _, a := range e.Attachments {
 		if a.Kind == "image" {
+			// The picture goes as a part, so the model sees it. A path is not
+			// said: a paste lives outside the project the tools can read, and
+			// the picture itself is already in the message.
 			if part, ok := images[a.File]; ok {
 				parts = append(parts, part)
-				b.WriteString("\n\n")
-				b.WriteString(prompts.Image(a.Path))
 			}
 			continue
 		}

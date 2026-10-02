@@ -1827,7 +1827,7 @@ func TestImageReachesThePromptAsParts(t *testing.T) {
 		t.Fatalf("user content = %v", user["content"])
 	}
 	text, _ := parts[0].(map[string]any)
-	if text["type"] != "text" || !strings.Contains(text["text"].(string), png) {
+	if text["type"] != "text" || text["text"] != "what is this" {
 		t.Errorf("first part = %v", text)
 	}
 	image, _ := parts[1].(map[string]any)
