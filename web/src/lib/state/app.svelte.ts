@@ -131,6 +131,9 @@ export const app = $state({
   // How many background commands each session still has running, from the same
   // feed. Only sessions with at least one appear.
   running: {} as Record<string, number>,
+  // Sessions whose last turn ended while they were not the open one. Cleared
+  // when the session is opened, so the dot in the sidebar marks unseen work.
+  finished: {} as Record<string, boolean>,
   // The model has been asked and nothing has come back yet. True from the
   // moment a turn starts, again after each tool result while the model reads
   // it, and for the whole of a compaction, which are the stretches that draw
@@ -244,8 +247,12 @@ function onFeed(feed: Record<string, SessionFeed>, whole: boolean): void {
   const running = whole ? {} : { ...app.running };
   for (const [id, item] of Object.entries(feed)) {
     if (item.state !== undefined) {
-      if (item.state === "idle") delete states[id];
-      else states[id] = item.state;
+      if (item.state === "idle") {
+        // A turn that was running has just ended. It went unseen only if the
+        // session is not the open one, which watched it to the end.
+        if (states[id] !== undefined && id !== app.sessionId) app.finished[id] = true;
+        delete states[id];
+      } else states[id] = item.state;
     }
     if (item.running !== undefined) {
       if (item.running === 0) delete running[id];
@@ -254,6 +261,12 @@ function onFeed(feed: Record<string, SessionFeed>, whole: boolean): void {
   }
   app.states = states;
   app.running = running;
+}
+
+/** Whether a session's last turn ended while it was not the open one. The
+    open one is never marked, since its turn was watched. */
+export function turnFinished(id: string): boolean {
+  return app.finished[id] === true;
 }
 
 /** Whether a session is held on a person: a permission card, a question or a
@@ -389,6 +402,8 @@ export async function selectSession(id: string): Promise<void> {
   if (keepChanges) showSection("changes");
   else app.panel = false;
   markAnnounced();
+  // Opening a session is reading its finished turn.
+  delete app.finished[id];
   unsubscribe = api.events(id, onEvent);
   void loadChanges();
   void loadProcesses();

@@ -19,6 +19,7 @@
     isWorking,
     hasBackground,
     needsYou,
+    turnFinished,
     selectSession,
     sessionsOf,
     removeProject,
@@ -285,6 +286,8 @@
                       <span class="background" role="status" aria-label="Running in the background"></span>
                     {:else if isWorking(session.id)}
                       <span class="working" role="status" aria-label="Working"></span>
+                    {:else if turnFinished(session.id)}
+                      <span class="finished" role="status" aria-label="Turn finished"></span>
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{session.title}</span>
                     {#if held}

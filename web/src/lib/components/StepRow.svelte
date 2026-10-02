@@ -180,8 +180,7 @@
     {#if child && child.status !== "idle"}
       <span class="text-[12px] text-muted">{statusLabel(child.status)}</span>
       <span class="spinner"></span>
-    {/if}
-    {#if item.kind === "tool" && item.running}
+    {:else if item.kind === "tool" && item.running}
       <span class="spinner"></span>
     {/if}
     {#if expandable}
