@@ -1256,6 +1256,13 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			}
 			continue
 		}
+		// A server that will not take a picture refuses the whole request, so
+		// the pictures the last calls returned become errors in their results
+		// and the request goes again. Older ones were accepted already.
+		if llm.Kind(err) == llm.KindBadRequest && e.refuseImages(s, err) {
+			e.dropLive(s)
+			continue
+		}
 		if err != nil {
 			e.keepPartial(s)
 			e.endWithError(s, err, iteration)
@@ -1989,6 +1996,36 @@ func (e *Engine) appendTool(s *Session, call llm.ToolCall, record *store.Permiss
 		ToolCallID: call.ID, ToolName: call.Function.Name, Content: o.content,
 		ExitCode: o.exitCode, Truncated: o.truncated, Permission: record, Meta: o.meta,
 		Attachments: o.images, InContext: true, Visible: true})
+}
+
+// refuseImages takes the pictures off the results that follow the last
+// assistant entry, which the refused request was the first to carry, and says
+// in each result why it was not seen. It reports whether there were any.
+func (e *Engine) refuseImages(s *Session, err error) bool {
+	s.mu.Lock()
+	var dropped []string
+	for i := len(s.Entries) - 1; i >= 0 && s.Entries[i].Kind != "assistant"; i-- {
+		entry := &s.Entries[i]
+		if entry.Kind != "tool" || len(entry.Attachments) == 0 {
+			continue
+		}
+		for _, a := range entry.Attachments {
+			dropped = append(dropped, a.File)
+		}
+		entry.Content = fmt.Sprintf("%s was not sent: %s", entry.Attachments[0].Path, err)
+		entry.Attachments = nil
+		entry.Meta = map[string]any{"error": true}
+	}
+	s.mu.Unlock()
+	if len(dropped) == 0 {
+		return false
+	}
+	for _, id := range dropped {
+		e.files.Remove(id)
+	}
+	e.save(s)
+	e.publish(s.ID, ev("resync", nil))
+	return true
 }
 
 // recordBaseline keeps one file as it stood before this session first wrote

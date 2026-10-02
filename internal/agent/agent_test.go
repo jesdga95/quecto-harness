@@ -1895,6 +1895,46 @@ func TestReadImageSendsThePicture(t *testing.T) {
 	}
 }
 
+// TestRefusedImageIsAToolError asserts that a server refusing the picture
+// read_image returned ends neither the loop nor the session: the result says
+// why, the picture is dropped, and the request goes again without it.
+func TestRefusedImageIsAToolError(t *testing.T) {
+	h := newHarness(t, "stream_read_image.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.mu.Lock()
+	h.replay.NoVision = true
+	h.replay.mu.Unlock()
+	s := h.session(t)
+	if err := os.WriteFile(filepath.Join(h.project, "shot.png"), onePixelPNG(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.Send(s.ID, "look at it", nil)
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	var tool store.Entry
+	for _, e := range doc.Entries {
+		if e.Kind == "tool" {
+			tool = e
+		}
+	}
+	if len(tool.Attachments) != 0 || tool.Meta["error"] != true {
+		t.Fatalf("tool entry = %+v", tool)
+	}
+	if !strings.Contains(tool.Content, "shot.png was not sent") || !strings.Contains(tool.Content, "Vision is disabled") {
+		t.Errorf("result = %q", tool.Content)
+	}
+	last := doc.Entries[len(doc.Entries)-1]
+	if last.Kind != "assistant" {
+		t.Errorf("the turn ended on %s %q, want the model's reply", last.Kind, last.Content)
+	}
+	if n := h.replay.Count(); n != 3 {
+		t.Errorf("chat requests = %d, want the call, the refusal and the retry", n)
+	}
+	if carriesImage(h.replay.Body(2)) {
+		t.Error("the retry carried the picture again")
+	}
+}
+
 // onePixelPNG is the smallest header that sniffs as a png.
 func onePixelPNG() []byte {
 	return []byte{

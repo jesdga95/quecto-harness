@@ -24,12 +24,15 @@ type replay struct {
 	// byModel queues scripts answered only to a request naming that model, and
 	// held gates them, so a launcher and the agent it launched are scripted
 	// and timed apart from each other.
-	byModel  map[string][][]string
-	nextFor  map[string]int
-	held     map[string]chan struct{}
-	Delay    time.Duration
-	Props    time.Duration
-	Status   int
+	byModel map[string][][]string
+	nextFor map[string]int
+	held    map[string]chan struct{}
+	Delay   time.Duration
+	Props   time.Duration
+	Status  int
+	// NoVision refuses a request carrying an image, the way a server with
+	// vision turned off does, without using up a script.
+	NoVision bool
 	Requests []map[string]any
 	Titles   []map[string]any
 	Queries  []string
@@ -164,6 +167,12 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	r.Requests = append(r.Requests, body)
 	r.Order = append(r.Order, "chat")
+	if r.NoVision && carriesImage(body) {
+		r.mu.Unlock()
+		w.WriteHeader(400)
+		fmt.Fprint(w, `{"error":{"message":"Vision is disabled for this server"}}`)
+		return
+	}
 	script := []string(nil)
 	// A model with a queue of its own answers from it, so two agents talking
 	// at once never take each other's script.
@@ -239,4 +248,19 @@ func serveFixture(t *testing.T, w http.ResponseWriter, name string) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
+}
+
+// carriesImage reports whether any message in a chat body holds an image part.
+func carriesImage(body map[string]any) bool {
+	msgs, _ := body["messages"].([]any)
+	for _, m := range msgs {
+		msg, _ := m.(map[string]any)
+		parts, _ := msg["content"].([]any)
+		for _, p := range parts {
+			if part, _ := p.(map[string]any); part["type"] == "image_url" {
+				return true
+			}
+		}
+	}
+	return false
 }
