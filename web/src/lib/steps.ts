@@ -14,13 +14,19 @@ export function stringArg(item: TranscriptItem, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
-/** What grep and web_search were asked for, which is the text unless the
-    call only named files. */
+/** What grep and web_search were asked for. A grep names the text, then the
+    file name pattern and folder it was narrowed to, so two calls that differ
+    only there read differently. */
 export function searchQuery(item: TranscriptItem): string {
   if (item.kind !== "tool") return "";
-  if (item.name === "grep") return stringArg(item, "text") || stringArg(item, "name");
   if (item.name === "web_search") return stringArg(item, "query");
-  return "";
+  if (item.name !== "grep") return "";
+  const text = stringArg(item, "text");
+  const name = stringArg(item, "name");
+  const path = stringArg(item, "path").trim();
+  let out = text && name ? `${text} in ${name}` : text || name;
+  if (path) out += ` under ${path}`;
+  return out;
 }
 
 /** A call that failed before it could run, or that the tool refused, carries

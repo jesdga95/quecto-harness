@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"time"
 
 	"quecto-harness/internal/config"
@@ -147,10 +149,9 @@ type ReplaceInFileArgs struct {
 }
 
 type FindArgs struct {
-	Path  string `json:"path"`
-	Name  string `json:"name"`
-	Text  string `json:"text"`
-	Regex bool   `json:"regex"`
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Text string `json:"text"`
 }
 
 type RunShellArgs struct {
@@ -168,7 +169,47 @@ func decodeArgs(raw json.RawMessage, v any) error {
 		return errors.New("the arguments were empty")
 	}
 	if err := json.Unmarshal(raw, v); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field != "" {
+			return fmt.Errorf("the argument %s must be %s, not %s", typeErr.Field, jsonKind(typeErr.Type.Kind()), jsonValue(typeErr.Value))
+		}
 		return fmt.Errorf("the arguments are not valid JSON: %s", err)
 	}
 	return nil
+}
+
+// jsonKind names the JSON value a Go field of this kind decodes from.
+func jsonKind(k reflect.Kind) string {
+	switch k {
+	case reflect.Bool:
+		return "true or false"
+	case reflect.String:
+		return "a string"
+	case reflect.Slice, reflect.Array:
+		return "a list"
+	case reflect.Map, reflect.Struct:
+		return "an object"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return "a number"
+	}
+	return "another type"
+}
+
+// jsonValue names the JSON value the decoder found, as UnmarshalTypeError
+// reports it.
+func jsonValue(v string) string {
+	switch v {
+	case "bool":
+		return "true or false"
+	case "array":
+		return "a list"
+	case "object":
+		return "an object"
+	}
+	if strings.HasPrefix(v, "number") {
+		return "a number"
+	}
+	return "a " + v
 }

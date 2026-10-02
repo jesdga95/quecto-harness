@@ -160,10 +160,9 @@ func buildSchemas() []llm.Tool {
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"text":  map[string]any{"type": "string", "description": "Text to look for inside files."},
-					"name":  map[string]any{"type": "string", "description": "File name pattern, such as *.go. Matched against the name, not the folders above it."},
-					"path":  map[string]any{"type": "string", "description": "Folder or file to search, relative to the project root. Default the whole project."},
-					"regex": map[string]any{"type": "boolean", "description": "Treat text as a regular expression. Default false."},
+					"text": map[string]any{"type": "string", "description": "Text or regular expression to look for inside files."},
+					"name": map[string]any{"type": "string", "description": "File name pattern, such as *.go. Matched against the name, not the folders above it."},
+					"path": map[string]any{"type": "string", "description": "Folder or file to search, relative to the project root. Default the whole project."},
 				},
 				"additionalProperties": false,
 			}),

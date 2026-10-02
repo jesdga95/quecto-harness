@@ -1019,12 +1019,26 @@ func TestFindTextIgnoresCaseAndIsLiteral(t *testing.T) {
 			t.Errorf("output does not contain %q:\n%s", want, out)
 		}
 	}
-	// A literal search takes the dot as a dot rather than as any character.
-	if out := find(t, r, `{"text":"chat.line"}`); !strings.Contains(out, "no match for") {
-		t.Errorf("literal search matched a regular expression:\n%s", out)
-	}
-	if out := find(t, r, `{"text":"chat.line","regex":true}`); !strings.Contains(out, "2 matches") {
+	// Text that compiles is also read as an expression.
+	if out := find(t, r, `{"text":"chat.line"}`); !strings.Contains(out, "2 matches") {
 		t.Errorf("regex search did not match:\n%s", out)
+	}
+}
+
+func TestFindTextMatchesAsWrittenWhenTheExpressionDoesNot(t *testing.T) {
+	base := t.TempDir()
+	body := "v := x[0] + y\nstrings.Repeat(s, 2)\nopen(\n"
+	if err := os.WriteFile(filepath.Join(base, "a.go"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRunner(base, config.Defaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"x[0] + y", `strings\\.`, "open("} {
+		if out := find(t, r, `{"text":"`+text+`"}`); !strings.Contains(out, "1 match in 1 file") {
+			t.Errorf("%s did not match once:\n%s", text, out)
+		}
 	}
 }
 
@@ -1043,6 +1057,27 @@ func TestFindSkipsInstalledCodeUntilNamed(t *testing.T) {
 	}
 	if strings.Contains(named, "passed over") {
 		t.Errorf("a named path still reported a skip:\n%s", named)
+	}
+}
+
+func TestFindKeepsSkippingUnderANamedPath(t *testing.T) {
+	r := findTree(t)
+	if err := os.MkdirAll(filepath.Join(r.Root, "web", "node_modules", "dep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.Root, "web", "node_modules", "dep", "x.js"), []byte("chat-line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := find(t, r, `{"text":"chat-line","path":"web"}`)
+	if strings.Contains(out, "web/node_modules/dep/x.js") || !strings.Contains(out, "passed over node_modules") {
+		t.Errorf("a named path searched installed code inside it:\n%s", out)
+	}
+	if !strings.Contains(out, "web/Chat.css:1:") {
+		t.Errorf("the named path itself was not searched:\n%s", out)
+	}
+	inside := find(t, r, `{"text":"chat-line","path":"web/node_modules/dep"}`)
+	if !strings.Contains(inside, "web/node_modules/dep/x.js:1:") {
+		t.Errorf("a path inside a skipped folder was not searched:\n%s", inside)
 	}
 }
 
@@ -1117,9 +1152,10 @@ func TestFindBadInput(t *testing.T) {
 	if _, err := r.Find(context.Background(), json.RawMessage(`{"text":"x","path":"nope"}`)); err == nil {
 		t.Error("grep accepted a path that does not exist")
 	}
-	out := find(t, r, `{"text":"(unclosed","regex":true}`)
-	if !strings.Contains(out, "not a valid regular expression") || !strings.Contains(out, "without regex") {
-		t.Errorf("a bad expression did not say how to retry:\n%s", out)
+	// An argument of the wrong type names the field and what it takes.
+	_, err := r.Find(context.Background(), json.RawMessage(`{"text":5}`))
+	if err == nil || err.Error() != "grep: the argument text must be a string, not a number" {
+		t.Errorf("a number in text was reported as %v", err)
 	}
 }
 

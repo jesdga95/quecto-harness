@@ -27,12 +27,13 @@ const (
 	findRelated  = 3
 )
 
-// skipDirs are passed over when the walk reaches them on its own. Naming one
-// as path searches it.
+// skipDirs are passed over when the walk reaches them on its own, under the
+// project or under a named path. A path that is one, or lies inside one,
+// searches it whole.
 var skipDirs = []string{".git", "node_modules", "dist", "build", "vendor", ".venv", "target"}
 
 // Find lists files whose name matches and the lines in them that contain the
-// text. Matching ignores case and text is literal unless regex is set.
+// text. Matching ignores case.
 func (r *Runner) Find(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args FindArgs
 	if err := decodeArgs(raw, &args); err != nil {
@@ -60,23 +61,12 @@ func (r *Runner) Find(ctx context.Context, raw json.RawMessage) (Result, error) 
 		}
 	}
 
-	// A literal needle is quoted into an expression, so both kinds of search
-	// run through one matcher.
 	var re *regexp.Regexp
 	if args.Text != "" {
-		expr := regexp.QuoteMeta(args.Text)
-		if args.Regex {
-			expr = args.Text
-		}
-		var err error
-		re, err = regexp.Compile("(?i)" + expr)
-		if err != nil {
-			return Result{Output: fmt.Sprintf("%s is not a valid regular expression: %s\ncall again without regex to search for it as plain text", args.Text, err)}, nil
-		}
+		re = textMatcher(args.Text)
 	}
 
-	// The default skips apply only when no path was given.
-	f := finder{runner: r, re: re, name: args.Name, skipping: strings.TrimSpace(args.Path) == ""}
+	f := finder{runner: r, re: re, name: args.Name, skipping: !inSkipDir(r.rel(base))}
 	if err := f.walk(ctx, base); err != nil {
 		if ctx.Err() != nil {
 			return Result{Output: "stopped"}, nil
@@ -85,6 +75,28 @@ func (r *Runner) Find(ctx context.Context, raw json.RawMessage) (Result, error) 
 	}
 	out, truncated := Truncate(f.render(args), r.OutputLimit)
 	return Result{Output: out, Truncated: truncated, Bytes: len(out)}, nil
+}
+
+// textMatcher matches a line that contains text as written or, when text
+// compiles as a regular expression, matches it, so punctuation in plain text
+// never causes a miss.
+func textMatcher(text string) *regexp.Regexp {
+	expr := regexp.QuoteMeta(text)
+	if _, err := regexp.Compile(text); err == nil {
+		expr = "(?:" + expr + ")|(?:" + text + ")"
+	}
+	return regexp.MustCompile("(?i)" + expr)
+}
+
+// inSkipDir reports whether a project-relative path is or lies inside a
+// skipped folder.
+func inSkipDir(rel string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if slices.Contains(skipDirs, part) {
+			return true
+		}
+	}
+	return false
 }
 
 // finder holds the state of one walk.
