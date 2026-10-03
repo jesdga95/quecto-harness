@@ -258,14 +258,14 @@ const renderer: RendererObject = {
 
   // Inline code that names a file opens it in the panel.
   codespan({ text }) {
-    const path = fileTarget(text);
-    return path ? fileLinkHtml(path, text, true) : `<code>${escapeHtml(text)}</code>`;
+    const ref = fileTarget(text);
+    return ref ? fileLinkHtml(ref, text, true) : `<code>${escapeHtml(text)}</code>`;
   },
 
   link({ href, title, tokens }) {
     // A link to a file has no page to open; the file opens in the panel.
-    const target = /^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith("file://") ? null : fileTarget(href);
-    if (target) return fileLinkHtml(target, this.parser.parseInline(tokens, this.parser.textRenderer), false);
+    const ref = /^[a-z][a-z0-9+.-]*:/i.test(href) && !href.startsWith("file://") ? null : fileTarget(href);
+    if (ref) return fileLinkHtml(ref, this.parser.parseInline(tokens, this.parser.textRenderer), false);
     const label = this.parser.parseInline(tokens);
     const url = safeUrl(href);
     if (!url) return label;

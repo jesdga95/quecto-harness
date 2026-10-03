@@ -42,7 +42,7 @@ import {
   writtenPreviews,
   type Artifact,
 } from "../artifacts";
-import { inProject } from "../files";
+import { inProject, type FileRef } from "../files";
 import type { Plan } from "../plan";
 import { confirm } from "./confirm.svelte";
 
@@ -118,6 +118,9 @@ export const app = $state({
   files: {} as Record<string, ProjectFile | undefined>,
   fileErrors: {} as Record<string, string>,
   openFiles: [] as string[],
+  // The file a link asked for and the line it named, which the panel opens
+  // that file on. It goes when the tab closes.
+  mark: null as FileRef | null,
   // The panel's tabs, by artifact id, in the order they were opened, and the
   // folder its file browser is showing.
   tabs: [] as string[],
@@ -992,6 +995,7 @@ export function closeTab(id: string): void {
   const at = app.tabs.indexOf(id);
   if (at === -1) return;
   app.tabs.splice(at, 1);
+  if (app.mark && fileArtifactId(app.mark.path) === id) app.mark = null;
   if (app.artifactId !== id) return;
   const next = app.tabs[at] ?? app.tabs[at - 1];
   app.artifactId = next ?? "";
@@ -1049,11 +1053,13 @@ export async function loadFile(raw: string, loud = false): Promise<ProjectFile |
   }
 }
 
-/** Opens a file in the project in the panel, as a file link asks. */
-export async function openFile(raw: string): Promise<void> {
+/** Opens a file in the project in the panel, as a file link asks. A line from
+    the link is the line the panel marks. */
+export async function openFile(raw: string, line = 0): Promise<void> {
   const file = await loadFile(raw, true);
   if (!file) return;
   if (!app.openFiles.includes(file.path)) app.openFiles.push(file.path);
+  if (line > 0) app.mark = { path: file.path, line };
   showArtifact(fileArtifactId(file.path));
 }
 
@@ -1065,6 +1071,7 @@ function resetArtifacts(): void {
   app.files = {};
   app.fileErrors = {};
   app.openFiles = [];
+  app.mark = null;
   app.tabs = [];
   app.section = "files";
   app.browseDir = null;

@@ -112,8 +112,18 @@
       !waiting &&
       (shown.kind === "svg" || shown.kind === "page" || shown.kind === "plan" || shown.kind === "markdown"),
   );
+  // The line a file link asked for, when the file it named is the one on
+  // screen. A line asked for is looked at, so the file is shown as its source.
+  const asked = $derived(shown?.path && app.mark?.path === shown.path ? app.mark.line : 0);
+
   const current = $derived<"preview" | "code">(
-    shown?.kind === "image" ? "preview" : canPreview ? view : "code",
+    shown?.kind === "image"
+      ? "preview"
+      : asked > 0
+        ? "code"
+        : canPreview
+          ? view
+          : "code",
   );
 
   // Bumped to run a page's scripts again from the start.
@@ -141,18 +151,47 @@
     if (code) stream.draw(code, markup);
   });
 
+  // What the source view holds: the whole file, or a write still arriving as
+  // far as its reveal has come.
+  const drawn = $derived(!shown || current === "preview" ? "" : shown.complete ? shown.source : stream.text);
+  const rows = $derived(drawn === "" ? 0 : drawn.replace(/\n$/, "").split("\n").length);
+  // A line the file does not have is marked at its last one.
+  const mark = $derived(asked > 0 && rows > 0 ? Math.min(asked, rows) : 0);
+
   // One number a line, as a single run of text so a long file costs one node.
-  const gutter = $derived.by(() => {
-    const text = shown?.complete ? shown.source : stream.text;
-    if (!shown || current === "preview" || text === "") return "";
-    const lines = text.replace(/\n$/, "").split("\n").length;
-    return Array.from({ length: lines }, (_, i) => i + 1).join("\n");
-  });
+  const gutter = $derived(Array.from({ length: rows }, (_, i) => i + 1).join("\n"));
 
   let sourceBox = $state<HTMLDivElement | null>(null);
+  let codeBox = $state<HTMLElement | null>(null);
+  // Where the marked line sits, measured from the type the source is drawn in.
+  let markAt = $state({ top: 0, height: 0 });
+
   $effect(() => {
     void markup;
-    if (sourceBox && shown && !shown.complete) sourceBox.scrollTop = sourceBox.scrollHeight;
+    if (sourceBox && shown && !shown.complete && !asked) sourceBox.scrollTop = sourceBox.scrollHeight;
+  });
+
+  // The band is placed once the source is on screen: one row of the code's own
+  // line height, sitting under its padding, with the line centred in the box.
+  $effect(() => {
+    void markup;
+    const line = mark;
+    const codeEl = code;
+    const box = sourceBox;
+    const pre = codeBox;
+    if (!line || !codeEl || !box || !pre) {
+      markAt = { top: 0, height: 0 };
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const measured = parseFloat(getComputedStyle(codeEl).lineHeight);
+      const height = Number.isFinite(measured) && measured > 0 ? measured : 18;
+      const pad = parseFloat(getComputedStyle(pre).paddingTop) || 0;
+      const top = pad + (line - 1) * height;
+      markAt = { top, height };
+      box.scrollTop = Math.max(0, top - Math.round(box.clientHeight / 2));
+    });
+    return () => cancelAnimationFrame(frame);
   });
 
   // The path row: the project root, then the folders down to the file, each
@@ -416,7 +455,7 @@
               <div class="artifact-source-scroll" bind:this={sourceBox}>
                 <div class="source-rows">
                   <pre class="source-gutter num" aria-hidden="true">{gutter}</pre>
-                  <pre><code bind:this={code}></code></pre>
+                  <pre class="source-code" bind:this={codeBox}>{#if mark && markAt.height}<span class="source-mark" style="top:{markAt.top}px;height:{markAt.height}px"></span>{/if}<code bind:this={code}></code></pre>
                 </div>
               </div>
             </div>

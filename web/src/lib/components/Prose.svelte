@@ -26,7 +26,8 @@
       const link = (event.target as HTMLElement).closest<HTMLElement>("[data-file]");
       if (!link || !node.contains(link)) return;
       event.preventDefault();
-      void openFile(link.dataset.file ?? "");
+      const line = Number(link.dataset.line ?? 0);
+      void openFile(link.dataset.file ?? "", Number.isFinite(line) ? line : 0);
     };
     node.addEventListener("click", click);
     return { destroy: () => node.removeEventListener("click", click) };

@@ -34,9 +34,15 @@ function extOf(name: string): string {
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
 
-/** The path a piece of inline code or a link names, with any :line or
-    :line:col suffix taken off, or null when it does not name a file. */
-export function fileTarget(raw: string): string | null {
+/** What a piece of inline code or a link names: the file, and the line its
+    :line or :line:col suffix asks for, 0 when it names none. The column is
+    dropped, since the panel marks a line and nothing narrower. */
+export interface FileRef {
+  path: string;
+  line: number;
+}
+
+export function fileTarget(raw: string): FileRef | null {
   let text = raw.trim();
   if (text.startsWith("file://")) {
     try {
@@ -47,15 +53,16 @@ export function fileTarget(raw: string): string | null {
   }
   if (text.length === 0 || text.length > 300 || /\s/.test(text)) return null;
   if (text.includes("://") || text.startsWith("-") || text.startsWith("~")) return null;
-  text = text.replace(/:\d+(:\d+)?$/, "");
+  const suffix = /:(\d+)(:\d+)?$/.exec(text);
+  text = suffix ? text.slice(0, suffix.index) : text;
   if (text.endsWith("/")) return null;
   const segments = text.replace(/^\.\//, "").split("/");
   if (segments.some((s) => !/^[\w.@+-]+$/.test(s) && s !== "")) return null;
   const name = segments.at(-1) ?? "";
-  if (BARE.has(name)) return text;
-  const ext = extOf(name);
-  if (IMAGE.has(ext) || TEXT.has(ext) || CODE.has(ext)) return text;
-  return null;
+  const known = BARE.has(name) || IMAGE.has(extOf(name)) || TEXT.has(extOf(name)) || CODE.has(extOf(name));
+  if (!known) return null;
+  const line = Number(suffix?.[1] ?? 0);
+  return { path: text, line: Number.isSafeInteger(line) ? line : 0 };
 }
 
 export function glyphOf(path: string): Glyph {
@@ -92,13 +99,15 @@ const ICONS: Record<Glyph, string> = {
 };
 
 /** A file link as markup, for a renderer that emits strings. label is shown
-    as it was written, the path is what a click opens. */
-export function fileLinkHtml(path: string, label: string, code: boolean): string {
+    as it was written, the ref is what a click opens. */
+export function fileLinkHtml(ref: FileRef, label: string, code: boolean): string {
   const name = escapeHtml(label);
   const text = code ? `<code>${name}</code>` : `<span>${name}</span>`;
+  const line = ref.line > 0 ? ` data-line="${ref.line}"` : "";
+  const title = escapeHtml(ref.line > 0 ? `${ref.path}:${ref.line}` : ref.path);
   return (
-    `<button type="button" class="md-file${code ? " is-code" : ""}" data-file="${escapeHtml(path)}" title="${escapeHtml(path)}">` +
-    `${ICONS[glyphOf(path)]}${text}</button>`
+    `<button type="button" class="md-file${code ? " is-code" : ""}" data-file="${escapeHtml(ref.path)}"${line} title="${title}">` +
+    `${ICONS[glyphOf(ref.path)]}${text}</button>`
   );
 }
 

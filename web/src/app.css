@@ -3190,7 +3190,22 @@
     color: var(--muted);
     user-select: none;
   }
+  /* The line a file link named: one row of the code's own line height, marked
+     across the column and held to its left edge. The code sits above it so the
+     text stays legible. */
+  .source-code {
+    position: relative;
+  }
+  .source-mark {
+    position: absolute;
+    left: 0;
+    right: 0;
+    background: var(--accent-bg);
+    box-shadow: inset 3px 0 0 var(--accent);
+    pointer-events: none;
+  }
   .artifact-source code {
+    position: relative;
     font: inherit;
     color: var(--text-2);
     white-space: pre;
