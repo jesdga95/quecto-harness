@@ -45,20 +45,20 @@
   <div class="flex items-center gap-2 px-4 py-3">
     {#if revising}
       <input
-        class="input !rounded-full"
+        class="input input-tall !rounded-full"
         placeholder="Say what to change in the plan"
         bind:value={typed}
         onkeydown={(e) => e.key === "Enter" && revise()}
         use:focus
       />
-      <button class="chip" onclick={() => (revising = false)}>Cancel</button>
-      <button class="chip chip-brand" disabled={typed.trim() === ""} onclick={revise}>
+      <button class="chip chip-tall" onclick={() => (revising = false)}>Cancel</button>
+      <button class="chip chip-brand chip-tall" disabled={typed.trim() === ""} onclick={revise}>
         Send
       </button>
     {:else}
-      <button class="chip chip-brand" onclick={approve}>Approve and execute</button>
-      <button class="chip" onclick={() => (revising = true)}>Keep planning</button>
-      <button class="chip chip-plain ml-auto" onclick={() => showArtifact(PLAN_ID)}>
+      <button class="chip chip-brand chip-tall" onclick={approve}>Approve and execute</button>
+      <button class="chip chip-tall" onclick={() => (revising = true)}>Keep planning</button>
+      <button class="chip chip-plain chip-tall ml-auto" onclick={() => showArtifact(PLAN_ID)}>
         Open plan
       </button>
     {/if}

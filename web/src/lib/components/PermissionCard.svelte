@@ -54,21 +54,21 @@
   <pre class="mono-block mx-4 mt-2.5">{item.command}</pre>
 
   <div class="flex flex-wrap items-center gap-2 px-4 py-3">
-    <button class="chip chip-brand" disabled={sent} onclick={() => send({ decision: "once" })}>
+    <button class="chip chip-brand chip-tall" disabled={sent} onclick={() => send({ decision: "once" })}>
       Allow once
     </button>
     {#if item.tool === "bash"}
       <button
-        class="chip"
+        class="chip chip-tall"
         disabled={sent}
         onclick={() => send({ decision: "always", prefix: prefix.trim() })}
       >
         Allow always
       </button>
-      <input class="input !w-[180px] !rounded-full" bind:value={prefix} aria-label="Allowed prefix" />
+      <input class="input input-tall !w-[180px] !rounded-full" bind:value={prefix} aria-label="Allowed prefix" />
     {/if}
     <button
-      class="chip chip-plain ml-auto text-muted"
+      class="chip chip-plain chip-tall ml-auto text-muted"
       disabled={sent}
       onclick={() => (asking ? send({ decision: "deny", reason: reason.trim() }) : (asking = true))}
     >
@@ -79,13 +79,13 @@
   {#if asking}
     <div class="flex items-center gap-2 px-4 pb-3">
       <input
-        class="input !rounded-full"
+        class="input input-tall !rounded-full"
         placeholder="Reason, optional"
         bind:value={reason}
         onkeydown={(e) => e.key === "Enter" && send({ decision: "deny", reason: reason.trim() })}
       />
       <button
-        class="chip"
+        class="chip chip-tall"
         disabled={sent}
         onclick={() => send({ decision: "deny", reason: reason.trim() })}
       >

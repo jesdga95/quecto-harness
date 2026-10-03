@@ -486,6 +486,11 @@
     opacity: 0.45;
     cursor: not-allowed;
   }
+  /* A chip that answers a turn, rather than reporting one, takes the height of
+     the composer's send circle so every action control is the same size. */
+  .chip-tall {
+    height: 34px;
+  }
 
   .round {
     display: inline-grid;
@@ -1345,6 +1350,12 @@
   .textarea:disabled {
     opacity: 0.55;
     cursor: not-allowed;
+  }
+  /* A field beside an action chip takes that chip's 34px height, with the
+     padding trimmed so the text still sits on the middle of the row. */
+  .input-tall {
+    height: 34px;
+    padding: 6px 11px;
   }
 
   .pill {

@@ -99,7 +99,7 @@
       onkeydown={(e) => e.key === "Enter" && send(chosen)}
     />
     <button
-      class="chip chip-brand"
+      class="chip chip-brand chip-tall"
       disabled={!open || (chosen.length === 0 && typed.trim() === "")}
       onclick={() => send(chosen)}
     >
