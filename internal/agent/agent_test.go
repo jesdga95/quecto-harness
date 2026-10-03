@@ -1795,6 +1795,31 @@ func TestAttachmentReachesThePrompt(t *testing.T) {
 // TestImageReachesThePromptAsParts asserts that an image goes to the file
 // store rather than into the session document, and travels in the message as
 // the array of parts the endpoint takes.
+// TestImageAloneHasNoTextPart asserts that a message with a picture and no
+// words sends the picture alone, since a server refuses an empty text part.
+func TestImageAloneHasNoTextPart(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	png := filepath.Join(t.TempDir(), "shot.png")
+	if err := os.WriteFile(png, onePixelPNG(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.engine.Send(s.ID, "", []string{png}); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	msgs, _ := h.replay.Body(0)["messages"].([]any)
+	user, _ := msgs[len(msgs)-1].(map[string]any)
+	parts, ok := user["content"].([]any)
+	if !ok || len(parts) != 1 {
+		t.Fatalf("user content = %v", user["content"])
+	}
+	if part, _ := parts[0].(map[string]any); part["type"] != "image_url" {
+		t.Errorf("the only part = %v, want the picture", part)
+	}
+}
+
 func TestImageReachesThePromptAsParts(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)

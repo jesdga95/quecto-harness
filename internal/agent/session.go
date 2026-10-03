@@ -766,7 +766,16 @@ func userMessage(e store.Entry, images map[string]llm.Part, rules string) llm.Me
 	if len(parts) == 0 {
 		return llm.Message{Role: "user", Content: b.String()}
 	}
-	return llm.Message{Role: "user", Parts: append([]llm.Part{llm.TextPart(b.String())}, parts...)}
+	return llm.Message{Role: "user", Parts: withText(b.String(), parts)}
+}
+
+// withText puts the text ahead of the pictures. Empty text is left out rather
+// than sent as an empty part, which a server may refuse.
+func withText(text string, parts []llm.Part) []llm.Part {
+	if text == "" {
+		return parts
+	}
+	return append([]llm.Part{llm.TextPart(text)}, parts...)
 }
 
 // repairToolResults returns one tool message per call, synthesising the ones
@@ -805,7 +814,7 @@ func toolMessage(id string, e store.Entry, images map[string]llm.Part) llm.Messa
 		}
 	}
 	if len(parts) > 0 {
-		m.Parts = append([]llm.Part{llm.TextPart(e.Content)}, parts...)
+		m.Parts = withText(e.Content, parts)
 	}
 	return m
 }
