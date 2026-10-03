@@ -1426,6 +1426,12 @@ export class MockApi implements HarnessApi {
         toolMs: Math.round(ms * 0.15),
         agent: this.active()?.name,
         model: this.active()?.model,
+        perRequest: [0.82, 0.88, 0.94, 1].map((f, i) => ({
+          window: Math.round(input * f),
+          tokens: Math.round(tokens / 4),
+          firstMs: 600 + i * 90,
+          genMs: Math.round((ms * 0.6) / 4),
+        })),
       },
     });
     this.emit(session, { type: "status", status: "idle" });
@@ -1652,8 +1658,8 @@ export class MockApi implements HarnessApi {
       children: [],
     };
     first.children = [
-      { id: auditor.id, title: auditor.title, agent: "Cloud reasoner", status: "running" },
-      { id: worker.id, title: worker.title, agent: "Studio box", status: "idle" },
+      { id: auditor.id, title: auditor.title, agent: "Cloud reasoner", status: "running", fill: 16400 },
+      { id: worker.id, title: worker.title, agent: "Studio box", status: "idle", fill: 22100 },
     ];
     this.sessions.push(first, second, third, worker, auditor);
     this.turnIndex.set(first.id, 2);

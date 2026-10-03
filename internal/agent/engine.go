@@ -211,7 +211,10 @@ func (e *Engine) announce(s *Session, st State) {
 	if parent == "" {
 		return
 	}
-	e.publish(parent, ev("child", map[string]any{"session": s.ID, "state": string(st)}))
+	s.mu.Lock()
+	fill := s.computeFill()
+	s.mu.Unlock()
+	e.publish(parent, ev("child", map[string]any{"session": s.ID, "state": string(st), "fill": fill}))
 	// A subagent's card is drawn in its launcher, so the session list shows
 	// the launcher as waiting on a person while the card is open, and as
 	// itself again once it is not.
@@ -322,6 +325,20 @@ func (e *Engine) State(id string) State {
 		return StateIdle
 	}
 	return s.State()
+}
+
+// LiveFill is a session's context as it stands now, without reading one back
+// from disk. ok is false for a session nothing holds.
+func (e *Engine) LiveFill(id string) (fill int, ok bool) {
+	e.mu.Lock()
+	s, held := e.live[id]
+	e.mu.Unlock()
+	if !held {
+		return 0, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.computeFill(), true
 }
 
 // LiveState is what a session is doing, without reading one back from disk to
@@ -1024,6 +1041,18 @@ type turnCost struct {
 	asking  time.Duration
 	waiting time.Duration
 	tools   time.Duration
+	// each holds every request on its own, in the order they were made.
+	each []requestCost
+}
+
+// requestCost is one request of a turn. window is its prompt and is -1 where
+// the server reported no usage; first and generating are zero for a request
+// that produced nothing.
+type requestCost struct {
+	window     int
+	tokens     int
+	first      time.Duration
+	generating time.Duration
 }
 
 // add folds in one finished request. sent is when it was made and first is
@@ -1032,19 +1061,25 @@ type turnCost struct {
 func (c *turnCost) add(res llm.Result, sent, first time.Time) {
 	c.requests++
 	c.asking += time.Since(sent)
+	one := requestCost{window: -1}
 	if u := res.Usage; u != nil {
 		c.tokens += u.CompletionTokens
 		c.input += u.PromptTokens
 		c.window = u.PromptTokens
+		one.window = u.PromptTokens
+		one.tokens = u.CompletionTokens
 		if u.CachedTokens != nil {
 			c.cached += *u.CachedTokens
 			c.cachedSeen = true
 		}
 	}
 	if !first.IsZero() {
-		c.generating += time.Since(first)
-		c.waiting += first.Sub(sent)
+		one.generating = time.Since(first)
+		one.first = first.Sub(sent)
+		c.generating += one.generating
+		c.waiting += one.first
 	}
+	c.each = append(c.each, one)
 }
 
 // fields renders the numbers for the transcript. The rate is measured rather
@@ -1065,6 +1100,7 @@ func (c *turnCost) fields() map[string]any {
 		"tool_ms":       c.tools.Milliseconds(),
 		"tok_per_s":     rate,
 		"requests":      c.requests,
+		"per_request":   c.perRequest(),
 	}
 	if c.cachedSeen {
 		out["cached_tokens"] = c.cached
@@ -1074,6 +1110,24 @@ func (c *turnCost) fields() map[string]any {
 	}
 	if c.model != "" {
 		out["model"] = c.model
+	}
+	return out
+}
+
+// perRequest renders each request's prompt, output and timings. A prompt the
+// server did not report is left out rather than written as zero.
+func (c *turnCost) perRequest() []map[string]any {
+	out := make([]map[string]any, 0, len(c.each))
+	for _, r := range c.each {
+		row := map[string]any{
+			"tokens":   r.tokens,
+			"first_ms": r.first.Milliseconds(),
+			"gen_ms":   r.generating.Milliseconds(),
+		}
+		if r.window >= 0 {
+			row["window_tokens"] = r.window
+		}
+		out = append(out, row)
 	}
 	return out
 }

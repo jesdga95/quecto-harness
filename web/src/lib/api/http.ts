@@ -37,6 +37,7 @@ import type {
   ToolsetDebug,
   ProjectFile,
   ProjectDir,
+  RequestCost,
   TurnStatus,
   Usage,
   WorkMode,
@@ -232,7 +233,7 @@ interface WireSnapshot {
   question?: { id?: string; call_id?: string; index?: number } | null;
   state?: string;
   parent?: string;
-  children?: { id?: string; title?: string; agent?: string; state?: string }[] | null;
+  children?: { id?: string; title?: string; agent?: string; state?: string; fill?: number }[] | null;
   steer?: WireSteer | null;
   mode?: string;
   toolset?: string;
@@ -304,6 +305,7 @@ interface WireEvent {
   mode?: string;
   kickoff?: boolean;
   plan?: unknown;
+  fill?: number;
 }
 
 // transport
@@ -576,7 +578,24 @@ function toCost(src: object | null | undefined): TurnCost | undefined {
     toolMs: num("tool_ms"),
     agent: str("agent"),
     model: str("model"),
+    perRequest: toRequests(f.per_request),
   };
+}
+
+/** The requests of a turn. A row without its counts is dropped rather than
+    drawn as zero. */
+function toRequests(raw: unknown): RequestCost[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: RequestCost[] = [];
+  for (const row of raw) {
+    if (row === null || typeof row !== "object") continue;
+    const r = row as Record<string, unknown>;
+    const n = (key: string) => (typeof r[key] === "number" ? (r[key] as number) : undefined);
+    const tokens = n("tokens");
+    if (tokens === undefined) continue;
+    out.push({ window: n("window_tokens"), tokens, firstMs: n("first_ms") ?? 0, genMs: n("gen_ms") ?? 0 });
+  }
+  return out;
 }
 
 /** A stored time, or nothing where the entry has none a date can read. */
@@ -955,6 +974,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
       title: c.title ?? "",
       agent: c.agent ?? "",
       status: toStatus(c.state),
+      fill: typeof c.fill === "number" && c.fill > 0 ? c.fill : undefined,
     })),
   };
   summaries.set(id, session);
@@ -1175,6 +1195,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           callId: ev.call_id,
           agent: ev.agent,
           title: ev.title,
+          fill: typeof ev.fill === "number" && ev.fill > 0 ? ev.fill : undefined,
         },
       ];
 

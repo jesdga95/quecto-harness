@@ -3,7 +3,7 @@
   import ArrowsIn from "phosphor-svelte/lib/ArrowsIn";
   import ArrowsOut from "phosphor-svelte/lib/ArrowsOut";
   import Browser from "phosphor-svelte/lib/Browser";
-  import ChartDonut from "phosphor-svelte/lib/ChartDonut";
+  import ChartPie from "phosphor-svelte/lib/ChartPie";
   import FolderOpen from "phosphor-svelte/lib/FolderOpen";
   import GitDiff from "phosphor-svelte/lib/GitDiff";
   import Terminal from "phosphor-svelte/lib/Terminal";
@@ -247,7 +247,7 @@
         {:else if section.id === "processes"}
           <Terminal size={15} class="tab-icon" />
         {:else}
-          <ChartDonut size={15} class="tab-icon" />
+          <ChartPie size={15} class="tab-icon" />
         {/if}
         <span class="tab-label">{section.label}</span>
         {#if section.id === "context" && use.limited}

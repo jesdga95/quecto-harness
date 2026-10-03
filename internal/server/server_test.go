@@ -2412,6 +2412,7 @@ func TestSubagentSessionsAreNotListed(t *testing.T) {
 	child.ID = store.NewID()
 	child.Parent = parentID
 	child.Title = "review internal/llm"
+	child.LastUsage = &llm.Usage{PromptTokens: 9000, CompletionTokens: 200}
 	if err := f.srv.store.Save(&child); err != nil {
 		t.Fatal(err)
 	}
@@ -2445,6 +2446,10 @@ func TestSubagentSessionsAreNotListed(t *testing.T) {
 	}
 	if one["state"] != "idle" {
 		t.Errorf("state = %v, want idle for a run nothing is running", one["state"])
+	}
+	// The context it holds is its last reported request, prompt and answer.
+	if one["fill"] != float64(9200) {
+		t.Errorf("fill = %v, want 9200", one["fill"])
 	}
 }
 

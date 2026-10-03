@@ -421,18 +421,31 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // children lists the subagent runs one session launched, each with the name of
-// the agent running it and what it is doing now. A reloaded page reads which
-// are still working from here and nowhere else.
+// the agent running it, what it is doing now and the context it holds. A
+// reloaded page reads which are still working from here and nowhere else.
 func (s *Server) children(id string) []map[string]any {
 	kids := s.store.Children(id)
 	out := make([]map[string]any, 0, len(kids))
 	cfg := s.cfg.Config()
 	for _, k := range kids {
 		a, _ := cfg.AgentByID(k.Agent)
-		out = append(out, map[string]any{
+		// A working run's context moves with every request; a stopped one's is
+		// what its last request reported.
+		state := s.engine.LiveState(k.ID)
+		fill := k.Fill
+		if state != agent.StateIdle {
+			if live, ok := s.engine.LiveFill(k.ID); ok {
+				fill = live
+			}
+		}
+		row := map[string]any{
 			"id": k.ID, "title": k.Title, "agent": a.Name,
-			"state": string(s.engine.LiveState(k.ID)),
-		})
+			"state": string(state),
+		}
+		if fill > 0 {
+			row["fill"] = fill
+		}
+		out = append(out, row)
 	}
 	return out
 }

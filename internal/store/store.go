@@ -168,6 +168,9 @@ type Summary struct {
 	Updated  time.Time `json:"updated"`
 	Messages int       `json:"messages"`
 	Bytes    int64     `json:"bytes"`
+	// Fill is the context after the last request the server reported on, and
+	// zero where it never reported one.
+	Fill int `json:"fill,omitempty"`
 }
 
 // Sessions is the on-disk session set. One mutex per session id, so two
@@ -358,6 +361,10 @@ func (s *Sessions) lockFor(id string) *sync.Mutex {
 }
 
 func summarise(sess *Session, size int64) Summary {
+	fill := 0
+	if u := sess.LastUsage; u != nil {
+		fill = u.PromptTokens + u.CompletionTokens
+	}
 	messages := 0
 	for _, e := range sess.Entries {
 		if e.Visible {
@@ -375,6 +382,7 @@ func summarise(sess *Session, size int64) Summary {
 		Updated:  sess.Updated,
 		Messages: messages,
 		Bytes:    size,
+		Fill:     fill,
 	}
 }
 

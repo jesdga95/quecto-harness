@@ -310,12 +310,18 @@ func TestTheLauncherIsToldWhenASubagentGoesIdle(t *testing.T) {
 	var states []string
 	for time.Now().Before(deadline) {
 		states = states[:0]
+		fill := 0
 		for _, e := range h.rec.ofType("child") {
 			if e.Fields["session"] == child.ID {
 				states = append(states, e.Fields["state"].(string))
+				fill, _ = e.Fields["fill"].(int)
 			}
 		}
 		if len(states) > 0 && states[len(states)-1] == string(StateIdle) {
+			// The launcher's panel reads the run's context from this event.
+			if fill <= 0 {
+				t.Errorf("fill = %d, want the context the run holds", fill)
+			}
 			return
 		}
 		time.Sleep(2 * time.Millisecond)

@@ -1124,15 +1124,16 @@ function onRunEvent(event: HarnessEvent): void {
 
 /** Records where a subagent run has got to. A launch is the first the launcher
     hears of one, so an id nothing holds is added rather than dropped. */
-function noteRun(id: string, status: TurnStatus, agent = "", title = ""): void {
+function noteRun(id: string, status: TurnStatus, agent = "", title = "", fill?: number): void {
   const run = app.runs.find((r) => r.id === id);
   if (run) {
     run.status = status;
     if (agent) run.agent = agent;
     if (title) run.title = title;
+    if (fill !== undefined) run.fill = fill;
     return;
   }
-  app.runs.unshift({ id, title, agent, status });
+  app.runs.unshift({ id, title, agent, status, fill });
 }
 
 // Statuses that mean a request is out and nothing has come back for it.
@@ -1201,7 +1202,7 @@ function onEvent(event: HarnessEvent): void {
   }
 
   if (event.type === "child") {
-    noteRun(event.session, event.status, event.agent ?? "", event.title ?? "");
+    noteRun(event.session, event.status, event.agent ?? "", event.title ?? "", event.fill);
   }
 
   // The harness says the files moved for a reason this stream cannot show,

@@ -282,6 +282,16 @@ func TestTurnCostIsRecordedOnTheEntryThatEndedIt(t *testing.T) {
 	if ms, ok := last.Meta["ms"].(int64); !ok || ms < 0 {
 		t.Errorf("ms = %v", last.Meta["ms"])
 	}
+	// Each request keeps its own prompt and output, in the order they were made.
+	each, ok := last.Meta["per_request"].([]map[string]any)
+	if !ok || len(each) != 2 {
+		t.Fatalf("per_request = %#v, want two requests", last.Meta["per_request"])
+	}
+	for i, want := range []struct{ window, tokens int }{{410, 22}, {3950, 48}} {
+		if each[i]["window_tokens"] != want.window || each[i]["tokens"] != want.tokens {
+			t.Errorf("request %d = %v, want window %d and tokens %d", i+1, each[i], want.window, want.tokens)
+		}
+	}
 	// The rate is measured from the first token of each response, so a replay
 	// served from memory reports a large one rather than none at all.
 	if rate, ok := last.Meta["tok_per_s"].(float64); !ok || rate <= 0 {

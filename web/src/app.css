@@ -1410,26 +1410,8 @@
     color: var(--crit);
   }
 
-  /* The context as one line against the whole window: a colour per part, the
-     tail is what is free, and the tick is where compaction fires. The tick
-     hangs past the line and its label sits under it, so the legend clears
-     them. */
-  .ctxline {
-    position: relative;
-    margin-top: 10px;
-  }
-  .ctxline .bar {
-    display: flex;
-    height: 10px;
-    border-radius: 999px;
-    background: var(--surface-2);
-    overflow: hidden;
-  }
-  .ctxline .bar span {
-    flex: none;
-    height: 100%;
-    transition: width 220ms ease;
-  }
+  /* The parts of the context, by colour. Subagent runs share the agents hue,
+     each a step lighter, and the runs past the third share the lightest. */
   .seg-system {
     background: var(--c-system);
   }
@@ -1442,58 +1424,21 @@
   .seg-msg {
     background: var(--c-msg);
   }
-  /* A bar with no measured parts has only its fill. */
+  .seg-a1 {
+    background: var(--c-agents);
+  }
+  .seg-a2 {
+    background: color-mix(in srgb, var(--c-agents) 66%, var(--panel));
+  }
+  .seg-a3 {
+    background: color-mix(in srgb, var(--c-agents) 40%, var(--panel));
+  }
+  .seg-a4 {
+    background: color-mix(in srgb, var(--c-agents) 22%, var(--panel));
+  }
+  /* A window with no measured parts has only its fill. */
   .seg-plain {
     background: var(--ok);
-  }
-  .ctxline .tick {
-    position: absolute;
-    top: -4px;
-    bottom: -4px;
-    width: 2px;
-    border-radius: 999px;
-    background: var(--warn);
-  }
-  .ctxline .tick-label {
-    position: absolute;
-    top: 14px;
-    transform: translateX(-50%);
-    font-size: 11px;
-    color: var(--warn);
-    white-space: nowrap;
-  }
-  .ctxline .tick-label.is-start {
-    transform: none;
-  }
-  .ctxline .tick-label.is-end {
-    transform: translateX(-100%);
-  }
-
-  /* The part names under the line, one per row. */
-  .ctxlegend {
-    margin-top: 12px;
-    display: grid;
-    gap: 5px;
-  }
-  .ctxline.has-tick + .ctxlegend {
-    margin-top: 34px;
-  }
-  .ctxlegend .row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    font-size: 12px;
-  }
-  .ctxlegend dt {
-    color: var(--muted);
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .ctxlegend dd {
-    margin: 0;
   }
   .ctxdot {
     flex: none;
@@ -1501,132 +1446,299 @@
     height: 7px;
     border-radius: 999px;
   }
+  .ctxdot.is-free {
+    border: 1px solid var(--border-2);
+    background: var(--surface-2);
+  }
 
-  /* The Context section: the window, what fills it, and what each turn cost,
-     with compaction held below the scroll. */
+  /* The Context section: the window, every window, how it grew and what the
+     session spent, with compaction held below the scroll. */
   .ctxv {
-    padding: 16px 16px 20px;
+    padding: 18px 16px 22px;
   }
   .ctxv section + section {
-    margin-top: 22px;
+    margin-top: 26px;
   }
   .ctxv h4 {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-    margin: 0 0 8px;
+    margin: 0 0 10px;
     font-size: 11.5px;
     font-weight: 500;
     color: var(--muted);
   }
   .ctxv h4 span {
     font-weight: 400;
+    white-space: nowrap;
   }
-  .ctxv .ctxline {
-    margin-top: 0;
+  /* The agent answering, and its model, over the window. */
+  .ctxv h4.ctxv-who {
+    margin-bottom: 14px;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--muted);
   }
-  .ctxv-big {
+  .ctxv-who-name {
     display: flex;
     align-items: baseline;
     gap: 8px;
+    min-width: 0;
   }
-  .ctxv-big b {
-    font-size: 26px;
+  .ctxv-who-name b {
     font-weight: 500;
+    color: var(--text);
   }
-  .ctxv-big span {
-    font-size: 12.5px;
-    color: var(--muted);
+  .ctxv-who-name span {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .ctxv-big.is-warn b {
-    color: var(--warn);
+  .ctxv h4 .ctxv-who-side {
+    font-size: 11.5px;
   }
-  .ctxv-big.is-crit b {
-    color: var(--crit);
+
+  /* The window as a ring of its parts, with the compaction mark on it, and
+     the figures beside it. */
+  .ctxv-gauge-row {
+    display: flex;
+    align-items: center;
+    gap: 22px;
   }
-  .ctxv-sub {
-    margin: 2px 0 0;
+  .ctxv-gauge {
+    flex: none;
+    width: 148px;
+    height: 148px;
+  }
+  .ctxv-gauge circle {
+    fill: none;
+    stroke-width: 12;
+  }
+  .ctxv-ring-track {
+    stroke: var(--surface-2);
+  }
+  .ctxv-arc {
+    transition: stroke-dasharray 220ms ease;
+  }
+  .ctxv-arc.seg-system {
+    stroke: var(--c-system);
+  }
+  .ctxv-arc.seg-rules {
+    stroke: var(--c-agents);
+  }
+  .ctxv-arc.seg-tools {
+    stroke: var(--c-tools);
+  }
+  .ctxv-arc.seg-msg {
+    stroke: var(--c-msg);
+  }
+  .ctxv-arc.seg-plain {
+    stroke: var(--ok);
+  }
+  .ctxv-ring-tick {
+    stroke: var(--warn);
+    stroke-width: 3;
+    stroke-linecap: round;
+  }
+  .ctxv-ring-big {
+    font-family: var(--font-sans);
+    font-size: 28px;
+    font-weight: 500;
+    fill: var(--text);
+  }
+  .ctxv-ring-big.is-warn {
+    fill: var(--warn);
+  }
+  .ctxv-ring-big.is-crit {
+    fill: var(--crit);
+  }
+  .ctxv-ring-small {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    fill: var(--muted);
+  }
+  .ctxv-stats {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    margin: 0;
+  }
+  .ctxv-stats > div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--hair);
+  }
+  .ctxv-stats > div:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+  .ctxv-stats dt {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     font-size: 12px;
-    color: var(--muted);
-  }
-  .ctxv-parts {
-    width: 100%;
-    margin-top: 12px;
-    border-collapse: collapse;
-    font-size: 12px;
-  }
-  .ctxv-parts.has-tick {
-    margin-top: 30px;
-  }
-  .ctxv-parts td {
-    padding: 4px 0;
     color: var(--text-2);
   }
-  .ctxv-parts td:first-child {
+  .ctxv-stats dd {
+    margin: 0;
+    font-size: 15px;
+    color: var(--text);
+  }
+  .ctxv-tick-glyph {
+    width: 3px;
+    height: 11px;
+    margin: 0 2px;
+    border-radius: 999px;
+    background: var(--warn);
+  }
+  .ctxv-fill {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 18px;
+    margin-top: 16px;
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .ctxv-fill > div {
     display: flex;
     align-items: center;
     gap: 7px;
+    min-width: 0;
   }
-  .ctxv-parts td + td {
+  .ctxv-fill b {
+    margin-left: auto;
+    font-weight: 400;
+    color: var(--muted);
+  }
+  .ctxv-fill i {
+    width: 40px;
+    font-style: normal;
     text-align: right;
     color: var(--muted);
   }
-  .ctxv-parts td:last-child {
-    width: 60px;
+
+  /* A bar split into parts with nothing empty in it, and the rows naming
+     them. */
+  .ctxv-split {
+    display: flex;
+    gap: 2px;
+    height: 10px;
   }
-  .ctxv-parts .is-free td {
+  .ctxv-split span {
+    min-width: 3px;
+    height: 100%;
+  }
+  .ctxv-split span:first-child {
+    border-radius: 999px 0 0 999px;
+  }
+  .ctxv-split span:last-child {
+    border-radius: 0 999px 999px 0;
+  }
+  .ctxv-rows {
+    display: flex;
+    flex-direction: column;
+    margin-top: 12px;
+  }
+  .ctxv-row {
+    display: grid;
+    grid-template-columns: 1fr auto 48px;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .ctxv-row > :nth-child(n + 2) {
+    text-align: right;
     color: var(--muted);
   }
-  .ctxdot.is-free {
-    border: 1px solid var(--border-2);
-    background: var(--surface-2);
+  .ctxv-row.is-sub {
+    padding-left: 14px;
+    font-size: 11.5px;
+  }
+  .ctxv-row-name {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+  .ctxv-row-name > span:not(.ctxdot) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Charts drawn at the width they are given, so text and points keep their
+     shape. */
+  .ctxv-chart-wrap {
+    position: relative;
   }
   .ctxv-chart {
     display: block;
+    overflow: visible;
   }
   .ctxv-chart text {
+    font-family: var(--font-mono);
     font-size: 9px;
     fill: var(--muted);
+  }
+  .ctxv-chart text.is-end {
+    font-size: 10px;
+    fill: var(--text);
+  }
+  .ctxv-chart text.is-warn {
+    font-size: 10px;
+    fill: var(--warn);
+  }
+  .ctxv-chart .seg-system {
+    fill: var(--c-system);
+  }
+  .ctxv-chart .seg-msg {
+    fill: var(--c-msg);
+  }
+  .ctxv-chart .seg-tools {
+    fill: var(--c-tools);
   }
   .ctxv-threshold {
     stroke: var(--warn);
     stroke-dasharray: 4 3;
   }
-  .ctxv-tiles {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-    gap: 6px;
+  .ctxv-cross {
+    stroke: var(--border-2);
   }
-  .ctxv-tiles > div {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    min-width: 0;
-    padding: 7px 10px;
-    border-radius: 8px;
-    background: var(--surface-2);
+  .ctxv-point {
+    fill: var(--c-msg);
+    stroke: var(--panel);
+    stroke-width: 2;
   }
-  .ctxv-tiles span {
+  .ctxv-tip {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
     font-size: 11px;
-    color: var(--muted);
+    color: var(--text-2);
+    white-space: nowrap;
+    pointer-events: none;
   }
-  .ctxv-tiles b {
-    font-size: 13.5px;
-    font-weight: 500;
-  }
-  .ctxv-time {
-    display: flex;
-    height: 8px;
-    margin-bottom: 8px;
-    border-radius: 999px;
-    background: var(--surface-2);
-    overflow: hidden;
+  .ctxv-tip b {
+    font-family: var(--font-mono);
+    font-weight: 400;
+    color: var(--text);
   }
   .ctxv-legend {
     display: flex;
     flex-wrap: wrap;
     gap: 4px 14px;
+    margin-top: 10px;
     font-size: 11.5px;
     color: var(--text-2);
   }
@@ -1639,33 +1751,84 @@
     font-weight: 400;
     color: var(--muted);
   }
-  .ctxv-table {
-    overflow-x: auto;
+
+  /* A figure card: its name, a small picture of it, the figure, a note. */
+  .ctxv-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+    gap: 6px;
   }
-  .ctxv-turns {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 11.5px;
+  .ctxv-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    padding: 9px 10px 10px;
+    border-radius: 8px;
+    background: var(--surface-2);
   }
-  .ctxv-turns th,
-  .ctxv-turns td {
-    padding: 5px 6px;
-    border-bottom: 1px solid var(--hair);
-    text-align: right;
-    white-space: nowrap;
-  }
-  .ctxv-turns th {
-    font-weight: 500;
+  .ctxv-card-label {
+    font-size: 11px;
     color: var(--muted);
   }
-  .ctxv-turns td {
-    color: var(--text-2);
+  .ctxv-card b {
+    font-size: 13.5px;
+    font-weight: 500;
   }
-  .ctxv-turns th:first-child,
-  .ctxv-turns td:first-child {
-    padding-left: 0;
-    text-align: left;
+  .ctxv-card-foot {
+    margin-top: -4px;
+    overflow: hidden;
+    font-size: 10.5px;
+    color: var(--muted);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
+  .ctxv-card-pic {
+    display: flex;
+    align-items: center;
+    height: 28px;
+  }
+  .ctxv-mini {
+    display: flex;
+    gap: 2px;
+    width: 100%;
+    height: 6px;
+  }
+  .ctxv-mini span {
+    min-width: 3px;
+    border-radius: 2px;
+  }
+  .ctxv-mini .is-rest {
+    background: var(--border);
+  }
+  .ctxv-spark {
+    display: block;
+    width: 100%;
+    height: 28px;
+    overflow: visible;
+  }
+  .ctxv-spark polyline {
+    fill: none;
+    stroke: var(--c-msg);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+  }
+  .ctxv-reqs {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    width: 100%;
+    height: 22px;
+  }
+  .ctxv-reqs i {
+    flex: 1;
+    max-width: 8px;
+    min-height: 3px;
+    border-radius: 2px;
+    background: var(--c-msg);
+  }
+
   .ctxv-foot {
     flex: none;
     padding: 10px 16px;

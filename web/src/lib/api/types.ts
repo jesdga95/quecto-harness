@@ -59,6 +59,9 @@ export interface Child {
   /** What the run is doing now. Idle is one that has stopped working, whether
       it finished, failed or was stopped. */
   status: TurnStatus;
+  /** The context the run holds in its own window. Absent until a request of
+      its own has been measured. */
+  fill?: number;
 }
 
 /** A named connection: where a model runs, what key opens it, which model, and
@@ -327,6 +330,7 @@ export type HarnessEvent =
       callId?: string;
       agent?: string;
       title?: string;
+      fill?: number;
     }
   | { type: "error"; message: string }
   /** A command the harness started in the background. */
@@ -554,6 +558,18 @@ export interface TurnCost {
   toolMs?: number;
   agent?: string;
   model?: string;
+  /** Each request of the turn, in the order they were made. Absent on a turn
+      that predates them. */
+  perRequest?: RequestCost[];
+}
+
+/** One request of a turn. window is its prompt, absent where the server did
+    not report one; tokens is its output. */
+export interface RequestCost {
+  window?: number;
+  tokens: number;
+  firstMs: number;
+  genMs: number;
 }
 
 /** One folder in the project, as the panel's browser lists it. path is
