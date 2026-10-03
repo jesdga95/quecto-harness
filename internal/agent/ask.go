@@ -245,11 +245,8 @@ func parseQuestions(raw json.RawMessage) ([]Question, error) {
 			Multi bool `json:"multi_select"`
 		} `json:"questions"`
 	}
-	if len(raw) == 0 {
-		return nil, errors.New("ask_user_question: the arguments were empty")
-	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return nil, fmt.Errorf("ask_user_question: the arguments are not valid JSON: %s", err)
+	if err := tools.DecodeArgs("ask_user_question", raw, &args); err != nil {
+		return nil, err
 	}
 	if len(args.Questions) == 0 {
 		return nil, errors.New("ask_user_question: give one to five questions")

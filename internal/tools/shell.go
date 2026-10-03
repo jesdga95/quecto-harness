@@ -127,8 +127,8 @@ func (p *Proc) Stop() error {
 // with an exit code line. Each call is a new shell.
 func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args RunShellArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return Result{}, fmt.Errorf("bash: %s", err)
+	if err := DecodeArgs("bash", raw, &args); err != nil {
+		return Result{}, err
 	}
 	p, err := r.start(ctx, args, nil)
 	if err != nil {
@@ -280,20 +280,22 @@ func keepSpill(f *os.File, buf *limitBuffer, truncated, keep bool) string {
 // ShellTimeout is how long the call in raw would be given. Arguments that do
 // not decode take the default, which is what running them does.
 func (r *Runner) ShellTimeout(raw json.RawMessage) time.Duration {
-	var args RunShellArgs
-	if decodeArgs(raw, &args) != nil {
-		return r.Timeout
-	}
-	return r.shellTimeout(args)
+	return r.shellTimeout(shellArgs(raw))
 }
 
-// ShellBackground reports whether a call asks to run in the background.
+// ShellBackground reports whether a call asks to run in the background. A call
+// whose arguments do not decode asks for nothing, and running it reports the
+// field that failed.
 func (r *Runner) ShellBackground(raw json.RawMessage) bool {
+	return shellArgs(raw).Background
+}
+
+// shellArgs reads the shell arguments without reporting a failure, for the two
+// questions asked of a call before it runs.
+func shellArgs(raw json.RawMessage) RunShellArgs {
 	var args RunShellArgs
-	if decodeArgs(raw, &args) != nil {
-		return false
-	}
-	return args.Background
+	_ = json.Unmarshal(raw, &args)
+	return args
 }
 
 // shellTimeout clamps what the call asked for between a second and MaxTimeout.

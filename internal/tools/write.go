@@ -38,8 +38,8 @@ type Snapshot struct {
 // summary line, not the content, so the session file does not carry it twice.
 func (r *Runner) WriteFile(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args WriteFileArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return Result{}, fmt.Errorf("write: %s", err)
+	if err := DecodeArgs("write", raw, &args); err != nil {
+		return Result{}, err
 	}
 	if args.Path == "" {
 		return Result{}, errors.New("write needs a path")

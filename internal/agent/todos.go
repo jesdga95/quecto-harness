@@ -52,6 +52,9 @@ func parseTodos(raw json.RawMessage) ([]store.Todo, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&args); err != nil {
+		if msg, ok := tools.FieldError(raw, err); ok {
+			return nil, fmt.Errorf("todo_write: %s", msg)
+		}
 		return nil, fmt.Errorf("todo_write: %s: send todos, each item with content and status only", err)
 	}
 	if args.Todos == nil {

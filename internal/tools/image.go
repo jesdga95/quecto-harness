@@ -34,8 +34,8 @@ var imageNames = map[string]string{
 // bytes, so a name ending in .png proves nothing.
 func (r *Runner) ReadImage(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args ReadImageArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return Result{}, fmt.Errorf("read_image: %s", err)
+	if err := DecodeArgs("read_image", raw, &args); err != nil {
+		return Result{}, err
 	}
 	if args.Path == "" {
 		return Result{}, errors.New("read_image needs a path")

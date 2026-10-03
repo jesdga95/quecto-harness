@@ -162,54 +162,140 @@ type RunShellArgs struct {
 	Background bool `json:"background"`
 }
 
-// decodeArgs is lenient about unknown fields, since a small model routinely
-// invents one and the call should still run.
-func decodeArgs(raw json.RawMessage, v any) error {
-	if len(raw) == 0 {
-		return errors.New("the arguments were empty")
+// DecodeArgs reads a call's arguments. Unknown fields are ignored, since a small
+// model routinely invents one and the call should still run. A field that
+// arrived as the wrong kind of JSON value is reported by name, with the text the
+// call put there and the kind the field takes. What is close to a boolean, such
+// as "True" or 1, is still a wrong value, and the call is not run.
+func DecodeArgs(tool string, raw json.RawMessage, v any) error {
+	if strings.TrimSpace(string(raw)) == "" {
+		return fmt.Errorf("%s: the arguments were empty", tool)
 	}
 	if err := json.Unmarshal(raw, v); err != nil {
-		var typeErr *json.UnmarshalTypeError
-		if errors.As(err, &typeErr) && typeErr.Field != "" {
-			return fmt.Errorf("the argument %s must be %s, not %s", typeErr.Field, jsonKind(typeErr.Type.Kind()), jsonValue(typeErr.Value))
+		if msg, ok := FieldError(raw, err); ok {
+			return fmt.Errorf("%s: %s", tool, msg)
 		}
-		return fmt.Errorf("the arguments are not valid JSON: %s", err)
+		return fmt.Errorf("%s: the arguments are not valid JSON: %s", tool, err)
 	}
 	return nil
+}
+
+// FieldError renders a decode failure where one field arrived as the wrong kind
+// of JSON value: the field, what was found at it and what it takes. It reports
+// false for every other failure, which each caller answers in its own words.
+func FieldError(raw json.RawMessage, err error) (string, bool) {
+	var typeErr *json.UnmarshalTypeError
+	if !errors.As(err, &typeErr) || typeErr.Field == "" {
+		return "", false
+	}
+	got := jsonValue(typeErr.Value)
+	text := rawAt(raw, strings.Split(typeErr.Field, "."), got)
+	if text == "" {
+		got = withArticle(got)
+	} else {
+		got = got + " " + text
+	}
+	return fmt.Sprintf("%s got %s, expected JSON %s", typeErr.Field, got, jsonKind(typeErr.Type.Kind())), true
+}
+
+// rawAt reads the text a call put at a dotted field path. An array element is
+// not named in the path a decode failure reports, so where the path crosses a
+// list the element holding a value of the kind that failed is the one shown.
+func rawAt(raw json.RawMessage, path []string, kind string) string {
+	if len(path) == 0 {
+		return clipText(raw)
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil {
+		if next, ok := fields[path[0]]; ok {
+			return rawAt(next, path[1:], kind)
+		}
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) == nil {
+		first := ""
+		for _, item := range items {
+			got := rawAt(item, path, kind)
+			if got == "" {
+				continue
+			}
+			if first == "" {
+				first = got
+			}
+			if looksLike(got, kind) {
+				return got
+			}
+		}
+		return first
+	}
+	return ""
+}
+
+// looksLike reports whether raw text is of the kind the decoder named, which is
+// how a field repeated in a list is matched to the element that failed.
+func looksLike(text, kind string) bool {
+	switch kind {
+	case "string":
+		return strings.HasPrefix(text, `"`)
+	case "number":
+		return text != "" && strings.ContainsAny(text[:1], "-0123456789")
+	case "boolean":
+		return text == "true" || text == "false"
+	case "object":
+		return strings.HasPrefix(text, "{")
+	case "list":
+		return strings.HasPrefix(text, "[")
+	}
+	return false
+}
+
+// clipText keeps the text shown back to a model short.
+func clipText(raw json.RawMessage) string {
+	r := []rune(strings.TrimSpace(string(raw)))
+	if len(r) <= 80 {
+		return string(r)
+	}
+	return string(r[:80]) + "..."
+}
+
+// withArticle reads a bare kind name as a phrase.
+func withArticle(kind string) string {
+	if kind != "" && strings.Contains("aeiou", kind[:1]) {
+		return "an " + kind
+	}
+	return "a " + kind
 }
 
 // jsonKind names the JSON value a Go field of this kind decodes from.
 func jsonKind(k reflect.Kind) string {
 	switch k {
 	case reflect.Bool:
-		return "true or false"
+		return "boolean true or false"
 	case reflect.String:
-		return "a string"
+		return "string"
 	case reflect.Slice, reflect.Array:
-		return "a list"
+		return "list"
 	case reflect.Map, reflect.Struct:
-		return "an object"
+		return "object"
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64:
-		return "a number"
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "integer"
+	case reflect.Float32, reflect.Float64:
+		return "number"
 	}
-	return "another type"
+	return "another kind of value"
 }
 
-// jsonValue names the JSON value the decoder found, as UnmarshalTypeError
-// reports it.
+// jsonValue names the kind of JSON value the decoder found, as
+// UnmarshalTypeError reports it.
 func jsonValue(v string) string {
 	switch v {
 	case "bool":
-		return "true or false"
+		return "boolean"
 	case "array":
-		return "a list"
-	case "object":
-		return "an object"
+		return "list"
+	case "":
+		return "another kind of value"
 	}
-	if strings.HasPrefix(v, "number") {
-		return "a number"
-	}
-	return "a " + v
+	return v
 }

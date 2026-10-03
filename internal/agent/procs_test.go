@@ -1,12 +1,17 @@
 package agent
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"quecto-harness/internal/config"
+	"quecto-harness/internal/llm"
 	"quecto-harness/internal/store"
+	"quecto-harness/internal/tools"
 )
 
 // waitEnded returns a session's processes once none of them is running.
@@ -174,5 +179,30 @@ func TestStoppingASessionReachesAnIdleSubagent(t *testing.T) {
 		if e.From == "Background process" {
 			t.Error("a subagent whose launcher was stopped heard about its process")
 		}
+	}
+}
+
+// A background flag that is not a JSON boolean is the model's mistake. The call
+// answers with the field, what it held and what it takes, and nothing runs.
+func TestABackgroundFlagThatIsNotABooleanRunsNothing(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	s := h.session(t)
+	runner, err := tools.NewRunner(h.project, h.cfg.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := llm.ToolCall{ID: "call_b", Type: "function", Function: llm.FunctionCall{
+		Name:      "bash",
+		Arguments: `{"command":"touch ran","background":"True"}`,
+	}}
+	if _, err := h.engine.runBash(context.Background(), s, runner, call); err == nil ||
+		!strings.Contains(err.Error(), `bash: background got string "True", expected JSON boolean true or false`) {
+		t.Errorf("the call answered %v", err)
+	}
+	if procs := h.engine.Processes(s.ID); len(procs) != 0 {
+		t.Errorf("processes = %v, want none", procs)
+	}
+	if _, err := os.Stat(filepath.Join(h.project, "ran")); err == nil {
+		t.Error("the refused call ran its command")
 	}
 }

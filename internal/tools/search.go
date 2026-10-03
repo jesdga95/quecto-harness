@@ -34,7 +34,7 @@ type WebSearchArgs struct {
 // its path is not guarded and its call is shown before it is sent.
 func (r *Runner) WebSearch(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args WebSearchArgs
-	if err := decodeArgs(raw, &args); err != nil {
+	if err := DecodeArgs("web_search", raw, &args); err != nil {
 		return Result{}, err
 	}
 	if strings.TrimSpace(args.Query) == "" {

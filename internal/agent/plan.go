@@ -78,11 +78,8 @@ type draftPatch struct {
 
 func parseDraft(raw json.RawMessage) (draftPatch, error) {
 	var p draftPatch
-	if len(raw) == 0 {
-		return p, errors.New("write_plan: the arguments were empty")
-	}
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return p, fmt.Errorf("write_plan: the arguments are not valid JSON: %s", err)
+	if err := tools.DecodeArgs("write_plan", raw, &p); err != nil {
+		return p, err
 	}
 	if p.Steps != nil && len(trimAll(*p.Steps)) > maxTodos {
 		return p, fmt.Errorf("write_plan: %d steps, keep the plan under %d", len(trimAll(*p.Steps)), maxTodos)

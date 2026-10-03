@@ -443,6 +443,59 @@ func TestRunShellNeedsACommand(t *testing.T) {
 	}
 }
 
+// A boolean written as a string or a number is the model's mistake: the call
+// names the field, what it held and what it takes, and no command runs.
+func TestRunShellRefusesABackgroundThatIsNotABoolean(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	cases := []struct {
+		args string
+		want string
+	}{
+		{`{"command":"touch ran","background":"True"}`, `bash: background got string "True", expected JSON boolean true or false`},
+		{`{"command":"touch ran","background":"TRUE"}`, `bash: background got string "TRUE", expected JSON boolean true or false`},
+		{`{"command":"touch ran","background":"true"}`, `bash: background got string "true", expected JSON boolean true or false`},
+		{`{"command":"touch ran","background":1}`, `bash: background got number 1, expected JSON boolean true or false`},
+		{`{"command":"touch ran","background":0}`, `bash: background got number 0, expected JSON boolean true or false`},
+		{`{"command":"touch ran","background":{"yes":true}}`, `bash: background got object {"yes":true}, expected JSON boolean true or false`},
+		{`{"command":"touch ran","timeout_s":"120"}`, `bash: timeout_s got string "120", expected JSON integer`},
+	}
+	for _, c := range cases {
+		_, err := r.RunShell(context.Background(), json.RawMessage(c.args))
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%s answered %v, want %s", c.args, err, c.want)
+		}
+		if r.ShellBackground(json.RawMessage(c.args)) {
+			t.Errorf("%s was read as a background call", c.args)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(base, "ran")); err == nil {
+		t.Error("a refused bash call ran its command")
+	}
+	res, err := r.RunShell(context.Background(), json.RawMessage(`{"command":"touch ran","background":true}`))
+	if err != nil || (res.ExitCode != nil && *res.ExitCode != 0) {
+		t.Errorf("background true answered %v with %v", res.ExitCode, err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "ran")); err != nil {
+		t.Errorf("the command background true runs left no file: %v", err)
+	}
+}
+
+// A field inside a list is named by its path, and the element shown is the one
+// holding the value that failed.
+func TestFieldErrorNamesAFieldInsideAList(t *testing.T) {
+	var v struct {
+		Questions []struct {
+			Multi bool `json:"multi_select"`
+		} `json:"questions"`
+	}
+	raw := json.RawMessage(`{"questions":[{"multi_select":true},{"multi_select":"True"}]}`)
+	msg, ok := FieldError(raw, json.Unmarshal(raw, &v))
+	if !ok || msg != `questions.multi_select got string "True", expected JSON boolean true or false` {
+		t.Errorf("a bad multi_select was reported as %q, ok %v", msg, ok)
+	}
+}
+
 func TestRunShellTruncation(t *testing.T) {
 	r := testRoot(t, t.TempDir())
 	r.OutputLimit = 1024
@@ -1154,7 +1207,7 @@ func TestFindBadInput(t *testing.T) {
 	}
 	// An argument of the wrong type names the field and what it takes.
 	_, err := r.Find(context.Background(), json.RawMessage(`{"text":5}`))
-	if err == nil || err.Error() != "grep: the argument text must be a string, not a number" {
+	if err == nil || err.Error() != "grep: text got number 5, expected JSON string" {
 		t.Errorf("a number in text was reported as %v", err)
 	}
 }

@@ -93,6 +93,26 @@ func TestToolDescriptionsNameTheirArguments(t *testing.T) {
 	}
 }
 
+// A boolean argument is a JSON literal, and a description that names one says
+// how to write it.
+func TestDescriptionsSayHowToWriteABoolean(t *testing.T) {
+	const want = " is the JSON literal true or false, lowercase and unquoted"
+	for _, c := range []struct {
+		tool, flag string
+		get        func() string
+	}{
+		{"bash", "background", ToolBash},
+		{"edit", "replace_all", ToolEdit},
+		{"web_search", "full", ToolWebSearch},
+		{"subagent", "wait", ToolSubagent},
+		{"ask_user_question", "multi_select", ToolAskUserQuestion},
+	} {
+		if got := c.get(); !strings.Contains(got, c.flag+want) {
+			t.Errorf("%s does not say how to write %s: %q", c.tool, c.flag, got)
+		}
+	}
+}
+
 func TestSystemAppendsInstructions(t *testing.T) {
 	base := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools})
 	got := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: execTools, Instructions: "Review Go, do not write it."})

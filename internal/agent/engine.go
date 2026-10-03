@@ -1993,12 +1993,12 @@ func (e *Engine) keepImage(o *outcome, img *tools.Image) {
 // yet.
 func (e *Engine) runBash(ctx context.Context, s *Session, runner *tools.Runner, call llm.ToolCall) (tools.Result, error) {
 	raw := json.RawMessage(call.Function.Arguments)
-	var args tools.RunShellArgs
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return tools.Result{}, fmt.Errorf("the arguments are not valid JSON: %w", err)
-	}
-	if !args.Background {
+	if !runner.ShellBackground(raw) {
 		return runner.RunShell(ctx, raw)
+	}
+	var args tools.RunShellArgs
+	if err := tools.DecodeArgs("bash", raw, &args); err != nil {
+		return tools.Result{}, err
 	}
 	pr, err := e.procs.Start(e.ctx, runner, s.ID, call.ID, args)
 	if err != nil {

@@ -36,8 +36,8 @@ var skipDirs = []string{".git", "node_modules", "dist", "build", "vendor", ".ven
 // text. Matching ignores case.
 func (r *Runner) Find(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args FindArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return Result{}, fmt.Errorf("grep: %s", err)
+	if err := DecodeArgs("grep", raw, &args); err != nil {
+		return Result{}, err
 	}
 	if args.Name == "" && args.Text == "" {
 		return Result{}, errors.New("grep needs name or text")

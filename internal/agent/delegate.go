@@ -307,9 +307,11 @@ func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (
 		Agent string `json:"agent"`
 		Title string `json:"title"`
 		Task  string `json:"task"`
+		// Wait is decoded here so a value that is not a boolean fails the call.
+		Wait *bool `json:"wait"`
 	}
-	if err := decodeArgs(call.Function.Arguments, &args); err != nil {
-		return nil, config.Agent{}, fmt.Errorf("subagent: %s", err)
+	if err := tools.DecodeArgs("subagent", json.RawMessage(call.Function.Arguments), &args); err != nil {
+		return nil, config.Agent{}, err
 	}
 	title := strings.Join(strings.Fields(args.Title), " ")
 	if title == "" {
@@ -376,8 +378,8 @@ func (e *Engine) sendMessage(s *Session, call llm.ToolCall) (tools.Result, error
 		To   string `json:"to"`
 		Text string `json:"text"`
 	}
-	if err := decodeArgs(call.Function.Arguments, &args); err != nil {
-		return tools.Result{}, fmt.Errorf("send_message: %s", err)
+	if err := tools.DecodeArgs("send_message", json.RawMessage(call.Function.Arguments), &args); err != nil {
+		return tools.Result{}, err
 	}
 	text := strings.TrimSpace(args.Text)
 	if text == "" {
@@ -582,15 +584,4 @@ func findAgent(cfg config.Config, me config.Agent, name string) (config.Agent, e
 	}
 	return config.Agent{}, fmt.Errorf("subagent: no agent named %q. There is %s",
 		want, strings.Join(names, ", "))
-}
-
-// decodeArgs reads a call's arguments, tolerating a field the model invented.
-func decodeArgs(raw string, v any) error {
-	if strings.TrimSpace(raw) == "" {
-		return errors.New("the arguments were empty")
-	}
-	if err := json.Unmarshal([]byte(raw), v); err != nil {
-		return fmt.Errorf("the arguments are not valid JSON: %s", err)
-	}
-	return nil
 }

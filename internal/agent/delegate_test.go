@@ -748,6 +748,23 @@ func TestDescriptionOutranksTheInstructions(t *testing.T) {
 	}
 }
 
+// A wait that is not a JSON boolean is refused, and no agent starts.
+func TestSubagentWaitMustBeABoolean(t *testing.T) {
+	h, _ := launcher(t)
+	s := h.session(t)
+	args := `{"agent":"Reviewer","title":"Review the package","task":"look","wait":"False"}`
+	_, _, err := h.engine.startAgent(s, llm.ToolCall{ID: "call_w", Type: "function",
+		Function: llm.FunctionCall{Name: "subagent", Arguments: args}}, nil)
+	if err == nil || !strings.Contains(err.Error(), `wait got string "False", expected JSON boolean true or false`) {
+		t.Errorf("%s answered %v", args, err)
+	}
+	for _, live := range h.engine.liveSessions() {
+		if live.Parent == s.ID {
+			t.Fatal("a refused wait started an agent")
+		}
+	}
+}
+
 // A title that is missing, blank or too long is refused before anything
 // starts, and one that passes is filed with its whitespace collapsed.
 func TestTitleIsRequiredAndBounded(t *testing.T) {

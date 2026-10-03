@@ -17,8 +17,8 @@ import (
 // little context would otherwise change whichever occurrence came first.
 func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args ReplaceInFileArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return Result{}, fmt.Errorf("edit: %s", err)
+	if err := DecodeArgs("edit", raw, &args); err != nil {
+		return Result{}, err
 	}
 	if args.Path == "" {
 		return Result{}, errors.New("edit needs a path")

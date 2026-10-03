@@ -16,8 +16,8 @@ const maxReadableFile = 64 << 20
 // ReadFile returns numbered lines from a text file in the project.
 func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args ReadFileArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return Result{}, fmt.Errorf("read: %s", err)
+	if err := DecodeArgs("read", raw, &args); err != nil {
+		return Result{}, err
 	}
 	if args.Path == "" {
 		return Result{}, errors.New("read needs a path")
