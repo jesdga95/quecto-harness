@@ -60,7 +60,11 @@
   --brand: #0d9488;
 }
 
+/* Two palettes on the root element, chosen by its data-scheme attribute: an
+   unset attribute paints light. Scrollbars, form controls and native colour
+   pickers read color-scheme rather than the custom properties. */
 :root {
+  color-scheme: light;
   --bg: #f8fafc;
   --page: #ffffff;
   --panel: #f7f9fb;
@@ -123,63 +127,58 @@
   --mark: #0d9488;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f172a;
-    --page: #0f172a;
-    --panel: #141d2e;
-    --hair: rgb(226 232 240 / 0.09);
-    --edge: rgb(45 212 191 / 0.28);
-    --edge-focus: rgb(45 212 191 / 0.5);
-    --spin-run: #fcd34d;
-    --plan: #c4b5fd;
-    --plan-bg: rgb(167 139 250 / 0.16);
-    --plan-edge: rgb(167 139 250 / 0.3);
-    --plan-edge-focus: rgb(167 139 250 / 0.55);
-    --surface: #1a2436;
-    --surface-2: #263145;
-    --border: #2e3b50;
-    --border-2: #475569;
-    --text: #f1f5f9;
-    --text-2: #cbd5e1;
-    --muted: #94a3b8;
-    --accent: #2dd4bf;
-    --accent-bg: #10403c;
-    --ok: #48b878;
-    --ok-bg: #123122;
-    /* Amber at full strength, since on ink it is exactly the colour the brand
-       reserves for what the operator has to look at. */
-    --warn: #fcd34d;
-    --warn-bg: #3a2a0b;
-    --crit: #e97b70;
-    --crit-bg: #3a1f1c;
-    --btn: #2dd4bf;
-    --btn-text: #0f172a;
-    --hl-key: #c4b5fd;
-    --hl-str: #86e0ac;
-    --hl-num: #f0c674;
-    --hl-type: #93c5fd;
-    --hl-fn: #67e8f9;
-    --hl-com: #8496ad;
-    --term-bg: #26382f;
-    --c-system: #64748b;
-    --c-agents: #a78bfa;
-    --c-tools: #60a5fa;
-    --c-msg: #2dd4bf;
-    --glass: rgb(21 30 47 / 0.74);
-    --glow-1: rgb(45 212 191 / 0.2);
-    --glow-2: rgb(94 234 212 / 0.16);
-    --glow-p1: rgb(167 139 250 / 0.22);
-    --glow-p2: rgb(196 181 253 / 0.1);
-    --mark: #fcd34d;
-  }
+:root[data-scheme="dark"] {
+  color-scheme: dark;
+  --bg: #0f172a;
+  --page: #0f172a;
+  --panel: #141d2e;
+  --hair: rgb(226 232 240 / 0.09);
+  --edge: rgb(45 212 191 / 0.28);
+  --edge-focus: rgb(45 212 191 / 0.5);
+  --spin-run: #fcd34d;
+  --plan: #c4b5fd;
+  --plan-bg: rgb(167 139 250 / 0.16);
+  --plan-edge: rgb(167 139 250 / 0.3);
+  --plan-edge-focus: rgb(167 139 250 / 0.55);
+  --surface: #1a2436;
+  --surface-2: #263145;
+  --border: #2e3b50;
+  --border-2: #475569;
+  --text: #f1f5f9;
+  --text-2: #cbd5e1;
+  --muted: #94a3b8;
+  --accent: #2dd4bf;
+  --accent-bg: #10403c;
+  --ok: #48b878;
+  --ok-bg: #123122;
+  /* Amber at full strength, since on ink it is exactly the colour the brand
+     reserves for what the operator has to look at. */
+  --warn: #fcd34d;
+  --warn-bg: #3a2a0b;
+  --crit: #e97b70;
+  --crit-bg: #3a1f1c;
+  --btn: #2dd4bf;
+  --btn-text: #0f172a;
+  --hl-key: #c4b5fd;
+  --hl-str: #86e0ac;
+  --hl-num: #f0c674;
+  --hl-type: #93c5fd;
+  --hl-fn: #67e8f9;
+  --hl-com: #8496ad;
+  --term-bg: #26382f;
+  --c-system: #64748b;
+  --c-agents: #a78bfa;
+  --c-tools: #60a5fa;
+  --c-msg: #2dd4bf;
+  --glass: rgb(21 30 47 / 0.74);
+  --glow-1: rgb(45 212 191 / 0.2);
+  --glow-2: rgb(94 234 212 / 0.16);
+  --glow-p1: rgb(167 139 250 / 0.22);
+  --glow-p2: rgb(196 181 253 / 0.1);
+  --mark: #fcd34d;
 }
-
 @layer base {
   html {
-    /* Follows the operating system. Native controls and scrollbars need this
-       told to them separately from the custom properties above. */
-    color-scheme: light dark;
     background: var(--page);
     color: var(--text);
     font-family: var(--font-sans);

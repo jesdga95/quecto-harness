@@ -11,6 +11,7 @@
   import Plus from "phosphor-svelte/lib/Plus";
   import SidebarSimple from "phosphor-svelte/lib/SidebarSimple";
   import Logo from "./Logo.svelte";
+  import ThemeButton from "./ThemeButton.svelte";
   import {
     app,
     newSession,
@@ -328,11 +329,12 @@
       {/each}
     </nav>
 
-    <div class="px-2 pb-3">
-      <button class="side-row" onclick={onsettings}>
+    <div class="flex items-center gap-1 px-2 pb-3">
+      <button class="side-row min-w-0 flex-1" onclick={onsettings}>
         <Gear />
         Settings
       </button>
+      <ThemeButton />
     </div>
   </aside>
 {:else}
@@ -353,7 +355,10 @@
     <button class="icon-btn mt-2" aria-label="New session" onclick={() => newSession()}>
       <Plus />
     </button>
-    <button class="icon-btn mt-auto mb-4" aria-label="Settings" onclick={onsettings}>
+    <div class="mt-auto mb-2">
+      <ThemeButton align="left" />
+    </div>
+    <button class="icon-btn mb-4" aria-label="Settings" onclick={onsettings}>
       <Gear />
     </button>
   </aside>

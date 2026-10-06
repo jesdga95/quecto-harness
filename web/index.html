@@ -5,6 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Quecto Harness</title>
+    <script>
+      // The stylesheet chooses its palette from data-scheme on this element. The
+      // stored choice is read here, before the stylesheet first applies, so a
+      // reader who chose dark is not shown a light page first.
+      (() => {
+        let pref = "system";
+        try {
+          const raw = localStorage.getItem("quecto.theme");
+          if (raw === "light" || raw === "dark") pref = raw;
+        } catch {
+          pref = "system";
+        }
+        const follows = matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.scheme =
+          pref === "dark" || (pref === "system" && follows) ? "dark" : "light";
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>
