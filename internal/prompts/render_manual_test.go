@@ -14,9 +14,10 @@ func TestShowSystemPrompt(t *testing.T) {
 	t.Log("\n=== a launcher ===\n" + System(SystemVars{
 		Project: "/src/x", OS: "darwin", CanAsk: true, CanMessage: true,
 		Agents: []AgentBrief{
-			{Name: "Reviewer", Role: "Reviews Go and does not write it."},
-			{Name: "Local llama.cpp"},
+			{Name: "Reviewer", Role: "Reviews Go and does not write it.", Slots: 1},
+			{Name: "Local llama.cpp", Slots: 2},
 		},
+		Tools: []string{"read", "grep", "write", "edit", "bash", "subagent", "ask_user_question"},
 	}))
 	t.Log("\n=== a subagent ===\n" + System(SystemVars{
 		Project: "/src/x", OS: "darwin", CanMessage: true,

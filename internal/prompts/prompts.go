@@ -57,6 +57,10 @@ type AgentBrief struct {
 	Name string
 	// Role is the one line saying what the agent is for.
 	Role string
+	// Slots is how many runs one reply may start on that agent at once: its
+	// limit less the slot this turn holds when the agent is the one it runs
+	// on. Read from stored config, so the line is the same tokens each turn.
+	Slots int
 }
 
 // SystemVars are the values system.md takes. Rules are the project's, and

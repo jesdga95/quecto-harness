@@ -413,7 +413,7 @@ func TestConcurrencyBoundsLiveChildren(t *testing.T) {
 	if !strings.Contains(outs[0], "started Reviewer") {
 		t.Errorf("the first launch = %q", outs[0])
 	}
-	if !strings.Contains(outs[1], "runs 1 at a time") {
+	if !strings.Contains(outs[1], "runs up to 1 at a time") {
 		t.Errorf("the second launch = %q, want it refused", outs[1])
 	}
 	release()
@@ -437,7 +437,7 @@ func TestAnAgentThatRunsOneAtATimeWillNotTakeItsOwnWork(t *testing.T) {
 	waitIdle(t, s)
 
 	out := toolOutput(t, s, "subagent")
-	if !strings.Contains(out, "runs 1 at a time") {
+	if !strings.Contains(out, "runs up to 1 at a time") {
 		t.Errorf("subagent answered %q, want it refused against the agent's own slot", out)
 	}
 	if h.engine.busy(mine.ID) != 0 {
@@ -484,6 +484,65 @@ func TestAnAgentCanTakeItsOwnWork(t *testing.T) {
 	if h.engine.busy(mine.ID) != 0 {
 		t.Errorf("the agent is still counted busy after both turns ended")
 	}
+}
+
+// The prompt says how many runs each listed agent takes. "Start them together"
+// with no number attached is how a model comes to write four calls at an agent
+// that answers one at a time.
+func TestThePromptNamesTheRunsAnAgentTakes(t *testing.T) {
+	h, reviewer := launcher(t)
+	if _, _, err := h.cfg.UpdateAgent(reviewer.ID, func(a *config.Agent) {
+		a.Description = "Reviews Go and does not write it."
+		a.Concurrency = 3
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.replay.forModel("Alpha-12B", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "what is here", nil)
+	waitIdle(t, s)
+
+	system, _ := textsFor(h, "Alpha-12B")
+	if !strings.Contains(system, "- Reviewer (up to 3 at a time): Reviews Go and does not write it.") {
+		t.Errorf("the launcher's prompt = %q, want the agent listed with the runs it takes", system)
+	}
+}
+
+// What has filled up is read where the model can act on it, at the tail of the
+// conversation, rather than in the prompt that opens every request.
+func TestStartedRunCountsTheSlotsInUse(t *testing.T) {
+	h, reviewer := launcher(t)
+	if _, _, err := h.cfg.UpdateAgent(reviewer.ID, func(a *config.Agent) { a.Concurrency = 3 }); err != nil {
+		t.Fatal(err)
+	}
+	release := h.replay.hold("Beta-30B")
+	h.replay.forModel("Alpha-12B", "stream_subagent_two.txt", "stream_plain.txt", "stream_plain.txt")
+	h.replay.forModel("Beta-30B", "stream_plain.txt", "stream_plain.txt")
+
+	s := h.session(t)
+	h.engine.Send(s.ID, "launch two", nil)
+	childOf(t, h, s)
+	waitIdle(t, s)
+
+	s.mu.Lock()
+	var outs []string
+	for _, e := range s.Entries {
+		if e.Kind == "tool" && e.ToolName == "subagent" {
+			outs = append(outs, e.Content)
+		}
+	}
+	s.mu.Unlock()
+	if len(outs) != 2 {
+		t.Fatalf("subagent ran %d times, want 2", len(outs))
+	}
+	if !strings.Contains(outs[0], "1 of its 3 slots in use") {
+		t.Errorf("the first launch = %q, want the slot it filled", outs[0])
+	}
+	if !strings.Contains(outs[1], "2 of its 3 slots in use") {
+		t.Errorf("the second launch = %q, want both slots counted", outs[1])
+	}
+	release()
 }
 
 // A card a subagent raises is drawn in the conversation the person has open,
@@ -689,6 +748,9 @@ func TestBriefFollowsTheParent(t *testing.T) {
 	if len(b.agents) != 1 || b.agents[0].Name != "Reviewer" {
 		t.Errorf("the agents it may hand work to = %+v", b.agents)
 	}
+	if len(b.agents) == 1 && b.agents[0].Slots != 1 {
+		t.Errorf("the other agent was listed with %d slots, want its own 1", b.agents[0].Slots)
+	}
 	child := newSession("sess_kid", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
 	child.Parent = "sess_top"
 	child.Entries = []store.Entry{{Kind: "user", From: "Local", Content: "do it"}}
@@ -716,6 +778,12 @@ func TestBriefListsTheCallerWhenASlotIsFree(t *testing.T) {
 	b = h.engine.briefFor(top, h.cfg.Config())
 	if len(b.agents) != 1 || b.agents[0].Name != mine.Name {
 		t.Errorf("a two-slot agent is not offered to itself: %+v", b.agents)
+	}
+	// The number the prompt will show is what is left of its limit once this
+	// turn's own slot is spent, so a model launching onto its own agent is
+	// told the truth it will meet at launch.
+	if len(b.agents) == 1 && b.agents[0].Slots != 1 {
+		t.Errorf("it was listed with %d slots, want 1 of its 2", b.agents[0].Slots)
 	}
 	if !b.offer.Agents {
 		t.Errorf("the brief offers no agents: %+v", b)

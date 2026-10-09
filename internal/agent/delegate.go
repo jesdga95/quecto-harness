@@ -114,10 +114,9 @@ func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 		if !a.Enabled || !slices.Contains(me.Calls, a.ID) {
 			continue
 		}
-		// This turn is already one of its own agent's tasks, so a launch onto
-		// that agent has one fewer place to go. An agent with none left is not
-		// listed: naming one that every launch would refuse only buys a wasted
-		// call.
+		// The count is the agent's limit less this turn's own slot, read from
+		// stored config so the head of the prompt is the same tokens each
+		// turn. An agent with no room left is not listed at all.
 		free := a.Concurrency
 		if a.ID == mine {
 			free--
@@ -125,7 +124,7 @@ func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 		if free < 1 {
 			continue
 		}
-		b.agents = append(b.agents, prompts.AgentBrief{Name: a.Name, Role: role(a)})
+		b.agents = append(b.agents, prompts.AgentBrief{Name: a.Name, Role: role(a), Slots: free})
 	}
 	b.offer.Agents = len(b.agents) > 0
 	return b
@@ -240,9 +239,14 @@ func (e *Engine) runAgent(ctx context.Context, s *Session, call llm.ToolCall) (t
 		return tools.Result{}, err
 	}
 	// The handle is on the entry as well as in the sentence, so a page loaded
-	// later still links the row to the transcript it started.
+	// later still links the row to the transcript it started. The live count
+	// goes at the tail of the conversation, never in the prompt that opens it.
+	out := fmt.Sprintf("started %s (%s)", target.Name, child.ID)
+	if limit := target.Concurrency; limit > 0 {
+		out = fmt.Sprintf("%s; %d of its %d slots in use", out, e.busy(target.ID), limit)
+	}
 	return tools.Result{
-		Output: fmt.Sprintf("started %s (%s)", target.Name, child.ID),
+		Output: out,
 		Meta:   map[string]any{"session": child.ID, "agent": target.Name},
 	}, nil
 }
@@ -342,7 +346,7 @@ func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (
 	// it counts is requests to one model server. This session is one of them,
 	// so an agent that runs one at a time cannot take work from itself.
 	if live := e.busy(target.ID); target.Concurrency > 0 && live >= target.Concurrency {
-		return nil, config.Agent{}, fmt.Errorf("subagent: %s runs %d at a time and that many are working now: wait for one to finish, or pick another agent",
+		return nil, config.Agent{}, fmt.Errorf("subagent: %s runs up to %d at a time and that many are working now: wait for one to finish, or pick another agent",
 			target.Name, target.Concurrency)
 	}
 

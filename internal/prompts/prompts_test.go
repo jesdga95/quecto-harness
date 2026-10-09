@@ -196,7 +196,7 @@ func TestSystemSaysItsKnowledgeIsStale(t *testing.T) {
 // reaches for one it does not have.
 func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
 	full := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, CanMessage: true, CanSearch: true,
-		Agents: []AgentBrief{{Name: "Reviewer"}},
+		Agents: []AgentBrief{{Name: "Reviewer", Slots: 1}},
 		Tools:  append(append([]string(nil), execTools...), "web_search", "ask_user_question", "subagent", "send_message")})
 	for _, name := range []string{"ask_user_question", "subagent", "send_message", "web_search"} {
 		if !strings.Contains(full, name) {
@@ -219,10 +219,10 @@ func TestSystemNamesOnlyTheToolsInTheRequest(t *testing.T) {
 func TestSystemListsTheAgentsWithTheirRoles(t *testing.T) {
 	got := System(SystemVars{Project: "/src/x", OS: "darwin", CanAsk: true, Tools: append(append([]string(nil), execTools...), "subagent"),
 		Agents: []AgentBrief{
-			{Name: "Reviewer", Role: "Reviews Go and does not write it."},
-			{Name: "Searcher"},
+			{Name: "Reviewer", Role: "Reviews Go and does not write it.", Slots: 1},
+			{Name: "Searcher", Slots: 2},
 		}})
-	for _, want := range []string{"- Reviewer: Reviews Go and does not write it.", "- Searcher"} {
+	for _, want := range []string{"- Reviewer (up to 1 at a time): Reviews Go and does not write it.", "- Searcher (up to 2 at a time)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt omits %q: %q", want, got)
 		}
@@ -235,15 +235,36 @@ func TestSystemListsTheAgentsWithTheirRoles(t *testing.T) {
 	}
 }
 
+// A model told to start tasks together needs the number to stop at, or it
+// writes four calls at an agent that answers one at a time. The number comes
+// from stored config, so the list is the same tokens every turn.
+func TestSystemBoundsTheRunsOneAgentTakes(t *testing.T) {
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: append(append([]string(nil), execTools...), "subagent"),
+		Agents: []AgentBrief{
+			{Name: "Engineer", Role: "Full end to end implementation.", Slots: 4},
+			{Name: "Reviewer", Role: "Reviews a diff for correctness.", Slots: 1},
+		}})
+	for _, want := range []string{
+		"- Engineer (up to 4 at a time): Full end to end implementation",
+		"- Reviewer (up to 1 at a time): Reviews a diff for correctness.",
+		"up to the number named for an agent",
+		"A launch past that number is refused",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt omits %q: %q", want, got)
+		}
+	}
+}
+
 // An agent is chosen on what it is for, so what it runs is not in the prompt.
-// The list carries a name and a description and nothing else.
+// The list carries a name, a description and a number, and nothing else.
 func TestSystemDoesNotNameTheModelBehindAnAgent(t *testing.T) {
 	got := System(SystemVars{Project: "/src/x", OS: "darwin", Tools: append(append([]string(nil), execTools...), "subagent"),
 		Agents: []AgentBrief{
-			{Name: "Reviewer", Role: "Reviews Go and does not write it."},
+			{Name: "Reviewer", Role: "Reviews Go and does not write it.", Slots: 1},
 		}})
-	if !strings.Contains(got, "- Reviewer: Reviews Go and does not write it.\n") {
-		t.Errorf("the line is not the name and the description alone: %q", got)
+	if !strings.Contains(got, "- Reviewer (up to 1 at a time): Reviews Go and does not write it.\n") {
+		t.Errorf("the line is not the name, the description and the number alone: %q", got)
 	}
 }
 
@@ -252,7 +273,7 @@ func TestSystemDoesNotNameTheModelBehindAnAgent(t *testing.T) {
 func TestSystemDoesNotParseAgentNames(t *testing.T) {
 	got := System(SystemVars{Project: "/src/x", OS: "darwin",
 		Tools:    append(append([]string(nil), execTools...), "subagent", "send_message"),
-		Agents:   []AgentBrief{{Name: "{{.Project}}", Role: "{{if"}},
+		Agents:   []AgentBrief{{Name: "{{.Project}}", Role: "{{if", Slots: 1}},
 		Launcher: "{{range}}"})
 	for _, want := range []string{"{{.Project}}", "{{if", "{{range}}"} {
 		if !strings.Contains(got, want) {

@@ -289,8 +289,10 @@ too late to be picked up starts a turn of its own.
   neither `subagent` nor `ask_user_question` (depth is one), reports to its launcher, has its
   permission card drawn in the launcher's conversation, rolls its file writes up onto the
   launcher, and is stopped and deleted with it. An agent's `concurrency` bounds how many
-  sessions it answers at once, and one with no room left is left off the list the prompt
-  offers. An agent's `calls` names the other agents it may hand work to: only those are
+  sessions it answers at once. The list the prompt offers names each one with the runs it
+  takes, less the slot this turn holds when the agent is the session's own, and an agent
+  with no room left is left off it; what is working right now is read in a tool result,
+  never in the system prompt. An agent's `calls` names the other agents it may hand work to: only those are
   offered to it and only those does `subagent` accept, and an empty list is an agent that
   answers the person only, which is also the default for a new one.
 
