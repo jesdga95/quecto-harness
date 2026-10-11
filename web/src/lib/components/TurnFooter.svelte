@@ -19,6 +19,10 @@
     input !== undefined && input > 0 && cost.cached !== undefined ? (cost.cached / input) * 100 : undefined,
   );
   const who = $derived([cost.agent, cost.model].filter(Boolean).join(" / "));
+  // The rate the model server measured for itself, which is the one that can
+  // be checked against the server. The one this harness timed reads higher on a
+  // server that streams thinking this harness never reads as output.
+  const serverTps = $derived(cost.serverTokPerS ?? 0);
 </script>
 
 <div class="turn-foot">
@@ -49,13 +53,25 @@
               <div><span>From cache</span><b class="num">{Math.round(hit)}%</b></div>
             {/if}
             <div><span>Generated</span><b class="num">{k(cost.tokens)}</b></div>
-            {#if cost.tokPerS > 0}
-              <div><span>Speed</span><b class="num">{Math.round(cost.tokPerS)}<small> tok/s</small></b></div>
+            {#if serverTps > 0 || cost.tokPerS > 0}
+              <div>
+                <span>Speed</span>
+                <b class="num">{Math.round(serverTps > 0 ? serverTps : cost.tokPerS)}<small> tok/s</small></b>
+              </div>
             {/if}
           </div>
           {#if cost.requests > 0}
             <p class="stat-note">
-              {cost.requests} model {cost.requests === 1 ? "call" : "calls"}{#if input !== undefined}, {full(input)} prompt tokens{/if}
+              {cost.requests} model {cost.requests === 1 ? "call" : "calls"}{#if input !== undefined},
+              {full(input)} prompt tokens{/if}
+            </p>
+          {/if}
+          {#if serverTps > 0 && cost.tokPerS > 0}
+            <!-- The tile holds the server's own number; this is what the
+                 harness timed, which starts late when thinking is unread. -->
+            <p class="stat-note">
+              {Math.round(cost.tokPerS)} tok/s measured here, over {duration(cost.genMs ?? 0)} of the
+              {duration(cost.serverGenMs ?? 0)} the server spent generating
             </p>
           {/if}
         </div>

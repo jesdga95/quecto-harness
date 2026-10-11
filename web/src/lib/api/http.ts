@@ -578,6 +578,9 @@ function toCost(src: object | null | undefined): TurnCost | undefined {
     toolMs: num("tool_ms"),
     agent: str("agent"),
     model: str("model"),
+    serverTokens: num("server_tokens"),
+    serverGenMs: num("server_gen_ms"),
+    serverTokPerS: num("server_tok_per_s"),
     perRequest: toRequests(f.per_request),
   };
 }
@@ -593,7 +596,15 @@ function toRequests(raw: unknown): RequestCost[] | undefined {
     const n = (key: string) => (typeof r[key] === "number" ? (r[key] as number) : undefined);
     const tokens = n("tokens");
     if (tokens === undefined) continue;
-    out.push({ window: n("window_tokens"), tokens, firstMs: n("first_ms") ?? 0, genMs: n("gen_ms") ?? 0 });
+    out.push({
+      window: n("window_tokens"),
+      tokens,
+      firstMs: n("first_ms") ?? 0,
+      genMs: n("gen_ms") ?? 0,
+      serverTokens: n("server_tokens"),
+      serverGenMs: n("server_gen_ms"),
+      serverTokPerS: n("server_tok_per_s"),
+    });
   }
   return out;
 }
@@ -980,9 +991,10 @@ function toTranscript(snap: WireSnapshot): Transcript {
   summaries.set(id, session);
 
   // The rate the chip shows is the last turn's, which is on the entry that
-  // ended it rather than in the snapshot's own usage.
+  // ended it rather than in the snapshot's own usage. The server's own rate
+  // comes first where it reported one.
   const last = [...items].reverse().find((i) => i.kind === "assistant" && i.cost);
-  const rate = last?.kind === "assistant" ? last.cost?.tokPerS : undefined;
+  const rate = last?.kind === "assistant" ? (last.cost?.serverTokPerS ?? last.cost?.tokPerS) : undefined;
 
   const usage: Usage = {
     prompt_tokens: snap.last_usage?.prompt_tokens ?? snap.fill ?? 0,

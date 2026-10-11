@@ -1036,6 +1036,11 @@ type turnCost struct {
 	cached     int
 	cachedSeen bool
 	generating time.Duration
+	// serverN and serverMs are the generation as the model server measured it
+	// itself. serverN is zero where no request of the turn reported timings,
+	// which is not the same as a turn that generated nothing.
+	serverN  int
+	serverMs time.Duration
 	// asking is the time spent inside requests, waiting the part of it before
 	// the first token, and tools the time spent running tool calls.
 	asking  time.Duration
@@ -1047,12 +1052,24 @@ type turnCost struct {
 
 // requestCost is one request of a turn. window is its prompt and is -1 where
 // the server reported no usage; first and generating are zero for a request
-// that produced nothing.
+// that produced nothing. serverN and serverMs are the same generation as the
+// server measured it, and are zero where it reported no timings.
 type requestCost struct {
 	window     int
 	tokens     int
 	first      time.Duration
 	generating time.Duration
+	serverN    int
+	serverMs   time.Duration
+}
+
+// serverRate is the tokens per second the server reported for itself, or zero
+// where it reported none.
+func (r requestCost) serverRate() float64 {
+	if r.serverN <= 0 || r.serverMs <= 0 {
+		return 0
+	}
+	return float64(r.serverN) / r.serverMs.Seconds()
 }
 
 // add folds in one finished request. sent is when it was made and first is
@@ -1073,6 +1090,12 @@ func (c *turnCost) add(res llm.Result, sent, first time.Time) {
 			c.cachedSeen = true
 		}
 	}
+	if t := res.Timings; t != nil && t.PredictedN > 0 && t.PredictedPerSecond > 0 {
+		one.serverN = t.PredictedN
+		one.serverMs = time.Duration(float64(t.PredictedN) / t.PredictedPerSecond * float64(time.Second))
+		c.serverN += one.serverN
+		c.serverMs += one.serverMs
+	}
 	if !first.IsZero() {
 		one.generating = time.Since(first)
 		one.first = first.Sub(sent)
@@ -1082,8 +1105,9 @@ func (c *turnCost) add(res llm.Result, sent, first time.Time) {
 	c.each = append(c.each, one)
 }
 
-// fields renders the numbers for the transcript. The rate is measured rather
-// than read from the response, since only some servers report one.
+// fields renders the numbers for the transcript. tok_per_s is timed by the
+// harness; server_tok_per_s is the rate the server reported, left out where it
+// reported none. The first reads high when thinking is streamed unread.
 func (c *turnCost) fields() map[string]any {
 	rate := 0.0
 	if secs := c.generating.Seconds(); secs > 0 {
@@ -1102,6 +1126,11 @@ func (c *turnCost) fields() map[string]any {
 		"requests":      c.requests,
 		"per_request":   c.perRequest(),
 	}
+	if c.serverN > 0 && c.serverMs > 0 {
+		out["server_tokens"] = c.serverN
+		out["server_gen_ms"] = c.serverMs.Milliseconds()
+		out["server_tok_per_s"] = float64(c.serverN) / c.serverMs.Seconds()
+	}
 	if c.cachedSeen {
 		out["cached_tokens"] = c.cached
 	}
@@ -1115,7 +1144,8 @@ func (c *turnCost) fields() map[string]any {
 }
 
 // perRequest renders each request's prompt, output and timings. A prompt the
-// server did not report is left out rather than written as zero.
+// server did not report is left out rather than written as zero, and so is a
+// rate the server did not report for itself.
 func (c *turnCost) perRequest() []map[string]any {
 	out := make([]map[string]any, 0, len(c.each))
 	for _, r := range c.each {
@@ -1126,6 +1156,11 @@ func (c *turnCost) perRequest() []map[string]any {
 		}
 		if r.window >= 0 {
 			row["window_tokens"] = r.window
+		}
+		if rate := r.serverRate(); rate > 0 {
+			row["server_tokens"] = r.serverN
+			row["server_gen_ms"] = r.serverMs.Milliseconds()
+			row["server_tok_per_s"] = rate
 		}
 		out = append(out, row)
 	}

@@ -1315,8 +1315,12 @@ function onEvent(event: HarnessEvent): void {
     app.awaitingModel = false;
   }
 
-  if (event.type === "done" && event.cost && event.cost.tokPerS > 0) {
-    app.usage.tok_per_s = Math.round(event.cost.tokPerS);
+  if (event.type === "done" && event.cost) {
+    // The server's own rate when it reported one, since that is the number a
+    // reader can check against the server. Ours is the fallback for a server
+    // that reported no timings at all.
+    const rate = event.cost.serverTokPerS ?? event.cost.tokPerS;
+    if (rate > 0) app.usage.tok_per_s = Math.round(rate);
   }
 
   if (event.type === "status") {

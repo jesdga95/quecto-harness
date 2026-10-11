@@ -297,6 +297,26 @@ func TestTurnCostIsRecordedOnTheEntryThatEndedIt(t *testing.T) {
 	if rate, ok := last.Meta["tok_per_s"].(float64); !ok || rate <= 0 {
 		t.Errorf("tok_per_s = %v", last.Meta["tok_per_s"])
 	}
+	// The server's own rate rides beside it. Only the second replay reported
+	// timings, and it said 35 tokens at 52.94 per second, so the turn carries
+	// that pair and nothing from the request that said nothing.
+	if n, ok := last.Meta["server_tokens"].(int); !ok || n != 35 {
+		t.Errorf("server_tokens = %v, want the 35 the server counted", last.Meta["server_tokens"])
+	}
+	srv, ok := last.Meta["server_tok_per_s"].(float64)
+	if !ok || srv < 52.9 || srv > 52.99 {
+		t.Errorf("server_tok_per_s = %v, want the 52.94 the server reported", last.Meta["server_tok_per_s"])
+	}
+	if ms, ok := last.Meta["server_gen_ms"].(int64); !ok || ms < 660 || ms > 662 {
+		t.Errorf("server_gen_ms = %v, want the 661 ms 35 tokens at 52.94 is", last.Meta["server_gen_ms"])
+	}
+	if _, ok := each[0]["server_tok_per_s"]; ok {
+		t.Errorf("request 1 carries server_tok_per_s = %v, want it absent: that replay reported no timings",
+			each[0]["server_tok_per_s"])
+	}
+	if r, ok := each[1]["server_tok_per_s"].(float64); !ok || r < 52.9 || r > 52.99 {
+		t.Errorf("request 2 server_tok_per_s = %v, want 52.94", each[1]["server_tok_per_s"])
+	}
 
 	done := h.rec.ofType("done")
 	if len(done) != 1 {

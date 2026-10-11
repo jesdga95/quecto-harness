@@ -151,6 +151,8 @@ type Usage struct {
 	CachedTokens     *int `json:"cached_tokens,omitempty"`
 }
 
+// Timings is what the model server measured for itself. PredictedN over
+// PredictedPerSecond is the time it spent generating.
 type Timings struct {
 	PromptN            int
 	PromptPerSecond    float64
