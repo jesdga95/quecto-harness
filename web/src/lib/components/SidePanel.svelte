@@ -13,6 +13,7 @@
   import DownloadSimple from "phosphor-svelte/lib/DownloadSimple";
   import FileCode from "phosphor-svelte/lib/FileCode";
   import Folder from "phosphor-svelte/lib/Folder";
+  import List from "phosphor-svelte/lib/List";
   import ListChecks from "phosphor-svelte/lib/ListChecks";
   import PenNib from "phosphor-svelte/lib/PenNib";
   import X from "phosphor-svelte/lib/X";
@@ -43,6 +44,7 @@
     openSection,
     showArtifact,
     toggleArtifactsWide,
+    toggleList,
     type Section,
   } from "../state/app.svelte";
 
@@ -297,6 +299,18 @@
       </button>
     {/each}
     <div class="ml-auto flex shrink-0 items-center gap-0.5">
+      {#if (app.section === "agents" && app.runs.length > 0) || (app.section === "processes" && app.procs.length > 0)}
+        <button
+          class="icon-btn"
+          class:is-on={app.listed}
+          aria-pressed={app.listed ? "true" : "false"}
+          aria-label={app.listed ? "Open the item again" : "Show only the list"}
+          title={app.listed ? "Open the item again" : "Show only the list"}
+          onclick={toggleList}
+        >
+          <List />
+        </button>
+      {/if}
       <button
         class="icon-btn"
         aria-label={app.artifactsWide ? "Show the conversation" : "Hide the conversation"}

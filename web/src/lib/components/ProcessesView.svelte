@@ -3,15 +3,18 @@
   import Stop from "phosphor-svelte/lib/Stop";
   import Terminal from "phosphor-svelte/lib/Terminal";
   import CopyButton from "./CopyButton.svelte";
-  import { app, loadProcessOutput, showProcesses, stopProcess } from "../state/app.svelte";
+  import { app, loadProcessOutput, openProcess, stopProcess } from "../state/app.svelte";
   import type { Process } from "../api";
   import { bytes, clockLabel } from "../format";
   import { followEnd } from "../stream.svelte";
 
   const running = $derived(app.procs.filter((p) => p.status === "running").length);
   const ended = $derived(app.procs.length - running);
-  // The newest command is what a reader opening the section came for.
-  const shown = $derived(app.procs.find((p) => p.id === app.procId) ?? app.procs.at(-1));
+  // The newest command is what a reader opening the section came for, until they
+  // ask for the list alone.
+  const shown = $derived(
+    app.listed ? undefined : (app.procs.find((p) => p.id === app.procId) ?? app.procs.at(-1)),
+  );
   // Newest first, so a command just started is at the top of the list.
   const listed = $derived([...app.procs].reverse());
 
@@ -89,11 +92,11 @@
     {/if}
   </div>
 
-  <div class="dock-list">
+  <div class="dock-list" class:is-alone={app.listed}>
     {#each listed as proc (proc.id)}
       <div class="dock-row" class:is-on={proc.id === shown?.id}>
         <span class="state-mark {mark(proc)}" role="status" aria-label={proc.status === "running" ? "Running" : end(proc)}></span>
-        <button class="dock-row-main" title={proc.command} onclick={() => showProcesses(proc.id)}>
+        <button class="dock-row-main" title={proc.command} onclick={() => openProcess(proc.id)}>
           <span class="dock-row-title is-mono">{proc.command}</span>
           <span class="dock-row-sub">
             {proc.status === "running"

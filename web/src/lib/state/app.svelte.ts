@@ -90,6 +90,9 @@ export const app = $state({
   panel: false,
   // The section the dock is showing.
   section: "files" as Section,
+  // Whether that section is showing its list rather than one open item. Agents
+  // and Shell open on one when they are shown, so this is what lets go of it.
+  listed: false,
   // The subagent runs this session launched, newest first, with what each is
   // doing now. The chip counts them and the panel lists them.
   runs: [] as Child[],
@@ -956,6 +959,9 @@ export function showSection(section: Section): void {
   app.section = section;
   app.artifactsDismissed = false;
   app.panel = true;
+  // Entering a section opens the item it came for. Agents follow the one still
+  // working and Shell the newest command, so this is what lets that happen again.
+  app.listed = false;
 }
 
 /** Closes the panel. Closing it while a turn runs keeps it closed until the
@@ -987,6 +993,12 @@ export function showProcesses(id = ""): void {
   if (id) app.procId = id;
 }
 
+/** Opens one background command from the list, leaving the list alone. */
+export function openProcess(id: string): void {
+  app.listed = false;
+  app.procId = id;
+}
+
 /** Ends one background command. A command that already went is not an error. */
 export async function stopProcess(id: string): Promise<void> {
   if (!app.sessionId) return;
@@ -1014,6 +1026,18 @@ function closeRuns(): void {
   runStream = null;
   app.runId = "";
   app.runItems = [];
+}
+
+/** Shows a section's list instead of the item it opened itself on. Pressed
+    again, the section opens one item again. */
+export function toggleList(): void {
+  if (app.listed) {
+    app.listed = false;
+    return;
+  }
+  app.listed = true;
+  if (app.section === "agents") closeRuns();
+  if (app.section === "processes") app.procId = "";
 }
 
 /** Takes an artifact out of the Files stack. The one beside it takes its place. */
@@ -1130,6 +1154,7 @@ function announceArtifacts(): void {
 export async function openRun(id: string): Promise<void> {
   runStream?.();
   runStream = null;
+  app.listed = false;
   app.runId = id;
   app.runItems = [];
   const t = await guard(() => api.getSession(id));
