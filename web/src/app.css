@@ -1673,36 +1673,32 @@
     font-weight: 400;
     white-space: nowrap;
   }
-  /* The agent answering, and its model, over the window. */
-  .ctxv h4.ctxv-who {
-    margin-bottom: 14px;
-    font-size: 13px;
-    font-weight: 400;
-    color: var(--muted);
-  }
-  .ctxv-who-name {
+  /* The agent answering, and its model, under the window's own heading. It is
+     a line of the section rather than its title, so every section opens the
+     same way. */
+  .ctxv-who {
     display: flex;
     align-items: baseline;
     gap: 8px;
-    min-width: 0;
+    margin: 0 0 14px;
+    font-size: 12px;
+    color: var(--muted);
   }
-  .ctxv-who-name b {
+  .ctxv-who b {
     font-weight: 500;
     color: var(--text);
   }
-  .ctxv-who-name span {
+  .ctxv-who span {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .ctxv h4 .ctxv-who-side {
-    font-size: 11.5px;
   }
 
   /* The window as a ring of its parts, with the compaction mark on it, and
      the figures beside it. */
   .ctxv-gauge-row {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     gap: 22px;
   }
   .ctxv-gauge {
@@ -1757,24 +1753,23 @@
     font-size: 11px;
     fill: var(--muted);
   }
+  /* The figures beside the ring share its height, so their rules fall at the
+     top and bottom of it rather than floating across its middle. */
   .ctxv-stats {
     flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    display: grid;
+    grid-auto-rows: 1fr;
     min-width: 0;
     margin: 0;
   }
   .ctxv-stats > div {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding-bottom: 10px;
     border-bottom: 1px solid var(--hair);
   }
   .ctxv-stats > div:last-child {
-    padding-bottom: 0;
     border-bottom: 0;
   }
   .ctxv-stats dt {
@@ -1796,29 +1791,36 @@
     border-radius: 999px;
     background: var(--warn);
   }
+  /* The four parts of the fill, in two columns whose tracks are shared, so the
+     figures of the left half and the right half fall on the same axes. */
   .ctxv-fill {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px 18px;
+    grid-template-columns: minmax(0, 1fr) 46px 38px minmax(0, 1fr) 46px 38px;
+    align-items: center;
+    gap: 6px 8px;
     margin-top: 16px;
     font-size: 12px;
     color: var(--text-2);
   }
-  .ctxv-fill > div {
+  .ctxv-fill > :nth-child(6n + 4) {
+    padding-left: 14px;
+  }
+  .ctxv-fill-name {
     display: flex;
     align-items: center;
     gap: 7px;
     min-width: 0;
   }
-  .ctxv-fill b {
-    margin-left: auto;
-    font-weight: 400;
-    color: var(--muted);
+  .ctxv-fill-name span:not(.ctxdot) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .ctxv-fill i {
-    width: 40px;
-    font-style: normal;
+  .ctxv-fill-n,
+  .ctxv-fill-pc {
     text-align: right;
+  }
+  .ctxv-fill-pc {
     color: var(--muted);
   }
 
@@ -1875,6 +1877,16 @@
 
   /* Charts drawn at the width they are given, so text and points keep their
      shape. */
+  .ctxv-charts {
+    display: flex;
+    flex-direction: column;
+  }
+  .ctxv-charts h4 {
+    margin-top: 18px;
+  }
+  .ctxv-charts h4:first-child {
+    margin-top: 0;
+  }
   .ctxv-chart-wrap {
     position: relative;
   }
@@ -1952,13 +1964,16 @@
     color: var(--muted);
   }
 
-  /* A figure card: its name, a small picture of it, the figure, a note. */
+  /* A figure card: its name, a small picture of it, the figure, a note. Twelve
+     tracks so any number of cards fills its rows exactly, since three of the
+     six are drawn only when their figures exist. */
   .ctxv-cards {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+    grid-template-columns: repeat(12, 1fr);
     gap: 6px;
   }
   .ctxv-card {
+    grid-column: span 4;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -1966,6 +1981,19 @@
     padding: 9px 10px 10px;
     border-radius: 8px;
     background: var(--surface-2);
+  }
+  /* Six, the full set, take three to a row. Four share one row. Five open a row
+     of three and close it with two. Two fill a row between them. */
+  .ctxv-card:first-child:nth-last-child(4),
+  .ctxv-card:first-child:nth-last-child(4) ~ .ctxv-card {
+    grid-column: span 3;
+  }
+  .ctxv-card:first-child:nth-last-child(5) ~ .ctxv-card:nth-child(n + 4) {
+    grid-column: span 6;
+  }
+  .ctxv-card:first-child:nth-last-child(2),
+  .ctxv-card:first-child:nth-last-child(2) ~ .ctxv-card {
+    grid-column: span 6;
   }
   .ctxv-card-label {
     font-size: 11px;
