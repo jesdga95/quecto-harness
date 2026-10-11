@@ -3,23 +3,42 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- The PNG and the ICO are for a browser that cannot draw an SVG icon. -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Quecto Harness</title>
     <script>
       // The stylesheet chooses its palette from data-scheme on this element. The
       // stored choice is read here, before the stylesheet first applies, so a
-      // reader who chose dark is not shown a light page first.
+      // reader who chose a palette is not shown another one first.
       (() => {
-        let pref = "system";
+        const isPalette = (v) =>
+          v === "light" ||
+          v === "dark" ||
+          v === "high-contrast-light" ||
+          v === "high-contrast-dark" ||
+          v === "grey-paper" ||
+          v === "cream";
+        let palette = "light";
+        let follow = true;
         try {
           const raw = localStorage.getItem("quecto.theme");
-          if (raw === "light" || raw === "dark") pref = raw;
+          if (isPalette(raw)) palette = raw;
+          follow = localStorage.getItem("quecto.follow") !== "0";
         } catch {
-          pref = "system";
+          // The operating system decides.
         }
-        const follows = matchMedia("(prefers-color-scheme: dark)").matches;
-        document.documentElement.dataset.scheme =
-          pref === "dark" || (pref === "system" && follows) ? "dark" : "light";
+        if (follow) {
+          palette = matchMedia("(prefers-contrast: more)").matches
+            ? matchMedia("(prefers-color-scheme: dark)").matches
+              ? "high-contrast-dark"
+              : "high-contrast-light"
+            : matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+        }
+        document.documentElement.dataset.scheme = palette;
       })();
     </script>
   </head>

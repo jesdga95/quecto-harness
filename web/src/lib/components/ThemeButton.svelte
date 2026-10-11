@@ -4,8 +4,8 @@
   import Moon from "phosphor-svelte/lib/Moon";
   import Sun from "phosphor-svelte/lib/Sun";
   import Popover from "./Popover.svelte";
-  import { setTheme, theme } from "../state/theme.svelte";
-  import type { ThemePref } from "../state/theme.svelte";
+  import { setFollow, setPalette, theme } from "../state/theme.svelte";
+  import type { Palette } from "../state/theme.svelte";
 
   let {
     align = "right",
@@ -17,42 +17,53 @@
 
   let open = $state(false);
 
-  // One table drives the button and the menu. The icon on the button is the
-  // one for the scheme in force, so a monitor while the operating system is
-  // being followed.
-  const choices = [
-    {
-      value: "system",
-      label: "System",
-      hint: "Follow the operating system.",
-      icon: Monitor,
-    },
-    {
-      value: "light",
-      label: "Light",
-      hint: "The light palette, whatever the operating system is set to.",
-      icon: Sun,
-    },
-    {
-      value: "dark",
-      label: "Dark",
-      hint: "The ink palette, whatever the operating system is set to.",
-      icon: Moon,
-    },
-  ] as const satisfies readonly {
-    value: ThemePref;
+  interface Choice {
+    value: Palette;
     label: string;
-    hint: string;
     icon: Component;
-  }[];
-
-  const current = $derived(choices.find((c) => c.value === theme.pref) ?? choices[0]);
-  const Trigger = $derived(current.icon);
-
-  function pick(value: ThemePref) {
-    open = false;
-    setTheme(value);
+    /** The two halves of a chip: its page over its surface. A chip paints the
+        palette it offers rather than the one in force, so its fills are written
+        out beside its name. */
+    page: string;
+    surface: string;
   }
+
+  // The order the menu shows. Only the first group is one the operating system
+  // can decide between, so a reader who follows it never lands on a paper.
+  const groups: { head: string; choices: Choice[] }[] = [
+    {
+      head: "Palette",
+      choices: [
+        { value: "light", label: "Light", icon: Sun, page: "#ffffff", surface: "#f1f5f9" },
+        { value: "dark", label: "Dark", icon: Moon, page: "#0f172a", surface: "#1a2436" },
+        {
+          value: "high-contrast-light",
+          label: "High contrast light",
+          icon: Sun,
+          page: "#ffffff",
+          surface: "#e6ebf1",
+        },
+        {
+          value: "high-contrast-dark",
+          label: "High contrast dark",
+          icon: Moon,
+          page: "#000000",
+          surface: "#0f141c",
+        },
+      ],
+    },
+    {
+      head: "Paper",
+      choices: [
+        { value: "grey-paper", label: "Grey paper", icon: Sun, page: "#e6ebf1", surface: "#ffffff" },
+        { value: "cream", label: "Cream", icon: Sun, page: "#f7f5f0", surface: "#fffefb" },
+      ],
+    },
+  ];
+
+  const all = groups.flatMap((g) => g.choices);
+  const current = $derived(all.find((c) => c.value === theme.active) ?? all[0]);
+  const Trigger = $derived(theme.follow ? Monitor : current.icon);
 </script>
 
 <div class="relative">
@@ -63,21 +74,52 @@
     aria-expanded={open}
     onclick={() => (open = !open)}
   >
-    <!-- An explicit choice takes the accent, so a page following the operating
+    <!-- An explicit palette takes the accent, so a page following the operating
          system and a page that was told look different. -->
-    <Trigger class={current.value === "system" ? "" : "text-accent"} />
+    <Trigger class={theme.follow ? "" : "text-accent"} />
   </button>
 
   {#if open}
     <Popover onclose={() => (open = false)} up align={align} width={250}>
-      {#each choices as c (c.value)}
-        {@const picked = c.value === current.value}
-        <button class="popover-item" onclick={() => pick(c.value)}>
-          <span class="min-w-0 flex-1">
-            <span class="block" class:text-accent={picked}>{c.label}</span>
-            <span class="block text-[12px] text-muted">{c.hint}</span>
+      <label class="popover-item">
+        <span class="min-w-0 flex-1">
+          <span class="block">Follow the operating system</span>
+          <span class="block text-[12px] text-muted">
+            Its colour scheme and its contrast setting.
           </span>
-        </button>
+        </span>
+        <input
+          class="switch"
+          type="checkbox"
+          checked={theme.follow}
+          onchange={(e) => setFollow(e.currentTarget.checked)}
+        />
+      </label>
+
+      {#each groups as g (g.head)}
+        <div class="popover-head">{g.head}</div>
+        {#each g.choices as c (c.value)}
+          <!-- The palette in force carries the row background and, while the
+               operating system is followed, the rest fade. The accent marks
+               only a palette a reader named. -->
+          {@const active = c.value === theme.active}
+          {@const named = !theme.follow && active}
+          <button
+            class="popover-item"
+            class:is-on={active}
+            class:opacity-45={theme.follow && !active}
+            onclick={() => setPalette(c.value)}
+          >
+            <span
+              class="scheme-chip"
+              style="background:linear-gradient({c.page} 50%,{c.surface} 50%)"
+              aria-hidden="true"
+            ></span>
+            <span class="min-w-0 flex-1">
+              <span class="block" class:text-accent={named}>{c.label}</span>
+            </span>
+          </button>
+        {/each}
       {/each}
     </Popover>
   {/if}

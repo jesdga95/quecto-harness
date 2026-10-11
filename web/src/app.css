@@ -60,9 +60,9 @@
   --brand: #0d9488;
 }
 
-/* Two palettes on the root element, chosen by its data-scheme attribute: an
-   unset attribute paints light. Scrollbars, form controls and native colour
-   pickers read color-scheme rather than the custom properties. */
+/* Six palettes, chosen by data-scheme on the root; an unset attribute paints
+   light. Scrollbars, form controls and native colour pickers read color-scheme
+   rather than the custom properties. */
 :root {
   color-scheme: light;
   --bg: #f8fafc;
@@ -177,6 +177,191 @@
   --glow-p2: rgb(196 181 253 / 0.1);
   --mark: #fcd34d;
 }
+
+/* High contrast light: white paper with every border drawn as an ink line, so
+   the separation between surfaces carries the contrast rather than the paper. */
+:root[data-scheme="high-contrast-light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #f4f6f8;
+  --hair: rgb(0 0 0 / 0.34);
+  --edge: rgb(4 70 63 / 0.45);
+  --edge-focus: #04463f;
+  --spin-run: #04463f;
+  --plan: #38106f;
+  --plan-bg: #ded1f7;
+  --plan-edge: rgb(56 16 111 / 0.45);
+  --plan-edge-focus: #38106f;
+  --surface-2: #e6ebf1;
+  --border: #333c48;
+  --border-2: #111827;
+  --text: #000000;
+  --text-2: #111827;
+  --muted: #333c48;
+  --accent: #04463f;
+  --accent-bg: #c9e6df;
+  --ok: #0b6230;
+  --ok-bg: #d3eddb;
+  --warn: #6f3c00;
+  --warn-bg: #f5e2ba;
+  --crit: #8f1409;
+  --crit-bg: #f8d3ce;
+  --btn: #04463f;
+  --hl-key: #45108a;
+  --hl-str: #03552a;
+  --hl-num: #6d3600;
+  --hl-type: #0e3170;
+  --hl-fn: #064a5e;
+  --hl-com: #333c48;
+  --term-bg: #101a17;
+  --c-system: #333c48;
+  --c-agents: #45108a;
+  --c-tools: #0e3170;
+  --c-msg: #04463f;
+  --glass: rgb(255 255 255 / 0.92);
+  --mark: #04463f;
+}
+
+/* High contrast dark: black rather than blue ink, so a surface chosen for
+   contrast is not also tinted, with the accent and the status colours raised to
+   hold a wide margin against it. */
+:root[data-scheme="high-contrast-dark"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --page: #000000;
+  --panel: #0a0e14;
+  --hair: rgb(226 232 240 / 0.22);
+  --edge: rgb(94 234 212 / 0.45);
+  --edge-focus: #5eead4;
+  --spin-run: #ffd76a;
+  --plan: #d6c7ff;
+  --plan-bg: #1d1338;
+  --plan-edge: rgb(214 199 255 / 0.45);
+  --plan-edge-focus: #d6c7ff;
+  --surface: #0f141c;
+  --surface-2: #1a2029;
+  --border: #7c8b9e;
+  --border-2: #aab6c5;
+  --text: #ffffff;
+  --text-2: #e6ebf2;
+  --muted: #b6c2cf;
+  --accent: #5eead4;
+  --accent-bg: #0b352f;
+  --ok: #5fd68b;
+  --ok-bg: #0d2c1a;
+  --warn: #ffd76a;
+  --warn-bg: #2e2107;
+  --crit: #ff9b90;
+  --crit-bg: #33130f;
+  --btn: #5eead4;
+  --btn-text: #000000;
+  --hl-key: #d6c7ff;
+  --hl-str: #9ff0bd;
+  --hl-num: #ffd88a;
+  --hl-type: #a9d1ff;
+  --hl-fn: #84f2ff;
+  --hl-com: #a9b7c6;
+  --term-bg: #05090c;
+  --c-system: #8b98a8;
+  --c-agents: #d6c7ff;
+  --c-tools: #a9d1ff;
+  --c-msg: #5eead4;
+  --glass: rgb(10 14 20 / 0.9);
+  --mark: #ffd76a;
+}
+
+/* Grey paper: the page sits below white and the surfaces it carries stay at
+   white, so a card reads as paper laid on the desk rather than as a hole cut in
+   it. Chosen by hand only. */
+:root[data-scheme="grey-paper"] {
+  color-scheme: light;
+  --bg: #e6ebf1;
+  --page: #e6ebf1;
+  --panel: #dde4ec;
+  --hair: rgb(20 32 46 / 0.22);
+  --edge: rgb(4 70 63 / 0.45);
+  --edge-focus: #04463f;
+  --spin-run: #04463f;
+  --plan: #331063;
+  --plan-bg: #d9cbf4;
+  --plan-edge: rgb(51 16 99 / 0.45);
+  --plan-edge-focus: #331063;
+  --surface-2: #cfd8e3;
+  --border: #55657a;
+  --border-2: #2f3b4a;
+  --text: #000000;
+  --text-2: #14202e;
+  --muted: #2f3b4a;
+  --accent: #04463f;
+  --accent-bg: #c6e3dc;
+  --ok: #0b5c2c;
+  --ok-bg: #cfe9d7;
+  --warn: #6b3900;
+  --warn-bg: #f2ddb2;
+  --crit: #8c130a;
+  --crit-bg: #f6cfc9;
+  --btn: #04463f;
+  --hl-key: #3d0e7d;
+  --hl-str: #024f26;
+  --hl-num: #653200;
+  --hl-type: #0b2a63;
+  --hl-fn: #044255;
+  --hl-com: #2f3b4a;
+  --term-bg: #101a17;
+  --c-system: #55657a;
+  --c-agents: #3d0e7d;
+  --c-tools: #0b2a63;
+  --c-msg: #04463f;
+  --glass: rgb(230 235 241 / 0.9);
+  --mark: #04463f;
+}
+
+/* Cream: warm paper and warm ink, which reads as a wider margin than a cool
+   grey of the same luminance. Chosen by hand only. */
+:root[data-scheme="cream"] {
+  color-scheme: light;
+  --bg: #f7f5f0;
+  --page: #f7f5f0;
+  --panel: #f1eee7;
+  --hair: rgb(43 38 30 / 0.2);
+  --edge: rgb(10 75 65 / 0.45);
+  --edge-focus: #0a4b41;
+  --spin-run: #0a4b41;
+  --plan: #3d1a72;
+  --plan-bg: #e2d7f2;
+  --plan-edge: rgb(61 26 114 / 0.45);
+  --plan-edge-focus: #3d1a72;
+  --surface: #fffefb;
+  --surface-2: #e6e1d6;
+  --border: #7a746a;
+  --border-2: #4f4a41;
+  --text: #0b0a08;
+  --text-2: #33302a;
+  --muted: #4f4a41;
+  --accent: #0a4b41;
+  --accent-bg: #d5e6de;
+  --ok: #14602f;
+  --ok-bg: #d8ecdd;
+  --warn: #6b3d00;
+  --warn-bg: #f3e2c1;
+  --crit: #8c1f12;
+  --crit-bg: #f7d6d0;
+  --btn: #0a4b41;
+  --hl-key: #4a1a86;
+  --hl-str: #0a5c2c;
+  --hl-num: #6f4200;
+  --hl-type: #16336f;
+  --hl-fn: #0a5165;
+  --hl-com: #57503f;
+  --term-bg: #14110d;
+  --c-system: #7a746a;
+  --c-agents: #4a1a86;
+  --c-tools: #16336f;
+  --c-msg: #0a4b41;
+  --glass: rgb(247 245 240 / 0.9);
+  --mark: #0a4b41;
+}
+
 @layer base {
   html {
     background: var(--page);
@@ -2498,6 +2683,15 @@
   .popover-item.is-on {
     background: var(--surface-2);
     font-weight: 500;
+  }
+  /* A palette's page over its surface. The fills come from the component, since
+     each chip paints its own palette rather than the one in force. */
+  .scheme-chip {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
   }
   /* Files matching an @ in the composer, over the field. */
   .mention-list {

@@ -383,6 +383,28 @@ func TestAuthWrongTokenOnRootServesInstructions(t *testing.T) {
 	}
 }
 
+// A tab icon is served without the cookie, since some browsers fetch it without
+// one. Every other page still answers with the instruction.
+func TestTabIconNeedsNoCookie(t *testing.T) {
+	f := newFixture(t)
+	f.srv.ui = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Write([]byte("<svg/>"))
+	})
+	for _, path := range []string{"/favicon.svg", "/favicon.png", "/favicon.ico"} {
+		w := httptest.NewRecorder()
+		f.handler.ServeHTTP(w, newRequest("GET", path, nil))
+		if w.Body.String() != "<svg/>" {
+			t.Errorf("%s without a cookie = %q, want the icon", path, w.Body.String())
+		}
+	}
+	w := httptest.NewRecorder()
+	f.handler.ServeHTTP(w, newRequest("GET", "/index.html", nil))
+	if !strings.Contains(w.Body.String(), "quecto-harness open") {
+		t.Errorf("/index.html without a cookie = %q, want the instruction", w.Body.String())
+	}
+}
+
 func TestOriginRejection(t *testing.T) {
 	f := newFixture(t)
 	cases := []struct {
