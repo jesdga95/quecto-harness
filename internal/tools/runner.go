@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -198,9 +199,9 @@ func FieldError(raw json.RawMessage, err error) (string, bool) {
 	return fmt.Sprintf("%s got %s, expected JSON %s", typeErr.Field, got, jsonKind(typeErr.Type.Kind())), true
 }
 
-// rawAt reads the text a call put at a dotted field path. An array element is
-// not named in the path a decode failure reports, so where the path crosses a
-// list the element holding a value of the kind that failed is the one shown.
+// rawAt reads the text a call put at a dotted field path. Some Go releases name
+// the array element in that path and some do not, so where the path crosses a
+// list without an index the element holding a value of the failed kind is shown.
 func rawAt(raw json.RawMessage, path []string, kind string) string {
 	if len(path) == 0 {
 		return clipText(raw)
@@ -213,6 +214,12 @@ func rawAt(raw json.RawMessage, path []string, kind string) string {
 	}
 	var items []json.RawMessage
 	if json.Unmarshal(raw, &items) == nil {
+		if i, err := strconv.Atoi(path[0]); err == nil {
+			if i < 0 || i >= len(items) {
+				return ""
+			}
+			return rawAt(items[i], path[1:], kind)
+		}
 		first := ""
 		for _, item := range items {
 			got := rawAt(item, path, kind)
