@@ -491,7 +491,12 @@ func TestFieldErrorNamesAFieldInsideAList(t *testing.T) {
 	}
 	raw := json.RawMessage(`{"questions":[{"multi_select":true},{"multi_select":"True"}]}`)
 	msg, ok := FieldError(raw, json.Unmarshal(raw, &v))
-	if !ok || msg != `questions.multi_select got string "True", expected JSON boolean true or false` {
+	// Newer Go releases put the element's index in the path, older ones leave it out.
+	want := []string{
+		`questions.multi_select got string "True", expected JSON boolean true or false`,
+		`questions.1.multi_select got string "True", expected JSON boolean true or false`,
+	}
+	if !ok || (msg != want[0] && msg != want[1]) {
 		t.Errorf("a bad multi_select was reported as %q, ok %v", msg, ok)
 	}
 }
