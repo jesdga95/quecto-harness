@@ -47,6 +47,9 @@ var (
 	ErrNoModel    = errors.New("The agent has no model: choose one in the agents dialog")
 	ErrCompacting = errors.New("The conversation is being compacted: that finishes on its own")
 	ErrTooShort   = errors.New("Not enough content to compact: keep working and try again later")
+	// ErrUnknownAgent is an agent id that names no agent at all, which is not
+	// the same as one that exists and is switched off.
+	ErrUnknownAgent = errors.New("No agent with that id: choose one from the agent list")
 )
 
 // Engine owns every live session and dispatches turns.
@@ -714,19 +717,31 @@ func (e *Engine) Compact(id string) error {
 	return nil
 }
 
-// SetAgent moves every live session onto the agent answering now. One agent
-// answers for the whole harness, so a change of agent moves all of them.
+// SetAgent moves the live sessions whose agent was deleted or disabled onto the
+// agent answering now. Every other conversation keeps the agent it was given.
 //
 // Nothing is sent to the model server. Making a model ready can cost minutes
 // of another machine's memory, so it waits for a message that needs the model
 // rather than following a choice made in a menu.
 func (e *Engine) SetAgent() {
-	a, _ := e.cfg.Config().Agent()
+	cfg := e.cfg.Config()
+	def, ok := cfg.Agent()
+	if !ok {
+		return
+	}
 	for _, s := range e.liveSessions() {
-		if s.Parent != "" {
+		s.mu.Lock()
+		mine := s.AgentID
+		s.mu.Unlock()
+		if s.Parent != "" || mine == "" {
 			continue
 		}
-		e.pointTo(s, a.ID, a.Model)
+		a, found := cfg.AgentByID(mine)
+		if found && a.Enabled {
+			continue
+		}
+		e.pointTo(s, def.ID, def.Model)
+		e.showAgentNote(s, lostAgent(a, found), def)
 	}
 }
 
@@ -771,26 +786,84 @@ func (e *Engine) pointTo(s *Session, agentID, model string) {
 	}
 }
 
-// point moves a session onto the agent answering now and answers with it. A
-// subagent was launched on an agent by name and stays on it, so the chip
-// moving does not repoint work already under way.
+// point answers with the agent this conversation was given. One whose agent was
+// deleted or disabled takes the agent answering now and says so in the
+// transcript. A subagent was launched on an agent by name and stays on it.
 func (e *Engine) point(s *Session) (config.Agent, error) {
+	cfg := e.cfg.Config()
 	s.mu.Lock()
 	child, mine := s.Parent != "", s.AgentID
 	s.mu.Unlock()
 	if child {
-		a, ok := e.cfg.Config().AgentByID(mine)
+		a, ok := cfg.AgentByID(mine)
 		if !ok {
 			return config.Agent{}, ErrNoAgent
 		}
 		return a, usable(a)
 	}
+	a, ok := cfg.AgentByID(mine)
+	if !ok || !a.Enabled {
+		return e.fallToDefault(s, lostAgent(a, ok))
+	}
+	e.pointTo(s, a.ID, a.Model)
+	return a, usable(a)
+}
+
+// fallToDefault moves a conversation whose agent no longer answers onto the
+// agent answering now, and names the loss once in the transcript.
+func (e *Engine) fallToDefault(s *Session, lost string) (config.Agent, error) {
 	a, err := e.active()
 	if err != nil {
 		return config.Agent{}, err
 	}
 	e.pointTo(s, a.ID, a.Model)
+	e.showAgentNote(s, lost, a)
 	return a, nil
+}
+
+// lostAgent names what a conversation can no longer answer with. A deleted
+// agent has no name left to show, so only a disabled one is named.
+func lostAgent(a config.Agent, found bool) string {
+	if found {
+		return a.Name + " is disabled"
+	}
+	return "The agent this conversation was on is gone"
+}
+
+// showAgentNote records that a conversation lost the agent it answered with. A
+// note already shown is not repeated, so a loss is named once and not on every
+// turn.
+func (e *Engine) showAgentNote(s *Session, lost string, a config.Agent) {
+	note := lost + ": " + a.Name + " answers this conversation now."
+	s.mu.Lock()
+	if s.agentNote == note {
+		s.mu.Unlock()
+		return
+	}
+	s.agentNote = note
+	entry := s.appendEntry(store.Entry{Kind: "status", Content: note, InContext: false, Visible: true})
+	s.mu.Unlock()
+	e.save(s)
+	e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
+}
+
+// UseAgent gives one conversation an agent of its own, which it keeps across a
+// change of the one answering now. A turn already running keeps the agent it
+// started with, which is the one it read at its start.
+func (e *Engine) UseAgent(id, agentID string) error {
+	s, err := e.Get(id)
+	if err != nil {
+		return err
+	}
+	a, ok := e.cfg.Config().AgentByID(agentID)
+	if !ok {
+		return ErrUnknownAgent
+	}
+	if !a.Enabled {
+		return fmt.Errorf("%s is disabled: enable it to answer a conversation", a.Name)
+	}
+	e.pointTo(s, a.ID, a.Model)
+	return nil
 }
 
 // Rename sets the session title. An empty title hands it back to the harness,

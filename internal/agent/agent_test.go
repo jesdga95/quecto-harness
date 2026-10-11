@@ -1327,15 +1327,17 @@ func TestCompactRefusedWhileBusy(t *testing.T) {
 	waitIdle(t, s)
 }
 
-// Choosing an agent points every session at it and forgets what the previous
-// model's tokenizer implied. Nothing is sent to the model server: a choice
-// made in a menu loads nothing, whether a session is open or not.
-func TestSetAgentRepointsAndResets(t *testing.T) {
+// Choosing a different agent for the harness leaves a conversation on its own
+// agent with everything read of its model intact, and sends nothing to the
+// model server.
+func TestSetAgentLeavesConversationsOnTheirOwnAgent(t *testing.T) {
 	h := newHarness(t)
 	s := h.session(t)
 	s.mu.Lock()
 	s.NCtx, s.NCtxSource = 131072, "props"
 	s.LastUsage = &llm.Usage{PromptTokens: 100}
+	s.caps = llm.Caps{Known: true, ToolCalls: true}
+	s.prepared = true
 	s.mu.Unlock()
 
 	other := h.addAgent(t, "Other", h.url, "Delta3.8-27B Q5")
@@ -1345,23 +1347,21 @@ func TestSetAgentRepointsAndResets(t *testing.T) {
 	h.engine.SetAgent()
 	h.engine.Wait(5 * time.Second)
 
-	if doc, _, _, _ := s.Snapshot(); doc.Agent != other.ID {
-		t.Errorf("session agent = %q, want %q", doc.Agent, other.ID)
-	}
-
 	doc, state, _, caps := s.Snapshot()
-	if doc.Model != "Delta3.8-27B Q5" {
-		t.Errorf("session model = %q", doc.Model)
+	if doc.Agent == other.ID {
+		t.Errorf("session agent = %q, want the conversation left on its own agent", doc.Agent)
+	}
+	if doc.Model != "Alpha-12B" {
+		t.Errorf("session model = %q, want the one it was on", doc.Model)
 	}
 	if state != StateIdle {
 		t.Errorf("state = %s, want a session a choice left ready", state)
 	}
-	if doc.LastUsage != nil {
-		t.Error("last usage was carried across models")
+	if doc.LastUsage == nil {
+		t.Error("last usage was dropped although the conversation never moved")
 	}
-	// Nothing is known about the new model until a turn reads it.
-	if doc.NCtxSource != "" || caps.Known {
-		t.Errorf("the new model was read: n_ctx from %q caps %+v", doc.NCtxSource, caps)
+	if doc.NCtxSource != "props" || doc.NCtx != 131072 || !caps.Known || !caps.ToolCalls {
+		t.Errorf("what the model had been read was reset: n_ctx %d from %q caps %+v", doc.NCtx, doc.NCtxSource, caps)
 	}
 	h.replay.mu.Lock()
 	queries := append([]string(nil), h.replay.Queries...)
@@ -1370,9 +1370,122 @@ func TestSetAgentRepointsAndResets(t *testing.T) {
 		t.Errorf("the choice asked the model server: %v", queries)
 	}
 	for _, e := range doc.Entries {
-		if e.Kind == "status" && strings.Contains(e.Content, "odel") {
-			t.Errorf("the transcript reported the change: %+v", e)
+		if e.Kind == "status" {
+			t.Errorf("the transcript reported a change that moved nothing: %+v", e)
 		}
+	}
+}
+
+// A conversation whose agent was deleted takes the one answering now, and the
+// transcript says so once rather than on every turn.
+func TestAConversationWhoseAgentIsGoneFallsToTheDefault(t *testing.T) {
+	h := newHarness(t)
+	other := h.addAgent(t, "Other", h.url, "Delta3.8-27B Q5")
+	s := h.sessionWith(t, "Beta-30B")
+	if err := h.engine.UseAgent(s.ID, other.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.cfg.RemoveAgent(other.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.SetAgent()
+	h.engine.Wait(5 * time.Second)
+
+	doc, _, _, _ := s.Snapshot()
+	if doc.Agent != h.agent.ID {
+		t.Errorf("session agent = %q, want the agent answering now", doc.Agent)
+	}
+	var notes []string
+	for _, e := range doc.Entries {
+		if e.Kind == "status" {
+			notes = append(notes, e.Content)
+		}
+	}
+	// A deleted agent leaves no name behind to read, so the note says the agent
+	// is gone and names what answers in its place.
+	if len(notes) != 1 {
+		t.Fatalf("status entries = %v, want one note about the lost agent", notes)
+	}
+	if !strings.Contains(notes[0], "gone") {
+		t.Errorf("note = %q, want it to say the agent is gone", notes[0])
+	}
+	if !strings.Contains(notes[0], h.agent.Name) {
+		t.Errorf("note = %q, want it to name what answers instead", notes[0])
+	}
+}
+
+// A conversation whose agent was switched off, rather than deleted, is named in
+// the note, since it is still in the list to be switched back on.
+func TestAConversationWhoseAgentIsDisabledIsToldSo(t *testing.T) {
+	h := newHarness(t)
+	own := h.addAgent(t, "Own", h.url, "Beta-30B")
+	s := h.session(t)
+	if err := h.engine.UseAgent(s.ID, own.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.cfg.UpdateAgent(own.ID, func(a *config.Agent) { a.Enabled = false }); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.SetAgent()
+	h.engine.Wait(5 * time.Second)
+
+	var notes []string
+	doc, _, _, _ := s.Snapshot()
+	for _, e := range doc.Entries {
+		if e.Kind == "status" {
+			notes = append(notes, e.Content)
+		}
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "Own is disabled") {
+		t.Fatalf("status entries = %v, want one naming the agent switched off", notes)
+	}
+	if doc.Agent != h.agent.ID {
+		t.Errorf("session agent = %q, want the agent answering now", doc.Agent)
+	}
+}
+
+// A conversation given an agent of its own keeps it across a change of the one
+// answering now, which is what lets two conversations run on two models.
+func TestAConversationKeepsItsOwnAgent(t *testing.T) {
+	h := newHarness(t)
+	own := h.addAgent(t, "Own", h.url, "Beta-30B")
+	s := h.session(t)
+	if err := h.engine.UseAgent(s.ID, own.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	third := h.addAgent(t, "Third", h.url, "Gamma-9B")
+	if _, err := h.cfg.SelectAgent(third.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.SetAgent()
+	h.engine.Wait(5 * time.Second)
+
+	doc, _, _, _ := s.Snapshot()
+	if doc.Agent != own.ID || doc.Model != "Beta-30B" {
+		t.Errorf("session = %s/%s, want it left on %s/Beta-30B", doc.Agent, doc.Model, own.ID)
+	}
+}
+
+// An agent id that names nothing, and one that exists switched off, are refused
+// rather than leaving the conversation pointing at nothing.
+func TestUseAgentRefusesAnAgentThatCannotAnswer(t *testing.T) {
+	h := newHarness(t)
+	s := h.session(t)
+	before := s.AgentID
+
+	if err := h.engine.UseAgent(s.ID, "agt_nothing"); err != ErrUnknownAgent {
+		t.Errorf("UseAgent of an unknown id = %v, want ErrUnknownAgent", err)
+	}
+	off := h.addAgent(t, "Off", h.url, "Beta-30B")
+	if _, _, err := h.cfg.UpdateAgent(off.ID, func(a *config.Agent) { a.Enabled = false }); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.UseAgent(s.ID, off.ID); err == nil {
+		t.Error("UseAgent of a disabled agent = nil, want it refused")
+	}
+	if doc, _, _, _ := s.Snapshot(); doc.Agent != before {
+		t.Errorf("session agent = %q after two refusals, want it left where it was", doc.Agent)
 	}
 }
 

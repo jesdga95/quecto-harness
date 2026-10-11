@@ -414,7 +414,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	doc, state, _, _ := sess.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id": doc.ID, "project": doc.Project, "model": doc.Model, "title": doc.Title,
+		"id": doc.ID, "project": doc.Project, "model": doc.Model, "agent": doc.Agent, "title": doc.Title,
 		"created": doc.Created, "updated": doc.Updated, "messages": 0, "bytes": 0,
 		"state": string(state),
 	})
@@ -476,6 +476,9 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	}
 	body := map[string]any{
 		"id": doc.ID, "project": doc.Project, "model": doc.Model, "parent": doc.Parent,
+		// The agent this conversation answers with, which is its own once one
+		// has been chosen for it.
+		"agent":   doc.Agent,
 		"updated": doc.Updated, "mode": string(doc.Mode), "toolset": string(doc.Toolset), "plan": doc.Plan, "draft": doc.Draft,
 		// A subagent run is reachable only from the transcript that launched
 		// it, so a launcher carries the list of what it launched.
@@ -708,6 +711,27 @@ func (s *Server) putMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": sess.ID, "mode": body.Mode})
+}
+
+// postSessionAgent gives one conversation an agent of its own. The agent
+// answering now is untouched: it is what a conversation with none of its own
+// starts on, not what every conversation is moved onto.
+func (s *Server) postSessionAgent(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Agent string `json:"agent"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := s.engine.UseAgent(sess.ID, body.Agent); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": sess.ID, "agent": body.Agent})
 }
 
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
@@ -1050,7 +1074,8 @@ func writeEngineError(w http.ResponseWriter, err error) {
 	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrNotLast),
 		errors.Is(err, agent.ErrCompacting), errors.Is(err, agent.ErrTooShort):
 		writeError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, agent.ErrNotFound):
+	// An agent id naming nothing is 404 here as it is on the agent routes.
+	case errors.Is(err, agent.ErrNotFound), errors.Is(err, agent.ErrUnknownAgent):
 		writeError(w, http.StatusNotFound, err.Error())
 	default:
 		writeError(w, http.StatusBadRequest, err.Error())

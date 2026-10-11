@@ -157,6 +157,7 @@ interface WireSummary {
   id?: string;
   project?: string;
   model?: string;
+  agent?: string;
   title?: string;
   updated?: string;
   parent?: string;
@@ -223,6 +224,8 @@ interface WireSnapshot {
   id?: string;
   project?: string;
   model?: string;
+  /** The agent this conversation answers with, its own once one was chosen. */
+  agent?: string;
   title?: string;
   updated?: string;
   n_ctx?: number;
@@ -466,6 +469,7 @@ function toSession(s: WireSummary): Session {
     id: s.id ?? "",
     project: s.project ?? "",
     model: s.model ?? "",
+    agent: s.agent ?? "",
     title: s.title || "New session",
     updated: s.updated ?? new Date().toISOString(),
     parent: s.parent ?? "",
@@ -977,6 +981,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
     id,
     project: snap.project ?? known?.project ?? "",
     model: snap.model ?? known?.model ?? "",
+    agent: snap.agent ?? known?.agent ?? "",
     title: snap.title || known?.title || titleOf(entries),
     updated: snap.updated ?? known?.updated ?? new Date().toISOString(),
     parent: snap.parent ?? known?.parent ?? "",
@@ -1474,6 +1479,12 @@ class HttpApi implements HarnessApi {
 
   async setMode(id: string, mode: WorkMode): Promise<void> {
     await call<unknown>(`/sessions/${encodeURIComponent(id)}/mode`, "PUT", { mode });
+  }
+
+  /** Gives one conversation an agent of its own, which it keeps across a change
+      of the agent answering now. */
+  async setSessionAgent(id: string, agent: string): Promise<void> {
+    await call<unknown>(`/sessions/${encodeURIComponent(id)}/agent`, "POST", { agent });
   }
 
   async deleteSession(id: string): Promise<void> {

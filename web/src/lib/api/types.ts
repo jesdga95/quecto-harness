@@ -40,6 +40,9 @@ export interface Session {
   id: string;
   project: string;
   model: string;
+  /** The agent this conversation answers with. It is its own once one has been
+      chosen for it, and it survives a change of the agent answering now. */
+  agent: string;
   title: string;
   /** When the session last changed, which is what the sidebar orders by. */
   updated: string;
@@ -687,6 +690,9 @@ export interface HarnessApi {
       sequence number the message was stored under. */
   sendMessage(id: string, text: string, files?: string[], mode?: WorkMode): Promise<Sent>;
   setMode(id: string, mode: WorkMode): Promise<void>;
+  /** Gives one conversation an agent of its own, which it keeps across a change
+      of the agent answering now. */
+  setSessionAgent(id: string, agent: string): Promise<void>;
   /** Runs the last message again, with text in place of the words it was sent
       with. The reply to it is discarded. */
   resend(id: string, seq: number, text?: string): Promise<void>;

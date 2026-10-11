@@ -736,7 +736,8 @@ export async function removeAgent(id: string): Promise<void> {
   await refreshState();
 }
 
-/** Chooses the agent every session answers with. Nothing is loaded by the
+/** Chooses the agent a conversation with none of its own starts on. Open
+    conversations keep the agent they answer with. Nothing is loaded by the
     choice: the next message that needs the model is what loads it. */
 export async function setActiveAgent(id: string): Promise<void> {
   if (app.config?.agent === id) return;
@@ -745,6 +746,31 @@ export async function setActiveAgent(id: string): Promise<void> {
   app.usage.breakdown = undefined;
   if ((await guard(() => api.selectAgent(id))) === null) return;
   await refreshState();
+}
+
+/** The agent the open conversation answers with, which is its own once one has
+    been chosen for it. With no conversation open there is nothing to answer
+    with, and the agent answering now is what the next one starts on. */
+export function conversationAgent(): Agent | undefined {
+  const own = app.opened?.agent ?? "";
+  return agentById(own) ?? activeAgent();
+}
+
+/** Gives the open conversation an agent of its own. It keeps it across a change
+    of the agent answering now. */
+export async function setConversationAgent(id: string): Promise<void> {
+  const session = app.sessionId;
+  if (!session || conversationAgent()?.id === id) return;
+  app.usage.breakdown = undefined;
+  if ((await guard(() => api.setSessionAgent(session, id))) === null) return;
+  // The agent answers with its own model, so the session and its sidebar row
+  // take that model along with the agent.
+  const model = agentById(id)?.model ?? "";
+  if (app.opened) app.opened = { ...app.opened, agent: id, model };
+  for (const list of Object.values(app.sessions)) {
+    const at = list.findIndex((s) => s.id === session);
+    if (at >= 0 && list[at]) list[at] = { ...list[at], agent: id, model };
+  }
 }
 
 export function probeAgent(

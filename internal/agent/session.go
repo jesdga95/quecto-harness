@@ -85,6 +85,10 @@ type Session struct {
 	// prompt, so a file that is still too large is not named again on every
 	// turn. It is not in the document: a restart re-warns once.
 	rulesNote string
+	// agentNote is the last warning that this conversation lost the agent it
+	// answered with, so the same loss is not named on every turn. It is not in
+	// the document either: a restart re-warns once.
+	agentNote string
 	// prepared reports that the model has been read: its window and its chat
 	// template are known and a request can be shaped for it.
 	prepared bool
