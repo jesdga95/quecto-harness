@@ -85,3 +85,8 @@ compiled in. `make check` runs gofmt, vet and the race tests.
 
 For UI work, run `make run` for a backend-only binary and `npm run dev` in
 `web/`, which serves the page on Vite's port and proxies `/api` to the harness.
+
+## License
+
+MIT, in `LICENSE`. The embedded Poppins typeface is under the SIL Open Font
+License 1.1, in `NOTICE`.
