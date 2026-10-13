@@ -287,10 +287,14 @@ func (s *Server) authorised(r *http.Request) bool {
 	return false
 }
 
+// publicIcons are served without the cookie. Some browsers fetch a tab icon
+// without it, and the icon holds nothing private.
+var publicIcons = map[string]bool{"/favicon.svg": true, "/favicon.png": true, "/favicon.ico": true}
+
 // serveUI hands an unauthenticated visitor an instruction rather than a
 // browser auth dialog, because they typed the address by hand.
 func (s *Server) serveUI(w http.ResponseWriter, r *http.Request) {
-	if !s.authorised(r) {
+	if !s.authorised(r) && !publicIcons[r.URL.Path] {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write([]byte("Open the URL printed by quecto-harness, or run quecto-harness open\n"))
