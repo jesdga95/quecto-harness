@@ -1807,6 +1807,10 @@ func TestAViewCarriesTheReplyStillStreaming(t *testing.T) {
 	if reply["content"] != "Hello world" || reply["reasoning"] != "Thinking" {
 		t.Errorf("reply = %v, want the text and the thinking so far", reply)
 	}
+	since, err := time.Parse(time.RFC3339Nano, fmt.Sprint(reply["since"]))
+	if err != nil || time.Since(since) > time.Minute || time.Until(since) > 0 {
+		t.Errorf("reply since = %v, want when the request was sent", reply["since"])
+	}
 	calls, _ := reply["tool_calls"].([]any)
 	if len(calls) != 1 {
 		t.Fatalf("reply calls = %v, want one", reply["tool_calls"])

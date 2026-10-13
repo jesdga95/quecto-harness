@@ -1294,7 +1294,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			req.MaxTokens = *a.MaxTokens
 		}
 		req.Tools = tools.Schemas(b.offer)
-		s.live = &Reply{}
+		s.live = &Reply{Since: time.Now()}
 		s.mu.Unlock()
 
 		res, err := e.request(ctx, s, back, req, &cost)
@@ -1533,7 +1533,7 @@ func (e *Engine) noteRetry(s *Session, err error, wait time.Duration, attempt in
 		wait.Round(100*time.Millisecond), attempt+1, len(e.retry)+1)
 	s.mu.Lock()
 	drew := s.live != nil && (s.live.Content != "" || s.live.Reasoning != "" || len(s.live.ToolCalls) > 0)
-	s.live = &Reply{}
+	s.live = &Reply{Since: time.Now()}
 	entry := s.appendEntry(store.Entry{Kind: "status", Content: text, InContext: false, Visible: true})
 	s.mu.Unlock()
 	e.save(s)

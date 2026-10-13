@@ -243,6 +243,7 @@ interface WireSnapshot {
     content?: string;
     reasoning?: string;
     tool_calls?: { index?: number; id?: string; name?: string; arguments?: string }[] | null;
+    since?: string;
   } | null;
   last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
   compactable?: boolean;
@@ -922,6 +923,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
   // the stream that carries on from last_seq, which fills them in.
   const opened = new Map<number, OpenCall>();
   const reply = snap.reply;
+  let replying = false;
   if (reply) {
     const frames: WireEvent[] = [];
     if (reply.reasoning) frames.push({ type: "reasoning", text: reply.reasoning });
@@ -932,7 +934,9 @@ function toTranscript(snap: WireSnapshot): Transcript {
     for (const frame of frames) {
       for (const event of mapEvent(frame, opened)) applyEvent(items, event);
     }
+    replying = frames.length > 0;
   }
+  const sent = reply?.since ? Date.parse(reply.since) : NaN;
 
   // An unanswered request has no entry of its own yet, so the card that blocks
   // the composer has to be restored from the pending list.
@@ -1004,6 +1008,8 @@ function toTranscript(snap: WireSnapshot): Transcript {
     todos: toTodos(snap.todos),
     steer: toSteer(snap.steer),
     status: toStatus(snap.state),
+    replying,
+    waitingSince: Number.isFinite(sent) && sent > 0 ? sent : undefined,
     mode: toWorkMode(snap.mode),
     toolset: toToolset(snap.toolset),
     draft: toPlan(snap.draft),
