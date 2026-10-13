@@ -40,6 +40,9 @@ export interface Session {
   id: string;
   project: string;
   model: string;
+  /** The agent this conversation answers with. It is its own once one has been
+      chosen for it, and it survives a change of the agent answering now. */
+  agent: string;
   title: string;
   /** When the session last changed, which is what the sidebar orders by. */
   updated: string;
@@ -558,6 +561,12 @@ export interface TurnCost {
   toolMs?: number;
   agent?: string;
   model?: string;
+  /** The generation as the model server measured it itself, absent where no
+      request of the turn reported timings. serverTokPerS is serverTokens over
+      serverGenMs, and both are summed over the turn's requests. */
+  serverTokens?: number;
+  serverGenMs?: number;
+  serverTokPerS?: number;
   /** Each request of the turn, in the order they were made. Absent on a turn
       that predates them. */
   perRequest?: RequestCost[];
@@ -570,6 +579,12 @@ export interface RequestCost {
   tokens: number;
   firstMs: number;
   genMs: number;
+  /** The same generation as the server timed it, absent where it reported no
+      timings. serverTokens is the server's own count, which is more than
+      tokens whenever it streamed thinking the harness never read as output. */
+  serverTokens?: number;
+  serverGenMs?: number;
+  serverTokPerS?: number;
 }
 
 /** One folder in the project, as the panel's browser lists it. path is
@@ -679,6 +694,9 @@ export interface HarnessApi {
       sequence number the message was stored under. */
   sendMessage(id: string, text: string, files?: string[], mode?: WorkMode): Promise<Sent>;
   setMode(id: string, mode: WorkMode): Promise<void>;
+  /** Gives one conversation an agent of its own, which it keeps across a change
+      of the agent answering now. */
+  setSessionAgent(id: string, agent: string): Promise<void>;
   /** Runs the last message again, with text in place of the words it was sent
       with. The reply to it is discarded. */
   resend(id: string, seq: number, text?: string): Promise<void>;

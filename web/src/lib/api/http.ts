@@ -157,6 +157,7 @@ interface WireSummary {
   id?: string;
   project?: string;
   model?: string;
+  agent?: string;
   title?: string;
   updated?: string;
   parent?: string;
@@ -223,6 +224,8 @@ interface WireSnapshot {
   id?: string;
   project?: string;
   model?: string;
+  /** The agent this conversation answers with, its own once one was chosen. */
+  agent?: string;
   title?: string;
   updated?: string;
   n_ctx?: number;
@@ -467,6 +470,7 @@ function toSession(s: WireSummary): Session {
     id: s.id ?? "",
     project: s.project ?? "",
     model: s.model ?? "",
+    agent: s.agent ?? "",
     title: s.title || "New session",
     updated: s.updated ?? new Date().toISOString(),
     parent: s.parent ?? "",
@@ -579,6 +583,9 @@ function toCost(src: object | null | undefined): TurnCost | undefined {
     toolMs: num("tool_ms"),
     agent: str("agent"),
     model: str("model"),
+    serverTokens: num("server_tokens"),
+    serverGenMs: num("server_gen_ms"),
+    serverTokPerS: num("server_tok_per_s"),
     perRequest: toRequests(f.per_request),
   };
 }
@@ -594,7 +601,15 @@ function toRequests(raw: unknown): RequestCost[] | undefined {
     const n = (key: string) => (typeof r[key] === "number" ? (r[key] as number) : undefined);
     const tokens = n("tokens");
     if (tokens === undefined) continue;
-    out.push({ window: n("window_tokens"), tokens, firstMs: n("first_ms") ?? 0, genMs: n("gen_ms") ?? 0 });
+    out.push({
+      window: n("window_tokens"),
+      tokens,
+      firstMs: n("first_ms") ?? 0,
+      genMs: n("gen_ms") ?? 0,
+      serverTokens: n("server_tokens"),
+      serverGenMs: n("server_gen_ms"),
+      serverTokPerS: n("server_tok_per_s"),
+    });
   }
   return out;
 }
@@ -970,6 +985,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
     id,
     project: snap.project ?? known?.project ?? "",
     model: snap.model ?? known?.model ?? "",
+    agent: snap.agent ?? known?.agent ?? "",
     title: snap.title || known?.title || titleOf(entries),
     updated: snap.updated ?? known?.updated ?? new Date().toISOString(),
     parent: snap.parent ?? known?.parent ?? "",
@@ -984,9 +1000,10 @@ function toTranscript(snap: WireSnapshot): Transcript {
   summaries.set(id, session);
 
   // The rate the chip shows is the last turn's, which is on the entry that
-  // ended it rather than in the snapshot's own usage.
+  // ended it rather than in the snapshot's own usage. The server's own rate
+  // comes first where it reported one.
   const last = [...items].reverse().find((i) => i.kind === "assistant" && i.cost);
-  const rate = last?.kind === "assistant" ? last.cost?.tokPerS : undefined;
+  const rate = last?.kind === "assistant" ? (last.cost?.serverTokPerS ?? last.cost?.tokPerS) : undefined;
 
   const usage: Usage = {
     prompt_tokens: snap.last_usage?.prompt_tokens ?? snap.fill ?? 0,
@@ -1468,6 +1485,12 @@ class HttpApi implements HarnessApi {
 
   async setMode(id: string, mode: WorkMode): Promise<void> {
     await call<unknown>(`/sessions/${encodeURIComponent(id)}/mode`, "PUT", { mode });
+  }
+
+  /** Gives one conversation an agent of its own, which it keeps across a change
+      of the agent answering now. */
+  async setSessionAgent(id: string, agent: string): Promise<void> {
+    await call<unknown>(`/sessions/${encodeURIComponent(id)}/agent`, "POST", { agent });
   }
 
   async deleteSession(id: string): Promise<void> {

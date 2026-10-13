@@ -123,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{id}/dir", s.getProjectDir)
 	mux.HandleFunc("PUT /api/sessions/{id}", s.rebindSession)
 	mux.HandleFunc("PUT /api/sessions/{id}/mode", s.putMode)
+	mux.HandleFunc("POST /api/sessions/{id}/agent", s.postSessionAgent)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.deleteSession)
 	mux.HandleFunc("POST /api/sessions/{id}/message", s.postMessage)
 	mux.HandleFunc("POST /api/sessions/{id}/resend", s.postResend)

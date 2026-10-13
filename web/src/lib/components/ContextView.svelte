@@ -84,7 +84,17 @@
   });
 
   const sums = $derived.by(() => {
-    const s = { output: 0, input: 0, inputSeen: false, cached: 0, cachedSeen: false, requests: 0, ms: 0 };
+    const s = {
+      output: 0,
+      input: 0,
+      inputSeen: false,
+      cached: 0,
+      cachedSeen: false,
+      requests: 0,
+      ms: 0,
+      serverTokens: 0,
+      serverMs: 0,
+    };
     const t = { timed: false, llm: 0, gen: 0, tool: 0, first: 0, firstN: 0 };
     for (const c of turns) {
       s.output += c.tokens;
@@ -97,6 +107,12 @@
       if (c.cached !== undefined) {
         s.cached += c.cached;
         s.cachedSeen = true;
+      }
+      // A rate cannot be averaged over turns, so what adds up is the server's
+      // own token count and its own time, and the rate is taken at the end.
+      if (c.serverTokens !== undefined && c.serverGenMs !== undefined) {
+        s.serverTokens += c.serverTokens;
+        s.serverMs += c.serverGenMs;
       }
       if (c.llmMs !== undefined) {
         t.timed = true;
@@ -113,12 +129,25 @@
   });
   const stats = $derived(turnStats());
   const tps = $derived(sums.gen > 0 ? Math.round(sums.output / (sums.gen / 1000)) : 0);
+  // The rate the model server measured for itself, over the whole session. It
+  // counts the thinking a server streams and this harness never reads, so it is
+  // the one that matches what the server says.
+  const serverTps = $derived(
+    sums.serverMs > 0 && sums.serverTokens > 0 ? Math.round(sums.serverTokens / (sums.serverMs / 1000)) : 0,
+  );
   const hit = $derived(
     sums.cachedSeen && sums.input > 0 ? Math.round((sums.cached / sums.input) * 100) : undefined,
   );
   const spent = $derived(sums.first + sums.gen + sums.tool);
   const requests = $derived(turns.flatMap((c) => c.perRequest ?? []));
   const rates = $derived(requests.filter((r) => r.genMs > 0 && r.tokens > 0).map((r) => r.tokens / (r.genMs / 1000)));
+  // The same series as the server timed it. Where a server reported no timings
+  // for a request, that request holds no rate of its own.
+  const serverRates = $derived(
+    requests
+      .filter((r) => (r.serverTokPerS ?? 0) > 0)
+      .map((r) => r.serverTokPerS as number),
+  );
   const firsts = $derived(requests.filter((r) => r.firstMs > 0).map((r) => r.firstMs));
 
   // A line through a series, scaled to a 100 by 28 box with a little room.
@@ -139,11 +168,18 @@
   // The context after every request, turn by turn. A turn that kept no
   // requests of its own adds its last one. The scale is the window where one
   // is known, so the headroom and the compaction line read true.
+  // Both charts draw in one box: the same left edge, the same baseline, the same
+  // height, and the same 36px on the right for their figures. Stacked, their
+  // columns fall one under the other.
   let width = $state(0);
   const W = $derived(Math.max(width, 240));
-  const H = 150;
+  const H = 156;
   const TOP = 10;
   const BASE = 124;
+  const LEFT = 4;
+  const RIGHT = $derived(W - 36);
+  // Room above the tallest bar for the figure written over it.
+  const HEAD = 14;
   const growth = $derived.by(() => {
     const points: { turn: number; req: number; v: number }[] = [];
     turns.forEach((c, i) => {
@@ -152,9 +188,8 @@
       vs.forEach((v, j) => points.push({ turn: i + 1, req: j + 1, v }));
     });
     if (points.length < 2) return null;
-    const right = W - 36;
     const max = use.limited ? app.usage.n_ctx : niceCeil(Math.max(...points.map((p) => p.v)));
-    const x = (i: number) => 4 + (i * (right - 4)) / (points.length - 1);
+    const x = (i: number) => LEFT + (i * (RIGHT - LEFT)) / (points.length - 1);
     const y = (v: number) => BASE - (Math.min(v, max) / max) * (BASE - TOP);
     const at = points.map((p, i) => ({ ...p, x: x(i), y: y(p.v) }));
     const line = at.map((p) => `${p.x},${p.y}`).join(" ");
@@ -184,7 +219,6 @@
       at,
       line,
       area: `${at[0].x},${BASE} ${line} ${end.x},${BASE}`,
-      right,
       labels,
       dividers,
       placed,
@@ -217,18 +251,16 @@
   );
   const bars = $derived.by(() => {
     if (timed.length === 0) return null;
-    const base = 108;
     const peak = Math.max(...timed.map((t) => (t.c.firstMs ?? 0) + (t.c.genMs ?? 0) + (t.c.toolMs ?? 0)), 1);
-    const slot = W / timed.length;
+    const slot = (RIGHT - LEFT) / timed.length;
     const w = Math.min(56, slot * 0.62);
-    const h = (ms: number) => (ms / peak) * (base - 18);
+    const h = (ms: number) => (ms / peak) * (BASE - TOP - HEAD);
     // Every turn is numbered while a bar's slot holds its number.
     const step = Math.max(1, Math.ceil(24 / slot));
     return {
-      base,
       cols: timed.map((t, i) => {
-        const x = slot * i + (slot - w) / 2;
-        let top = base;
+        const x = LEFT + slot * i + (slot - w) / 2;
+        let top = BASE;
         const segs = [
           { cls: "seg-tools", ms: t.c.toolMs ?? 0 },
           { cls: "seg-msg", ms: t.c.genMs ?? 0 },
@@ -251,7 +283,8 @@
     if (c.window !== undefined) bits.push(`context ${k(c.window)}`);
     if (c.cached !== undefined && c.input) bits.push(`${Math.round((c.cached / c.input) * 100)}% cached`);
     bits.push(`${k(c.tokens)} generated`);
-    if (c.tokPerS > 0) bits.push(`${Math.round(c.tokPerS)} tok/s`);
+    if ((c.serverTokPerS ?? 0) > 0) bits.push(`${Math.round(c.serverTokPerS as number)} tok/s at the server`);
+    if (c.tokPerS > 0) bits.push(`${Math.round(c.tokPerS)} tok/s measured here`);
     bits.push(`${c.requests} ${c.requests === 1 ? "request" : "requests"}`);
     return bits.join(", ");
   }
@@ -270,13 +303,11 @@
   <div class="artifact-body">
     <div class="ctxv min-h-0 flex-1 overflow-y-auto">
       <section>
-        <h4 class="ctxv-who">
-          <span class="ctxv-who-name">
-            {#if last?.agent}<b>{last.agent}</b>{/if}
-            {#if last?.model}<span>{last.model}</span>{/if}
-          </span>
-          <span class="ctxv-who-side">{compacted}</span>
-        </h4>
+        <h4>Window<span>{compacted}</span></h4>
+        <div class="ctxv-who">
+          {#if last?.agent}<b>{last.agent}</b>{/if}
+          {#if last?.model}<span>{last.model}</span>{/if}
+        </div>
         <div class="ctxv-gauge-row">
           <svg
             class="ctxv-gauge"
@@ -325,11 +356,9 @@
         {#if parts}
           <div class="ctxv-fill">
             {#each rows as row (row.label)}
-              <div>
-                <span class="ctxdot {row.cls}"></span>{row.label}
-                <b class="num">{row.estimate ? "~" : ""}{k(row.n)}</b>
-                <i class="num">{(share(row.n) * 100).toFixed(1)}%</i>
-              </div>
+              <span class="ctxv-fill-name"><span class="ctxdot {row.cls}"></span><span>{row.label}</span></span>
+              <span class="ctxv-fill-n num">{row.estimate ? "~" : ""}{k(row.n)}</span>
+              <span class="ctxv-fill-pc num">{(share(row.n) * 100).toFixed(1)}%</span>
             {/each}
           </div>
         {/if}
@@ -361,62 +390,9 @@
                   <span class="ctxdot {run.cls}"></span><span>{run.label}</span>
                 </span>
                 <span class="num">{k(run.n)}</span>
-                <span></span>
+                <span class="num">{((run.n / windows.total) * 100).toFixed(1)}%</span>
               </div>
             {/each}
-          </div>
-        </section>
-      {/if}
-
-      {#if growth}
-        <section>
-          <h4>Growth<span>By request</span></h4>
-          <div class="ctxv-chart-wrap" bind:clientWidth={width}>
-            <svg class="ctxv-chart" viewBox="0 0 {W} {H}" width={W} height={H} role="img" aria-label="Context after each request">
-              <line x1="4" x2={growth.right} y1={BASE} y2={BASE} stroke="var(--hair)" />
-              {#if growth.top !== null}
-                <line x1="4" x2={growth.right} y1={growth.top} y2={growth.top} stroke="var(--hair)" />
-              {/if}
-              {#if growth.tick !== null}
-                <line x1="4" x2={growth.right} y1={growth.tick} y2={growth.tick} class="ctxv-threshold" />
-              {/if}
-              {#each growth.dividers as dx (dx)}
-                <line x1={dx} x2={dx} y1={TOP} y2={BASE} stroke="var(--hair)" stroke-dasharray="2 3" />
-              {/each}
-              {#each growth.labels as l (l.x)}
-                <text x={l.x} y={BASE + 15} text-anchor="middle">{l.text}</text>
-              {/each}
-              <polygon points={growth.area} fill="var(--c-msg)" opacity="0.14" />
-              <polyline points={growth.line} fill="none" stroke="var(--c-msg)" stroke-width="2" stroke-linejoin="round" />
-              {#each growth.placed as m (m.cls)}
-                <text x={growth.right + 6} y={m.y + 3} class={m.cls}>{m.text}</text>
-              {/each}
-              <circle
-                cx={growth.at[growth.at.length - 1].x}
-                cy={growth.at[growth.at.length - 1].y}
-                r="4"
-                class="ctxv-point"
-              />
-              {#if point}
-                <line x1={point.x} x2={point.x} y1={TOP} y2={BASE} class="ctxv-cross" />
-                <circle cx={point.x} cy={point.y} r="4" class="ctxv-point" />
-              {/if}
-              <rect
-                x="0"
-                y={TOP}
-                width={growth.right + 4}
-                height={BASE - TOP}
-                fill="transparent"
-                role="presentation"
-                onpointermove={track}
-                onpointerleave={() => (hover = null)}
-              />
-            </svg>
-            {#if point}
-              <div class="ctxv-tip" style="left:{Math.min(Math.max(point.x, 60), W - 60)}px">
-                Turn {point.turn}, request {point.req} <b>{k(point.v)}</b>
-              </div>
-            {/if}
           </div>
         </section>
       {/if}
@@ -435,18 +411,31 @@
                 <span class="ctxv-card-foot">{k(sums.cached)} of {k(sums.input)} input</span>
               </div>
             {/if}
-            {#if tps > 0}
+            {#if tps > 0 || serverTps > 0}
               <div class="ctxv-card">
                 <span class="ctxv-card-label">Speed</span>
                 <div class="ctxv-card-pic">
-                  {#if rates.length > 1}
+                  {#if serverRates.length > 1}
+                    <svg class="ctxv-spark" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
+                      <polyline points={spark(serverRates)} />
+                    </svg>
+                  {:else if rates.length > 1}
                     <svg class="ctxv-spark" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
                       <polyline points={spark(rates)} />
                     </svg>
                   {/if}
                 </div>
-                <b class="num">{tps} tok/s</b>
-                <span class="ctxv-card-foot">{rates.length > 1 ? "Per request" : "While generating"}</span>
+                {#if serverTps > 0}
+                  <!-- The server's own number first, since it can be checked
+                     against the server. What this harness timed rides under it. -->
+                  <b class="num">{serverTps} tok/s</b>
+                  <span class="ctxv-card-foot" title={tps > 0 ? `${tps} tok/s measured here` : undefined}>
+                    At the server{#if tps > 0} · {tps} here{/if}
+                  </span>
+                {:else}
+                  <b class="num">{tps} tok/s</b>
+                  <span class="ctxv-card-foot">{rates.length > 1 ? "Per request" : "While generating"}</span>
+                {/if}
               </div>
             {/if}
             {#if sums.firstN > 0}
@@ -506,41 +495,96 @@
         </section>
       {/if}
 
-      {#if bars}
-        <section>
-          <h4>
-            Time by turn<span class="num">{timed.length < turns.length ? `Last ${timed.length} turns` : duration(sums.ms)}</span>
-          </h4>
-          <svg class="ctxv-chart" viewBox="0 0 {W} {bars.base + 32}" width={W} height={bars.base + 32} role="img" aria-label="Time by turn">
-            <line x1="0" x2={W} y1={bars.base} y2={bars.base} stroke="var(--hair)" />
-            {#each bars.cols as col (col.n)}
-              <g>
-                <title>{turnLine(col.n, col.c)}</title>
-                {#each col.segs as seg, j (j)}
-                  <rect class={seg.cls} x={col.x} y={seg.y} width={col.w} height={seg.h} rx="2" />
+      <!-- The two charts of the session share one box, so their turn columns
+           fall on the same vertical lines and their baselines are one line. -->
+      {#if growth || bars}
+        <section class="ctxv-charts" bind:clientWidth={width}>
+          {#if growth}
+            <h4>Growth<span>By request</span></h4>
+            <div class="ctxv-chart-wrap">
+              <svg class="ctxv-chart" viewBox="0 0 {W} {H}" width={W} height={H} role="img" aria-label="Context after each request">
+                <line x1={LEFT} x2={RIGHT} y1={BASE} y2={BASE} stroke="var(--hair)" />
+                {#if growth.top !== null}
+                  <line x1={LEFT} x2={RIGHT} y1={growth.top} y2={growth.top} stroke="var(--hair)" />
+                {/if}
+                {#if growth.tick !== null}
+                  <line x1={LEFT} x2={RIGHT} y1={growth.tick} y2={growth.tick} class="ctxv-threshold" />
+                {/if}
+                {#each growth.dividers as dx (dx)}
+                  <line x1={dx} x2={dx} y1={TOP} y2={BASE} stroke="var(--hair)" stroke-dasharray="2 3" />
                 {/each}
-                <rect x={col.x} y="0" width={col.w} height={bars.base} fill="transparent" />
-              </g>
-              {#if bars.cols.length <= 8}
-                <text x={col.x + col.w / 2} y={col.top - 5} text-anchor="middle" class="is-end">{duration(col.c.ms)}</text>
+                {#each growth.labels as l (l.x)}
+                  <text x={l.x} y={BASE + 15} text-anchor="middle">{l.text}</text>
+                {/each}
+                <polygon points={growth.area} fill="var(--c-msg)" opacity="0.14" />
+                <polyline points={growth.line} fill="none" stroke="var(--c-msg)" stroke-width="2" stroke-linejoin="round" />
+                {#each growth.placed as m (m.cls)}
+                  <text x={RIGHT + 6} y={m.y + 3} class={m.cls}>{m.text}</text>
+                {/each}
+                <circle
+                  cx={growth.at[growth.at.length - 1].x}
+                  cy={growth.at[growth.at.length - 1].y}
+                  r="4"
+                  class="ctxv-point"
+                />
+                {#if point}
+                  <line x1={point.x} x2={point.x} y1={TOP} y2={BASE} class="ctxv-cross" />
+                  <circle cx={point.x} cy={point.y} r="4" class="ctxv-point" />
+                {/if}
+                <rect
+                  x="0"
+                  y={TOP}
+                  width={RIGHT + 4}
+                  height={BASE - TOP}
+                  fill="transparent"
+                  role="presentation"
+                  onpointermove={track}
+                  onpointerleave={() => (hover = null)}
+                />
+              </svg>
+              {#if point}
+                <div class="ctxv-tip" style="left:{Math.min(Math.max(point.x, 60), W - 60)}px">
+                  Turn {point.turn}, request {point.req} <b>{k(point.v)}</b>
+                </div>
               {/if}
-              {#if col.label}
-                <text x={col.x + col.w / 2} y={bars.base + 14} text-anchor="middle">
-                  {bars.cols.length <= 4 ? `Turn ${col.n}` : col.n}
-                </text>
-              {/if}
-              {#if bars.cols.length <= 4}
-                <text x={col.x + col.w / 2} y={bars.base + 26} text-anchor="middle">
-                  {col.c.window !== undefined ? `${k(col.c.window)} · ` : ""}{col.c.requests} req
-                </text>
-              {/if}
-            {/each}
-          </svg>
-          <div class="ctxv-legend">
-            <span><span class="ctxdot seg-system"></span>Waiting for the first token<b class="num">{duration(sums.first)}</b></span>
-            <span><span class="ctxdot seg-msg"></span>Generating<b class="num">{duration(sums.gen)}</b></span>
-            <span><span class="ctxdot seg-tools"></span>Tools<b class="num">{duration(sums.tool)}</b></span>
-          </div>
+            </div>
+          {/if}
+
+          {#if bars}
+            <h4>
+              Time by turn<span class="num">{timed.length < turns.length ? `Last ${timed.length} turns` : duration(sums.ms)}</span>
+            </h4>
+            <svg class="ctxv-chart" viewBox="0 0 {W} {H}" width={W} height={H} role="img" aria-label="Time by turn">
+              <line x1={LEFT} x2={RIGHT} y1={BASE} y2={BASE} stroke="var(--hair)" />
+              {#each bars.cols as col (col.n)}
+                <g>
+                  <title>{turnLine(col.n, col.c)}</title>
+                  {#each col.segs as seg, j (j)}
+                    <rect class={seg.cls} x={col.x} y={seg.y} width={col.w} height={seg.h} rx="2" />
+                  {/each}
+                  <rect x={col.x} y={TOP} width={col.w} height={BASE - TOP} fill="transparent" />
+                </g>
+                {#if bars.cols.length <= 8}
+                  <text x={col.x + col.w / 2} y={col.top - 5} text-anchor="middle" class="is-end">{duration(col.c.ms)}</text>
+                {/if}
+                {#if col.label}
+                  <text x={col.x + col.w / 2} y={BASE + 15} text-anchor="middle">
+                    {bars.cols.length <= 4 ? `Turn ${col.n}` : col.n}
+                  </text>
+                {/if}
+                {#if bars.cols.length <= 4}
+                  <text x={col.x + col.w / 2} y={BASE + 27} text-anchor="middle">
+                    {col.c.window !== undefined ? `${k(col.c.window)} · ` : ""}{col.c.requests} req
+                  </text>
+                {/if}
+              {/each}
+            </svg>
+            <div class="ctxv-legend">
+              <span><span class="ctxdot seg-system"></span>Waiting for the first token<b class="num">{duration(sums.first)}</b></span>
+              <span><span class="ctxdot seg-msg"></span>Generating<b class="num">{duration(sums.gen)}</b></span>
+              <span><span class="ctxdot seg-tools"></span>Tools<b class="num">{duration(sums.tool)}</b></span>
+            </div>
+          {/if}
         </section>
       {/if}
     </div>

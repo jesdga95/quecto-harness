@@ -3,6 +3,9 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -286,5 +289,59 @@ func TestResponsesToolOutputCarriesAnImage(t *testing.T) {
 	}
 	if b, _ := parts[1].(map[string]any); b["type"] != "input_image" {
 		t.Errorf("second part = %v, want input_image", b)
+	}
+}
+
+// A server that measures its own generation sends timings beside the response
+// in the closing frame, not inside it.
+func TestResponsesReadsTheServersOwnTimings(t *testing.T) {
+	res, events, err := responsesFrames(t, []string{
+		`data: {"type":"response.output_text.delta","delta":"OK"}`,
+		`data: {"type":"response.completed","response":{"status":"completed","output":[],"usage":{"input_tokens":69,"output_tokens":200,"total_tokens":269}},"timings":{"cache_n":0,"prompt_n":69,"prompt_per_second":82.5,"predicted_n":200,"predicted_ms":2952.1,"predicted_per_second":67.7}}`,
+	})
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if res.Timings == nil {
+		t.Fatalf("timings = nil, want the ones the frame carried beside the response")
+	}
+	if res.Timings.PredictedN != 200 || res.Timings.PredictedPerSecond != 67.7 {
+		t.Errorf("timings = %+v, want the server's own 200 tokens at 67.7", res.Timings)
+	}
+	if res.Timings.PromptPerSecond != 82.5 || res.Timings.CacheN != 0 {
+		t.Errorf("timings = %+v, want the prompt rate and cache count too", res.Timings)
+	}
+	var kinds []EventKind
+	for _, e := range events {
+		kinds = append(kinds, e.Kind)
+	}
+	want := []EventKind{EventContent, EventFinish, EventUsage, EventTimings}
+	if fmt.Sprint(kinds) != fmt.Sprint(want) {
+		t.Errorf("events = %v, want %v", kinds, want)
+	}
+}
+
+// A server that ignored stream:true answers with one object, and its timings
+// ride inside that object rather than beside it.
+func TestResponsesWholeObjectCarriesItsOwnTimings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"completed","output":[{"type":"output_text","content":[{"type":"output_text","text":"OK"}]}],`+
+			`"usage":{"input_tokens":54,"output_tokens":8,"total_tokens":62},`+
+			`"timings":{"prompt_n":54,"prompt_per_second":77.4,"predicted_n":8,"predicted_ms":98.4,"predicted_per_second":81.3}}`)
+	}))
+	defer srv.Close()
+	res, err := New(srv.URL, "", ProtocolResponses).stream(context.Background(), responsesPath, sent, "m", newResponsesState(), nil)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if res.Content != "OK" {
+		t.Errorf("content = %q", res.Content)
+	}
+	if res.Timings == nil {
+		t.Fatalf("timings = nil, want the ones the object carried")
+	}
+	if res.Timings.PredictedN != 8 || res.Timings.PredictedPerSecond != 81.3 {
+		t.Errorf("timings = %+v, want the server's own 8 tokens at 81.3", res.Timings)
 	}
 }

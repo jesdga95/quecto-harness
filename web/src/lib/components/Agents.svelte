@@ -9,6 +9,7 @@
     app,
     removeAgent,
     saveAgent,
+    setActiveAgent,
   } from "../state/app.svelte";
   import { confirm } from "./../state/confirm.svelte";
   import AgentPanel from "./AgentPanel.svelte";
@@ -52,6 +53,13 @@
     if (!(await letGo())) return;
     draft = null;
     chosen = id;
+  }
+
+  /** Makes this the agent a conversation opened later starts on. The ones
+      already open keep the agent they answer with. */
+  async function asDefault() {
+    const id = draft?.id ?? "";
+    if (id) await setActiveAgent(id);
   }
 
   async function leave() {
@@ -146,8 +154,11 @@
           {:else}
             <!-- Every agent answers the person; the robot adds that at least
                  one agent names it in its list, itself included, so it may
-                 take work. -->
+                 take work. The label marks where new conversations start. -->
             <span class="flex shrink-0 items-center gap-1 text-muted">
+              {#if agent.id === active}
+                <span class="text-[11px]">New conversations</span>
+              {/if}
               <User size={13} />
               {#if app.agents.some((x) => x.enabled && x.calls.includes(agent.id))}
                 <Robot size={13} />
@@ -185,8 +196,25 @@
       </div>
 
       <footer
-        class="flex shrink-0 items-center justify-end gap-2.5 border-t border-hair bg-panel px-6 py-3"
+        class="flex shrink-0 items-center gap-2.5 border-t border-hair bg-panel px-6 py-3"
       >
+        <!-- What a conversation opened later starts on. The conversations
+             already open keep the agent they answer with, so this moves
+             nothing that is running. -->
+        {#if draft.enabled}
+          {#if draft.id === active}
+            <span class="min-w-0 flex-1 truncate text-[12px] text-muted">
+              New conversations start on this one
+            </span>
+          {:else}
+            <button class="btn btn-ghost !border-transparent" onclick={() => void asDefault()}>
+              Use for new conversations
+            </button>
+            <span class="min-w-0 flex-1"></span>
+          {/if}
+        {:else}
+          <span class="min-w-0 flex-1"></span>
+        {/if}
         <button class="btn btn-danger !border-transparent" onclick={remove}>Delete</button>
         <button class="btn btn-ghost !border-transparent" onclick={clone}>Clone</button>
         <button class="btn btn-primary" disabled={!dirty || saving} onclick={save}>

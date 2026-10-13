@@ -778,8 +778,10 @@ func TestCreateSessionRejectsUnknownProject(t *testing.T) {
 	}
 }
 
-// One agent answers for the harness, and every session takes it.
-func TestSelectingAnAgentRepointsEverySession(t *testing.T) {
+// Choosing the agent answering now leaves the conversations already open on the
+// agent they answer with. It is what a conversation with none of its own starts
+// on, not what every conversation is moved onto.
+func TestSelectingAnAgentLeavesOpenConversationsAlone(t *testing.T) {
 	f := newFixture(t)
 	first := f.newSession(t)
 	second := f.newSession(t)
@@ -794,11 +796,68 @@ func TestSelectingAnAgentRepointsEverySession(t *testing.T) {
 		t.Errorf("state = %v", decode(t, w))
 	}
 	for _, id := range []string{first, second} {
-		f.waitIdle(t, id)
 		doc := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
-		if doc["model"] != "Delta3.8-27B Q5" {
-			t.Errorf("session %s = %v", id, doc["model"])
+		if doc["model"] != "Alpha-12B" {
+			t.Errorf("session %s = %v, want it left on the model it was on", id, doc["model"])
 		}
+	}
+
+	// A conversation opened after the choice starts on the new agent.
+	third := f.newSession(t)
+	doc := decode(t, f.do(t, "GET", "/api/sessions/"+third, nil))
+	if doc["model"] != "Delta3.8-27B Q5" {
+		t.Errorf("a new session = %v, want the agent answering now", doc["model"])
+	}
+}
+
+// A conversation is given an agent of its own, and keeps it after the agent
+// answering now changes, which is what lets two conversations run on two
+// models at once.
+func TestASessionGivenItsOwnAgentKeepsIt(t *testing.T) {
+	f := newFixture(t)
+	id := f.newSession(t)
+	own := f.addAgent(t, map[string]any{
+		"name": "Own", "url": f.upstream.URL, "model": "Beta-30B"})
+
+	w := f.do(t, "POST", "/api/sessions/"+id+"/agent", map[string]string{"agent": own})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	doc := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
+	if doc["agent"] != own || doc["model"] != "Beta-30B" {
+		t.Fatalf("session = %v/%v, want %s/Beta-30B", doc["agent"], doc["model"], own)
+	}
+
+	third := f.addAgent(t, map[string]any{
+		"name": "Third", "url": f.upstream.URL, "model": "Gamma-9B"})
+	if w := f.do(t, "POST", "/api/agents/"+third+"/select", nil); w.Code != http.StatusOK {
+		t.Fatalf("select = %d: %s", w.Code, w.Body.String())
+	}
+	doc = decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
+	if doc["agent"] != own || doc["model"] != "Beta-30B" {
+		t.Errorf("session = %v/%v after the harness moved on, want it left on %s/Beta-30B",
+			doc["agent"], doc["model"], own)
+	}
+}
+
+// An agent id that names nothing, and one switched off, are refused rather than
+// leaving a conversation pointing at nothing.
+func TestASessionRefusesAnAgentThatCannotAnswer(t *testing.T) {
+	f := newFixture(t)
+	id := f.newSession(t)
+	before := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
+
+	if w := f.do(t, "POST", "/api/sessions/"+id+"/agent", map[string]string{"agent": "agt_nothing"}); w.Code != http.StatusNotFound {
+		t.Errorf("unknown agent = %d: %s, want 404", w.Code, w.Body.String())
+	}
+	off := f.addAgent(t, map[string]any{
+		"name": "Off", "url": f.upstream.URL, "model": "Beta-30B", "enabled": false})
+	if w := f.do(t, "POST", "/api/sessions/"+id+"/agent", map[string]string{"agent": off}); w.Code != http.StatusBadRequest {
+		t.Errorf("disabled agent = %d: %s, want 400", w.Code, w.Body.String())
+	}
+	after := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))
+	if after["agent"] != before["agent"] || after["model"] != before["model"] {
+		t.Errorf("session moved after two refusals: %v/%v", after["agent"], after["model"])
 	}
 }
 

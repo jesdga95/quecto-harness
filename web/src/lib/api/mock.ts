@@ -823,6 +823,19 @@ export class MockApi implements HarnessApi {
     if (t) t.mode = mode;
   }
 
+  async setSessionAgent(id: string, agent: string): Promise<void> {
+    await this.tick();
+    const found = this.agents.find((a) => a.id === agent);
+    if (!found || !found.enabled) throw new Error(`${agent} cannot answer`);
+    const t = this.transcripts.get(id);
+    if (t) t.session = { ...t.session, agent, model: found.model };
+    const s = this.sessions.find((x) => x.id === id);
+    if (s) {
+      s.agent = agent;
+      s.model = found.model;
+    }
+  }
+
   async getChanges(id: string): Promise<Changes> {
     await this.tick();
     if (!this.transcripts.has(id)) throw new Error(`session ${id} not found`);
@@ -956,6 +969,7 @@ export class MockApi implements HarnessApi {
       id: nextId("s"),
       project,
       model,
+      agent: this.config.agent,
       title: "New session",
       updated: new Date().toISOString(),
       parent: "",
@@ -1612,6 +1626,7 @@ export class MockApi implements HarnessApi {
       id: nextId("s"),
       project,
       model: "Gemma4-12B",
+      agent: "agt_local",
       title: "Wire the SSE hub",
       updated: new Date(Date.now() - 3_600_000).toISOString(),
       parent: "",
@@ -1621,6 +1636,7 @@ export class MockApi implements HarnessApi {
       id: nextId("s"),
       project,
       model: "Gemma4-12B",
+      agent: "agt_local",
       title: "New session",
       updated: new Date(Date.now() - 600_000).toISOString(),
       parent: "",
@@ -1630,6 +1646,7 @@ export class MockApi implements HarnessApi {
       id: nextId("s"),
       project: this.config.projects[1]!,
       model: "Qwen3.8-27B Q5",
+      agent: "agt_studio",
       title: "Dashboard palette",
       updated: new Date(Date.now() - 86_400_000).toISOString(),
       parent: "",
@@ -1641,6 +1658,7 @@ export class MockApi implements HarnessApi {
       id: nextId("s"),
       project,
       model: "Qwen3.8-27B Q5",
+      agent: "agt_studio",
       title: "Audit hub.go for races",
       updated: new Date(Date.now() - 1_800_000).toISOString(),
       parent: first.id,
@@ -1652,6 +1670,7 @@ export class MockApi implements HarnessApi {
       id: nextId("s"),
       project,
       model: "Kimi K2 Thinking",
+      agent: "agt_cloud",
       title: "Check handlers for a missing context",
       updated: new Date(Date.now() - 300_000).toISOString(),
       parent: first.id,

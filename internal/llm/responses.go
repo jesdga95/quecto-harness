@@ -221,14 +221,17 @@ func (s *responsesState) failure() error {
 // responseEvent is one named frame. Only the fields the harness reads are
 // named; the endpoint sends a good deal more.
 type responseEvent struct {
-	Type       string          `json:"type"`
-	Delta      *string         `json:"delta"`
-	ItemID     *string         `json:"item_id"`
-	Item       *responseItem   `json:"item"`
-	Response   *responseObject `json:"response"`
-	Message    *string         `json:"message"`
-	Code       *string         `json:"code"`
-	OutputText *string         `json:"text"`
+	Type     string          `json:"type"`
+	Delta    *string         `json:"delta"`
+	ItemID   *string         `json:"item_id"`
+	Item     *responseItem   `json:"item"`
+	Response *responseObject `json:"response"`
+	// Timings is optional. A server that measures its own generation sends it
+	// beside the response rather than inside it.
+	Timings    *timings `json:"timings"`
+	Message    *string  `json:"message"`
+	Code       *string  `json:"code"`
+	OutputText *string  `json:"text"`
 }
 
 type responseItem struct {
@@ -240,9 +243,12 @@ type responseItem struct {
 }
 
 type responseObject struct {
-	Status            *string          `json:"status"`
-	Output            []responseOutput `json:"output"`
-	Usage             *responsesUsage  `json:"usage"`
+	Status *string          `json:"status"`
+	Output []responseOutput `json:"output"`
+	Usage  *responsesUsage  `json:"usage"`
+	// A server that ignored stream:true answers with one object, and the
+	// timings it measured ride inside it rather than beside it.
+	Timings           *timings `json:"timings"`
 	IncompleteDetails *struct {
 		Reason *string `json:"reason"`
 	} `json:"incomplete_details"`
@@ -350,7 +356,7 @@ func (s *responsesState) apply(e *responseEvent, on func(Event) error) (bool, er
 			ID: p.id.String(), Name: p.name.String(), Arguments: args})
 
 	case "response.completed", "response.incomplete":
-		return true, s.finish(e.Response, on)
+		return true, s.finish(e.Response, e.Timings, on)
 
 	case "response.failed", "error":
 		msg := deref(e.Message)
@@ -365,8 +371,9 @@ func (s *responsesState) apply(e *responseEvent, on func(Event) error) (bool, er
 }
 
 // finish reads the closing frame: the usage of the turn, why it stopped, and
-// any item the deltas did not carry.
-func (s *responsesState) finish(r *responseObject, on func(Event) error) error {
+// any item the deltas did not carry. tms is the timings the frame carries
+// beside the response, and is nil on a server that measured nothing.
+func (s *responsesState) finish(r *responseObject, tms *timings, on func(Event) error) error {
 	if r == nil {
 		return nil
 	}
@@ -396,7 +403,19 @@ func (s *responsesState) finish(r *responseObject, on func(Event) error) error {
 	}
 	if u := r.Usage.toUsage(); u != nil {
 		s.res.Usage = u
-		return emit(on, Event{Kind: EventUsage, Usage: u})
+		if err := emit(on, Event{Kind: EventUsage, Usage: u}); err != nil {
+			return err
+		}
+	}
+	// Timings arrive beside the response, or inside it from a server that
+	// ignored stream:true.
+	t := tms
+	if t == nil {
+		t = r.Timings
+	}
+	if t != nil {
+		s.res.Timings = t.toTimings()
+		return emit(on, Event{Kind: EventTimings, Timings: s.res.Timings})
 	}
 	return nil
 }
@@ -420,7 +439,7 @@ func (s *responsesState) whole(raw []byte, on func(Event) error) error {
 			}
 		}
 	}
-	return s.finish(&r, on)
+	return s.finish(&r, nil, on)
 }
 
 // open is the accumulator for one call, under the call id when it is known

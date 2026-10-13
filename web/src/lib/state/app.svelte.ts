@@ -91,6 +91,9 @@ export const app = $state({
   panel: false,
   // The section the dock is showing.
   section: "files" as Section,
+  // Whether that section is showing its list rather than one open item. Agents
+  // and Shell open on one when they are shown, so this is what lets go of it.
+  listed: false,
   // The subagent runs this session launched, newest first, with what each is
   // doing now. The chip counts them and the panel lists them.
   runs: [] as Child[],
@@ -741,7 +744,8 @@ export async function removeAgent(id: string): Promise<void> {
   await refreshState();
 }
 
-/** Chooses the agent every session answers with. Nothing is loaded by the
+/** Chooses the agent a conversation with none of its own starts on. Open
+    conversations keep the agent they answer with. Nothing is loaded by the
     choice: the next message that needs the model is what loads it. */
 export async function setActiveAgent(id: string): Promise<void> {
   if (app.config?.agent === id) return;
@@ -750,6 +754,31 @@ export async function setActiveAgent(id: string): Promise<void> {
   app.usage.breakdown = undefined;
   if ((await guard(() => api.selectAgent(id))) === null) return;
   await refreshState();
+}
+
+/** The agent the open conversation answers with, which is its own once one has
+    been chosen for it. With no conversation open there is nothing to answer
+    with, and the agent answering now is what the next one starts on. */
+export function conversationAgent(): Agent | undefined {
+  const own = app.opened?.agent ?? "";
+  return agentById(own) ?? activeAgent();
+}
+
+/** Gives the open conversation an agent of its own. It keeps it across a change
+    of the agent answering now. */
+export async function setConversationAgent(id: string): Promise<void> {
+  const session = app.sessionId;
+  if (!session || conversationAgent()?.id === id) return;
+  app.usage.breakdown = undefined;
+  if ((await guard(() => api.setSessionAgent(session, id))) === null) return;
+  // The agent answers with its own model, so the session and its sidebar row
+  // take that model along with the agent.
+  const model = agentById(id)?.model ?? "";
+  if (app.opened) app.opened = { ...app.opened, agent: id, model };
+  for (const list of Object.values(app.sessions)) {
+    const at = list.findIndex((s) => s.id === session);
+    if (at >= 0 && list[at]) list[at] = { ...list[at], agent: id, model };
+  }
 }
 
 export function probeAgent(
@@ -935,6 +964,9 @@ export function showSection(section: Section): void {
   app.section = section;
   app.artifactsDismissed = false;
   app.panel = true;
+  // Entering a section opens the item it came for. Agents follow the one still
+  // working and Shell the newest command, so this is what lets that happen again.
+  app.listed = false;
 }
 
 /** Closes the panel. Closing it while a turn runs keeps it closed until the
@@ -966,6 +998,12 @@ export function showProcesses(id = ""): void {
   if (id) app.procId = id;
 }
 
+/** Opens one background command from the list, leaving the list alone. */
+export function openProcess(id: string): void {
+  app.listed = false;
+  app.procId = id;
+}
+
 /** Ends one background command. A command that already went is not an error. */
 export async function stopProcess(id: string): Promise<void> {
   if (!app.sessionId) return;
@@ -993,6 +1031,18 @@ function closeRuns(): void {
   runStream = null;
   app.runId = "";
   app.runItems = [];
+}
+
+/** Shows a section's list instead of the item it opened itself on. Pressed
+    again, the section opens one item again. */
+export function toggleList(): void {
+  if (app.listed) {
+    app.listed = false;
+    return;
+  }
+  app.listed = true;
+  if (app.section === "agents") closeRuns();
+  if (app.section === "processes") app.procId = "";
 }
 
 /** Takes an artifact out of the Files stack. The one beside it takes its place. */
@@ -1109,6 +1159,7 @@ function announceArtifacts(): void {
 export async function openRun(id: string): Promise<void> {
   runStream?.();
   runStream = null;
+  app.listed = false;
   app.runId = id;
   app.runItems = [];
   const t = await guard(() => api.getSession(id));
@@ -1334,8 +1385,12 @@ function onEvent(event: HarnessEvent): void {
     app.awaitingModel = false;
   }
 
-  if (event.type === "done" && event.cost && event.cost.tokPerS > 0) {
-    app.usage.tok_per_s = Math.round(event.cost.tokPerS);
+  if (event.type === "done" && event.cost) {
+    // The server's own rate when it reported one, since that is the number a
+    // reader can check against the server. Ours is the fallback for a server
+    // that reported no timings at all.
+    const rate = event.cost.serverTokPerS ?? event.cost.tokPerS;
+    if (rate > 0) app.usage.tok_per_s = Math.round(rate);
   }
 
   if (event.type === "status") {
