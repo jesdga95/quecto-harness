@@ -597,6 +597,10 @@ export interface Transcript {
   /** What the session is doing. A snapshot is what a page reloaded mid-turn
       has to read this from. */
   status: TurnStatus;
+  /** Whether the request under way has streamed any output yet. */
+  replying?: boolean;
+  /** When the request under way was sent, in milliseconds since the epoch. */
+  waitingSince?: number;
   /** The message waiting for a turn that is still running. */
   steer: Steer | null;
   /** The mode the next turn runs in. */

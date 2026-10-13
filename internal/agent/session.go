@@ -251,6 +251,9 @@ type Reply struct {
 	Content   string      `json:"content"`
 	Reasoning string      `json:"reasoning"`
 	ToolCalls []ReplyCall `json:"tool_calls"`
+	// Since is when the request was sent, which a page opened part way
+	// through the wait counts from.
+	Since time.Time `json:"since"`
 }
 
 // ReplyCall is one tool call as far as its fragments have arrived. Fragments

@@ -33,7 +33,8 @@
       waited = 0;
       return;
     }
-    const started = Date.now();
+    const started = app.waitSince || Date.now();
+    waited = Math.max(0, Math.floor((Date.now() - started) / 1000));
     const tick = setInterval(() => {
       waited = Math.floor((Date.now() - started) / 1000);
     }, 1000);

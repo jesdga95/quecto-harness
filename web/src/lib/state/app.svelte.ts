@@ -28,6 +28,7 @@ import type {
   Todo,
   Toolset,
   ToolsetDebug,
+  Transcript,
   TranscriptItem,
   TurnStatus,
   Usage,
@@ -143,6 +144,9 @@ export const app = $state({
   // nothing. Not the "waiting" turn status, which is a permission card waiting
   // on a person.
   awaitingModel: false,
+  // When that wait began, in milliseconds since the epoch, so a session opened
+  // part way through it shows how long it has really taken.
+  waitSince: 0,
   allowlist: [] as string[],
   // The harness pane's debug view: every tool, which tools each toolset sends,
   // and the prompt each renders. Kept here so a refetch on each visit draws
@@ -386,10 +390,11 @@ export async function selectSession(id: string): Promise<void> {
   app.sessionToolset = t.toolset;
   app.draft = t.draft;
   // A session opened while its turn runs is running, and the snapshot is the
-  // only thing that says so. A model being read and a compaction both draw
-  // nothing until they land, so the wait is taken from the status.
+  // only thing that says so. A request with nothing streamed yet draws nothing
+  // of its own, so the wait is taken from the status and the reply.
   app.status = t.status;
-  app.awaitingModel = WAITING.has(t.status);
+  app.waitSince = t.waitingSince ?? Date.now();
+  app.awaitingModel = waiting(t);
   app.changes = { files: [], added: 0, removed: 0 };
   app.procs = [];
   app.procId = "";
@@ -544,7 +549,7 @@ export async function send(text: string, files: string[] = []): Promise<void> {
   if (divider) app.items.push(divider);
   pushUser(app.items, message, attached);
   // The first status event is a round trip away, and the wait starts now.
-  app.awaitingModel = true;
+  startWait();
   // The harness reads the attachments, so a file it refuses refuses the whole
   // message. The bubble comes back off the transcript when that happens.
   const item = app.items[app.items.length - 1];
@@ -1149,6 +1154,19 @@ const ASKED = new Set<TurnStatus>(["loading", "thinking", "streaming", "compacti
 // The waits a session can be found in, which draw nothing of their own.
 const WAITING = new Set<TurnStatus>(["loading", "compacting"]);
 
+// A wait that begins while the page watches starts now. One already under way
+// keeps the time it began.
+function startWait(): void {
+  if (!app.awaitingModel) app.waitSince = Date.now();
+  app.awaitingModel = true;
+}
+
+// A snapshot is a wait when the model is loading or compacting, or when a
+// request is out and has streamed nothing yet, as with thinking not streamed.
+function waiting(t: Transcript): boolean {
+  return WAITING.has(t.status) || (ASKED.has(t.status) && !t.replying);
+}
+
 function onEvent(event: HarnessEvent): void {
   if (event.type === "resync") {
     app.items = event.transcript.items;
@@ -1158,7 +1176,8 @@ function onEvent(event: HarnessEvent): void {
     app.draft = event.transcript.draft;
     app.steer = event.transcript.steer;
     app.status = event.transcript.status;
-    app.awaitingModel = WAITING.has(event.transcript.status);
+    app.waitSince = event.transcript.waitingSince ?? Date.now();
+    app.awaitingModel = waiting(event.transcript);
     markAnnounced();
     return;
   }
@@ -1323,7 +1342,7 @@ function onEvent(event: HarnessEvent): void {
     const settled = app.status === "loading" && event.status !== "loading";
     if (app.status === "idle" && event.status !== "idle") app.artifactsDismissed = false;
     app.status = event.status;
-    if (ASKED.has(event.status)) app.awaitingModel = true;
+    if (ASKED.has(event.status)) startWait();
     if (event.status === "idle") app.awaitingModel = false;
     void refreshModels(settled);
   }
