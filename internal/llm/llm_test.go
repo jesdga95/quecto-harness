@@ -792,6 +792,55 @@ func TestChatStallsMidStreamAndKeepsWhatArrived(t *testing.T) {
 	}
 }
 
+// A reply that opens with frames carrying no output, as the responses endpoint
+// does before a model that thinks without streaming it, keeps the first limit
+// until text arrives. How long that silence lasts depends on the hardware.
+func TestResponsesSilentThinkingKeepsTheFirstLimit(t *testing.T) {
+	shortIdle(t, 2*time.Second, 200*time.Millisecond)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		f := w.(http.Flusher)
+		fmt.Fprint(w, `data: {"type":"response.created","response":{"status":"in_progress"}}`+"\n\n")
+		f.Flush()
+		time.Sleep(600 * time.Millisecond)
+		fmt.Fprint(w, `data: {"type":"response.output_text.delta","delta":"OK"}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"status":"completed","output":[]}}`+"\n\n")
+		f.Flush()
+	}))
+	defer srv.Close()
+
+	res, err := New(srv.URL, "", ProtocolResponses).stream(context.Background(), responsesPath, sent, "m", newResponsesState(), nil)
+	if err != nil {
+		t.Fatalf("chat: %v, want the silence before the first text to fall under the first limit", err)
+	}
+	if res.Content != "OK" {
+		t.Errorf("content = %q", res.Content)
+	}
+}
+
+// Once text has arrived, the shorter limit applies to the silence after it.
+func TestResponsesStallsAfterOutputOnTheShortLimit(t *testing.T) {
+	shortIdle(t, time.Minute, 250*time.Millisecond)
+	srv := stallServer(t, []string{
+		`data: {"type":"response.created","response":{"status":"in_progress"}}`,
+		`data: {"type":"response.output_text.delta","delta":"Hel"}`,
+	}, 10*time.Second)
+	defer srv.Close()
+
+	start := time.Now()
+	res, err := New(srv.URL, "", ProtocolResponses).stream(context.Background(), responsesPath, sent, "m", newResponsesState(), nil)
+	if Kind(err) != KindStalled {
+		t.Fatalf("kind = %q, err = %v", Kind(err), err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("gave up after %v, want about the short limit", took)
+	}
+	if res.Content != "Hel" {
+		t.Errorf("content = %q, want what arrived before the stall", res.Content)
+	}
+}
+
 func TestChatSteadyStreamOutlastsTheIdleLimit(t *testing.T) {
 	shortIdle(t, time.Minute, 300*time.Millisecond)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -17,9 +17,9 @@ import (
 // parser resynchronises at the next blank line.
 const maxFrameBytes = 1 << 20
 
-// How long a reply may go silent before it is abandoned. The first gap covers
-// prompt processing, which sends nothing; later gaps fall between tokens,
-// where silence is a dead connection rather than a server still working.
+// How long a reply may go silent before it is abandoned. The first limit holds
+// until the reply carries output, which covers prompt processing and thinking
+// that is not streamed; after that, silence is a dead connection.
 var (
 	streamFirstEvent = 5 * time.Minute
 	streamIdle       = 90 * time.Second
@@ -141,12 +141,20 @@ func (c *Client) stream(ctx context.Context, path string, body []byte, model str
 
 	idle := newIdleReader(resp.Body, streamFirstEvent, streamIdle, cancel)
 	defer idle.stop()
+	// Frames that open a reply, such as response.created, are not output, so
+	// only text, thinking or a tool call moves the reply onto the shorter limit.
+	watched := func(ev Event) error {
+		if carriesOutput(ev.Kind) {
+			idle.output()
+		}
+		return emit(on, ev)
+	}
 
 	var res Result
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		res, err = c.readStream(ctx, idle, st, on)
+		res, err = c.readStream(ctx, idle, st, watched)
 	} else {
-		res, err = c.readWhole(idle, st, on)
+		res, err = c.readWhole(idle, st, watched)
 	}
 	// A read that ended while the caller is still waiting ended on the idle
 	// deadline, which reads as a cancellation everywhere below this point.
@@ -159,8 +167,8 @@ func (c *Client) stream(ctx context.Context, path string, body []byte, model str
 }
 
 // idleReader ends a reply that stops arriving. The deadline is reset by every
-// read that returns bytes, and drops to rest once the first ones have, so a
-// long wait before the reply starts does not license one in the middle of it.
+// read that returns bytes, and drops to rest once the reply carries output, so
+// a long wait before the output starts does not license one in the middle of it.
 type idleReader struct {
 	r    io.Reader
 	rest time.Duration
@@ -187,12 +195,32 @@ func (ir *idleReader) Read(p []byte) (int, error) {
 	if n > 0 {
 		ir.mu.Lock()
 		if !ir.quiet {
-			ir.limit = ir.rest
-			ir.timer.Reset(ir.rest)
+			ir.timer.Reset(ir.limit)
 		}
 		ir.mu.Unlock()
 	}
 	return n, err
+}
+
+// output moves the deadline to rest, since the reply has started to carry
+// output and a gap from here on falls between tokens.
+func (ir *idleReader) output() {
+	ir.mu.Lock()
+	defer ir.mu.Unlock()
+	if !ir.quiet && ir.limit != ir.rest {
+		ir.limit = ir.rest
+		ir.timer.Reset(ir.rest)
+	}
+}
+
+// carriesOutput reports whether an event is part of the generation, as opposed
+// to a frame that opens or closes the reply.
+func carriesOutput(kind EventKind) bool {
+	switch kind {
+	case EventContent, EventReasoning, EventToolCall:
+		return true
+	}
+	return false
 }
 
 // stalled reports that the deadline passed with nothing arriving, and how
