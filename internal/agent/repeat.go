@@ -3,8 +3,8 @@ package agent
 import (
 	"encoding/json"
 
-	"quecto-harness/internal/llm"
-	"quecto-harness/internal/prompts"
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/prompts"
 )
 
 // repeats counts the identical tool calls a turn has made in a row. Two calls

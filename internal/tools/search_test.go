@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"quecto-harness/internal/search"
+	"github.com/jesdga95/quecto-harness/internal/search"
 )
 
 // fakeSearch is a provider the tests steer: it records what it was asked and

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/llm"
 )
 
 func ids(list []Summary) []string {

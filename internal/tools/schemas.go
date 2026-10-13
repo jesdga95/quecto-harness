@@ -3,9 +3,9 @@ package tools
 import (
 	"encoding/json"
 
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/llm"
-	"quecto-harness/internal/prompts"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/prompts"
 )
 
 // schemas is built once, so a turn marshals the definitions rather than

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"quecto-harness/internal/tools"
+	"github.com/jesdga95/quecto-harness/internal/tools"
 )
 
 // pasteBudget bounds the request. The bytes arrive base64 encoded, which is a

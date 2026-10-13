@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"strings"
 
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/llm"
-	"quecto-harness/internal/prompts"
-	"quecto-harness/internal/store"
-	"quecto-harness/internal/tools"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/prompts"
+	"github.com/jesdga95/quecto-harness/internal/store"
+	"github.com/jesdga95/quecto-harness/internal/tools"
 )
 
 // ErrBadMode is a work mode outside the three the harness knows.

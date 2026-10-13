@@ -20,14 +20,14 @@ import (
 	"syscall"
 	"time"
 
-	"quecto-harness/internal/agent"
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/llm"
-	"quecto-harness/internal/perms"
-	"quecto-harness/internal/search"
-	"quecto-harness/internal/server"
-	"quecto-harness/internal/service"
-	"quecto-harness/internal/store"
+	"github.com/jesdga95/quecto-harness/internal/agent"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/perms"
+	"github.com/jesdga95/quecto-harness/internal/search"
+	"github.com/jesdga95/quecto-harness/internal/server"
+	"github.com/jesdga95/quecto-harness/internal/service"
+	"github.com/jesdga95/quecto-harness/internal/store"
 )
 
 // version, commit and date are set with -ldflags at build time.

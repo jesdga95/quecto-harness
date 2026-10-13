@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
 // The kinds of file View reports. Only text carries its content; an image is

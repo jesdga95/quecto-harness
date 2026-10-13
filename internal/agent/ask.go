@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"quecto-harness/internal/llm"
-	"quecto-harness/internal/tools"
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/tools"
 )
 
 // maxOptions bounds a question. Past four answers the card stops being a

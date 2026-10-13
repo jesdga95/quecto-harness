@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/diff"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/diff"
 )
 
 // baselineLimit is the largest file kept as a baseline. Past it the write

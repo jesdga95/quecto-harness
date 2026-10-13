@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
 const label = "io.quecto.harness"

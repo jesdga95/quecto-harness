@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/llm"
-	"quecto-harness/internal/perms"
-	"quecto-harness/internal/prompts"
-	"quecto-harness/internal/search"
-	"quecto-harness/internal/store"
-	"quecto-harness/internal/tools"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/perms"
+	"github.com/jesdga95/quecto-harness/internal/prompts"
+	"github.com/jesdga95/quecto-harness/internal/search"
+	"github.com/jesdga95/quecto-harness/internal/store"
+	"github.com/jesdga95/quecto-harness/internal/tools"
 )
 
 // recorder collects published events so a test can assert what a browser

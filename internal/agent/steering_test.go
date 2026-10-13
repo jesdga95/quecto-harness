@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
 // queueDuringTurn sends a message while the model is answering, which is where

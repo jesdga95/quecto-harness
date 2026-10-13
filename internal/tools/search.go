@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"quecto-harness/internal/search"
+	"github.com/jesdga95/quecto-harness/internal/search"
 )
 
 // minCharsPerHit is the most a budget gives one result: below it a page comes

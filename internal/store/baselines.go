@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
 // The state of a file the first time a session wrote to it. Only Text has a

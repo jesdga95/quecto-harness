@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"quecto-harness/internal/store"
+	"github.com/jesdga95/quecto-harness/internal/store"
 )
 
 // waitForQuestion blocks until the turn is waiting on an answer, which is what

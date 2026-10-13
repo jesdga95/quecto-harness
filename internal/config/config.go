@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"quecto-harness/internal/llm"
-	"quecto-harness/internal/search"
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/search"
 )
 
 // File mirrors config.json. A nil field is absent and takes the default,

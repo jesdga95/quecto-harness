@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/llm"
-	"quecto-harness/internal/store"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/store"
 )
 
 // lastUserSeq is what the browser names a message by when it asks for it to

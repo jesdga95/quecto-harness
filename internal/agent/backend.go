@@ -3,9 +3,9 @@ package agent
 import (
 	"context"
 
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/llm"
-	"quecto-harness/internal/search"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/search"
 )
 
 // Backend is the model server, as much of it as a session needs. The engine

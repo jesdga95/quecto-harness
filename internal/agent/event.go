@@ -1,6 +1,6 @@
 package agent
 
-import "quecto-harness/internal/perms"
+import "github.com/jesdga95/quecto-harness/internal/perms"
 
 // Event is one SSE payload. Type names the event; Fields carries the rest,
 // which the transport merges with the sequence number it assigns.

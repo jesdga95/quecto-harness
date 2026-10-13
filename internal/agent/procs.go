@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"quecto-harness/internal/tools"
+	"github.com/jesdga95/quecto-harness/internal/tools"
 )
 
 // tailLines is how many lines of a background command the browser and the

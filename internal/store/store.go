@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/llm"
 )
 
 var ErrNotFound = errors.New("No session with that id")

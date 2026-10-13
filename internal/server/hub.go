@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"quecto-harness/internal/agent"
+	"github.com/jesdga95/quecto-harness/internal/agent"
 )
 
 const (

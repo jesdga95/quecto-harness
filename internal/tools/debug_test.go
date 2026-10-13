@@ -3,7 +3,7 @@ package tools
 import (
 	"testing"
 
-	"quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
 // The debug view spells each parameter out in the order the schema writes it,

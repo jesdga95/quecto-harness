@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
 // ReplaceInFile swaps one exact run of text for another. The match must be

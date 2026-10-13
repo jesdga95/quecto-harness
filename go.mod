@@ -1,4 +1,4 @@
-module quecto-harness
+module github.com/jesdga95/quecto-harness
 
 go 1.24
 

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"quecto-harness/internal/store"
-	"quecto-harness/internal/tools"
+	"github.com/jesdga95/quecto-harness/internal/store"
+	"github.com/jesdga95/quecto-harness/internal/tools"
 )
 
 // maxTodos bounds a plan. A model that writes more than this is not planning.

@@ -20,13 +20,13 @@ import (
 	"testing"
 	"time"
 
-	"quecto-harness/internal/agent"
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/llm"
-	"quecto-harness/internal/perms"
-	"quecto-harness/internal/search"
-	"quecto-harness/internal/store"
-	"quecto-harness/internal/tools"
+	"github.com/jesdga95/quecto-harness/internal/agent"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/perms"
+	"github.com/jesdga95/quecto-harness/internal/search"
+	"github.com/jesdga95/quecto-harness/internal/store"
+	"github.com/jesdga95/quecto-harness/internal/tools"
 )
 
 const testToken = "test-token"

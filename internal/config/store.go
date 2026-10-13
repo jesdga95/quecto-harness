@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/llm"
 )
 
 // Store holds the resolved configuration and the allowlist, and is the only

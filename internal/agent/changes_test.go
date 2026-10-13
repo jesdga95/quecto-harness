@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/store"
-	"quecto-harness/internal/tools"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/store"
+	"github.com/jesdga95/quecto-harness/internal/tools"
 )
 
 func changeFor(t *testing.T, files []FileChange, path string) FileChange {

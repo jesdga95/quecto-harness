@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
 // testRoot builds the layout the path guard table is written against.

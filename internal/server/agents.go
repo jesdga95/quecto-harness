@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/llm"
 )
 
 // agentBody is what a write may carry. A field the body leaves out keeps the

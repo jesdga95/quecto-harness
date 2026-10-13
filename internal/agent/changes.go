@@ -1,9 +1,9 @@
 package agent
 
 import (
-	"quecto-harness/internal/diff"
-	"quecto-harness/internal/store"
-	"quecto-harness/internal/tools"
+	"github.com/jesdga95/quecto-harness/internal/diff"
+	"github.com/jesdga95/quecto-harness/internal/store"
+	"github.com/jesdga95/quecto-harness/internal/tools"
 )
 
 // diffLimit bounds the lines carried in one file's hunks. A rewritten file

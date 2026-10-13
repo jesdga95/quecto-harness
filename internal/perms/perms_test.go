@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
 func newStore(t *testing.T) *config.Store {

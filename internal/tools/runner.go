@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"quecto-harness/internal/config"
-	"quecto-harness/internal/search"
+	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/search"
 )
 
 // Runner executes the file and shell tools against one project root. All paths are
