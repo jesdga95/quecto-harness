@@ -11,9 +11,11 @@ LDFLAGS := -s -w \
 
 all: build
 
-# The UI is embedded at compile time, so it is rebuilt before the binary.
+# The UI is embedded at compile time, so it is rebuilt before the binary. The
+# build empties dist, and the tracked .gitkeep is put back after it.
 web:
 	cd web && npm ci && npm run build
+	touch internal/web/dist/.gitkeep
 
 build: web
 	CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/quecto-harness
