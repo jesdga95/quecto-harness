@@ -114,6 +114,9 @@ func TestStoppingABackgroundProcess(t *testing.T) {
 	if !strings.Contains(notice.Content, "was stopped") {
 		t.Errorf("the notice = %q", notice.Content)
 	}
+	// The notice starts a turn of its own, which writes the session until it
+	// ends, so the test waits for it rather than removing the folder under it.
+	waitIdle(t, s)
 }
 
 // A session that is stopped hears nothing about the commands it started, so
