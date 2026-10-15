@@ -245,7 +245,6 @@ interface WireSnapshot {
     tool_calls?: { index?: number; id?: string; name?: string; arguments?: string }[] | null;
     since?: string;
   } | null;
-  last_usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
   compactable?: boolean;
   breakdown?: { system?: number; rules?: number; tools?: number; messages?: number } | null;
 }
@@ -573,6 +572,8 @@ function toCost(src: object | null | undefined): TurnCost | undefined {
     input: num("input_tokens"),
     window: num("window_tokens"),
     cached: num("cached_tokens"),
+    unrecorded: num("unrecorded"),
+    stopped: num("stopped"),
     llmMs: num("llm_ms"),
     genMs: num("gen_ms"),
     firstMs: num("first_ms"),
@@ -988,9 +989,13 @@ function toTranscript(snap: WireSnapshot): Transcript {
   const last = [...items].reverse().find((i) => i.kind === "assistant" && i.cost);
   const rate = last?.kind === "assistant" ? last.cost?.tokPerS : undefined;
 
+  // The meter reads the fill the backend measured, which counts what has been
+  // written since the last report as well. A session no server has reported on
+  // yet has an estimate, or nothing at all.
   const usage: Usage = {
-    prompt_tokens: snap.last_usage?.prompt_tokens ?? snap.fill ?? 0,
-    completion_tokens: snap.last_usage?.completion_tokens ?? 0,
+    prompt_tokens: snap.fill ?? 0,
+    completion_tokens: last?.kind === "assistant" ? last.cost?.tokens ?? 0 : 0,
+    fill: snap.fill,
     n_ctx: snap.n_ctx ?? 0,
     tok_per_s: rate && rate > 0 ? Math.round(rate) : undefined,
     breakdown: toBreakdown(snap.breakdown),

@@ -41,6 +41,9 @@ type Entry struct {
 
 	Permission  *PermissionRecord `json:"permission,omitempty"`
 	Attachments []Attachment      `json:"attachments,omitempty"`
+	// Usage is what the model call that produced this entry reported. Entries
+	// written before it was kept, and entries no call produced, have none.
+	Usage *CallUsage `json:"usage,omitempty"`
 	// Edited is set on a user entry whose text was rewritten and sent again.
 	Edited bool `json:"edited,omitempty"`
 	// From names the agent a message came from. Empty is the person.
@@ -67,6 +70,51 @@ type Attachment struct {
 	File string `json:"file,omitempty"`
 	// Content is the whole file, for text.
 	Content string `json:"content,omitempty"`
+}
+
+// CallUsage is what one model call spent, kept on the entry that call
+// produced. A turn's and a session's totals are the sum over these, so a stop
+// that ends a turn in the middle leaves every call that ran still counted, and
+// the numbers can be recomputed from the saved session.
+type CallUsage struct {
+	// Reported says the server named the counts. A call cut off before any
+	// usage frame arrives has it false, which is unknown rather than zero.
+	Reported bool `json:"reported"`
+	// Stopped is set when this harness ended the call rather than the model.
+	Stopped bool `json:"stopped,omitempty"`
+	// Compaction is set when the call wrote a summary instead of a reply. Its
+	// prompt counted the messages the summary replaces, so it is never read as
+	// a measure of what is in context now.
+	Compaction bool `json:"compaction,omitempty"`
+	// Prompt counts the cached part. Cached is nil where the server did not
+	// say how much of it it reused, which is not a cache that held nothing.
+	Prompt     int  `json:"prompt,omitempty"`
+	Completion int  `json:"completion,omitempty"`
+	Cached     *int `json:"cached,omitempty"`
+	// ToolTokens is the estimated cost of the tool schemas this request sent.
+	ToolTokens int `json:"tool_tokens,omitempty"`
+	// FirstMs is the wait before the first token, GenMs the time spent
+	// producing, TotalMs the whole request. Measured here, since no server
+	// reports them alike; a request that streamed nothing has no first time.
+	FirstMs int64 `json:"first_ms,omitempty"`
+	GenMs   int64 `json:"gen_ms,omitempty"`
+	TotalMs int64 `json:"total_ms,omitempty"`
+	// PerSecond is the generation rate the server named, where it named one.
+	PerSecond float64 `json:"per_second,omitempty"`
+}
+
+// LastMeasured is the newest entry whose call reported counts that stand in
+// the context now, with its record, or -1 and nil where no such call is kept.
+// A summary's prompt counted the messages it replaces, and a call that
+// streamed no usage report says nothing, so neither measures what is there.
+func LastMeasured(entries []Entry) (int, *CallUsage) {
+	for i := len(entries) - 1; i >= 0; i-- {
+		u := entries[i].Usage
+		if u != nil && u.Reported && !u.Compaction {
+			return i, u
+		}
+	}
+	return -1, nil
 }
 
 // PermissionRecord is the decision as it was made, kept so a reloaded page
@@ -127,16 +175,12 @@ type Session struct {
 	Draft *Plan  `json:"draft,omitempty"`
 	Title string `json:"title"`
 	// Named is set when the user typed the title. Nothing overwrites it.
-	Named       bool       `json:"named"`
-	Created     time.Time  `json:"created"`
-	Updated     time.Time  `json:"updated"`
-	NCtx        int        `json:"n_ctx"`
-	NCtxSource  string     `json:"n_ctx_source"`
-	Compactions int        `json:"compactions"`
-	LastUsage   *llm.Usage `json:"last_usage,omitempty"`
-	// LastToolTokens is the tool schema cost inside LastUsage. It is zero when
-	// the request that produced LastUsage was sent without tools.
-	LastToolTokens int `json:"last_tool_tokens,omitempty"`
+	Named       bool      `json:"named"`
+	Created     time.Time `json:"created"`
+	Updated     time.Time `json:"updated"`
+	NCtx        int       `json:"n_ctx"`
+	NCtxSource  string    `json:"n_ctx_source"`
+	Compactions int       `json:"compactions"`
 	// ContextBase is the estimated fixed part of every prompt this model sees.
 	ContextBase *ContextBase `json:"context_base,omitempty"`
 	Todos       []Todo       `json:"todos,omitempty"`
@@ -168,8 +212,8 @@ type Summary struct {
 	Updated  time.Time `json:"updated"`
 	Messages int       `json:"messages"`
 	Bytes    int64     `json:"bytes"`
-	// Fill is the context after the last request the server reported on, and
-	// zero where it never reported one.
+	// Fill is the context after the last call the server reported on, and zero
+	// where it never reported one.
 	Fill int `json:"fill,omitempty"`
 }
 
@@ -362,8 +406,8 @@ func (s *Sessions) lockFor(id string) *sync.Mutex {
 
 func summarise(sess *Session, size int64) Summary {
 	fill := 0
-	if u := sess.LastUsage; u != nil {
-		fill = u.PromptTokens + u.CompletionTokens
+	if _, u := LastMeasured(sess.Entries); u != nil {
+		fill = u.Prompt + u.Completion
 	}
 	messages := 0
 	for _, e := range sess.Entries {

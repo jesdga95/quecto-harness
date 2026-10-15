@@ -1359,12 +1359,13 @@ export class MockApi implements HarnessApi {
       this.finish(session, t);
       if (index === 0) this.nameSession(session, t);
     } catch (err) {
-      if (!(err instanceof Cancelled)) {
+      const cut = err instanceof Cancelled;
+      if (!cut) {
         this.send(session, t, { type: "error", message: String(err) });
       } else {
         this.send(session, t, { type: "error", message: "Turn stopped by user" });
       }
-      this.finish(session, t);
+      this.finish(session, t, cut);
     } finally {
       if (this.running === turn) this.running = null;
       this.flushSteer(session, t);
@@ -1403,35 +1404,41 @@ export class MockApi implements HarnessApi {
     this.emit(session, { type: "title", title: named });
   }
 
-  private finish(session: string, t: Transcript): void {
+  private finish(session: string, t: Transcript, cut = false): void {
     const ms = Date.now() - this.turnStart;
     const tokens = t.items.reduce(
       (n, i) => n + (i.kind === "assistant" || i.kind === "reasoning" ? tokensIn(i.text) : 0),
       0,
     );
     const input = 36000 + tokens * 3;
+    // A turn cut short keeps its clock and names the call it lost, rather than
+    // reporting figures that no model server ever sent.
     this.send(session, t, {
       type: "done",
       cost: {
-        tokens,
+        tokens: cut ? 0 : tokens,
         ms,
-        tokPerS: 52,
-        requests: 4,
-        input,
-        window: input,
-        cached: Math.round(input * 0.99),
+        tokPerS: cut ? 0 : 52,
+        requests: cut ? 1 : 4,
+        input: cut ? undefined : input,
+        window: cut ? undefined : input,
+        cached: cut ? undefined : Math.round(input * 0.99),
+        unrecorded: cut ? 1 : undefined,
+        stopped: cut ? 1 : undefined,
         llmMs: Math.round(ms * 0.8),
         genMs: Math.round(ms * 0.6),
         firstMs: 2800,
         toolMs: Math.round(ms * 0.15),
         agent: this.active()?.name,
         model: this.active()?.model,
-        perRequest: [0.82, 0.88, 0.94, 1].map((f, i) => ({
-          window: Math.round(input * f),
-          tokens: Math.round(tokens / 4),
-          firstMs: 600 + i * 90,
-          genMs: Math.round((ms * 0.6) / 4),
-        })),
+        perRequest: cut
+          ? undefined
+          : [0.82, 0.88, 0.94, 1].map((f, i) => ({
+              window: Math.round(input * f),
+              tokens: Math.round(tokens / 4),
+              firstMs: 600 + i * 90,
+              genMs: Math.round((ms * 0.6) / 4),
+            })),
       },
     });
     this.emit(session, { type: "status", status: "idle" });

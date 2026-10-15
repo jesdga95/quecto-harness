@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -41,11 +42,20 @@ type replay struct {
 	// asked, so a test can assert that a side request did not land between
 	// two of a turn's own requests.
 	Order []string
+	// paused is closed once a script has been sent up to its hold marker and
+	// the connection is being held open, which is when a test stops a turn.
+	paused chan struct{}
 }
+
+// holdMarker is a frame that is never sent. Where a script ends with it the
+// connection stays open instead, so a test can stop a turn that has streamed
+// everything up to that point and is still waiting for the next frame.
+const holdMarker = "data: [HOLD]"
 
 func newReplay(t *testing.T, fixtures ...string) *replay {
 	t.Helper()
-	r := &replay{t: t, byModel: map[string][][]string{}, nextFor: map[string]int{}, held: map[string]chan struct{}{}}
+	r := &replay{t: t, byModel: map[string][][]string{}, nextFor: map[string]int{},
+		held: map[string]chan struct{}{}, paused: make(chan struct{})}
 	for _, f := range fixtures {
 		r.scripts = append(r.scripts, frames(t, f))
 	}
@@ -151,7 +161,7 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 			r.Titles = append(r.Titles, body)
 			r.Order = append(r.Order, "title")
 			r.mu.Unlock()
-			r.stream(w, frames(r.t, "stream_title.txt"))
+			r.stream(req.Context(), w, frames(r.t, "stream_title.txt"))
 			return
 		}
 	}
@@ -196,10 +206,10 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 		fmt.Fprint(w, `{"error":{"message":"the replay server ran out of scripted responses"}}`)
 		return
 	}
-	r.stream(w, script)
+	r.stream(req.Context(), w, script)
 }
 
-func (r *replay) stream(w http.ResponseWriter, script []string) {
+func (r *replay) stream(ctx context.Context, w http.ResponseWriter, script []string) {
 	r.mu.Lock()
 	delay := r.Delay
 	r.mu.Unlock()
@@ -208,6 +218,11 @@ func (r *replay) stream(w http.ResponseWriter, script []string) {
 	w.WriteHeader(200)
 	f, _ := w.(http.Flusher)
 	for _, frame := range script {
+		if frame == holdMarker {
+			r.pause()
+			<-ctx.Done()
+			return
+		}
 		fmt.Fprint(w, frame+"\n\n")
 		if f != nil {
 			f.Flush()
@@ -215,6 +230,21 @@ func (r *replay) stream(w http.ResponseWriter, script []string) {
 		if delay > 0 {
 			time.Sleep(delay)
 		}
+	}
+}
+
+// pause tells a test the script is spent and the connection is being held.
+func (r *replay) pause() {
+	r.mu.Lock()
+	already := false
+	select {
+	case <-r.paused:
+		already = true
+	default:
+	}
+	r.mu.Unlock()
+	if !already {
+		close(r.paused)
 	}
 }
 

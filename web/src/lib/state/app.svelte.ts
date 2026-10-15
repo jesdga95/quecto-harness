@@ -1317,6 +1317,7 @@ function onEvent(event: HarnessEvent): void {
     app.usage = {
       prompt_tokens: event.prompt_tokens,
       completion_tokens: event.completion_tokens,
+      fill: event.fill ?? app.usage.fill,
       n_ctx: event.n_ctx,
       tok_per_s: event.tok_per_s ?? app.usage.tok_per_s,
       cached_pct: event.cached_pct ?? app.usage.cached_pct,
@@ -1398,7 +1399,9 @@ export function pendingQuestion(): TranscriptItem | undefined {
 /** How full the context is. With no window known, the fill is a count of
     tokens rather than a share, and ratio and percent are zero. */
 export function contextUse(): { fill: number; limited: boolean; ratio: number; percent: number; measured: boolean } {
-  const fill = app.usage.prompt_tokens + app.usage.completion_tokens;
+  // The backend's fill counts what has been written since the last report as
+  // well; the sum of one report is what a turn mid-flight has to fall back on.
+  const fill = app.usage.fill ?? app.usage.prompt_tokens + app.usage.completion_tokens;
   const limited = app.usage.n_ctx > 0;
   const ratio = limited ? fill / app.usage.n_ctx : 0;
   const percent = limited ? Math.min(100, Math.round(ratio * 100)) : 0;

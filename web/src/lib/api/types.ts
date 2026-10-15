@@ -294,6 +294,9 @@ export type HarnessEvent =
       type: "usage";
       prompt_tokens: number;
       completion_tokens: number;
+      /** Everything in context, the report above and whatever has been added
+          since. The report alone undercounts as the turn writes. */
+      fill?: number;
       n_ctx: number;
       tok_per_s?: number;
       cached_pct?: number;
@@ -527,6 +530,9 @@ export interface Breakdown {
 export interface Usage {
   prompt_tokens: number;
   completion_tokens: number;
+  /** Everything in context, measured where the server reported and estimated
+      where it has not. Absent on a session nothing has reported on yet. */
+  fill?: number;
   n_ctx: number;
   tok_per_s?: number;
   cached_pct?: number;
@@ -551,6 +557,10 @@ export interface TurnCost {
   /** The context as it stood when the turn's last request was made. */
   window?: number;
   cached?: number;
+  /** Calls the turn made whose cost no server reported. stopped names how many
+      of those the user cut short, which is all of them when the two match. */
+  unrecorded?: number;
+  stopped?: number;
   /** Time inside requests, generating, before the first token, and in tools. */
   llmMs?: number;
   genMs?: number;

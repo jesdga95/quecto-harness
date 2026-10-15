@@ -62,25 +62,23 @@ type Session struct {
 
 	Entries []store.Entry
 
-	NCtx       int
-	NCtxSource string
-	LastUsage  *llm.Usage
-	// LastToolTokens is the tool schema cost inside LastUsage. A turn that
-	// spent its call budget sends no tools, and the breakdown says so rather
-	// than charging for schemas the prompt did not carry.
-	LastToolTokens int
-	ContextBase    *store.ContextBase
-	Compactions    int
-	Todos          []store.Todo
-	Baselines      []store.Baseline
+	NCtx        int
+	NCtxSource  string
+	ContextBase *store.ContextBase
+	Compactions int
+	Todos       []store.Todo
+	Baselines   []store.Baseline
 
 	// steer is the message waiting for the running turn to pick it up. It is
 	// not part of the document: a message that outlives the turn it was typed
 	// against is sent as an ordinary one instead.
 	steer *Steer
 
-	caps           llm.Caps
-	lastUsageEntry int
+	caps llm.Caps
+	// usageSince is the sequence number of the first entry this model could
+	// have measured. A report an earlier model made is no measure of this
+	// model's context, so it anchors nothing.
+	usageSince int
 	// rulesNote is the last warning that the project's rules are not in the
 	// prompt, so a file that is still too large is not named again on every
 	// turn. It is not in the document: a restart re-warns once.
@@ -126,10 +124,9 @@ func (s *Session) repoint(agentID, model string) {
 	s.AgentID = agentID
 	s.Model = model
 	s.forgetModel()
-	s.LastUsage = nil
-	s.LastToolTokens = 0
 	s.ContextBase = nil
-	s.lastUsageEntry = -1
+	// What the previous model reported is no measure of this one's context.
+	s.usageSince = s.turnSeq + 1
 }
 
 // forgetModel drops what was read from the model server, so the next turn
@@ -162,7 +159,7 @@ func newSession(id, project, agentID, model string, set config.Toolset) *Session
 	return &Session{
 		ID: id, Project: project, AgentID: agentID, Model: model,
 		Mode: config.WorkExecute, Toolset: set, Created: now, Updated: now,
-		state: StateIdle, lastUsageEntry: -1, seen: tools.NewSeen(),
+		state: StateIdle, seen: tools.NewSeen(),
 	}
 }
 
@@ -171,20 +168,15 @@ func fromDoc(d *store.Session) *Session {
 		ID: d.ID, Project: d.Project, AgentID: d.Agent, Parent: d.Parent, Model: d.Model,
 		Mode: d.Mode, Toolset: d.Toolset, Plan: d.Plan, Draft: d.Draft,
 		Created: d.Created, Updated: d.Updated, Title: d.Title, Named: d.Named,
-		Entries:        append([]store.Entry(nil), d.Entries...),
-		NCtx:           d.NCtx,
-		NCtxSource:     d.NCtxSource,
-		LastUsage:      d.LastUsage,
-		LastToolTokens: d.LastToolTokens,
-		ContextBase:    d.ContextBase,
-		Compactions:    d.Compactions,
-		Todos:          append([]store.Todo(nil), d.Todos...),
-		Baselines:      append([]store.Baseline(nil), d.Baselines...),
-		state:          StateIdle,
-		seen:           tools.NewSeen(),
-		// A reloaded session has no usage anchor, so the next fill is
-		// estimated from the entries rather than trusted from a past turn.
-		lastUsageEntry: -1,
+		Entries:     append([]store.Entry(nil), d.Entries...),
+		NCtx:        d.NCtx,
+		NCtxSource:  d.NCtxSource,
+		ContextBase: d.ContextBase,
+		Compactions: d.Compactions,
+		Todos:       append([]store.Todo(nil), d.Todos...),
+		Baselines:   append([]store.Baseline(nil), d.Baselines...),
+		state:       StateIdle,
+		seen:        tools.NewSeen(),
 	}
 }
 
@@ -202,6 +194,10 @@ func (s *Session) doc() *store.Session {
 			}
 			e.Meta = meta
 		}
+		if e.Usage != nil {
+			held := *e.Usage
+			e.Usage = &held
+		}
 		entries[i] = e
 	}
 	return &store.Session{
@@ -209,8 +205,7 @@ func (s *Session) doc() *store.Session {
 		Model: s.Model, Mode: s.Mode, Toolset: s.Toolset, Plan: s.Plan, Draft: s.Draft, Title: s.Title, Named: s.Named,
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
-		Compactions: s.Compactions, LastUsage: s.LastUsage,
-		LastToolTokens: s.LastToolTokens, ContextBase: s.ContextBase,
+		Compactions: s.Compactions, ContextBase: s.ContextBase,
 		Todos:     append([]store.Todo(nil), s.Todos...),
 		Baselines: append([]store.Baseline(nil), s.Baselines...),
 		Entries:   entries,
@@ -445,12 +440,6 @@ func (s *Session) rewindTo(i int) {
 	s.Entries = s.Entries[:i:i]
 	s.restoreContext()
 	s.restoreTodos()
-	// The anchor pointed into the entries that are gone, so the next fill is
-	// estimated from what is left rather than measured against a turn the
-	// history no longer contains.
-	s.LastUsage = nil
-	s.LastToolTokens = 0
-	s.lastUsageEntry = -1
 }
 
 // restoreContext rebuilds the in-context set: everything from the newest
@@ -826,15 +815,27 @@ func toolMessage(id string, e store.Entry, images map[string]llm.Part) llm.Messa
 // usage report does not cover it.
 const charsPerToken = 4
 
-// computeFill estimates tokens currently in context. The last usage report is
-// authoritative up to the response it came from; entries added since are
-// estimated at charsPerToken characters per token.
+// lastMeasured is the newest call that measured what is in context now, with
+// its entry index, or -1 where no such call is kept. A report the previous
+// model made measures that model's context, so it counts only from the entry
+// this model starts at. The caller holds the lock.
+func (s *Session) lastMeasured() (int, *store.CallUsage) {
+	i, u := store.LastMeasured(s.Entries)
+	if u != nil && s.Entries[i].Seq < s.usageSince {
+		return -1, nil
+	}
+	return i, u
+}
+
+// computeFill estimates tokens currently in context. The last call that
+// reported counts is authoritative up to the reply it produced; entries added
+// since are estimated at charsPerToken characters per token.
 func (s *Session) computeFill() int {
-	if s.LastUsage == nil || s.lastUsageEntry < 0 {
+	i, u := s.lastMeasured()
+	if u == nil {
 		return s.estimateChars(-1) / charsPerToken
 	}
-	base := s.LastUsage.PromptTokens + s.LastUsage.CompletionTokens
-	return base + s.estimateChars(s.lastUsageEntry)/charsPerToken
+	return u.Prompt + u.Completion + s.estimateChars(i)/charsPerToken
 }
 
 // compactFloor is the fewest characters since the last summary that a
@@ -949,15 +950,16 @@ func (s *Session) Breakdown() *Breakdown {
 	return s.breakdown()
 }
 
-// breakdown subtracts the fixed parts from the last usage report. Messages is
-// the remainder, which is the only part that came from the model server rather
-// than from counting characters. The caller holds the lock.
+// breakdown subtracts the fixed parts from the last call that reported counts.
+// Messages is the remainder, which is the only part that came from the model
+// server rather than from counting characters. The caller holds the lock.
 func (s *Session) breakdown() *Breakdown {
-	if s.LastUsage == nil || s.ContextBase == nil {
+	_, u := s.lastMeasured()
+	if u == nil || s.ContextBase == nil {
 		return nil
 	}
-	b := Breakdown{System: s.ContextBase.System, Rules: s.ContextBase.Rules, Tools: s.LastToolTokens}
-	b.Messages = s.LastUsage.PromptTokens + s.LastUsage.CompletionTokens - b.System - b.Rules - b.Tools
+	b := Breakdown{System: s.ContextBase.System, Rules: s.ContextBase.Rules, Tools: u.ToolTokens}
+	b.Messages = u.Prompt + u.Completion - b.System - b.Rules - b.Tools
 	if b.Messages < 0 {
 		return nil
 	}

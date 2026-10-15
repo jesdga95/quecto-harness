@@ -1,0 +1,81 @@
+{
+  "id": "sess_lkfhm4b2mrwfqz6d",
+  "project": "",
+  "agent": "agt_local",
+  "model": "Alpha-12B",
+  "mode": "execute",
+  "toolset": "full",
+  "title": "list the files here",
+  "named": false,
+  "created": "2026-01-04T09:00:00Z",
+  "updated": "2026-01-04T09:02:00Z",
+  "n_ctx": 131072,
+  "n_ctx_source": "props",
+  "compactions": 0,
+  "last_usage": {
+    "prompt_tokens": 4193,
+    "completion_tokens": 118,
+    "total_tokens": 4311,
+    "prompt_tokens_details": {
+      "cached_tokens": 3968
+    }
+  },
+  "last_tool_tokens": 1026,
+  "context_base": {
+    "system": 154,
+    "rules": 287,
+    "tools": 1026
+  },
+  "entries": [
+    {
+      "seq": 1,
+      "kind": "user",
+      "role": "user",
+      "content": "list the files here",
+      "in_context": true,
+      "visible": true,
+      "at": "2026-01-04T09:00:00Z"
+    },
+    {
+      "seq": 2,
+      "kind": "assistant",
+      "role": "assistant",
+      "content": "three files",
+      "in_context": true,
+      "visible": true,
+      "at": "2026-01-04T09:01:00Z",
+      "meta": {
+        "finish_reason": "stop",
+        "tokens": 118,
+        "input_tokens": 4193,
+        "window_tokens": 4193,
+        "ms": 3400,
+        "llm_ms": 3100,
+        "gen_ms": 2900,
+        "first_ms": 600,
+        "tool_ms": 0,
+        "tok_per_s": 40.689655172413794,
+        "requests": 1,
+        "cached_tokens": 3968,
+        "agent": "Local",
+        "model": "Alpha-12B",
+        "per_request": [
+          {
+            "tokens": 118,
+            "first_ms": 600,
+            "gen_ms": 2900,
+            "window_tokens": 4193
+          }
+        ]
+      }
+    },
+    {
+      "seq": 3,
+      "kind": "status",
+      "content": "Stopped",
+      "in_context": false,
+      "visible": true,
+      "at": "2026-01-04T09:02:00Z"
+    }
+  ]
+}

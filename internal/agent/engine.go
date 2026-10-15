@@ -703,7 +703,7 @@ func (e *Engine) Compact(id string) error {
 		defer e.wg.Done()
 		defer cancel()
 		if err := e.compact(ctx, s, e.backends.For(a), a, e.briefFor(s, e.cfg.Config()), e.turnCaps(s)); err != nil {
-			e.endWithError(s, err, 0)
+			e.endWithError(s, err, 0, turnClock{}, nil)
 			return
 		}
 		e.finish(s, StateIdle, "", 0, nil)
@@ -978,6 +978,18 @@ func (e *Engine) turnCaps(s *Session) llm.Caps {
 	return s.caps
 }
 
+// schemaTokens is the estimated cost of the tool schemas a request sends, kept
+// with its record so a context breakdown can subtract the figure that stood
+// when the report was made.
+func (e *Engine) schemaTokens(s *Session) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ContextBase == nil {
+		return 0
+	}
+	return s.ContextBase.Tools
+}
+
 // estimateBase estimates the token cost of the fixed parts of a prompt from
 // their size, at charsPerToken characters per token. The system message
 // renders once with and once without the project's rules, so the step between
@@ -1005,131 +1017,76 @@ func (e *Engine) estimateBase(s *Session, a config.Agent, b brief) {
 
 // fail ends the turn on the stream. The message is not kept: it says what went
 // wrong with one request, which is of no use to a reader of the session later
-// and of none at all to the model.
-func (e *Engine) fail(s *Session, err error) {
+// and of none at all to the model. What the turn's calls spent is kept, since
+// the reader paid for them.
+func (e *Engine) fail(s *Session, err error, clock turnClock) {
 	kind := string(llm.Kind(err))
 	if kind == "" {
 		kind = "internal"
 	}
 	e.setState(s, StateFailed)
 	e.publish(s.ID, ev("error", map[string]any{"kind": kind, "message": err.Error()}))
-	e.finish(s, StateIdle, "error", 0, nil)
+	e.endTurn(s, StateIdle, "error", 0, clock)
 	e.flushSteer(s)
 }
 
-// turnCost is what one turn spent, summed over every request it made. Elapsed
-// covers the tool calls between those requests; generating does not, so the
-// rate below is the model's and not the harness's.
-type turnCost struct {
-	started  time.Time
-	agent    string
-	model    string
-	requests int
-	// tokens is the output. input counts every prompt token sent, cached ones
-	// included; cached is how many of those the server said it reused, and
-	// counts only once a server has said so.
-	tokens int
-	input  int
-	// window is the prompt of the turn's last request, the context as it stood
-	// when the turn ended.
-	window     int
-	cached     int
-	cachedSeen bool
-	generating time.Duration
-	// asking is the time spent inside requests, waiting the part of it before
-	// the first token, and tools the time spent running tool calls.
-	asking  time.Duration
-	waiting time.Duration
-	tools   time.Duration
-	// each holds every request on its own, in the order they were made.
-	each []requestCost
+// turnClock is what one turn spent that no model call records: when it
+// started and how long its tool calls took. The token counts, the call count
+// and every timing of a request live on the entries those calls produced, so
+// the totals are summed from there rather than from a counter a stop can leave
+// half-written.
+type turnClock struct {
+	started time.Time
+	// tools is the time spent running tool calls, which is outside every
+	// request and so is in no call's record.
+	tools time.Duration
+	agent string
+	model string
 }
 
-// requestCost is one request of a turn. window is its prompt and is -1 where
-// the server reported no usage; first and generating are zero for a request
-// that produced nothing.
-type requestCost struct {
-	window     int
-	tokens     int
-	first      time.Duration
-	generating time.Duration
+// known reports a clock a turn is actually running. A compaction asked for on
+// its own has none, and writes no card.
+func (c turnClock) known() bool { return !c.started.IsZero() }
+
+// turnCard is what this turn spent, summed over the calls its entries
+// recorded after the message it answers. nil says it recorded none.
+func (e *Engine) turnCard(s *Session, clock turnClock) map[string]any {
+	if !clock.known() {
+		return nil
+	}
+	s.mu.Lock()
+	u := turnUsageOf(s.Entries, turnStart(s.Entries))
+	s.mu.Unlock()
+	return u.fields(time.Since(clock.started), clock.tools, clock.agent, clock.model)
 }
 
-// add folds in one finished request. sent is when it was made and first is
-// when its stream began to produce, which is zero for a request that produced
-// nothing.
-func (c *turnCost) add(res llm.Result, sent, first time.Time) {
-	c.requests++
-	c.asking += time.Since(sent)
-	one := requestCost{window: -1}
-	if u := res.Usage; u != nil {
-		c.tokens += u.CompletionTokens
-		c.input += u.PromptTokens
-		c.window = u.PromptTokens
-		one.window = u.PromptTokens
-		one.tokens = u.CompletionTokens
-		if u.CachedTokens != nil {
-			c.cached += *u.CachedTokens
-			c.cachedSeen = true
+// noteCard records what the turn spent on the reply that ended it, so a
+// reloaded page draws the line the stream drew.
+func (e *Engine) noteCard(s *Session, card map[string]any) {
+	if card == nil {
+		return
+	}
+	s.mu.Lock()
+	i := turnEnd(s.Entries, turnStart(s.Entries))
+	if i >= 0 {
+		if s.Entries[i].Meta == nil {
+			s.Entries[i].Meta = map[string]any{}
+		}
+		for k, v := range card {
+			s.Entries[i].Meta[k] = v
 		}
 	}
-	if !first.IsZero() {
-		one.generating = time.Since(first)
-		one.first = first.Sub(sent)
-		c.generating += one.generating
-		c.waiting += one.first
-	}
-	c.each = append(c.each, one)
+	s.mu.Unlock()
+	e.save(s)
 }
 
-// fields renders the numbers for the transcript. The rate is measured rather
-// than read from the response, since only some servers report one.
-func (c *turnCost) fields() map[string]any {
-	rate := 0.0
-	if secs := c.generating.Seconds(); secs > 0 {
-		rate = float64(c.tokens) / secs
-	}
-	out := map[string]any{
-		"tokens":        c.tokens,
-		"input_tokens":  c.input,
-		"window_tokens": c.window,
-		"ms":            time.Since(c.started).Milliseconds(),
-		"llm_ms":        c.asking.Milliseconds(),
-		"gen_ms":        c.generating.Milliseconds(),
-		"first_ms":      c.waiting.Milliseconds(),
-		"tool_ms":       c.tools.Milliseconds(),
-		"tok_per_s":     rate,
-		"requests":      c.requests,
-		"per_request":   c.perRequest(),
-	}
-	if c.cachedSeen {
-		out["cached_tokens"] = c.cached
-	}
-	if c.agent != "" {
-		out["agent"] = c.agent
-	}
-	if c.model != "" {
-		out["model"] = c.model
-	}
-	return out
-}
-
-// perRequest renders each request's prompt, output and timings. A prompt the
-// server did not report is left out rather than written as zero.
-func (c *turnCost) perRequest() []map[string]any {
-	out := make([]map[string]any, 0, len(c.each))
-	for _, r := range c.each {
-		row := map[string]any{
-			"tokens":   r.tokens,
-			"first_ms": r.first.Milliseconds(),
-			"gen_ms":   r.generating.Milliseconds(),
-		}
-		if r.window >= 0 {
-			row["window_tokens"] = r.window
-		}
-		out = append(out, row)
-	}
-	return out
+// endTurn writes the turn's totals where a reloaded page reads them, publishes
+// them with the done event, and returns the session to idle, which is the only
+// state a new message is accepted in.
+func (e *Engine) endTurn(s *Session, next State, finishReason string, iterations int, clock turnClock) {
+	card := e.turnCard(s, clock)
+	e.noteCard(s, card)
+	e.finish(s, next, finishReason, iterations, card)
 }
 
 // carriesOutput reports whether an event is part of the generation. Usage and
@@ -1144,36 +1101,19 @@ func carriesOutput(kind llm.EventKind) bool {
 }
 
 // finish publishes done and returns the session to idle, which is the only
-// state a new message is accepted in. cost is nil for a turn that ended
-// before it could be counted.
-func (e *Engine) finish(s *Session, next State, finishReason string, iterations int, cost map[string]any) {
+// state a new message is accepted in. card holds the turn's totals and is nil
+// for a turn that recorded no model call.
+func (e *Engine) finish(s *Session, next State, finishReason string, iterations int, card map[string]any) {
 	s.mu.Lock()
 	s.state = next
 	s.cancel = nil
 	s.mu.Unlock()
 	fields := map[string]any{"finish_reason": finishReason, "iterations": iterations}
-	for k, v := range cost {
+	for k, v := range card {
 		fields[k] = v
 	}
 	e.publish(s.ID, ev("done", fields))
 	e.announce(s, next)
-}
-
-// noteCost records what the turn spent on the assistant entry that ended it,
-// so a reloaded page draws the line the stream drew.
-func (e *Engine) noteCost(s *Session, cost map[string]any) {
-	s.mu.Lock()
-	i := s.lastUsageEntry
-	if i >= 0 && i < len(s.Entries) && s.Entries[i].Kind == "assistant" {
-		if s.Entries[i].Meta == nil {
-			s.Entries[i].Meta = map[string]any{}
-		}
-		for k, v := range cost {
-			s.Entries[i].Meta[k] = v
-		}
-	}
-	s.mu.Unlock()
-	e.save(s)
 }
 
 func (e *Engine) run(ctx context.Context, s *Session) {
@@ -1182,11 +1122,13 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	s.mu.Lock()
 	s.launches = nil
 	s.mu.Unlock()
+	clock := turnClock{started: time.Now()}
 	a, err := e.ensureReady(ctx, s)
 	if err != nil {
-		e.endWithError(s, err, 0)
+		e.endWithError(s, err, 0, clock, nil)
 		return
 	}
+	clock.agent, clock.model = a.Name, a.Model
 	cfg := e.cfg.Config()
 	// The agent, the settings and the capabilities are read once and hold for
 	// the whole turn, and so does the backend they resolve to. All of them
@@ -1206,7 +1148,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	e.estimateBase(s, a, b)
 	runner, rerr := tools.NewRunner(s.Project, cfg)
 	if rerr != nil {
-		e.fail(s, rerr)
+		e.fail(s, rerr, clock)
 		return
 	}
 	runner.Baseline = func(sn tools.Snapshot) { e.recordBaseline(s, sn) }
@@ -1236,7 +1178,6 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// compacted and sent again, so a second overflow ends the turn.
 	overflowed := false
 	carried := newCarry()
-	cost := turnCost{started: time.Now(), agent: a.Name, model: a.Model}
 
 	for iteration := 0; ; iteration++ {
 		e.setState(s, StatePreflight)
@@ -1258,7 +1199,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		if nctx > 0 && float64(fill) >= compactLimit(nctx, cfg.CompactAt, a.MaxTokens) && enough {
 			e.setState(s, StateCompacting)
 			if err := e.compact(ctx, s, back, a, b, caps); err != nil {
-				e.endWithError(s, err, iteration)
+				e.endWithError(s, err, iteration, clock, nil)
 				return
 			}
 		}
@@ -1296,8 +1237,11 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		req.Tools = tools.Schemas(b.offer)
 		s.live = &Reply{Since: time.Now()}
 		s.mu.Unlock()
+		// The schemas' estimated cost rides on the record, so the breakdown of
+		// a context reads the figure that stood when the report was made.
+		schemas := e.schemaTokens(s)
 
-		res, err := e.request(ctx, s, back, req, &cost)
+		res, rec, err := e.request(ctx, s, back, req, schemas)
 		if llm.Kind(err) == llm.KindOverflow && !overflowed && s.Compactable() {
 			// The fill is an estimate, so a window can be overrun before the
 			// threshold is reached. Compacting and asking again recovers once.
@@ -1305,7 +1249,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			e.dropLive(s)
 			e.setState(s, StateCompacting)
 			if err := e.compact(ctx, s, back, a, b, caps); err != nil {
-				e.endWithError(s, err, iteration)
+				e.endWithError(s, err, iteration, clock, nil)
 				return
 			}
 			continue
@@ -1318,30 +1262,23 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			continue
 		}
 		if err != nil {
-			e.keepPartial(s)
-			e.endWithError(s, err, iteration)
+			// What the cut call reported rides on the reply it had written, and
+			// on the stop marker where it wrote none, so the turn still counts
+			// the call it made.
+			rec = e.keepPartial(s, rec)
+			e.endWithError(s, err, iteration, clock, rec)
 			return
 		}
 		if res.Dropped > 0 {
 			e.publish(s.ID, ev("error", map[string]any{"kind": "malformed",
 				"message": fmt.Sprintf("The model server sent %d frames that could not be read: some output was lost", res.Dropped)}))
 		}
-		if res.Usage != nil {
-			s.mu.Lock()
-			s.LastUsage = res.Usage
-			s.LastToolTokens = 0
-			if s.ContextBase != nil {
-				s.LastToolTokens = s.ContextBase.Tools
-			}
-			s.mu.Unlock()
-		}
 
 		if len(res.ToolCalls) == 0 {
 			s.mu.Lock()
 			s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant",
 				Content: res.Content, Reasoning: res.Reasoning,
-				Meta: outcomeMeta(res), InContext: true, Visible: true})
-			s.lastUsageEntry = len(s.Entries) - 1
+				Meta: outcomeMeta(res), Usage: rec, InContext: true, Visible: true})
 			s.live = nil
 			s.mu.Unlock()
 			e.save(s)
@@ -1361,9 +1298,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				continue
 			}
 			e.setState(s, StateFinal)
-			counted := cost.fields()
-			e.noteCost(s, counted)
-			e.finish(s, StateIdle, res.FinishReason, iteration+1, counted)
+			e.endTurn(s, StateIdle, res.FinishReason, iteration+1, clock)
 			// One that landed between the check above and the session going
 			// idle has no turn to join, so it starts one of its own.
 			e.flushSteer(s)
@@ -1373,8 +1308,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		s.mu.Lock()
 		s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant",
 			Content: res.Content, Reasoning: res.Reasoning, ToolCalls: res.ToolCalls,
-			Meta: outcomeMeta(res), InContext: true, Visible: true})
-		s.lastUsageEntry = len(s.Entries) - 1
+			Meta: outcomeMeta(res), Usage: rec, InContext: true, Visible: true})
 		s.live = nil
 		s.mu.Unlock()
 		e.save(s)
@@ -1386,9 +1320,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			// is spent will not stop on its own, so the turn ends here.
 			if refused {
 				e.setState(s, StateFinal)
-				counted := cost.fields()
-				e.noteCost(s, counted)
-				e.finish(s, StateIdle, "tool_limit", iteration+1, counted)
+				e.endTurn(s, StateIdle, "tool_limit", iteration+1, clock)
 				e.flushSteer(s)
 				return
 			}
@@ -1402,10 +1334,10 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			// run at the same time.
 			if run := e.readRun(s, cfg, b.offer, res.ToolCalls, i); run > 1 {
 				calls += run
-				e.runReads(ctx, s, cfg, a, runner, res.ToolCalls[i:i+run], i, &seen, &cost)
+				e.runReads(ctx, s, cfg, a, runner, res.ToolCalls[i:i+run], i, &seen, &clock)
 				i += run - 1
 				if ctx.Err() != nil {
-					e.markStopped(s)
+					e.markStopped(s, clock, nil)
 					return
 				}
 				continue
@@ -1427,7 +1359,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			note := seen.see(call)
 			decision, record, stopped := e.decide(ctx, s, cfg, a, call)
 			if stopped {
-				e.stopWith(s, call, record)
+				e.stopWith(s, call, record, clock)
 				return
 			}
 			e.setState(s, StateExecuting)
@@ -1445,7 +1377,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			if note != "" {
 				entry = e.addNote(s, entry, note)
 			}
-			cost.tools += time.Since(began)
+			clock.tools += time.Since(began)
 			e.save(s)
 			e.publish(s.ID, ev("tool_output", map[string]any{
 				"index": i, "id": call.ID, "name": call.Function.Name,
@@ -1453,7 +1385,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				"meta": entry.Meta,
 			}))
 			if ctx.Err() != nil {
-				e.markStopped(s)
+				e.markStopped(s, clock, nil)
 				return
 			}
 		}
@@ -1478,7 +1410,13 @@ var errEmptyReply = errors.New("The model returned an empty reply: send the mess
 // request itself: a server error, a model still loading, a server that is not
 // answering yet, or an empty reply. A stall is not retried, since the server
 // is still busy and a new request would queue behind the old one.
-func (e *Engine) request(ctx context.Context, s *Session, back Backend, req llm.ChatRequest, cost *turnCost) (llm.Result, error) {
+//
+// It answers with what the call spent whichever way it ended, including one
+// this harness cut short: the server's report of the part it did send arrives
+// in the stream, and the caller puts that record on the entry the call
+// produced. A discarded attempt's record goes on the note saying it was sent
+// again, so every call of the turn is counted somewhere.
+func (e *Engine) request(ctx context.Context, s *Session, back Backend, req llm.ChatRequest, schemas int) (llm.Result, *store.CallUsage, error) {
 	for attempt := 0; ; attempt++ {
 		// first is when this request began to produce, which is what the
 		// generation rate is measured against. Chat calls on synchronously
@@ -1495,22 +1433,29 @@ func (e *Engine) request(ctx context.Context, s *Session, back Backend, req llm.
 		if err == nil && res.Content == "" && res.Reasoning == "" && len(res.ToolCalls) == 0 {
 			err = errEmptyReply
 		}
+		rec := callUsage(res, sent, first, schemas, stopped(err))
 		if err == nil {
-			cost.add(res, sent, first)
-			return res, nil
+			return res, rec, nil
 		}
 		if !retryable(err) || attempt >= len(e.retry) || ctx.Err() != nil {
-			return res, err
+			return res, rec, err
 		}
 		wait := e.retry[attempt]
-		e.noteRetry(s, err, wait, attempt+1)
+		e.noteRetry(s, err, wait, attempt+1, rec)
 		select {
 		case <-ctx.Done():
-			return res, ctx.Err()
+			return res, rec, ctx.Err()
 		case <-time.After(wait):
 		}
 		e.setState(s, StateStreaming)
 	}
+}
+
+// stopped reports that a request ended because this harness ended it, which is
+// what separates a call whose usage is unknown because it was cut off from one
+// whose server simply never reported.
+func stopped(err error) bool {
+	return llm.Kind(err) == llm.KindCanceled || errors.Is(err, context.Canceled)
 }
 
 // retryable reports whether a failed request is worth sending again as it is.
@@ -1527,14 +1472,15 @@ func retryable(err error) bool {
 
 // noteRetry records a failed attempt in the transcript and drops what it had
 // streamed, so the retry starts from a clean reply. A browser that drew some
-// of it is sent back for the transcript.
-func (e *Engine) noteRetry(s *Session, err error, wait time.Duration, attempt int) {
+// of it is sent back for the transcript. The note carries the attempt's
+// record: the call happened, and its cost belongs to the turn.
+func (e *Engine) noteRetry(s *Session, err error, wait time.Duration, attempt int, rec *store.CallUsage) {
 	text := fmt.Sprintf("%s. Trying again in %s, attempt %d of %d", strings.TrimRight(err.Error(), "."),
 		wait.Round(100*time.Millisecond), attempt+1, len(e.retry)+1)
 	s.mu.Lock()
 	drew := s.live != nil && (s.live.Content != "" || s.live.Reasoning != "" || len(s.live.ToolCalls) > 0)
 	s.live = &Reply{Since: time.Now()}
-	entry := s.appendEntry(store.Entry{Kind: "status", Content: text, InContext: false, Visible: true})
+	entry := s.appendEntry(store.Entry{Kind: "status", Content: text, InContext: false, Visible: true, Usage: rec})
 	s.mu.Unlock()
 	e.save(s)
 	if drew {
@@ -1554,21 +1500,25 @@ func (e *Engine) dropLive(s *Session) {
 // keepPartial keeps what a request had streamed before it was stopped or
 // failed, so the text the reader saw is still there on reload and the model
 // sees what it said. Tool calls cut off mid-way are dropped, and so is a
-// reply with no text, which some chat templates refuse to render.
-func (e *Engine) keepPartial(s *Session) {
+// reply with no text, which some chat templates refuse to render. The call's
+// record rides on the entry it produced; what is returned is the record that
+// found no entry to go on, which the caller offers to the stop marker.
+func (e *Engine) keepPartial(s *Session, rec *store.CallUsage) *store.CallUsage {
 	s.mu.Lock()
 	live := s.live
 	s.live = nil
 	if live == nil || (strings.TrimSpace(live.Content) == "" && strings.TrimSpace(live.Reasoning) == "") {
 		s.mu.Unlock()
-		return
+		return rec
 	}
 	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant",
 		Content: live.Content, Reasoning: live.Reasoning,
 		Meta:      map[string]any{"interrupted": true},
+		Usage:     rec,
 		InContext: strings.TrimSpace(live.Content) != "", Visible: true})
 	s.mu.Unlock()
 	e.save(s)
+	return nil
 }
 
 // outcomeMeta is what an assistant entry keeps about the request behind it:
@@ -1680,38 +1630,44 @@ func compactLimit(nctx int, share float64, maxTokens *int) float64 {
 	return limit
 }
 
-// endWithError separates a cancellation, which is a stop, from a failure.
-func (e *Engine) endWithError(s *Session, err error, iteration int) {
-	if llm.Kind(err) == llm.KindCanceled || errors.Is(err, context.Canceled) {
-		e.markStopped(s)
+// endWithError separates a cancellation, which is a stop, from a failure. rec
+// is a call that ended without a reply of its own, offered to whatever entry
+// the turn writes as it stops.
+func (e *Engine) endWithError(s *Session, err error, iteration int, clock turnClock, rec *store.CallUsage) {
+	if stopped(err) {
+		e.markStopped(s, clock, rec)
 		return
 	}
-	e.fail(s, err)
+	e.fail(s, err, clock)
 }
 
-func (e *Engine) markStopped(s *Session) {
+// markStopped ends the turn on a stop. The calls it had already made keep their
+// cost: a call that streamed no report is counted as a call and named as one
+// that could not be counted, rather than left out of the numbers silently.
+func (e *Engine) markStopped(s *Session, clock turnClock, rec *store.CallUsage) {
 	s.mu.Lock()
-	entry := s.appendEntry(store.Entry{Kind: "status", Content: "Stopped", InContext: false, Visible: true})
+	entry := s.appendEntry(store.Entry{Kind: "status", Content: "Stopped",
+		InContext: false, Visible: true, Usage: rec})
 	s.mu.Unlock()
 	e.setState(s, StateStopped)
 	e.save(s)
 	// A stop between two requests draws nothing of its own, so the marker is
 	// published rather than left for the next time the page is loaded.
 	e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
-	e.finish(s, StateIdle, "stopped", 0, nil)
+	e.endTurn(s, StateIdle, "stopped", 0, clock)
 	e.flushSteer(s)
 }
 
 // stopWith records the refused call so the assistant message keeps its pair
 // before the turn ends.
-func (e *Engine) stopWith(s *Session, call llm.ToolCall, record *store.PermissionRecord) {
+func (e *Engine) stopWith(s *Session, call llm.ToolCall, record *store.PermissionRecord, clock turnClock) {
 	s.mu.Lock()
 	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: call.ID,
 		ToolName: call.Function.Name, Content: "stopped by user",
 		Permission: record, InContext: true, Visible: true})
 	s.mu.Unlock()
 	e.save(s)
-	e.markStopped(s)
+	e.markStopped(s, clock, nil)
 }
 
 // forward publishes one streamed event and folds it into the live reply under
@@ -1733,9 +1689,11 @@ func (e *Engine) forward(s *Session, event llm.Event) {
 	}
 }
 
+// publishUsage sends the context meter what it needs: the last report the
+// server made, the fill built from it, and the breakdown that reads it.
 func (e *Engine) publishUsage(s *Session) {
 	s.mu.Lock()
-	u := s.LastUsage
+	_, u := s.lastMeasured()
 	fill := s.computeFill()
 	compactable := s.compactable()
 	reported, source := s.NCtx, s.NCtxSource
@@ -1750,8 +1708,8 @@ func (e *Engine) publishUsage(s *Session) {
 	agent, _ := e.cfg.Config().AgentByID(agentID)
 	nctx, _ := agent.Window(reported, source)
 	payload := map[string]any{
-		"prompt_tokens": u.PromptTokens, "completion_tokens": u.CompletionTokens,
-		"cached_tokens": u.CachedTokens, "fill": fill, "n_ctx": nctx, "compactable": compactable}
+		"prompt_tokens": u.Prompt, "completion_tokens": u.Completion,
+		"cached_tokens": u.Cached, "fill": fill, "n_ctx": nctx, "compactable": compactable}
 	if parts != nil {
 		payload["breakdown"] = parts
 	}
@@ -1879,7 +1837,7 @@ func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, calls
 // runReads runs calls that only read at the same time, and appends their
 // results in the order the model made them.
 func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a config.Agent,
-	runner *tools.Runner, calls []llm.ToolCall, first int, seen *repeats, cost *turnCost) {
+	runner *tools.Runner, calls []llm.ToolCall, first int, seen *repeats, clock *turnClock) {
 	notes := make([]string, len(calls))
 	records := make([]*store.PermissionRecord, len(calls))
 	for k, call := range calls {
@@ -1900,7 +1858,7 @@ func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a 
 		}()
 	}
 	wg.Wait()
-	cost.tools += time.Since(began)
+	clock.tools += time.Since(began)
 	for k, call := range calls {
 		entry := e.appendTool(s, call, records[k], outs[k])
 		if notes[k] != "" {
@@ -2176,6 +2134,11 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	s.mu.Unlock()
 	msgs := append(e.messagesUntil(s, a, b, start), llm.Message{Role: "user", Content: prompts.Compact(kept)})
 
+	// A summary is a model call like any other, and is kept on the entry it
+	// produced so the turn that asked for it counts it. Its own prompt counted
+	// the messages the summary replaces, so it is marked and never read as a
+	// measure of what is in context afterwards.
+	sent := time.Now()
 	res, err := back.Chat(ctx, llm.ChatRequest{
 		Model: a.Model, Messages: msgs, Tools: tools.Schemas(b.offer), Effort: a.Effort,
 		PreserveReasoning: a.PreserveReasoning,
@@ -2184,6 +2147,8 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	if err != nil {
 		return err
 	}
+	rec := callUsage(res, sent, time.Time{}, e.schemaTokens(s), false)
+	rec.Compaction = true
 	summary := strings.TrimSpace(res.Content)
 	if llm.CutOff(res.FinishReason) {
 		return errors.New("The summary was cut off at the token limit: raise the agent's max tokens, or compact sooner")
@@ -2222,10 +2187,7 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 		meta["todos"] = renderTodos(s.Todos)
 	}
 	s.appendEntry(store.Entry{Kind: "compaction", Role: "user",
-		Content: summary, InContext: true, Visible: true, Meta: meta})
-	s.LastUsage = nil
-	s.LastToolTokens = 0
-	s.lastUsageEntry = len(s.Entries) - 1
+		Content: summary, InContext: true, Visible: true, Meta: meta, Usage: rec})
 	after := s.computeFill()
 	s.Entries[len(s.Entries)-1].Meta["after"] = after
 	s.mu.Unlock()

@@ -2438,7 +2438,9 @@ func TestSubagentSessionsAreNotListed(t *testing.T) {
 	child.ID = store.NewID()
 	child.Parent = parentID
 	child.Title = "review internal/llm"
-	child.LastUsage = &llm.Usage{PromptTokens: 9000, CompletionTokens: 200}
+	child.Entries = []store.Entry{{Seq: 1, Kind: "assistant", Role: "assistant", Content: "reviewed",
+		InContext: true, Visible: true,
+		Usage: &store.CallUsage{Reported: true, Prompt: 9000, Completion: 200}}}
 	if err := f.srv.store.Save(&child); err != nil {
 		t.Fatal(err)
 	}

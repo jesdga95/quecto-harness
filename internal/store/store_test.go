@@ -28,10 +28,11 @@ func sample(id string, updated time.Time) *Session {
 		ContextBase: &ContextBase{System: 154, Rules: 287, Tools: 1026},
 		Created:     updated.Add(-time.Minute), Updated: updated,
 		NCtx: 131072, NCtxSource: "props", Compactions: 1,
-		LastUsage: &llm.Usage{PromptTokens: 4193, CompletionTokens: 118, TotalTokens: 4311, CachedTokens: &cached},
 		Entries: []Entry{
 			{Seq: 1, Kind: "user", Role: "user", Content: "list the files here", InContext: false, Visible: true, At: updated},
 			{Seq: 2, Kind: "assistant", Role: "assistant", Reasoning: "bash with ls",
+				Usage: &CallUsage{Reported: true, Prompt: 4193, Completion: 118, Cached: &cached,
+					ToolTokens: 1026, FirstMs: 640, GenMs: 2210, TotalMs: 2900, PerSecond: 53.4},
 				ToolCalls: []llm.ToolCall{{ID: "call_0", Type: "function", Function: llm.FunctionCall{Name: "bash", Arguments: `{"command":"ls"}`}}},
 				InContext: false, Visible: true, At: updated},
 			{Seq: 3, Kind: "tool", Role: "tool", ToolCallID: "call_0", ToolName: "bash",
@@ -100,6 +101,34 @@ func TestIndexBuiltAtOpen(t *testing.T) {
 	}
 	if got[0].Messages != 6 || got[0].Bytes == 0 {
 		t.Errorf("summary = %+v", got[0])
+	}
+}
+
+// The fill the index carries is the last call the server reported on. A
+// summary's own report is skipped, since it counted the messages it replaced,
+// and a call that streamed no report says nothing.
+func TestFillIsTheLastMeasuredCall(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := sample(NewID(), time.Now().UTC())
+	sess.Entries = append(sess.Entries,
+		Entry{Seq: 7, Kind: "status", Content: "Stopped", Visible: true,
+			Usage: &CallUsage{Stopped: true}},
+		Entry{Seq: 8, Kind: "compaction", Role: "user", Content: "the story so far",
+			InContext: true, Visible: true, Usage: &CallUsage{Reported: true, Compaction: true, Prompt: 90000, Completion: 400}},
+	)
+	if err := s.Save(sess); err != nil {
+		t.Fatal(err)
+	}
+	i, u := LastMeasured(sess.Entries)
+	if i != 1 || u == nil || u.Prompt != 4193 {
+		t.Errorf("last measured call = %d %+v, want the reply that reported 4193", i, u)
+	}
+	if got := s.List("/proj")[0].Fill; got != 4311 {
+		t.Errorf("fill = %d, want the prompt and completion of that call", got)
 	}
 }
 

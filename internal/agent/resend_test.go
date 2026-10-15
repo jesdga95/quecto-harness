@@ -274,9 +274,9 @@ func TestRewindRestoresContextAndPlan(t *testing.T) {
 	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: "call_2",
 		ToolName: "todo_write", Content: "0 of 1 done", InContext: true, Visible: true})
 	s.Todos = []store.Todo{{Content: "Add the handler", Status: "pending"}}
-	s.LastUsage = &llm.Usage{PromptTokens: 900, CompletionTokens: 100}
-	s.LastToolTokens = 15
-	s.lastUsageEntry = len(s.Entries) - 1
+	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", Content: "done",
+		InContext: true, Visible: true,
+		Usage: &store.CallUsage{Reported: true, Prompt: 900, Completion: 100, ToolTokens: 15}})
 
 	s.rewindTo(3)
 
@@ -294,8 +294,8 @@ func TestRewindRestoresContextAndPlan(t *testing.T) {
 	if len(s.Todos) != 1 || s.Todos[0].Content != "Read the routes" {
 		t.Errorf("todos = %+v, want the plan the surviving entries left", s.Todos)
 	}
-	if s.LastUsage != nil || s.LastToolTokens != 0 || s.lastUsageEntry != -1 {
-		t.Error("the usage anchor still points at a turn the history no longer holds")
+	if i, u := s.lastMeasured(); u != nil {
+		t.Errorf("the usage anchor still points at a turn the history no longer holds: %d %+v", i, u)
 	}
 	if second.Seq != 4 {
 		t.Fatalf("the message under test had seq %d", second.Seq)

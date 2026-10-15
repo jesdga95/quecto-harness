@@ -3,4 +3,6 @@ data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Read file.tx
 
 data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"created":1757141666,"id":"chatcmpl-9","model":"Alpha-12B"}
 
+data: {"choices":[],"created":1757141666,"id":"chatcmpl-9","model":"Alpha-12B","usage":{"completion_tokens":18,"prompt_tokens":12200,"total_tokens":12218,"prompt_tokens_details":{"cached_tokens":11008}},"timings":{"cache_n":11008,"prompt_n":1192,"prompt_ms":21440.5,"prompt_per_second":555.9,"predicted_n":18,"predicted_ms":340.2,"predicted_per_second":52.9}}
+
 data: [DONE]

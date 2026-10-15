@@ -112,8 +112,9 @@ protocols: `llamacpp`, `chat` (OpenAI-compatible) and `responses`.
   chunks are dropped and counted, never fatal. Tool-call fragments accumulate per index,
   with id and name deduped and arguments appended raw; an empty id is synthesised.
   Arguments are validated in `agent`, not here.
-- **Usage** is authoritative for token accounting; timings are surfaced to the UI but not
-  persisted.
+- **Usage** is authoritative for token accounting, and timings ride along with it: both are
+  kept with the call that reported them. What a server does not report stays unknown rather
+  than filled in.
 - **Errors** carry a kind taxonomy (`unreachable`, `auth`, `not_found`, `bad_request`,
   `model_loading`, `upstream`, `malformed`, `canceled`) with messages written for the
   reader, not the log.
@@ -228,16 +229,28 @@ too late to be picked up starts a turn of its own.
   `max_tool_calls`, 50 by default: once it is spent a `status` entry says so and further
   calls are answered as not run. The schemas stay in the request so the prompt cache holds,
   and a model that calls tools a second time after being refused ends the turn.
-- **Token fill** treats the last usage report as authoritative and estimates entries added
-  since at four characters per token, so a 16 KiB tool result counts before the next usage.
-  The window is the agent's `max_context` override, else what the server reported, else
-  zero. Zero is no limit: nothing compacts against it and the meter has no denominator.
+- **Every model call leaves one record**, kept on the entry that came from it: a reply, a
+  summary, a retry's status note, or a status entry when the call was cut before any reply
+  landed. It holds prompt, completion and cached tokens, the rate and timings the server
+  named, whether anything was reported at all, and whether the call was cut short. Turn
+  totals are summed from those records and written on the entry that ended the turn, on
+  every exit path, so a stopped or failed turn reports what ran rather than nothing. A call
+  that reported nothing is still counted as a call, and said to be uncounted: the card's
+  unrecorded figure is every such call, and its stopped figure the ones among them the user
+  cut short.
+- **Token fill** anchors on the newest reported, non-summary record and estimates entries
+  added since at four characters per token, so a 16 KiB tool result counts before the next
+  usage. A summary's own prompt counted the messages it replaced, so it anchors nothing,
+  and a turn that leaves no report behind has no anchor to mislead it. The window is the
+  agent's `max_context` override, else what the server reported, else zero. Zero is no
+  limit: nothing compacts against it and the meter has no denominator.
 - **`Prepare`** is the only request allowed to autoload a model, and it is called from
   `ensureReady`, so a model loads on the first message that needs it, never from the menu.
 - **Context breakdown.** The fixed parts are estimated at four characters per token
   from the rendered system message and the marshalled schemas, re-taken at each turn
-  start and a mode switch; the message cost is the remainder of a real usage report.
-  A negative remainder reports nothing.
+  start and a mode switch; the message cost is the remainder of a real usage report, and
+  the schemas' share is the figure kept with the report that anchors it, so a mid-turn
+  breakdown reads as the request that reported did. A negative remainder reports nothing.
 - **Titles.** A session with no typed title asks the model for one from the opening message
   alone, before the first reply, so it does not evict the turn's cache. A subagent run is
   titled from its task and asks nothing.
@@ -308,8 +321,9 @@ shows the card in its answered state.
 - A session is **one file at `0600`**, beside a sidecar folder holding the baseline copies,
   with one mutex per id so sessions never serialise against each other. The header carries
   project, agent, parent, model, title, whether the title was typed, times, `n_ctx` and its
-  source, compactions, last usage and its tool share, the estimated context base, the todo
-  list and the baselines. The system prompt is **regenerated, not stored**.
+  source, compactions, the estimated context base, the todo list and the baselines. Each
+  entry carries its own call record, and the entry that ended a turn carries that turn's
+  totals. The system prompt is **regenerated, not stored**.
 - `Open` builds an index from a one-time scan, so `List` never touches the filesystem; a
   corrupt file is skipped and named, not fatal. `Save` atomic-replaces with indented JSON.
 - **Size.** Tool output is capped at `output_limit_bytes`, but `write` content lives in
@@ -390,7 +404,8 @@ found`.
 - **Transcript.** The store reduces the event union: deltas append to the streaming
   assistant entry; `tool_call` matches on index; `permission` sets `pending` and blocks the
   composer (Stop stays enabled); `usage` updates the context meter with its segmented
-  system/tools/messages popover; `compacted` appends a divider and dims what dropped out;
+  system/tools/messages popover, reading the fill the backend measured rather than adding
+  one report's halves; `compacted` appends a divider and dims what dropped out;
   `done` returns to idle. Assistant content goes through `lib/markdown.ts`, built on
   `marked` with `highlight.js` and `katex`: markdown, TeX, highlighted code, and SVG
   figures and HTML pages mounted as elements. Half-written output stays literal text rather

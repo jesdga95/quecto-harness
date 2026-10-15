@@ -61,6 +61,7 @@ type harness struct {
 	rec     *recorder
 	replay  *replay
 	store   *store.Sessions
+	paths   config.Paths
 	project string
 	cancel  context.CancelFunc
 	url     string
@@ -114,7 +115,7 @@ func newHarness(t *testing.T, fixtures ...string) *harness {
 	})
 
 	h := &harness{engine: engine, cfg: cfg, broker: broker, rec: rec,
-		replay: rp, store: st, project: real, cancel: cancel, url: srv.URL}
+		replay: rp, store: st, paths: paths, project: real, cancel: cancel, url: srv.URL}
 	h.agent = h.addAgent(t, "Local", srv.URL, "Alpha-12B")
 	if _, err := cfg.SelectAgent(h.agent.ID); err != nil {
 		t.Fatal(err)
@@ -191,6 +192,50 @@ func waitState(t *testing.T, s *Session, want State) {
 	t.Fatalf("session stayed in %s, want %s", s.State(), want)
 }
 
+// lastAssistant is the newest reply in a transcript, for reading the card a
+// turn leaves on the entry that ended it.
+func lastAssistant(entries []store.Entry) store.Entry {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Kind == "assistant" {
+			return entries[i]
+		}
+	}
+	return store.Entry{}
+}
+
+// metaNum reads a number out of entry meta: int64 from a turn this process ran,
+// float64 from one that was loaded from a file.
+func metaNum(v any) int {
+	n, _ := metaInt(v)
+	return n
+}
+
+// waitForEvents waits until the recorder has seen n events of a kind, and
+// reports how many it had when it stopped waiting.
+func waitForEvents(t *testing.T, h *harness, kind string, n int) int {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := len(h.rec.ofType(kind)); got >= n {
+			return got
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return len(h.rec.ofType(kind))
+}
+
+// waitPaused blocks until the replay server has sent a script up to its hold
+// marker and is holding the connection open, which is when a test stops a turn
+// that has streamed everything it is going to.
+func waitPaused(t *testing.T, h *harness) {
+	t.Helper()
+	select {
+	case <-h.replay.paused:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the replay server never reached its hold marker")
+	}
+}
+
 func waitIdle(t *testing.T, s *Session) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
@@ -242,7 +287,7 @@ func TestPlainReply(t *testing.T) {
 	}
 }
 
-func TestTurnCostIsRecordedOnTheEntryThatEndedIt(t *testing.T) {
+func TestTurnTotalsComeFromTheRecordsOfItsCalls(t *testing.T) {
 	// Two requests in one turn, so the tokens are a sum rather than the last
 	// response's own count: 22 for the tool call and 48 for the answer.
 	h := newHarness(t, "stream_tool.txt", "stream_plain.txt")
@@ -291,6 +336,32 @@ func TestTurnCostIsRecordedOnTheEntryThatEndedIt(t *testing.T) {
 		if each[i]["window_tokens"] != want.window || each[i]["tokens"] != want.tokens {
 			t.Errorf("request %d = %v, want window %d and tokens %d", i+1, each[i], want.window, want.tokens)
 		}
+	}
+	// Each call keeps its own report on the entry it produced, and the card is
+	// the sum of those. The schemas' estimated cost rides along, since the
+	// breakdown reads it back off the last report rather than off the session.
+	var records []*store.CallUsage
+	for _, e := range doc.Entries {
+		if e.Usage != nil {
+			records = append(records, e.Usage)
+		}
+	}
+	if len(records) != 2 {
+		t.Fatalf("records = %d, want one for each call the turn made", len(records))
+	}
+	for i, want := range []struct{ prompt, completion, cached int }{{410, 22, 384}, {3950, 48, 0}} {
+		u := records[i]
+		if !u.Reported || u.Stopped || u.Compaction {
+			t.Errorf("record %d = %+v, want a call that reported and ended on its own", i+1, u)
+		}
+		if u.Prompt != want.prompt || u.Completion != want.completion ||
+			u.Cached == nil || *u.Cached != want.cached {
+			t.Errorf("record %d = %+v, want prompt %d, completion %d, cached %d",
+				i+1, u, want.prompt, want.completion, want.cached)
+		}
+	}
+	if records[0].ToolTokens == 0 {
+		t.Error("the schemas' cost was not kept with the call that sent them")
 	}
 	// The rate is measured from the first token of each response, so a replay
 	// served from memory reports a large one rather than none at all.
@@ -393,9 +464,10 @@ func TestOutcomeLandsOnTheEntry(t *testing.T) {
 	}
 }
 
-// A turn the user stopped has no assistant entry to carry the cost, and the
-// done event that ends it reports none.
-func TestStoppedTurnReportsNoCost(t *testing.T) {
+// A turn stopped while a command was running still reports the call it made.
+// The call's server sent no usage frame, so the turn counts it as a call and
+// names it as one whose cost is unknown, rather than leaving it out.
+func TestStoppedTurnCountsTheCallsItMade(t *testing.T) {
 	h := newHarness(t, "stream_sleep.txt")
 	s := h.session(t)
 	h.engine.Send(s.ID, "sleep", nil)
@@ -405,12 +477,146 @@ func TestStoppedTurnReportsNoCost(t *testing.T) {
 	}
 	waitIdle(t, s)
 
+	doc, _, _, _ := s.Snapshot()
+	last := lastAssistant(doc.Entries)
+	if last.Kind != "assistant" {
+		t.Fatalf("no reply before the marker: %+v", doc.Entries)
+	}
+	if last.Usage == nil || last.Usage.Reported {
+		t.Errorf("record = %+v, want a call that reported nothing", last.Usage)
+	}
+	if last.Meta["requests"] != 1 || last.Meta["unrecorded"] != 1 {
+		t.Errorf("card = requests %v, unrecorded %v, want one call not counted",
+			last.Meta["requests"], last.Meta["unrecorded"])
+	}
+	if _, ok := last.Meta["stopped"]; ok {
+		t.Errorf("the call ran to its end and was named as cut: %v", last.Meta)
+	}
+	if last.Meta["tokens"] != 0 {
+		t.Errorf("tokens = %v, want nothing claimed for a call that reported nothing", last.Meta["tokens"])
+	}
+
 	done := h.rec.ofType("done")
 	if len(done) != 1 {
 		t.Fatalf("done events = %d", len(done))
 	}
-	if _, ok := done[0].Fields["tokens"]; ok {
-		t.Errorf("a stopped turn reported a cost: %+v", done[0].Fields)
+	if done[0].Fields["finish_reason"] != "stopped" {
+		t.Errorf("finish_reason = %v, want stopped", done[0].Fields["finish_reason"])
+	}
+	if done[0].Fields["requests"] != 1 || done[0].Fields["unrecorded"] != 1 {
+		t.Errorf("done = requests %v, unrecorded %v, want one call not counted",
+			done[0].Fields["requests"], done[0].Fields["unrecorded"])
+	}
+}
+
+// A call the user cut short keeps whatever the server had already streamed,
+// usage included, and the turn counts it.
+func TestStoppedMidStreamCallKeepsItsUsage(t *testing.T) {
+	h := newHarness(t, "stream_hold_usage.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "start talking", nil)
+	waitPaused(t, h)
+	// The hold says the server is done writing. The harness has to have read
+	// what it wrote before the stop, which the deltas it published say.
+	if n := waitForEvents(t, h, "delta", 1); n < 1 {
+		t.Fatalf("delta events = %d, want the reply to have started arriving", n)
+	}
+	// The report follows the last delta by one frame. The reader needs the
+	// moment to fold it in before the stop cuts the stream.
+	time.Sleep(50 * time.Millisecond)
+	if _, err := h.engine.Stop(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	last := lastAssistant(doc.Entries)
+	if last.Meta["interrupted"] != true {
+		t.Fatalf("no partial reply was kept: %+v", doc.Entries)
+	}
+	u := last.Usage
+	if u == nil {
+		t.Fatalf("the cut call kept no record")
+	}
+	if !u.Reported || !u.Stopped {
+		t.Errorf("record = reported %v stopped %v, want both", u.Reported, u.Stopped)
+	}
+	if u.Prompt != 3950 || u.Completion != 48 || u.Cached == nil || *u.Cached != 1024 {
+		t.Errorf("record = %+v, want the report the stream carried", u)
+	}
+	if u.PerSecond == 0 {
+		t.Error("the rate the server named was not kept")
+	}
+
+	done := h.rec.ofType("done")
+	if len(done) != 1 {
+		t.Fatalf("done events = %d", len(done))
+	}
+	for key, want := range map[string]int{"requests": 1, "tokens": 48, "input_tokens": 3950, "cached_tokens": 1024} {
+		if done[0].Fields[key] != want {
+			t.Errorf("done %s = %v, want %d", key, done[0].Fields[key], want)
+		}
+	}
+	if _, ok := done[0].Fields["unrecorded"]; ok {
+		t.Errorf("a counted call was named as one that was not: %v", done[0].Fields)
+	}
+	if _, ok := done[0].Fields["stopped"]; ok {
+		t.Errorf("a counted call was named as stopped and uncounted: %v", done[0].Fields)
+	}
+}
+
+// A summary is a model call like any other. It is recorded on the entry it
+// produced and counted in the turn that asked for it, and its own prompt,
+// which counted the messages it replaced, measures nothing afterwards.
+func TestCompactionCountsAsAModelCall(t *testing.T) {
+	h := newHarness(t, "stream_summary.txt", "stream_plain.txt")
+	s := h.session(t)
+	window := 8192
+	h.setAgent(t, func(a *config.Agent) { a.MaxContext = &window })
+	s.mu.Lock()
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: strings.Repeat("x", 40000),
+		InContext: true, Visible: true})
+	s.mu.Unlock()
+
+	h.engine.Send(s.ID, "carry on", nil)
+	waitIdle(t, s)
+
+	doc, _, fill, _ := s.Snapshot()
+	var summary *store.CallUsage
+	var last *store.Entry
+	for i, e := range doc.Entries {
+		if e.Kind == "compaction" {
+			summary = doc.Entries[i].Usage
+		}
+		if e.Kind == "assistant" {
+			last = &doc.Entries[i]
+		}
+	}
+	if summary == nil || !summary.Reported || !summary.Compaction {
+		t.Fatalf("the summary entry carries no compaction record: %+v", summary)
+	}
+	if summary.Prompt != 12200 || summary.Completion != 18 {
+		t.Errorf("summary record = %+v, want the report its request sent", summary)
+	}
+	if last == nil {
+		t.Fatal("no reply after the summary")
+	}
+	// Two calls, the summary and the reply: 12200 and 3950 sent, 18 and 48
+	// generated. The window the card names is the reply's prompt, since the
+	// summary's counted the messages it replaced.
+	for key, want := range map[string]int{"requests": 2, "tokens": 66, "input_tokens": 16150,
+		"window_tokens": 3950, "cached_tokens": 11008} {
+		if last.Meta[key] != want {
+			t.Errorf("card %s = %v, want %d", key, last.Meta[key], want)
+		}
+	}
+	if _, ok := last.Meta["unrecorded"]; ok {
+		t.Errorf("both calls reported, and one was named as unknown: %v", last.Meta)
+	}
+	// The context after the turn is the reply's report alone. Anchoring it on
+	// the summary would count a prompt that is no longer there.
+	if fill != 3998 {
+		t.Errorf("fill = %d, want the reply's 3950 and 48", fill)
 	}
 }
 
@@ -855,19 +1061,84 @@ func TestComputeFillBeforeAndAfterUsage(t *testing.T) {
 	s.mu.Lock()
 	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: strings.Repeat("x", 400), InContext: true, Visible: true})
 	estimated := s.computeFill()
+	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", Content: "answered",
+		InContext: true, Visible: true,
+		Usage: &store.CallUsage{Reported: true, Prompt: 1000, Completion: 24}})
+	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", Content: strings.Repeat("y", 800), InContext: true, Visible: true})
+	// A summary's own report counted the messages it replaced, and a call that
+	// streamed no report says nothing, so neither one anchors the fill.
+	s.appendEntry(store.Entry{Kind: "compaction", Role: "user", Content: "the story so far",
+		InContext: true, Visible: true,
+		Usage: &store.CallUsage{Reported: true, Compaction: true, Prompt: 90000, Completion: 400}})
+	withUsage := s.computeFill()
 	s.mu.Unlock()
 	if estimated != 100 {
 		t.Errorf("estimate = %d, want 400 characters over 4", estimated)
 	}
+	if withUsage != 1024+200+4 {
+		t.Errorf("fill = %d, want the last measured report, the entry added since, and the summary's own text", withUsage)
+	}
+}
 
-	s.mu.Lock()
-	s.LastUsage = &llm.Usage{PromptTokens: 1000, CompletionTokens: 24}
-	s.lastUsageEntry = len(s.Entries) - 1
-	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", Content: strings.Repeat("y", 800), InContext: true, Visible: true})
-	withUsage := s.computeFill()
-	s.mu.Unlock()
-	if withUsage != 1024+200 {
-		t.Errorf("fill = %d, want the report plus the entries added since", withUsage)
+// A session saved before every call kept its record still loads. The card its
+// last turn wrote is left as it was saved; what the session as a whole reports
+// is unmeasured rather than read back out of a header no longer consulted, and
+// a turn started on it now records its own call.
+func TestOldFormatSessionStillLoads(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	raw, err := os.ReadFile(filepath.Join("testdata", "session_old_format.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, _ := json.Marshal(h.project)
+	raw = []byte(strings.Replace(string(raw), `"project": ""`, `"project": `+string(project), 1))
+	const id = "sess_lkfhm4b2mrwfqz6d"
+	if err := os.WriteFile(filepath.Join(h.paths.Sessions, id+".json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := h.engine.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _, fill, _ := s.Snapshot()
+	if len(doc.Entries) != 3 {
+		t.Fatalf("entries = %d, want the three the file holds", len(doc.Entries))
+	}
+	for _, e := range doc.Entries {
+		if e.Usage != nil {
+			t.Errorf("entry %d carries a record the file never wrote: %+v", e.Seq, e.Usage)
+		}
+	}
+	// Thirty characters of in-context text and no report to measure against,
+	// so the fill is the estimate and the breakdown says nothing.
+	if fill != 7 {
+		t.Errorf("fill = %d, want the two in-context entries at four characters a token", fill)
+	}
+	if parts := s.Breakdown(); parts != nil {
+		t.Errorf("breakdown = %+v, want none for a session no server reported on", parts)
+	}
+	if metaNum(doc.Entries[1].Meta["tokens"]) != 118 {
+		t.Errorf("the card this session saved was rewritten: %v", doc.Entries[1].Meta)
+	}
+
+	if _, err := h.engine.Send(id, "and now", nil); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+	again, _, _, _ := s.Snapshot()
+	last := again.Entries[len(again.Entries)-1]
+	if last.Kind != "assistant" {
+		t.Fatalf("last entry = %s, want the reply", last.Kind)
+	}
+	if last.Usage == nil || last.Usage.Prompt != 3950 || last.Usage.Completion != 48 {
+		t.Errorf("the new turn recorded %+v, want the call it made", last.Usage)
+	}
+	if last.Meta["requests"] != 1 || last.Meta["input_tokens"] != 3950 {
+		t.Errorf("card = %v, want the new turn counted on its own", last.Meta)
+	}
+	if metaNum(again.Entries[1].Meta["requests"]) != 1 || metaNum(again.Entries[1].Meta["tokens"]) != 118 {
+		t.Errorf("the older turn's card changed: %v", again.Entries[1].Meta)
 	}
 }
 
@@ -1315,7 +1586,9 @@ func TestSetAgentRepointsAndResets(t *testing.T) {
 	s := h.session(t)
 	s.mu.Lock()
 	s.NCtx, s.NCtxSource = 131072, "props"
-	s.LastUsage = &llm.Usage{PromptTokens: 100}
+	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", Content: "answered",
+		InContext: true, Visible: true,
+		Usage: &store.CallUsage{Reported: true, Prompt: 100, Completion: 20}})
 	s.mu.Unlock()
 
 	other := h.addAgent(t, "Other", h.url, "Delta3.8-27B Q5")
@@ -1336,8 +1609,13 @@ func TestSetAgentRepointsAndResets(t *testing.T) {
 	if state != StateIdle {
 		t.Errorf("state = %s, want a session a choice left ready", state)
 	}
-	if doc.LastUsage != nil {
-		t.Error("last usage was carried across models")
+	// The entry keeps what the old model reported, but that is no measure of
+	// this model's context, so nothing anchors the fill now.
+	s.mu.Lock()
+	_, anchor := s.lastMeasured()
+	s.mu.Unlock()
+	if anchor != nil {
+		t.Errorf("a report the previous model made still anchors the fill: %+v", anchor)
 	}
 	// Nothing is known about the new model until a turn reads it.
 	if doc.NCtxSource != "" || caps.Known {
@@ -2398,7 +2676,9 @@ func TestForgetDropsWhatWasReadFromAnAgent(t *testing.T) {
 	s := h.session(t)
 	s.mu.Lock()
 	s.NCtx, s.NCtxSource, s.prepared = 131072, "props", true
-	s.LastUsage = &llm.Usage{PromptTokens: 100}
+	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", Content: "answered",
+		InContext: true, Visible: true,
+		Usage: &store.CallUsage{Reported: true, Prompt: 100, Completion: 20}})
 	s.mu.Unlock()
 
 	h.engine.Forget("agt_someone_else")
@@ -2411,7 +2691,11 @@ func TestForgetDropsWhatWasReadFromAnAgent(t *testing.T) {
 	if doc.NCtxSource != "" || caps.Known {
 		t.Errorf("the window and the template survived: %q %+v", doc.NCtxSource, caps)
 	}
-	if doc.LastUsage == nil {
+	// The same model answers, so what it reported still measures the context.
+	s.mu.Lock()
+	_, anchor := s.lastMeasured()
+	s.mu.Unlock()
+	if anchor == nil {
 		t.Error("the usage report was dropped, and it is still what the last turn cost")
 	}
 }
