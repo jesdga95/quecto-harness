@@ -107,8 +107,12 @@ type CallUsage struct {
 // the context now, with its record, or -1 and nil where no such call is kept.
 // A summary's prompt counted the messages it replaces, and a call that
 // streamed no usage report says nothing, so neither measures what is there.
+// A call made before a summary in context measured the messages it replaced.
 func LastMeasured(entries []Entry) (int, *CallUsage) {
 	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Kind == "compaction" && entries[i].InContext {
+			return -1, nil
+		}
 		u := entries[i].Usage
 		if u != nil && u.Reported && !u.Compaction {
 			return i, u

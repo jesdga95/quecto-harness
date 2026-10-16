@@ -829,11 +829,16 @@ func (s *Session) lastMeasured() (int, *store.CallUsage) {
 
 // computeFill estimates tokens currently in context. The last call that
 // reported counts is authoritative up to the reply it produced; entries added
-// since are estimated at charsPerToken characters per token.
+// since are estimated at charsPerToken characters per token. With no such
+// call, the fixed parts of the prompt are added where they are known.
 func (s *Session) computeFill() int {
 	i, u := s.lastMeasured()
 	if u == nil {
-		return s.estimateChars(-1) / charsPerToken
+		fill := s.estimateChars(-1) / charsPerToken
+		if b := s.ContextBase; b != nil {
+			fill += b.System + b.Rules + b.Tools
+		}
+		return fill
 	}
 	return u.Prompt + u.Completion + s.estimateChars(i)/charsPerToken
 }

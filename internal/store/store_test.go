@@ -105,8 +105,9 @@ func TestIndexBuiltAtOpen(t *testing.T) {
 }
 
 // The fill the index carries is the last call the server reported on. A
-// summary's own report is skipped, since it counted the messages it replaced,
-// and a call that streamed no report says nothing.
+// summary in context ends the search, since its own report and every one
+// before it counted the messages it replaced, and a call that streamed no
+// report says nothing.
 func TestFillIsTheLastMeasuredCall(t *testing.T) {
 	dir := t.TempDir()
 	s, err := Open(dir)
@@ -114,20 +115,28 @@ func TestFillIsTheLastMeasuredCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess := sample(NewID(), time.Now().UTC())
+	if i, u := LastMeasured(sess.Entries); u != nil {
+		t.Errorf("last measured call = %d %+v, want none past a summary in context", i, u)
+	}
+
+	sess.Entries[3].InContext = false
+	if i, u := LastMeasured(sess.Entries); i != 1 || u == nil {
+		t.Errorf("last measured call = %d, want the reply again once the summary is dropped", i)
+	}
+	sess.Entries[3].InContext = true
+
 	sess.Entries = append(sess.Entries,
-		Entry{Seq: 7, Kind: "status", Content: "Stopped", Visible: true,
-			Usage: &CallUsage{Stopped: true}},
-		Entry{Seq: 8, Kind: "compaction", Role: "user", Content: "the story so far",
-			InContext: true, Visible: true, Usage: &CallUsage{Reported: true, Compaction: true, Prompt: 90000, Completion: 400}},
-	)
+		Entry{Seq: 7, Kind: "assistant", Role: "assistant", Content: "done", InContext: true, Visible: true,
+			Usage: &CallUsage{Reported: true, Prompt: 3200, Completion: 40}},
+		Entry{Seq: 8, Kind: "status", Content: "Stopped", Visible: true,
+			Usage: &CallUsage{Stopped: true}})
 	if err := s.Save(sess); err != nil {
 		t.Fatal(err)
 	}
-	i, u := LastMeasured(sess.Entries)
-	if i != 1 || u == nil || u.Prompt != 4193 {
-		t.Errorf("last measured call = %d %+v, want the reply that reported 4193", i, u)
+	if i, u := LastMeasured(sess.Entries); i != 6 || u == nil || u.Prompt != 3200 {
+		t.Errorf("last measured call = %d %+v, want the reply after the summary", i, u)
 	}
-	if got := s.List("/proj")[0].Fill; got != 4311 {
+	if got := s.List("/proj")[0].Fill; got != 3240 {
 		t.Errorf("fill = %d, want the prompt and completion of that call", got)
 	}
 }

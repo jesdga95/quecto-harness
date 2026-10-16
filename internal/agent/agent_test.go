@@ -1065,18 +1065,25 @@ func TestComputeFillBeforeAndAfterUsage(t *testing.T) {
 		InContext: true, Visible: true,
 		Usage: &store.CallUsage{Reported: true, Prompt: 1000, Completion: 24}})
 	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", Content: strings.Repeat("y", 800), InContext: true, Visible: true})
-	// A summary's own report counted the messages it replaced, and a call that
-	// streamed no report says nothing, so neither one anchors the fill.
+	withUsage := s.computeFill()
+	// A summary's own report counted the messages it replaced, and so did every
+	// report made before it, so none of them anchors the fill once it is in.
+	for i := range s.Entries {
+		s.Entries[i].InContext = i == len(s.Entries)-1
+	}
 	s.appendEntry(store.Entry{Kind: "compaction", Role: "user", Content: "the story so far",
 		InContext: true, Visible: true,
 		Usage: &store.CallUsage{Reported: true, Compaction: true, Prompt: 90000, Completion: 400}})
-	withUsage := s.computeFill()
+	compacted := s.computeFill()
 	s.mu.Unlock()
 	if estimated != 100 {
 		t.Errorf("estimate = %d, want 400 characters over 4", estimated)
 	}
-	if withUsage != 1024+200+4 {
-		t.Errorf("fill = %d, want the last measured report, the entry added since, and the summary's own text", withUsage)
+	if withUsage != 1024+200 {
+		t.Errorf("fill = %d, want the last measured report and the entry added since", withUsage)
+	}
+	if compacted != (800+16)/4 {
+		t.Errorf("fill after compaction = %d, want the kept entry and the summary at four characters a token", compacted)
 	}
 }
 
@@ -1111,9 +1118,10 @@ func TestOldFormatSessionStillLoads(t *testing.T) {
 		}
 	}
 	// Thirty characters of in-context text and no report to measure against,
-	// so the fill is the estimate and the breakdown says nothing.
-	if fill != 7 {
-		t.Errorf("fill = %d, want the two in-context entries at four characters a token", fill)
+	// so the fill is the estimate over the fixed parts and the breakdown says
+	// nothing.
+	if fill != 7+154+287+1026 {
+		t.Errorf("fill = %d, want the fixed parts and the two in-context entries at four characters a token", fill)
 	}
 	if parts := s.Breakdown(); parts != nil {
 		t.Errorf("breakdown = %+v, want none for a session no server reported on", parts)
