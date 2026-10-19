@@ -115,6 +115,11 @@ type Session struct {
 	// gone is set when the session has been deleted, so nothing still in
 	// flight writes its file again.
 	gone bool
+	// dirty is a change the file does not hold yet, durable asks for the next
+	// write to be flushed to the disk, and saving is true while the writer
+	// runs. idle is signalled each time the writer stops.
+	dirty, durable, saving bool
+	idle                   *sync.Cond
 }
 
 // repoint moves the session to an agent and a model and forgets everything the
@@ -181,6 +186,16 @@ func fromDoc(d *store.Session) *Session {
 }
 
 // doc renders the on-disk shape. The caller holds the session lock.
+// copyPlan copies a plan's fields, which write_plan replaces in place. The
+// lists are only ever replaced whole, so they are shared.
+func copyPlan(p *store.Plan) *store.Plan {
+	if p == nil {
+		return nil
+	}
+	held := *p
+	return &held
+}
+
 func (s *Session) doc() *store.Session {
 	// The entries are copied, not shared: a save marshals this after the lock
 	// is dropped, so a field a live turn still mutates under the lock must not
@@ -202,7 +217,7 @@ func (s *Session) doc() *store.Session {
 	}
 	return &store.Session{
 		ID: s.ID, Project: s.Project, Agent: s.AgentID, Parent: s.Parent,
-		Model: s.Model, Mode: s.Mode, Toolset: s.Toolset, Plan: s.Plan, Draft: s.Draft, Title: s.Title, Named: s.Named,
+		Model: s.Model, Mode: s.Mode, Toolset: s.Toolset, Plan: copyPlan(s.Plan), Draft: copyPlan(s.Draft), Title: s.Title, Named: s.Named,
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, ContextBase: s.ContextBase,

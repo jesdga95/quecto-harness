@@ -234,19 +234,73 @@ func (e *Engine) announce(s *Session, st State) {
 	s.mu.Unlock()
 }
 
+// save writes the session and waits until the file holds it, flushed to the
+// disk.
 func (e *Engine) save(s *Session) {
 	s.mu.Lock()
-	// A read that lands after the session was deleted must not write the file
-	// back out.
+	defer s.mu.Unlock()
+	e.markLocked(s, true)
+	e.waitSavedLocked(s)
+}
+
+// saveSoon writes the session in the background without a flush, so the turn
+// does not wait on the disk between steps. Writes coalesce: the writer takes
+// the latest state each time round. finish flushes when the turn ends.
+func (e *Engine) saveSoon(s *Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e.markLocked(s, false)
+}
+
+// markLocked records a change and starts the writer if it is not running. A
+// session that has been deleted is never written back out. The caller holds
+// the lock.
+func (e *Engine) markLocked(s *Session, durable bool) {
 	if s.gone {
-		s.mu.Unlock()
 		return
 	}
-	doc := s.doc()
-	s.mu.Unlock()
-	if err := e.store.Save(doc); err != nil {
-		e.publish(s.ID, ev("error", map[string]any{"kind": "save", "message": err.Error()}))
+	s.dirty = true
+	s.durable = s.durable || durable
+	if !s.saving {
+		s.saving = true
+		go e.writeSession(s)
 	}
+}
+
+// waitSavedLocked blocks until the writer is idle. The caller holds the lock.
+func (e *Engine) waitSavedLocked(s *Session) {
+	if s.idle == nil {
+		s.idle = sync.NewCond(&s.mu)
+	}
+	for s.saving {
+		s.idle.Wait()
+	}
+}
+
+// writeSession writes the session until nothing is left unwritten. Each write
+// is a snapshot taken under the lock, so the file never goes back to an
+// older state.
+func (e *Engine) writeSession(s *Session) {
+	s.mu.Lock()
+	for s.dirty && !s.gone {
+		durable := s.durable
+		s.dirty, s.durable = false, false
+		doc := s.doc()
+		s.mu.Unlock()
+		write := e.store.SaveNoSync
+		if durable {
+			write = e.store.Save
+		}
+		if err := write(doc); err != nil {
+			e.publish(s.ID, ev("error", map[string]any{"kind": "save", "message": err.Error()}))
+		}
+		s.mu.Lock()
+	}
+	s.saving = false
+	if s.idle != nil {
+		s.idle.Broadcast()
+	}
+	s.mu.Unlock()
 }
 
 // Create starts a session in a project the user has added, bound to the agent
@@ -826,6 +880,11 @@ func (e *Engine) Delete(id string) error {
 		return ErrBusy
 	}
 	s.forget()
+	// A write already under way finishes before the file is removed, or it
+	// would put the file back.
+	s.mu.Lock()
+	e.waitSavedLocked(s)
+	s.mu.Unlock()
 	e.StopProcesses(id, true)
 	doc, _, _, _ := s.Snapshot()
 	if err := e.store.Delete(id); err != nil {
@@ -1015,7 +1074,7 @@ func (e *Engine) estimateBase(s *Session, a config.Agent, b brief) {
 		Tools:  schemaChars / charsPerToken,
 	}
 	s.mu.Unlock()
-	e.save(s)
+	e.saveSoon(s)
 }
 
 // fail ends the turn on the stream. The message is not kept: it says what went
@@ -1080,7 +1139,7 @@ func (e *Engine) noteCard(s *Session, card map[string]any) {
 		}
 	}
 	s.mu.Unlock()
-	e.save(s)
+	e.saveSoon(s)
 }
 
 // endTurn writes the turn's totals where a reloaded page reads them, publishes
@@ -1107,6 +1166,9 @@ func carriesOutput(kind llm.EventKind) bool {
 // state a new message is accepted in. card holds the turn's totals and is nil
 // for a turn that recorded no model call.
 func (e *Engine) finish(s *Session, next State, finishReason string, iterations int, card map[string]any) {
+	// The steps of the turn were written without a flush. The file reaches
+	// the disk before the session reads as idle.
+	e.save(s)
 	s.mu.Lock()
 	s.state = next
 	s.cancel = nil
@@ -1284,7 +1346,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				Meta: outcomeMeta(res), Usage: rec, InContext: true, Visible: true})
 			s.live = nil
 			s.mu.Unlock()
-			e.save(s)
+			e.saveSoon(s)
 			e.publishUsage(s)
 			// A turn the model meant to continue reads as a finished one, so
 			// the transcript says the call was never run.
@@ -1314,7 +1376,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			Meta: outcomeMeta(res), Usage: rec, InContext: true, Visible: true})
 		s.live = nil
 		s.mu.Unlock()
-		e.save(s)
+		e.saveSoon(s)
 		e.publishUsage(s)
 
 		if spent {
@@ -1352,7 +1414,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			if tools.Known(call.Function.Name) &&
 				(!b.offer.InMode(call.Function.Name) || !b.offer.InSet(call.Function.Name)) {
 				entry := e.unavailable(s, call, b.offer)
-				e.save(s)
+				e.saveSoon(s)
 				e.publish(s.ID, ev("tool_output", map[string]any{
 					"index": i, "id": call.ID, "name": call.Function.Name,
 					"output": entry.Content, "exit_code": nil, "truncated": false,
@@ -1381,7 +1443,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				entry = e.addNote(s, entry, note)
 			}
 			clock.tools += time.Since(began)
-			e.save(s)
+			e.saveSoon(s)
 			e.publish(s.ID, ev("tool_output", map[string]any{
 				"index": i, "id": call.ID, "name": call.Function.Name,
 				"output": entry.Content, "exit_code": entry.ExitCode, "truncated": entry.Truncated,
@@ -1867,7 +1929,7 @@ func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a 
 		if notes[k] != "" {
 			entry = e.addNote(s, entry, notes[k])
 		}
-		e.save(s)
+		e.saveSoon(s)
 		e.publish(s.ID, ev("tool_output", map[string]any{
 			"index": first + k, "id": call.ID, "name": call.Function.Name,
 			"output": entry.Content, "exit_code": entry.ExitCode, "truncated": entry.Truncated,
@@ -2080,7 +2142,7 @@ func (e *Engine) recordBaseline(s *Session, sn tools.Snapshot) {
 	}
 	s.Baselines = append(s.Baselines, b)
 	s.mu.Unlock()
-	e.save(s)
+	e.saveSoon(s)
 }
 
 // baselineState maps what the tool saw onto what the session stores.

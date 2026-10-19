@@ -7,8 +7,19 @@ import (
 
 // WriteAtomic replaces path with data. The temp file is created in the same
 // directory so the rename cannot cross a filesystem boundary, and a crash
-// never leaves a half-written file.
+// never leaves a half-written file. The data is flushed to the disk before
+// it returns.
 func WriteAtomic(path string, data []byte, perm os.FileMode) error {
+	return writeAtomic(path, data, perm, true)
+}
+
+// WriteAtomicNoSync is WriteAtomic without the flush. A process that dies
+// leaves the old file or the new one; only losing power can lose the write.
+func WriteAtomicNoSync(path string, data []byte, perm os.FileMode) error {
+	return writeAtomic(path, data, perm, false)
+}
+
+func writeAtomic(path string, data []byte, perm os.FileMode, sync bool) error {
 	dir := filepath.Dir(path)
 	f, err := os.CreateTemp(dir, ".tmp-"+filepath.Base(path)+"-*")
 	if err != nil {
@@ -26,8 +37,10 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 	if _, err := f.Write(data); err != nil {
 		return cleanup(err)
 	}
-	if err := f.Sync(); err != nil {
-		return cleanup(err)
+	if sync {
+		if err := f.Sync(); err != nil {
+			return cleanup(err)
+		}
 	}
 	if err := f.Close(); err != nil {
 		os.Remove(tmp)
@@ -37,7 +50,9 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 		os.Remove(tmp)
 		return wrapWrite(path, err)
 	}
-	syncDir(dir)
+	if sync {
+		syncDir(dir)
+	}
 	return nil
 }
 

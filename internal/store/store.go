@@ -341,20 +341,33 @@ func (s *Sessions) Load(id string) (*Session, error) {
 	return &sess, nil
 }
 
-// Save writes the file and refreshes the index. Writes for one session are
-// serialised; two sessions do not block each other.
+// Save writes the file, flushes it to the disk and refreshes the index.
+// Writes for one session are serialised; two sessions do not block each other.
 func (s *Sessions) Save(sess *Session) error {
+	return s.save(sess, true)
+}
+
+// SaveNoSync is Save without the flush to the disk.
+func (s *Sessions) SaveNoSync(sess *Session) error {
+	return s.save(sess, false)
+}
+
+func (s *Sessions) save(sess *Session, sync bool) error {
 	if sess.ID == "" {
 		return errors.New("Save session: the session has no id")
 	}
-	data, err := json.MarshalIndent(sess, "", "  ")
+	data, err := json.Marshal(sess)
 	if err != nil {
 		return fmt.Errorf("Save session %s: %w", sess.ID, err)
 	}
 	data = append(data, '\n')
+	write := config.WriteAtomicNoSync
+	if sync {
+		write = config.WriteAtomic
+	}
 	lock := s.lockFor(sess.ID)
 	lock.Lock()
-	err = config.WriteAtomic(s.path(sess.ID), data, 0o600)
+	err = write(s.path(sess.ID), data, 0o600)
 	lock.Unlock()
 	if err != nil {
 		return err
