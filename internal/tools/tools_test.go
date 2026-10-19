@@ -1509,3 +1509,31 @@ func TestReplaceInFileKeepsCRLFAcrossAList(t *testing.T) {
 		t.Errorf("file = %q", got)
 	}
 }
+
+// A file shown by a printing command in bash counts as read, so the edit
+// after it is taken. Other arguments, and other commands, record nothing.
+func TestShellPrintCountsAsRead(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	r.Seen = NewSeen()
+	for _, name := range []string{"a.go", "b.go", "c.go", "d.go"} {
+		os.WriteFile(filepath.Join(base, name), []byte("x\n"), 0o644)
+	}
+	r.NoteShellReads(`cd sub; sed -n '1,20p' a.go | grep x && head -n 5 "b.go"; ls c.go`)
+
+	read := func(name string) bool {
+		info, _ := os.Stat(filepath.Join(base, name))
+		path, _ := r.resolve(name)
+		seen, _ := r.Seen.check(path, info)
+		return seen
+	}
+	if !read("a.go") || !read("b.go") {
+		t.Error("a file printed by sed or head was not counted as read")
+	}
+	if read("c.go") || read("d.go") {
+		t.Error("a file ls named, or one nothing named, was counted as read")
+	}
+	if got := shellSegments(`FOO=1 cat 'a b' x\ y`); len(got) != 1 || strings.Join(got[0], "|") != "FOO=1|cat|a b|x y" {
+		t.Errorf("segments = %q", got)
+	}
+}

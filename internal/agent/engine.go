@@ -2017,7 +2017,14 @@ func (e *Engine) keepImage(o *outcome, img *tools.Image) {
 func (e *Engine) runBash(ctx context.Context, s *Session, runner *tools.Runner, call llm.ToolCall) (tools.Result, error) {
 	raw := json.RawMessage(call.Function.Arguments)
 	if !runner.ShellBackground(raw) {
-		return runner.RunShell(ctx, raw)
+		res, err := runner.RunShell(ctx, raw)
+		if err == nil && res.ExitCode != nil && *res.ExitCode == 0 {
+			var args tools.RunShellArgs
+			if json.Unmarshal(raw, &args) == nil {
+				runner.NoteShellReads(args.Command)
+			}
+		}
+		return res, err
 	}
 	var args tools.RunShellArgs
 	if err := tools.DecodeArgs("bash", raw, &args); err != nil {
