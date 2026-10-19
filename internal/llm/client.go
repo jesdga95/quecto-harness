@@ -31,7 +31,8 @@ const (
 // Client is the model server at one address: the HTTP half every backend
 // shares, and the backend that address turned out to speak. It has no global
 // timeout because a chat stream can legitimately run for minutes; deadlines
-// come from ctx.
+// come from ctx. A server may hold its headers until the prompt is read, so
+// the wait for them is as long as the wait for a reply's first event.
 type Client struct {
 	BaseURL string
 	Token   string
@@ -51,7 +52,7 @@ func New(baseURL, token string, protocol Protocol) *Client {
 				Proxy:                 http.ProxyFromEnvironment,
 				MaxIdleConnsPerHost:   4,
 				IdleConnTimeout:       90 * time.Second,
-				ResponseHeaderTimeout: 60 * time.Second,
+				ResponseHeaderTimeout: streamFirstEvent,
 				ExpectContinueTimeout: time.Second,
 				DisableCompression:    true,
 			},
