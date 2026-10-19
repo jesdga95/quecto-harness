@@ -20,10 +20,13 @@ import (
 )
 
 // titleTimeout and titleTokens bound the naming request, since it stands
-// between the message and the first token of the reply.
+// between the message and the first token of the reply. The token cap leaves
+// room for a short pass of thinking ahead of the title. titleChars is the most
+// of the opening message the request carries.
 const (
 	titleTimeout = 30 * time.Second
-	titleTokens  = 32
+	titleTokens  = 512
+	titleChars   = 2000
 )
 
 // loadTimeout bounds a model load. It is generous because the work is a large
@@ -868,31 +871,31 @@ func (e *Engine) Wait(d time.Duration) {
 // titleSession names the conversation from its opening message, before the
 // turn answers it.
 //
-// It goes first because the model server holds one prompt at a time. A title
-// request made after the turn would evict what the turn left cached, and the
-// next message would reprocess the conversation from the start. Made here, it
-// runs against a slot that holds nothing worth keeping, and it carries the
-// opening message alone rather than the conversation, so it is a few hundred
-// tokens either way.
+// The model server holds one prompt at a time, so the request opens with the
+// turn's own system message, tools and effort. It reads only its last message,
+// and the turn after it finds the head of its prompt still cached. A title
+// asked for after the turn would evict the conversation instead.
 //
 // A failure is not an error: the session keeps the title cut from the message.
-func (e *Engine) titleSession(ctx context.Context, s *Session, back Backend, a config.Agent, caps llm.Caps) {
+func (e *Engine) titleSession(ctx context.Context, s *Session, back Backend, a config.Agent, b brief, caps llm.Caps) {
 	s.mu.Lock()
 	first, text := s.firstTurn(), s.firstUserMessage()
 	s.mu.Unlock()
 	if !first || strings.TrimSpace(text) == "" {
 		return
 	}
+	if len(text) > titleChars {
+		text = strings.ToValidUTF8(text[:titleChars], "")
+	}
 	tctx, cancel := context.WithTimeout(ctx, titleTimeout)
 	defer cancel()
+	msgs := append(e.messagesUntil(s, a, b, 0), llm.Message{Role: "user", Content: prompts.Title(text)})
 	res, err := back.Chat(tctx, llm.ChatRequest{
-		Model:       a.Model,
-		Messages:    []llm.Message{{Role: "user", Content: prompts.Title(text)}},
-		Effort:      llm.EffortOff,
-		Temperature: a.Temperature,
-		TopP:        a.TopP,
-		Caps:        caps,
-		MaxTokens:   titleTokens,
+		Model: a.Model, Messages: msgs, Tools: tools.Schemas(b.offer), Effort: a.Effort,
+		PreserveReasoning: a.PreserveReasoning,
+		Temperature:       a.Temperature, TopP: a.TopP, TopK: a.TopK,
+		RepeatPenalty: a.RepeatPenalty, Seed: a.Seed, Caps: caps,
+		MaxTokens: titleTokens,
 	}, nil)
 	if err != nil {
 		return
@@ -1142,7 +1145,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// A subagent is filed under the task it was given, so nothing is spent
 	// asking the model for a name.
 	if s.Parent == "" {
-		e.titleSession(ctx, s, back, a, caps)
+		e.titleSession(ctx, s, back, a, b, caps)
 	}
 	// The estimate reads the same prompt the first request sends.
 	e.estimateBase(s, a, b)

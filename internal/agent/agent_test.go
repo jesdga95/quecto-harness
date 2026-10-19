@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -2289,20 +2290,31 @@ func TestTitleBeforeFirstReply(t *testing.T) {
 	if len(titles) != 1 {
 		t.Fatalf("naming requests = %d, want one", len(titles))
 	}
+	// The naming request opens the way the turn's first request does, so the
+	// server reads only the instruction and the turn finds its head cached.
+	h.replay.mu.Lock()
+	turn := h.replay.Requests[0]
+	h.replay.mu.Unlock()
 	msgs, _ := titles[0]["messages"].([]any)
-	if len(msgs) != 1 {
-		t.Fatalf("the naming request carried %d messages, want the opening one alone", len(msgs))
+	sent, _ := turn["messages"].([]any)
+	if len(msgs) != 2 || len(sent) < 1 {
+		t.Fatalf("the naming request carried %d messages, want the system message and the instruction", len(msgs))
 	}
-	only, _ := msgs[0].(map[string]any)
-	content, _ := only["content"].(string)
-	if only["role"] != "user" || !strings.Contains(content, "Six words or fewer") {
-		t.Errorf("message = %v", only)
+	if !reflect.DeepEqual(msgs[0], sent[0]) {
+		t.Errorf("the naming request's system message differs from the turn's: %v", msgs[0])
+	}
+	for _, k := range []string{"tools", "reasoning_budget", "chat_template_kwargs"} {
+		if !reflect.DeepEqual(titles[0][k], turn[k]) {
+			t.Errorf("%s = %v, the turn sent %v", k, titles[0][k], turn[k])
+		}
+	}
+	last, _ := msgs[1].(map[string]any)
+	content, _ := last["content"].(string)
+	if last["role"] != "user" || !strings.Contains(content, "Six words or fewer") {
+		t.Errorf("message = %v", last)
 	}
 	if !strings.Contains(content, "what is in this project") {
 		t.Error("the naming request did not carry the message it is naming")
-	}
-	if titles[0]["reasoning_budget"] != 0.0 {
-		t.Errorf("the naming request did not turn thinking off: %v", titles[0]["reasoning_budget"])
 	}
 
 	// A typed title outlives a second turn, which asks for no title at all.

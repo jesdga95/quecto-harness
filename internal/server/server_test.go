@@ -178,8 +178,14 @@ func newFixture(t *testing.T) *fixture {
 				}
 				return
 			}
-			// The naming request stands on its own: one message and no schemas.
-			if len(body.Messages) == 1 && len(body.Tools) == 0 {
+			// The naming request ends on the title instruction.
+			var last struct {
+				Content string `json:"content"`
+			}
+			if n := len(body.Messages); n > 0 {
+				json.Unmarshal(body.Messages[n-1], &last)
+			}
+			if strings.HasPrefix(last.Content, "Give the task quoted below a title.") {
 				fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"A name"},"finish_reason":"stop"}]}`+"\n\n")
 				fmt.Fprint(w, "data: [DONE]\n\n")
 				if flusher != nil {

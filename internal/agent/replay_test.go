@@ -152,11 +152,12 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 	var body map[string]any
 	json.NewDecoder(req.Body).Decode(&body)
 
-	// The naming request stands on its own: one message and no schemas. It
-	// answers from its own fixture so the queued scripts stay lined up with
-	// the turns the test is about.
-	if msgs, _ := body["messages"].([]any); len(msgs) == 1 {
-		if _, hasTools := body["tools"]; !hasTools {
+	// The naming request ends on the title instruction. It answers from its
+	// own fixture so the queued scripts stay lined up with the turns the test
+	// is about.
+	if msgs, _ := body["messages"].([]any); len(msgs) > 0 {
+		last, _ := msgs[len(msgs)-1].(map[string]any)
+		if content, _ := last["content"].(string); strings.HasPrefix(content, "Give the task quoted below a title.") {
 			r.mu.Lock()
 			r.Titles = append(r.Titles, body)
 			r.Order = append(r.Order, "title")
