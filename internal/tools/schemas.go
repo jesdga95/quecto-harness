@@ -202,11 +202,22 @@ func buildSchemas() []llm.Tool {
 				"type": "object",
 				"properties": ordered{
 					{"path", map[string]any{"type": "string", "description": "Path relative to the project root."}},
-					{"old_string", map[string]any{"type": "string", "description": "The exact text to replace. It must appear once unless replace_all is set."}},
-					{"new_string", map[string]any{"type": "string", "description": "What to put in its place. Empty deletes the text."}},
-					{"replace_all", map[string]any{"type": "boolean", "description": "Replace every occurrence rather than exactly one."}},
+					{"edits", map[string]any{
+						"type":        "array",
+						"description": "The replacements, applied in order.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": ordered{
+								{"old_string", map[string]any{"type": "string", "description": "The exact text to replace. It must appear once unless replace_all is set."}},
+								{"new_string", map[string]any{"type": "string", "description": "What to put in its place. Empty deletes the text."}},
+								{"replace_all", map[string]any{"type": "boolean", "description": "Replace every occurrence rather than exactly one."}},
+							},
+							"required":             []string{"old_string", "new_string"},
+							"additionalProperties": false,
+						},
+					}},
 				},
-				"required":             []string{"path", "old_string", "new_string"},
+				"required":             []string{"path", "edits"},
 				"additionalProperties": false,
 			}),
 		}},

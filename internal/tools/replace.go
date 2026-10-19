@@ -12,9 +12,11 @@ import (
 	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
-// ReplaceInFile swaps one exact run of text for another. The match must be
-// unique unless every occurrence was asked for, since a model that gave too
-// little context would otherwise change whichever occurrence came first.
+// ReplaceInFile makes a list of exact replacements in one file, in order. A
+// match must be unique unless every occurrence was asked for, since a model
+// that gave too little context would otherwise change whichever came first.
+// Each replacement that matches is applied and the rest are reported, so one
+// wrong line does not cost the others.
 func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result, error) {
 	var args ReplaceInFileArgs
 	if err := DecodeArgs("edit", raw, &args); err != nil {
@@ -23,11 +25,20 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 	if args.Path == "" {
 		return Result{}, errors.New("edit needs a path")
 	}
-	if args.OldString == "" {
-		return Result{}, errors.New("edit needs old_string: to create a file, use write")
+	edits := args.Edits
+	if len(edits) == 0 && (args.OldString != "" || args.NewString != "") {
+		edits = []Replacement{{OldString: args.OldString, NewString: args.NewString, ReplaceAll: args.ReplaceAll}}
 	}
-	if args.OldString == args.NewString {
-		return Result{}, fmt.Errorf("old_string and new_string are the same, so %s is already what you asked for", args.Path)
+	if len(edits) == 0 {
+		return Result{}, errors.New("edit needs edits, a list of replacements: to create a file, use write")
+	}
+	if len(edits) == 1 {
+		if edits[0].OldString == "" {
+			return Result{}, errors.New("edit needs old_string: to create a file, use write")
+		}
+		if edits[0].OldString == edits[0].NewString {
+			return Result{}, fmt.Errorf("old_string and new_string are the same, so %s is already what you asked for", args.Path)
+		}
 	}
 	path, err := r.resolve(args.Path)
 	if err != nil {
@@ -66,28 +77,43 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 
 	// read shows a CRLF file with LF endings, so text copied from it is matched
 	// against the file with its endings folded the same way.
-	old, oldString, newString := string(content), args.OldString, args.NewString
-	crlf := allCRLF(old) && !strings.Contains(oldString, "\r")
+	text := string(content)
+	crlf := allCRLF(text)
 	if crlf {
-		old = strings.ReplaceAll(old, "\r\n", "\n")
-		newString = strings.ReplaceAll(newString, "\r\n", "\n")
+		text = strings.ReplaceAll(text, "\r\n", "\n")
 	}
 
-	n := strings.Count(old, oldString)
-	switch {
-	case n == 0:
-		return Result{}, fmt.Errorf("old_string is not in %s: read the file and copy the text exactly, whitespace included", args.Path)
-	case n > 1 && !args.ReplaceAll:
-		return Result{}, fmt.Errorf("old_string appears %d times in %s, at lines %s: include more of the surrounding lines so it matches once, or set replace_all to change every one",
-			n, args.Path, joinLines(linesOf(old, oldString)))
+	var done, failed []string
+	for i, e := range edits {
+		oldString, newString := e.OldString, e.NewString
+		if crlf && !strings.Contains(oldString, "\r") {
+			newString = strings.ReplaceAll(newString, "\r\n", "\n")
+		} else if crlf {
+			oldString = strings.ReplaceAll(oldString, "\r\n", "\n")
+			newString = strings.ReplaceAll(newString, "\r\n", "\n")
+		}
+		next, summary, err := replaceOnce(text, args.Path, oldString, newString, e.ReplaceAll)
+		if err != nil {
+			if len(edits) == 1 {
+				return Result{}, err
+			}
+			failed = append(failed, fmt.Sprintf("%d: %s", i+1, err))
+			continue
+		}
+		if summary == "" {
+			continue
+		}
+		text = next
+		done = append(done, summary)
+	}
+	if len(done) == 0 {
+		if len(failed) == 0 {
+			return Result{}, fmt.Errorf("every old_string matches its new_string, so %s is already what you asked for", args.Path)
+		}
+		return Result{}, fmt.Errorf("no replacement was applied to %s:\n%s", args.Path, strings.Join(failed, "\n"))
 	}
 
-	count := 1
-	if args.ReplaceAll {
-		count = -1
-	}
-	updated := strings.Replace(old, oldString, newString, count)
-	line := lineOf(old, oldString)
+	updated := text
 	if crlf {
 		updated = strings.ReplaceAll(updated, "\n", "\r\n")
 	}
@@ -99,16 +125,45 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 	}
 	r.noteFile(path)
 
-	summary := fmt.Sprintf("edited %s at line %d (-%d +%d)",
-		r.rel(path), line, countLines(oldString), countLines(newString))
-	if n > 1 {
-		summary = fmt.Sprintf("edited %s in %d places, at lines %s", r.rel(path), n, joinLines(linesOf(old, oldString)))
+	var out string
+	if len(edits) == 1 {
+		out = fmt.Sprintf("edited %s %s", r.rel(path), done[0])
+	} else {
+		out = fmt.Sprintf("edited %s: %d of %d replacements applied, %s", r.rel(path), len(done), len(edits), strings.Join(done, "; "))
+	}
+	if len(failed) > 0 {
+		out += "\nnot applied:\n" + strings.Join(failed, "\n")
 	}
 	return Result{
-		Output: summary,
+		Output: out,
 		Bytes:  len(updated),
 		Meta:   lineCounts(before, updated),
 	}, nil
+}
+
+// replaceOnce makes one replacement in text and describes where it landed. A
+// replacement whose old and new text are the same changes nothing and is
+// described as nothing.
+func replaceOnce(text, name, oldString, newString string, all bool) (string, string, error) {
+	if oldString == "" {
+		return "", "", errors.New("old_string is empty")
+	}
+	if oldString == newString {
+		return text, "", nil
+	}
+	n := strings.Count(text, oldString)
+	switch {
+	case n == 0:
+		return "", "", fmt.Errorf("old_string is not in %s: read the file and copy the text exactly, whitespace included", name)
+	case n > 1 && !all:
+		return "", "", fmt.Errorf("old_string appears %d times in %s, at lines %s: include more of the surrounding lines so it matches once, or set replace_all to change every one",
+			n, name, joinLines(linesOf(text, oldString)))
+	}
+	if n > 1 {
+		return strings.ReplaceAll(text, oldString, newString), fmt.Sprintf("in %d places, at lines %s", n, joinLines(linesOf(text, oldString))), nil
+	}
+	return strings.Replace(text, oldString, newString, 1),
+		fmt.Sprintf("at line %d (-%d +%d)", lineOf(text, oldString), countLines(oldString), countLines(newString)), nil
 }
 
 // allCRLF reports whether every line in s ends in CRLF. A file that mixes the

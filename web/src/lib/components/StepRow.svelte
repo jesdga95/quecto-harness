@@ -89,8 +89,15 @@
   const edit = $derived.by(() => {
     if (item.kind !== "tool" || (item.name !== "write" && item.name !== "edit")) return null;
     const text = (key: string) => (typeof item.args[key] === "string" ? (item.args[key] as string) : "");
-    const added = item.name === "write" ? text("content") : text("new_string");
-    const removed = item.name === "write" ? "" : text("old_string");
+    // An edit carries a list of replacements; one stored before it did names
+    // a single one at the top level.
+    const list = Array.isArray(item.args.edits) ? (item.args.edits as Record<string, unknown>[]) : null;
+    const side = (key: string) =>
+      list
+        ? list.map((e) => (e && typeof e[key] === "string" ? (e[key] as string) : "")).join("\n")
+        : text(key);
+    const added = item.name === "write" ? text("content") : side("new_string");
+    const removed = item.name === "write" ? "" : side("old_string");
     const count = (s: string) => (s === "" ? 0 : s.replace(/\n$/, "").split("\n").length);
     const meta = item.meta;
     const counts =

@@ -142,11 +142,21 @@ type WriteFileArgs struct {
 	Content string `json:"content"`
 }
 
+// ReplaceInFileArgs is one file and the replacements to make in it. A call
+// that names one replacement at the top level, the shape edit once had, is
+// read as a list of one.
 type ReplaceInFileArgs struct {
-	Path       string `json:"path"`
+	Path       string        `json:"path"`
+	Edits      []Replacement `json:"edits"`
+	OldString  string        `json:"old_string,omitempty"`
+	NewString  string        `json:"new_string,omitempty"`
+	ReplaceAll bool          `json:"replace_all,omitempty"`
+}
+
+type Replacement struct {
 	OldString  string `json:"old_string"`
 	NewString  string `json:"new_string"`
-	ReplaceAll bool   `json:"replace_all"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
 type FindArgs struct {

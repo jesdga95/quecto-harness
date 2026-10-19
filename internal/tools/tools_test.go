@@ -1455,3 +1455,57 @@ func TestReadImage(t *testing.T) {
 		}
 	}
 }
+
+// A list of replacements is made in order in one write. One that does not
+// match is reported by number and the rest still land.
+func TestReplaceInFileAppliesAListAndReportsMisses(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	target := filepath.Join(base, "a.go")
+	os.WriteFile(target, []byte("one\ntwo\nthree\nfour\n"), 0o644)
+
+	res, err := r.ReplaceInFile(context.Background(), json.RawMessage(`{"path":"a.go","edits":[
+		{"old_string":"one","new_string":"ONE"},
+		{"old_string":"missing","new_string":"x"},
+		{"old_string":"ONE\ntwo","new_string":"ONE\nTWO"},
+		{"old_string":"four","new_string":"four"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "ONE\nTWO\nthree\nfour\n" {
+		t.Errorf("file = %q", got)
+	}
+	for _, want := range []string{"edited a.go: 2 of 4 replacements applied", "not applied:\n2: old_string is not in a.go"} {
+		if !strings.Contains(res.Output, want) {
+			t.Errorf("output %q does not say %q", res.Output, want)
+		}
+	}
+	if res.Meta["added"] != 2 || res.Meta["removed"] != 2 {
+		t.Errorf("meta = %v", res.Meta)
+	}
+
+	// When nothing matches the file is left alone and the call fails.
+	_, err = r.ReplaceInFile(context.Background(), json.RawMessage(`{"path":"a.go","edits":[
+		{"old_string":"nope","new_string":"x"},{"old_string":"three\nthree","new_string":"x"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "no replacement was applied to a.go:\n1: ") {
+		t.Errorf("err = %v", err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "ONE\nTWO\nthree\nfour\n" {
+		t.Errorf("a failed call changed the file to %q", got)
+	}
+}
+
+// A CRLF file takes replacements copied from what read showed, with LF.
+func TestReplaceInFileKeepsCRLFAcrossAList(t *testing.T) {
+	base := t.TempDir()
+	r := testRoot(t, base)
+	target := filepath.Join(base, "w.txt")
+	os.WriteFile(target, []byte("a\r\nb\r\nc\r\n"), 0o644)
+	if _, err := r.ReplaceInFile(context.Background(), json.RawMessage(`{"path":"w.txt","edits":[
+		{"old_string":"a\nb","new_string":"A\nB"},{"old_string":"c","new_string":"C\nD"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "A\r\nB\r\nC\r\nD\r\n" {
+		t.Errorf("file = %q", got)
+	}
+}
