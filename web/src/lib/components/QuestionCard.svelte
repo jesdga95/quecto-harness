@@ -32,9 +32,9 @@
   });
 
   function dotClass(i: number): string {
-    if (i < current) return "h-1.5 w-1.5 rounded-full bg-accent";
-    if (i === current) return "h-1.5 w-4 rounded-full bg-accent";
-    return "h-1.5 w-1.5 rounded-full bg-line-strong";
+    const size = i === current ? "h-1.5 w-4" : "h-1.5 w-1.5";
+    if (i <= current) return `qcard-dot ${size} rounded-full`;
+    return `${size} rounded-full bg-line-strong`;
   }
 
   function toggle(i: number): void {
@@ -74,7 +74,7 @@
       >
         {#if cur.multi}
           {#if chosen.includes(i)}
-            <CheckSquare class="!text-accent" />
+            <CheckSquare class="qcard-tick" />
           {:else}
             <Square />
           {/if}

@@ -637,12 +637,30 @@
     background: rgb(100 116 139 / 0.16);
     color: var(--muted);
   }
-  .composer.is-plan .send {
+  /* The chips inside the composer answer turns, so they follow the send circle
+     into the mode's colour. */
+  .composer.is-plan .send,
+  .composer.is-plan .chip-brand {
     background: var(--plan);
     color: var(--btn-text);
   }
-  .composer.is-plan .send:disabled {
+  .composer.is-plan .send:disabled,
+  .composer.is-plan .chip-brand:disabled {
     background: var(--plan-bg);
+    color: var(--plan);
+  }
+  /* The card's own marks, the progress dots and a chosen answer's tick, take
+     the same colour so the card is one colour in either mode. */
+  .qcard-dot {
+    background: var(--accent);
+  }
+  .composer.is-plan .qcard-dot {
+    background: var(--plan);
+  }
+  .popover-item > .qcard-tick {
+    color: var(--accent);
+  }
+  .composer.is-plan .qcard-tick {
     color: var(--plan);
   }
   .send.is-stop svg {
