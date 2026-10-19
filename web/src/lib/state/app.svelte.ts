@@ -972,6 +972,12 @@ export async function stopProcess(id: string): Promise<void> {
   await guard(() => api.stopProcess(app.sessionId, id));
 }
 
+/** Moves a bash call the turn is waiting on to the background, or stops it. */
+export async function shellAction(call: string, action: "background" | "stop"): Promise<void> {
+  if (!app.sessionId) return;
+  await guard(() => api.shellAction(app.sessionId, call, action));
+}
+
 /** Reads a command's whole output as it stands now and keeps it for the tab.
     Each call fetches again, since a running command keeps printing. */
 export async function loadProcessOutput(id: string): Promise<void> {

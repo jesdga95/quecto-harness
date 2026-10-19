@@ -120,6 +120,9 @@ type Session struct {
 	// runs. idle is signalled each time the writer stops.
 	dirty, durable, saving bool
 	idle                   *sync.Cond
+	// shells takes the person's actions on each bash call still being
+	// waited on, by call id.
+	shells map[string]chan string
 }
 
 // repoint moves the session to an agent and a model and forgets everything the

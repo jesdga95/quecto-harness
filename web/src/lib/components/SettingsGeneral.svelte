@@ -19,9 +19,10 @@
   let compactAt = $state("0.8");
   let shell = $state("");
   let timeout = $state("120");
+  let after = $state("30");
   let limit = $state("16384");
   let maxCalls = $state("50");
-  let editing: "compactAt" | "timeout" | "limit" | "maxCalls" | null = $state(null);
+  let editing: "compactAt" | "timeout" | "after" | "limit" | "maxCalls" | null = $state(null);
 
   // The pane is remounted for each visit, so the fill is one-way, from the
   // draft it is pointed at. Typing commits upward; a commit changing the
@@ -34,6 +35,7 @@
     if (editing !== "compactAt") compactAt = String(source.compact_at);
     shell = source.shell;
     if (editing !== "timeout") timeout = String(source.command_timeout_s);
+    if (editing !== "after") after = String(source.background_after_s);
     if (editing !== "limit") limit = String(source.output_limit_bytes);
     if (editing !== "maxCalls") maxCalls = String(source.max_tool_calls);
   });
@@ -57,6 +59,13 @@
     if (Number.isNaN(n)) return;
     const next = Math.min(3600, Math.max(1, n));
     if (next !== config.command_timeout_s) onchange({ command_timeout_s: next });
+  }
+
+  function commitAfter(text: string) {
+    const n = Number.parseInt(text.trim(), 10);
+    if (Number.isNaN(n)) return;
+    const next = Math.min(3600, Math.max(0, n));
+    if (next !== config.background_after_s) onchange({ background_after_s: next });
   }
 
   function commitLimit(text: string) {
@@ -83,12 +92,14 @@
   export function flush() {
     if (invalid(compactAt, 0.05, 0.95)) compactAt = String(config.compact_at);
     if (invalid(timeout, 1, 3600)) timeout = String(config.command_timeout_s);
+    if (invalid(after, 0, 3600)) after = String(config.background_after_s);
     if (invalid(limit, 1024, 4194304)) limit = String(config.output_limit_bytes);
     if (invalid(maxCalls, 0, 1000)) maxCalls = String(config.max_tool_calls);
     commitListen(listen);
     commitCompact(compactAt);
     commitShell(shell);
     commitTimeout(timeout);
+    commitAfter(after);
     commitLimit(limit);
     commitMaxCalls(maxCalls);
   }
@@ -138,6 +149,17 @@
         onblur={() => (editing = null)}
       />
       <span class="text-[11.5px] text-muted">Seconds, 1 to 3600</span>
+    </label>
+    <label class="flex flex-col gap-1.5">
+      <span class="label">Background after</span>
+      <input
+        class="input num"
+        bind:value={after}
+        oninput={(e) => commitAfter(e.currentTarget.value)}
+        onfocus={() => (editing = "after")}
+        onblur={() => (editing = null)}
+      />
+      <span class="text-[11.5px] text-muted">Seconds a command is waited on before it moves to the background, 0 for never</span>
     </label>
     <label class="flex flex-col gap-1.5">
       <span class="label">Output limit</span>

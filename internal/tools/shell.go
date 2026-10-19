@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -34,7 +35,10 @@ type Proc struct {
 	parent  context.Context
 	timeout time.Duration
 	onLine  func(string)
-	keep    bool
+	keep    atomic.Bool
+	// stopNote replaces the stopped line of the result, so a command ended
+	// for a reason says which.
+	stopNote string
 }
 
 // PID is the process group the command runs in, zero before it has started.
@@ -123,6 +127,22 @@ func (p *Proc) Stop() error {
 	return nil
 }
 
+// Keep marks the command's saved output as wanted whatever its size, which a
+// command that moved to the background needs, since the panel opens it.
+func (p *Proc) Keep() { p.keep.Store(true) }
+
+// StopBecause ends the command and has its result say why.
+func (p *Proc) StopBecause(note string) error {
+	p.stopNote = note
+	return p.Stop()
+}
+
+// Result renders what the command printed once it has ended, in the shape the
+// model reads.
+func (p *Proc) Result(limit, code int, timedOut, stopped bool) Result {
+	return p.result(limit, code, timedOut, stopped)
+}
+
 // RunShell runs one command in the project root and returns its merged output
 // with an exit code line. Each call is a new shell.
 func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, error) {
@@ -130,7 +150,7 @@ func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, err
 	if err := DecodeArgs("bash", raw, &args); err != nil {
 		return Result{}, err
 	}
-	p, err := r.start(ctx, args, nil)
+	p, err := r.start(ctx, args, nil, !args.Background)
 	if err != nil {
 		return Result{}, err
 	}
@@ -142,12 +162,23 @@ func (r *Runner) RunShell(ctx context.Context, raw json.RawMessage) (Result, err
 // command carries no deadline. onLine receives each line of output as it
 // arrives, and may be nil.
 func (r *Runner) SpawnShell(ctx context.Context, args RunShellArgs, onLine func(string)) (*Proc, error) {
-	return r.start(ctx, args, onLine)
+	p, err := r.start(ctx, args, onLine, false)
+	if err == nil {
+		p.Keep()
+	}
+	return p, err
+}
+
+// WatchShell starts a command with no deadline of its own, for a caller that
+// waits on it and enforces the timeout itself, and may move it to the
+// background instead.
+func (r *Runner) WatchShell(ctx context.Context, args RunShellArgs, onLine func(string)) (*Proc, error) {
+	return r.start(ctx, args, onLine, false)
 }
 
 // start builds the command, its process group, the buffer and the spill file,
-// and runs it.
-func (r *Runner) start(ctx context.Context, args RunShellArgs, onLine func(string)) (*Proc, error) {
+// and runs it. deadline kills it at its timeout.
+func (r *Runner) start(ctx context.Context, args RunShellArgs, onLine func(string), deadline bool) (*Proc, error) {
 	if strings.TrimSpace(args.Command) == "" {
 		return nil, errors.New("bash needs a command")
 	}
@@ -158,12 +189,11 @@ func (r *Runner) start(ctx context.Context, args RunShellArgs, onLine func(strin
 		timeout: timeout,
 		pumped:  make(chan struct{}),
 		onLine:  onLine,
-		keep:    args.Background,
 	}
-	if args.Background {
-		p.runCtx = ctx
-	} else {
+	if deadline {
 		p.runCtx, p.cancel = context.WithTimeout(ctx, timeout)
+	} else {
+		p.runCtx = ctx
 	}
 	reader, writer := io.Pipe()
 	p.reader, p.pipe = reader, writer
@@ -214,12 +244,16 @@ func (p *Proc) result(limit, code int, timedOut, stopped bool) Result {
 	if b.Len() > 0 && !strings.HasSuffix(out, "\n") {
 		b.WriteString("\n")
 	}
-	b.WriteString(keepSpill(p.spill, p.buf, truncated, p.keep))
+	b.WriteString(keepSpill(p.spill, p.buf, truncated, p.keep.Load()))
 	if timedOut {
 		fmt.Fprintf(&b, "\ncommand timed out after %ds and was killed\n", int(p.timeout/time.Second))
 	}
 	if stopped {
-		b.WriteString("\nstopped\n")
+		if p.stopNote != "" {
+			b.WriteString("\n" + p.stopNote + "\n")
+		} else {
+			b.WriteString("\nstopped\n")
+		}
 		return Result{Output: strings.TrimRight(b.String(), "\n"), Truncated: truncated, Bytes: p.Total()}
 	}
 	b.WriteString("\n")

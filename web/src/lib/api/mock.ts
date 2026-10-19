@@ -565,6 +565,7 @@ export class MockApi implements HarnessApi {
     max_tool_calls: 50,
     shell: "/bin/sh",
     command_timeout_s: 120,
+    background_after_s: 30,
     output_limit_bytes: 16384,
     projects: [
       "/Users/jay/Projects/Personal/quecto-harness",
@@ -840,6 +841,10 @@ export class MockApi implements HarnessApi {
     return this.procs
       .filter((p) => p.session === id)
       .map((p) => ({ ...p.proc, tail: [...p.proc.tail] }));
+  }
+
+  async shellAction(_id: string, _call: string, _action: "background" | "stop"): Promise<void> {
+    await this.tick();
   }
 
   async stopProcess(id: string, proc: string): Promise<void> {

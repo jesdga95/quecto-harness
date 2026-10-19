@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
   import ArrowsIn from "phosphor-svelte/lib/ArrowsIn";
   import Brain from "phosphor-svelte/lib/Brain";
   import CaretRight from "phosphor-svelte/lib/CaretRight";
@@ -11,6 +12,7 @@
   import Question from "phosphor-svelte/lib/Question";
   import Robot from "phosphor-svelte/lib/Robot";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
+  import Stop from "phosphor-svelte/lib/Stop";
   import Terminal from "phosphor-svelte/lib/Terminal";
   import WarningCircle from "phosphor-svelte/lib/WarningCircle";
   import FileBlock from "./FileBlock.svelte";
@@ -23,7 +25,7 @@
   import { clockLabel, statusLabel } from "../format";
   import { asked } from "../question";
   import { stepDesc, stepFailed, stepName, stringArg, todosOf } from "../steps";
-  import { app, showProcesses } from "../state/app.svelte";
+  import { app, shellAction, showProcesses } from "../state/app.svelte";
 
   // live marks the row the model is still writing into.
   let { item, live = false }: { item: TranscriptItem; live?: boolean } = $props();
@@ -120,12 +122,18 @@
       ? item.meta.process
       : "",
   );
+  // A foreground bash call the turn is waiting on can be moved to the
+  // background or stopped without stopping the turn.
+  const waiting = $derived(
+    item.kind === "tool" && item.name === "bash" && item.running && item.args.background !== true,
+  );
   // A compaction with no summary is a divider and nothing more.
   const expandable = $derived(item.kind !== "compaction" || item.summary !== "");
 </script>
 
 <div>
-  <button class="step" disabled={!expandable} onclick={() => (open = !open)}>
+  <div class="step-line">
+  <button class="step" class:has-acts={waiting} disabled={!expandable} onclick={() => (open = !open)}>
     {#if item.kind === "reasoning"}
       <Brain />
     {:else if item.kind === "permission"}
@@ -190,10 +198,22 @@
     {:else if item.kind === "tool" && item.running}
       <span class="spinner"></span>
     {/if}
-    {#if expandable}
+    {#if expandable && !waiting}
       <span class="caret" class:is-open={open}><CaretRight /></span>
     {/if}
   </button>
+  {#if waiting}
+    <!-- The row is a button, so the actions sit over its end rather than in it. -->
+    <div class="step-acts">
+      <span class="step-bar"></span>
+      <span class="flex gap-0.5">
+        <button class="icon-btn is-stop" title="Stop" aria-label="Stop" onclick={() => void shellAction(item.id, "stop")}><Stop /></button>
+        <button class="icon-btn" title="Move to the background" aria-label="Move to the background" onclick={() => void shellAction(item.id, "background")}><ArrowSquareOut /></button>
+      </span>
+      <span class="caret" class:is-open={open}><CaretRight /></span>
+    </div>
+  {/if}
+  </div>
 
   {#if open && expandable}
     <div class="step-body">

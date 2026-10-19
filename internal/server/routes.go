@@ -59,6 +59,7 @@ type configJSON struct {
 	CompactAt        float64 `json:"compact_at"`
 	Shell            string  `json:"shell"`
 	CommandTimeoutS  int     `json:"command_timeout_s"`
+	BackgroundAfterS int     `json:"background_after_s"`
 	OutputLimitBytes int     `json:"output_limit_bytes"`
 	MaxToolCalls     int     `json:"max_tool_calls"`
 	Listen           string  `json:"listen"`
@@ -69,6 +70,7 @@ func toConfigJSON(c config.Config) configJSON {
 	return configJSON{
 		Agent: c.AgentID, Permissions: string(c.Mode), Toolset: string(c.Toolset), CompactAt: c.CompactAt,
 		Shell: c.Shell, CommandTimeoutS: int(c.CommandTimeout / time.Second),
+		BackgroundAfterS: int(c.BackgroundAfter / time.Second),
 		OutputLimitBytes: c.OutputLimitBytes, MaxToolCalls: c.MaxToolCalls, Listen: c.Listen,
 	}
 }
@@ -548,6 +550,20 @@ func (s *Server) stopProcess(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// postShellAction moves a bash call the turn is still waiting on to the
+// background, or stops it.
+func (s *Server) postShellAction(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	if err := s.engine.ShellAction(sess.ID, r.PathValue("call"), r.PathValue("action")); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // getProcessOutput is one command's output, cut to the same limit the file
 // panel reads a file at.
 func (s *Server) getProcessOutput(w http.ResponseWriter, r *http.Request) {
@@ -979,6 +995,7 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		CompactAt        *float64 `json:"compact_at"`
 		Shell            *string  `json:"shell"`
 		CommandTimeoutS  *int     `json:"command_timeout_s"`
+		BackgroundAfterS *int     `json:"background_after_s"`
 		OutputLimitBytes *int     `json:"output_limit_bytes"`
 		MaxToolCalls     *int     `json:"max_tool_calls"`
 		Listen           *string  `json:"listen"`
@@ -988,6 +1005,10 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.MaxToolCalls != nil && (*body.MaxToolCalls < 0 || *body.MaxToolCalls > 1000) {
 		writeError(w, http.StatusBadRequest, "Max tool calls is outside 0 to 1000: 0 is no limit")
+		return
+	}
+	if body.BackgroundAfterS != nil && (*body.BackgroundAfterS < 0 || *body.BackgroundAfterS > 3600) {
+		writeError(w, http.StatusBadRequest, "Background after is outside 0 to 3600 seconds: 0 waits for the timeout")
 		return
 	}
 	if body.Permissions != nil && !config.ValidMode(*body.Permissions) {
@@ -1014,6 +1035,9 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.CommandTimeoutS != nil {
 			c.CommandTimeout = time.Duration(*body.CommandTimeoutS) * time.Second
+		}
+		if body.BackgroundAfterS != nil {
+			c.BackgroundAfter = time.Duration(*body.BackgroundAfterS) * time.Second
 		}
 		if body.OutputLimitBytes != nil {
 			c.OutputLimitBytes = *body.OutputLimitBytes
@@ -1048,7 +1072,7 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) (*agent.Session
 func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrNotLast),
-		errors.Is(err, agent.ErrCompacting), errors.Is(err, agent.ErrTooShort):
+		errors.Is(err, agent.ErrCompacting), errors.Is(err, agent.ErrTooShort), errors.Is(err, agent.ErrNoShell):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, agent.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())

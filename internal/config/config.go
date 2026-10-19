@@ -28,6 +28,7 @@ type File struct {
 	CompactAt        *float64    `json:"compact_at,omitempty"`
 	Shell            *string     `json:"shell,omitempty"`
 	CommandTimeoutS  *int        `json:"command_timeout_s,omitempty"`
+	BackgroundAfterS *int        `json:"background_after_s,omitempty"`
 	OutputLimitBytes *int        `json:"output_limit_bytes,omitempty"`
 	MaxToolCalls     *int        `json:"max_tool_calls,omitempty"`
 	Search           *FileSearch `json:"search,omitempty"`
@@ -86,10 +87,13 @@ type Config struct {
 	// Toolset is the one a new session is created with. A session keeps its
 	// own, since a list that changes mid-session invalidates the prompt cache
 	// and leaves calls in the history to tools no longer sent.
-	Toolset          Toolset
-	CompactAt        float64
-	Shell            string
-	CommandTimeout   time.Duration
+	Toolset        Toolset
+	CompactAt      float64
+	Shell          string
+	CommandTimeout time.Duration
+	// BackgroundAfter is how long a bash call is waited on before it moves to
+	// the background and the turn goes on. Zero waits for the timeout.
+	BackgroundAfter  time.Duration
 	OutputLimitBytes int
 	// MaxToolCalls bounds the tool calls one turn may make. Zero is no bound,
 	// which leaves the Stop button as the only thing that ends a runaway turn.
@@ -422,6 +426,7 @@ func Defaults() Config {
 		CompactAt:        0.8,
 		Shell:            defaultShell(),
 		CommandTimeout:   120 * time.Second,
+		BackgroundAfter:  30 * time.Second,
 		OutputLimitBytes: 16384,
 		MaxToolCalls:     50,
 		Search: Search{
@@ -511,6 +516,13 @@ func (f File) Resolve(d Config) (Config, []string) {
 			note("command_timeout_s " + strconv.Itoa(*f.CommandTimeoutS) + " is outside 1 to 3600, using 120")
 		}
 	}
+	if f.BackgroundAfterS != nil {
+		if *f.BackgroundAfterS >= 0 && *f.BackgroundAfterS <= 3600 {
+			c.BackgroundAfter = time.Duration(*f.BackgroundAfterS) * time.Second
+		} else {
+			note("background_after_s " + strconv.Itoa(*f.BackgroundAfterS) + " is outside 0 to 3600, using 30")
+		}
+	}
 	if f.OutputLimitBytes != nil {
 		if *f.OutputLimitBytes >= 1024 && *f.OutputLimitBytes <= 4194304 {
 			c.OutputLimitBytes = *f.OutputLimitBytes
@@ -555,6 +567,7 @@ func (c Config) File() File {
 	toolset := string(c.Toolset)
 	shell := c.Shell
 	timeout, limit := int(c.CommandTimeout/time.Second), c.OutputLimitBytes
+	after := int(c.BackgroundAfter / time.Second)
 	maxCalls, agent := c.MaxToolCalls, c.AgentID
 	sProvider, sMaxHits, sMaxChars := string(c.Search.Provider), c.Search.MaxHits, c.Search.MaxChars
 	sTimeout := int(c.Search.Timeout / time.Second)
@@ -613,6 +626,7 @@ func (c Config) File() File {
 		CompactAt:        &compact,
 		Shell:            &shell,
 		CommandTimeoutS:  &timeout,
+		BackgroundAfterS: &after,
 		OutputLimitBytes: &limit,
 		MaxToolCalls:     &maxCalls,
 		Search:           &block,

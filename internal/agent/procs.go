@@ -45,7 +45,13 @@ type running struct {
 	pending []string
 	stopped bool
 	silent  bool
-	done    chan struct{}
+	// watched is a command a bash call is still waiting on. Nothing is told
+	// about it until it is promoted, and its end is the call's result rather
+	// than a message.
+	watched bool
+	// code is the exit code once done is closed.
+	code int
+	done chan struct{}
 }
 
 // Registry holds the background commands of every session. It publishes their
@@ -123,7 +129,66 @@ func (r *Registry) Start(ctx context.Context, runner *tools.Runner, session, cal
 	return pr.view, nil
 }
 
-// line records one line of output and queues it for the next tail event.
+// Watch starts a command for a bash call that waits on it. It is not listed
+// or announced unless Promote moves it to the background.
+func (r *Registry) Watch(ctx context.Context, runner *tools.Runner, session, call string, args tools.RunShellArgs) (*running, error) {
+	pr := &running{
+		view: Process{
+			Session:   session,
+			Call:      call,
+			Command:   args.Command,
+			Status:    "running",
+			StartedAt: time.Now().UnixMilli(),
+			Tail:      []string{},
+		},
+		watched: true,
+		done:    make(chan struct{}),
+	}
+	handle, err := runner.WatchShell(ctx, args, func(line string) { r.line(pr, line) })
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	pr.handle = handle
+	pr.view.PID = handle.PID()
+	pr.view.Spill = handle.SpillPath()
+	r.mu.Unlock()
+	go func() {
+		code, _, _, _ := handle.Wait()
+		r.finish(pr, code)
+	}()
+	return pr, nil
+}
+
+// Promote moves a watched command to the background: it is listed, its tail
+// is published, and its end is told to the conversation. It reports false
+// when the command has already ended.
+func (r *Registry) Promote(pr *running) bool {
+	r.mu.Lock()
+	if pr.view.Status != "running" {
+		r.mu.Unlock()
+		return false
+	}
+	r.next++
+	pr.view.ID = fmt.Sprintf("p-%d", r.next)
+	pr.watched = false
+	pr.pending = append([]string(nil), pr.view.Tail...)
+	pr.handle.Keep()
+	r.procs[pr.view.ID] = pr
+	r.order = append(r.order, pr.view.ID)
+	alive := r.runningLocked(pr.view.Session)
+	r.mu.Unlock()
+	r.publish(pr.view.Session, ev("proc_start", map[string]any{
+		"id": pr.view.ID, "call": pr.view.Call, "command": pr.view.Command,
+		"pid": pr.view.PID, "started_at": pr.view.StartedAt,
+	}))
+	r.publish(pr.view.Session, ev("procs", map[string]any{"running": alive}))
+	go r.flush(pr)
+	return true
+}
+
+// line records one line of output and queues it for the next tail event. A
+// watched command keeps only its tail, which Promote queues.
 func (r *Registry) line(pr *running, line string) {
 	r.mu.Lock()
 	if len(pr.view.Tail) >= tailLines {
@@ -131,7 +196,9 @@ func (r *Registry) line(pr *running, line string) {
 		pr.view.Truncated = true
 	}
 	pr.view.Tail = append(pr.view.Tail, line)
-	pr.pending = append(pr.pending, line)
+	if !pr.watched {
+		pr.pending = append(pr.pending, line)
+	}
 	r.mu.Unlock()
 }
 
@@ -164,8 +231,16 @@ func (r *Registry) send(pr *running) {
 }
 
 // finish closes a process, reports how it ended, and tells the conversation.
+// A watched command only closes: the call waiting on it reports the end.
 func (r *Registry) finish(pr *running, code int) {
 	r.mu.Lock()
+	pr.code = code
+	if pr.watched {
+		pr.view.Status = "done"
+		r.mu.Unlock()
+		close(pr.done)
+		return
+	}
 	if pr.stopped {
 		pr.view.Status = "stopped"
 		pr.view.ExitCode = intPtr(130)

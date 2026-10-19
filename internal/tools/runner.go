@@ -53,6 +53,10 @@ type Runner struct {
 	// Spill is the folder where a command whose output was cut saves all of
 	// it. read and grep reach it by absolute path; empty saves nothing.
 	Spill string
+
+	// BackgroundAfter is how long a bash call is waited on before it moves
+	// to the background. Zero waits for its timeout.
+	BackgroundAfter time.Duration
 }
 
 // Hide sets the directory no tool may reach, resolved the way Root is.
@@ -128,6 +132,8 @@ func NewRunner(root string, cfg config.Config) (*Runner, error) {
 		SearchHits:    cfg.Search.MaxHits,
 		SearchChars:   min(cfg.Search.MaxChars, limit),
 		SearchTimeout: searchTimeout,
+
+		BackgroundAfter: cfg.BackgroundAfter,
 	}, nil
 }
 

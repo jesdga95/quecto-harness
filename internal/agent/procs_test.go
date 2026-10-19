@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -207,5 +208,73 @@ func TestABackgroundFlagThatIsNotABooleanRunsNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(h.project, "ran")); err == nil {
 		t.Error("the refused call ran its command")
+	}
+}
+
+// A command still running after the configured wait moves to the background,
+// and the call returns so the turn goes on.
+func TestASlowCommandMovesToTheBackground(t *testing.T) {
+	h := newHarness(t, "stream_sleep.txt", "stream_plain.txt")
+	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeAllowlist; c.BackgroundAfter = time.Second })
+	h.cfg.AddAllow(h.project, "sleep")
+	s := h.session(t)
+	h.engine.Send(s.ID, "wait a while", nil)
+	waitIdle(t, s)
+
+	out := toolOutput(t, s, "bash")
+	if !strings.Contains(out, "Still running after 1s, so it was moved to the background as p-1") {
+		t.Errorf("the bash answer = %q", out)
+	}
+	procs := h.engine.Processes(s.ID)
+	if len(procs) != 1 || procs[0].Status != "running" || procs[0].Command != "sleep 30" {
+		t.Fatalf("processes = %v", procs)
+	}
+	if len(h.rec.ofType("proc_start")) != 1 {
+		t.Error("the move to the background was not announced")
+	}
+	h.engine.StopProcesses(s.ID, true)
+	waitEnded(t, h, s.ID)
+}
+
+// The person can stop a command the turn is waiting on, or move it to the
+// background, without stopping the turn.
+func TestAForegroundCommandCanBeStoppedOrMoved(t *testing.T) {
+	for _, action := range []string{shellStop, shellBackground} {
+		t.Run(action, func(t *testing.T) {
+			h := newHarness(t, "stream_sleep.txt", "stream_plain.txt")
+			h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeAllowlist; c.BackgroundAfter = 0 })
+			h.cfg.AddAllow(h.project, "sleep")
+			s := h.session(t)
+			h.engine.Send(s.ID, "wait a while", nil)
+
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				err := h.engine.ShellAction(s.ID, "call_s", action)
+				if err == nil {
+					break
+				}
+				if !errors.Is(err, ErrNoShell) || time.Now().After(deadline) {
+					t.Fatal(err)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			waitIdle(t, s)
+
+			out := toolOutput(t, s, "bash")
+			want := "stopped by the user"
+			if action == shellBackground {
+				want = "The user moved it to the background after 0s"
+			}
+			if !strings.Contains(out, want) {
+				t.Errorf("the bash answer = %q, want it to say %q", out, want)
+			}
+			if err := h.engine.ShellAction(s.ID, "call_s", action); !errors.Is(err, ErrNoShell) {
+				t.Errorf("an action on a finished call = %v", err)
+			}
+			h.engine.StopProcesses(s.ID, true)
+			if action == shellBackground {
+				waitEnded(t, h, s.ID)
+			}
+		})
 	}
 }

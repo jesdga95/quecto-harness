@@ -50,6 +50,7 @@ var (
 	ErrNoModel    = errors.New("The agent has no model: choose one in the agents dialog")
 	ErrCompacting = errors.New("The conversation is being compacted: that finishes on its own")
 	ErrTooShort   = errors.New("Not enough content to compact: keep working and try again later")
+	ErrNoShell    = errors.New("That command is not running in the foreground any more")
 )
 
 // Engine owns every live session and dispatches turns.
@@ -2016,19 +2017,12 @@ func (e *Engine) keepImage(o *outcome, img *tools.Image) {
 // yet.
 func (e *Engine) runBash(ctx context.Context, s *Session, runner *tools.Runner, call llm.ToolCall) (tools.Result, error) {
 	raw := json.RawMessage(call.Function.Arguments)
-	if !runner.ShellBackground(raw) {
-		res, err := runner.RunShell(ctx, raw)
-		if err == nil && res.ExitCode != nil && *res.ExitCode == 0 {
-			var args tools.RunShellArgs
-			if json.Unmarshal(raw, &args) == nil {
-				runner.NoteShellReads(args.Command)
-			}
-		}
-		return res, err
-	}
 	var args tools.RunShellArgs
 	if err := tools.DecodeArgs("bash", raw, &args); err != nil {
 		return tools.Result{}, err
+	}
+	if !args.Background {
+		return e.watchBash(ctx, s, runner, call, args, runner.ShellTimeout(raw))
 	}
 	pr, err := e.procs.Start(e.ctx, runner, s.ID, call.ID, args)
 	if err != nil {
@@ -2042,6 +2036,109 @@ func (e *Engine) runBash(ctx context.Context, s *Session, runner *tools.Runner, 
 		Output: out,
 		Meta:   map[string]any{"command": args.Command, "process": pr.ID, "background": true, "spill": pr.Spill},
 	}, nil
+}
+
+// Actions the person can take on a bash call that is still being waited on.
+const (
+	shellBackground = "background"
+	shellStop       = "stop"
+)
+
+// watchBash runs a bash call and waits on it until it ends, its timeout
+// passes, or it has run for the configured time, when it moves to the
+// background and the call returns what it has printed so far. The person can
+// move it or stop it sooner.
+func (e *Engine) watchBash(ctx context.Context, s *Session, runner *tools.Runner, call llm.ToolCall, args tools.RunShellArgs, timeout time.Duration) (tools.Result, error) {
+	pr, err := e.procs.Watch(e.ctx, runner, s.ID, call.ID, args)
+	if err != nil {
+		return tools.Result{}, err
+	}
+	actions := make(chan string, 1)
+	s.mu.Lock()
+	if s.shells == nil {
+		s.shells = map[string]chan string{}
+	}
+	s.shells[call.ID] = actions
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.shells, call.ID)
+		s.mu.Unlock()
+	}()
+
+	began := time.Now()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	var after <-chan time.Time
+	if wait := runner.BackgroundAfter; wait > 0 && wait < timeout {
+		t := time.NewTimer(wait)
+		defer t.Stop()
+		after = t.C
+	}
+	end := func(timedOut, stopped bool) (tools.Result, error) {
+		<-pr.done
+		res := pr.handle.Result(runner.OutputLimit, pr.code, timedOut, stopped)
+		if !timedOut && !stopped && pr.code == 0 {
+			runner.NoteShellReads(args.Command)
+		}
+		return res, nil
+	}
+	moved := func(why string) (tools.Result, error) {
+		if !e.procs.Promote(pr) {
+			return end(false, false)
+		}
+		out, _ := pr.handle.Output(runner.OutputLimit)
+		text := fmt.Sprintf("%s, so it was moved to the background as %s (pid %d). Its exit code and last lines arrive as a message when it ends; processes shows it meanwhile.",
+			why, pr.view.ID, pr.view.PID)
+		if out != "" {
+			text += "\nOutput so far:\n" + strings.TrimRight(out, "\n")
+		}
+		return tools.Result{
+			Output: text,
+			Meta:   map[string]any{"command": args.Command, "process": pr.view.ID, "background": true, "spill": pr.handle.SpillPath()},
+		}, nil
+	}
+	select {
+	case <-pr.done:
+		return end(false, false)
+	case <-ctx.Done():
+		pr.handle.Stop()
+		return end(false, true)
+	case <-deadline.C:
+		pr.handle.Stop()
+		return end(true, false)
+	case <-after:
+		return moved(fmt.Sprintf("Still running after %ds", int(runner.BackgroundAfter/time.Second)))
+	case act := <-actions:
+		if act == shellStop {
+			pr.handle.StopBecause("stopped by the user")
+			return end(false, true)
+		}
+		return moved(fmt.Sprintf("The user moved it to the background after %ds", int(time.Since(began)/time.Second)))
+	}
+}
+
+// ShellAction moves a bash call that is still being waited on to the
+// background, or stops it.
+func (e *Engine) ShellAction(id, callID, action string) error {
+	if action != shellBackground && action != shellStop {
+		return fmt.Errorf("Unknown action %q: use background or stop", action)
+	}
+	s, err := e.Get(id)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	actions := s.shells[callID]
+	s.mu.Unlock()
+	if actions == nil {
+		return ErrNoShell
+	}
+	select {
+	case actions <- action:
+	default:
+	}
+	return nil
 }
 
 // listProcesses reports the background commands of a session and the last

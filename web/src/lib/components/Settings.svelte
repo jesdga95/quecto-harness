@@ -47,6 +47,7 @@
       max_tool_calls: 50,
       shell: "/bin/sh",
       command_timeout_s: 120,
+      background_after_s: 30,
       output_limit_bytes: 16384,
       projects: [],
     };
@@ -114,6 +115,7 @@
     "compact_at",
     "shell",
     "command_timeout_s",
+    "background_after_s",
     "output_limit_bytes",
     "max_tool_calls",
   ] as const;

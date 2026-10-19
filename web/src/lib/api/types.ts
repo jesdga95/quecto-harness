@@ -166,6 +166,9 @@ export interface Config {
   max_tool_calls: number;
   shell: string;
   command_timeout_s: number;
+  /** Seconds a bash call is waited on before it moves to the background.
+      Zero waits for its timeout. */
+  background_after_s: number;
   output_limit_bytes: number;
   projects: string[];
 }
@@ -671,6 +674,9 @@ export interface HarnessApi {
   listProcesses(id: string): Promise<Process[]>;
   /** Ends one of them. A command that already went is not an error. */
   stopProcess(id: string, proc: string): Promise<void>;
+  /** Moves a bash call the turn is still waiting on to the background, or
+      stops it. */
+  shellAction(id: string, call: string, action: "background" | "stop"): Promise<void>;
   /** One command's output, cut to the panel's limit. */
   processOutput(id: string, proc: string): Promise<{ output: string; truncated: boolean }>;
   /** One file in the session's project. Rejects with the harness's message

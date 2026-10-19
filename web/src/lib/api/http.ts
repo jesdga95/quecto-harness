@@ -80,6 +80,7 @@ interface WireConfig {
   max_tool_calls?: number;
   shell?: string;
   command_timeout_s?: number;
+  background_after_s?: number;
   output_limit_bytes?: number;
   listen?: string;
 }
@@ -770,6 +771,7 @@ function toConfig(c: WireConfig): Config {
     max_tool_calls: c.max_tool_calls ?? 50,
     shell: c.shell ?? "/bin/sh",
     command_timeout_s: c.command_timeout_s ?? 120,
+    background_after_s: c.background_after_s ?? 30,
     output_limit_bytes: c.output_limit_bytes ?? 16384,
     projects: projectPaths.slice(),
   };
@@ -1416,6 +1418,13 @@ class HttpApi implements HarnessApi {
   async stopProcess(id: string, proc: string): Promise<void> {
     await call<unknown>(
       `/sessions/${encodeURIComponent(id)}/processes/${encodeURIComponent(proc)}/stop`,
+      "POST",
+    );
+  }
+
+  async shellAction(id: string, callId: string, action: "background" | "stop"): Promise<void> {
+    await call<unknown>(
+      `/sessions/${encodeURIComponent(id)}/calls/${encodeURIComponent(callId)}/${action}`,
       "POST",
     );
   }
