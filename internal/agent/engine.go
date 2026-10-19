@@ -759,7 +759,7 @@ func (e *Engine) Compact(id string) error {
 	go func() {
 		defer e.wg.Done()
 		defer cancel()
-		if err := e.compact(ctx, s, e.backends.For(a), a, e.briefFor(s, e.cfg.Config()), e.turnCaps(s)); err != nil {
+		if err := e.compact(ctx, s, e.backends.For(a), a, e.briefFor(s, e.cfg.Config()), e.turnCaps(s), true); err != nil {
 			e.endWithError(s, err, 0, turnClock{}, nil)
 			return
 		}
@@ -1263,7 +1263,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		// A context filled by the prompt itself is sent as it stands.
 		if nctx > 0 && float64(fill) >= compactLimit(nctx, cfg.CompactAt, a.MaxTokens) && enough {
 			e.setState(s, StateCompacting)
-			if err := e.compact(ctx, s, back, a, b, caps); err != nil {
+			if err := e.compact(ctx, s, back, a, b, caps, true); err != nil {
 				e.endWithError(s, err, iteration, clock, nil)
 				return
 			}
@@ -1313,7 +1313,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			overflowed = true
 			e.dropLive(s)
 			e.setState(s, StateCompacting)
-			if err := e.compact(ctx, s, back, a, b, caps); err != nil {
+			if err := e.compact(ctx, s, back, a, b, caps, false); err != nil {
 				e.endWithError(s, err, iteration, clock, nil)
 				return
 			}
@@ -2182,12 +2182,13 @@ func argSummary(call llm.ToolCall) (command, path string) {
 // latest messages, which it keeps word for word. A failure leaves the history
 // untouched, so a failed compaction never loses context.
 //
-// The request carries the turn's tools and effort. A chat template renders
-// both at the head of the prompt, so dropping either would miss the server's
-// prompt cache and read the whole conversation again. What it summarises is
-// a prefix of what the server holds, so that part is cached as well. A tool
+// The request carries the turn's tools and effort, which a chat template
+// renders at the head of the prompt. With whole set it sends the conversation
+// as the server holds it and adds the instruction after, so only the
+// instruction is read. Without it the request stops where the kept messages
+// begin, which is what a window that has overflowed can still take. A tool
 // call is ignored.
-func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config.Agent, b brief, caps llm.Caps) error {
+func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config.Agent, b brief, caps llm.Caps, whole bool) error {
 	s.mu.Lock()
 	before := s.computeFill()
 	start := s.tailStart()
@@ -2197,7 +2198,13 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 		tailSeq = s.Entries[start].Seq
 	}
 	s.mu.Unlock()
-	msgs := append(e.messagesUntil(s, a, b, start), llm.Message{Role: "user", Content: prompts.Compact(kept)})
+	end := start
+	if whole {
+		end = -1
+	}
+	// A summary of the whole conversation covers the kept messages too, so
+	// it is not told they follow it.
+	msgs := append(e.messagesUntil(s, a, b, end), llm.Message{Role: "user", Content: prompts.Compact(kept && !whole)})
 
 	// A summary is a model call like any other, and is kept on the entry it
 	// produced so the turn that asked for it counts it. Its own prompt counted

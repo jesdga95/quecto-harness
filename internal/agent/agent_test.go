@@ -1233,6 +1233,37 @@ func TestCompactRefusesTooLittle(t *testing.T) {
 	}
 }
 
+// The summary is asked for after the whole conversation, so the request
+// extends what the server holds and only the instruction is read.
+func TestCompactionSendsTheWholeConversation(t *testing.T) {
+	h := newHarness(t, "stream_summary.txt")
+	s := h.session(t)
+	s.mu.Lock()
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: earlierWork, InContext: true, Visible: true})
+	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", Content: "Done.", InContext: true, Visible: true})
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "the latest message", InContext: true, Visible: true})
+	want := len(s.contextMessages(config.Agent{}, "darwin", "", topBrief(), nil))
+	s.mu.Unlock()
+
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+
+	msgs, _ := h.replay.Body(0)["messages"].([]any)
+	if len(msgs) != want+1 {
+		t.Fatalf("the summary request sent %d messages, want the %d in context and the instruction", len(msgs), want)
+	}
+	latest, _ := msgs[want-1].(map[string]any)
+	if latest["content"] != "the latest message" {
+		t.Errorf("the message before the instruction = %v, want the latest one", latest["content"])
+	}
+	ask, _ := msgs[want].(map[string]any)
+	if content, _ := ask["content"].(string); !strings.HasPrefix(content, "Write a summary") || strings.Contains(content, "kept word for word") {
+		t.Errorf("instruction = %q", content)
+	}
+}
+
 func TestCompactionRewritesInContextOnly(t *testing.T) {
 	h := newHarness(t, "stream_summary.txt")
 	s := h.session(t)
