@@ -66,7 +66,7 @@ func (r *Runner) WriteFile(ctx context.Context, raw json.RawMessage) (Result, er
 		return Result{}, fmt.Errorf("create the folder for %s: check the permissions on the project", args.Path)
 	}
 	data := []byte(args.Content)
-	if err := config.WriteAtomic(path, data, perm); err != nil {
+	if err := config.WriteAtomicNoSync(path, data, perm); err != nil {
 		return Result{}, fmt.Errorf("write %s: %s", args.Path, err)
 	}
 	if r.Baseline != nil {

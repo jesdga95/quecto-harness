@@ -8,10 +8,39 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
+	"strconv"
+	"sync"
 )
 
 const maxReadableFile = 64 << 20
+
+// sniffBytes is how much of a file is checked for binary content.
+const sniffBytes = 8192
+
+// readers holds the buffered readers read and grep open files with, so a
+// read does not allocate a fresh 64 KB buffer.
+var readers = sync.Pool{New: func() any { return bufio.NewReaderSize(nil, 64<<10) }}
+
+func openReader(f *os.File) *bufio.Reader {
+	rd := readers.Get().(*bufio.Reader)
+	rd.Reset(f)
+	return rd
+}
+
+func closeReader(rd *bufio.Reader) {
+	rd.Reset(nil)
+	readers.Put(rd)
+}
+
+// sniff reports whether the start of a buffered file looks binary, without
+// consuming it.
+func sniff(rd *bufio.Reader) (bool, error) {
+	head, err := rd.Peek(sniffBytes)
+	if err != nil && err != io.EOF {
+		return false, err
+	}
+	return looksBinary(head), nil
+}
 
 // ReadFile returns numbered lines from a text file in the project.
 func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, error) {
@@ -49,16 +78,14 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 	}
 	defer f.Close()
 
-	sniff := make([]byte, 8192)
-	n, err := io.ReadFull(f, sniff)
-	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+	rd := openReader(f)
+	defer closeReader(rd)
+	binary, err := sniff(rd)
+	if err != nil {
 		return Result{}, fmt.Errorf("read %s: %s", args.Path, err)
 	}
-	if looksBinary(sniff[:n]) {
+	if binary {
 		return Result{}, fmt.Errorf("%s looks like a binary file, not read", args.Path)
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return Result{}, fmt.Errorf("read %s: %s", args.Path, err)
 	}
 
 	offset := 1
@@ -70,13 +97,13 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 		limit = *args.Limit
 	}
 
-	rd := bufio.NewReaderSize(f, 64<<10)
 	clip := min(r.ReadLimit, readLineClip)
 
-	var b strings.Builder
+	out := make([]byte, 0, min(int(info.Size())+int(info.Size())/4+64, r.ReadLimit+1024))
+	var scratch []byte
 	lineNo, emitted, stoppedOnBytes := 0, 0, false
 	for emitted < limit {
-		line, over, ok, err := readLine(rd, clip)
+		line, over, ok, err := readLine(rd, clip, &scratch)
 		if err != nil {
 			return Result{}, fmt.Errorf("read %s: %s", args.Path, err)
 		}
@@ -87,27 +114,28 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 		if lineNo < offset {
 			continue
 		}
-		if over > 0 {
-			line += fmt.Sprintf(" ... %d more bytes on this line", over)
-		}
-		if b.Len() >= r.ReadLimit {
+		if len(out) >= r.ReadLimit {
 			stoppedOnBytes = true
 			break
 		}
-		fmt.Fprintf(&b, "%6d\t%s\n", lineNo, line)
+		out = appendLineNo(out, lineNo)
+		out = append(out, '\t')
+		out = append(out, line...)
+		if over > 0 {
+			out = fmt.Appendf(out, " ... %d more bytes on this line", over)
+		}
+		out = append(out, '\n')
 		emitted++
 	}
 
-	out := b.String()
 	truncated := false
 	if stoppedOnBytes {
-		fmt.Fprintf(&b, "... stopped at %d KB, use offset %d\n", r.ReadLimit/1024, lineNo)
-		out = b.String()
+		out = fmt.Appendf(out, "... stopped at %d KB, use offset %d\n", r.ReadLimit/1024, lineNo)
 		truncated = true
 	} else {
 		remaining, counted := 0, true
 		for {
-			_, _, ok, err := readLine(rd, 0)
+			_, _, ok, err := readLine(rd, 0, &scratch)
 			if err != nil {
 				// Say that the file goes on rather than let a failed count
 				// read as end of file, which would hide the rest of it.
@@ -121,12 +149,10 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 		}
 		switch {
 		case !counted:
-			fmt.Fprintf(&b, "... more lines follow, use offset %d\n", lineNo+1)
-			out = b.String()
+			out = fmt.Appendf(out, "... more lines follow, use offset %d\n", lineNo+1)
 			truncated = true
 		case remaining > 0:
-			fmt.Fprintf(&b, "... %d more lines, use offset %d\n", remaining, lineNo+1)
-			out = b.String()
+			out = fmt.Appendf(out, "... %d more lines, use offset %d\n", remaining, lineNo+1)
 			truncated = true
 		}
 	}
@@ -136,7 +162,17 @@ func (r *Runner) ReadFile(ctx context.Context, raw json.RawMessage) (Result, err
 	if r.Seen != nil {
 		r.Seen.note(path, info)
 	}
-	return Result{Output: out, Truncated: truncated, Bytes: len(out)}, nil
+	return Result{Output: string(out), Truncated: truncated, Bytes: len(out)}, nil
+}
+
+// appendLineNo writes a line number right-aligned in six columns.
+func appendLineNo(dst []byte, n int) []byte {
+	var digits [20]byte
+	d := strconv.AppendInt(digits[:0], int64(n), 10)
+	for i := len(d); i < 6; i++ {
+		dst = append(dst, ' ')
+	}
+	return append(dst, d...)
 }
 
 // readLineClip is how much of one line a read shows. A minified file is one
@@ -147,9 +183,12 @@ const readLineClip = 2000
 // bytes of it and counting the rest as over. A minified file is one very long
 // line, and clipping it keeps the rest of the file readable where refusing the
 // line would abandon the whole read. ok is false at end of file.
-func readLine(rd *bufio.Reader, clip int) (line string, over int, ok bool, err error) {
-	var buf []byte
-	seen := false
+//
+// The line is valid until the next call: it points into the reader's buffer,
+// or into scratch when it spans more than one buffer or is clipped.
+func readLine(rd *bufio.Reader, clip int, scratch *[]byte) (line []byte, over int, ok bool, err error) {
+	buf := (*scratch)[:0]
+	long, seen := false, false
 	for {
 		chunk, err := rd.ReadSlice('\n')
 		if len(chunk) > 0 {
@@ -158,9 +197,10 @@ func readLine(rd *bufio.Reader, clip int) (line string, over int, ok bool, err e
 		switch err {
 		case bufio.ErrBufferFull:
 			buf, over = appendClipped(buf, chunk, over, clip)
+			long = true
 		case nil, io.EOF:
 			if err == io.EOF && !seen {
-				return "", 0, false, nil
+				return nil, 0, false, nil
 			}
 			if n := len(chunk); n > 0 && chunk[n-1] == '\n' {
 				chunk = chunk[:n-1]
@@ -168,10 +208,14 @@ func readLine(rd *bufio.Reader, clip int) (line string, over int, ok bool, err e
 					chunk = chunk[:n-1]
 				}
 			}
+			if !long && len(chunk) <= clip {
+				return chunk, 0, true, nil
+			}
 			buf, over = appendClipped(buf, chunk, over, clip)
-			return string(buf), over, true, nil
+			*scratch = buf
+			return buf, over, true, nil
 		default:
-			return "", 0, false, err
+			return nil, 0, false, err
 		}
 	}
 }

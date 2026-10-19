@@ -91,7 +91,7 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 	if crlf {
 		updated = strings.ReplaceAll(updated, "\n", "\r\n")
 	}
-	if err := config.WriteAtomic(path, []byte(updated), info.Mode().Perm()); err != nil {
+	if err := config.WriteAtomicNoSync(path, []byte(updated), info.Mode().Perm()); err != nil {
 		return Result{}, fmt.Errorf("write %s: %s", args.Path, err)
 	}
 	if r.Baseline != nil {

@@ -1,12 +1,10 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -166,30 +164,25 @@ func (f *finder) scan(path string) error {
 	}
 	defer file.Close()
 
-	sniff := make([]byte, 8192)
-	n, err := io.ReadFull(file, sniff)
-	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		return nil
-	}
-	if looksBinary(sniff[:n]) {
-		return nil
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
+	rd := openReader(file)
+	defer closeReader(rd)
+	if binary, err := sniff(rd); err != nil || binary {
 		return nil
 	}
 
-	rd := bufio.NewReaderSize(file, 64<<10)
 	rel := f.runner.rel(path)
+	var scratch []byte
 	lineNo, inFile := 0, 0
 	for {
-		line, _, ok, err := readLine(rd, findScanClip)
+		raw, _, ok, err := readLine(rd, findScanClip, &scratch)
 		if err != nil || !ok {
 			break
 		}
 		lineNo++
-		if !f.re.MatchString(line) {
+		if !f.re.Match(raw) {
 			continue
 		}
+		line := string(raw)
 		if inFile == 0 {
 			f.files = append(f.files, rel)
 		}

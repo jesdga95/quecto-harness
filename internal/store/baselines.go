@@ -59,7 +59,7 @@ func (s *Sessions) WriteBlob(id, name string, data []byte) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("Create %s: check the permissions on the sessions folder", dir)
 	}
-	return config.WriteAtomic(filepath.Join(dir, name), data, 0o600)
+	return config.WriteAtomicNoSync(filepath.Join(dir, name), data, 0o600)
 }
 
 // Blob reads one baseline copy back.
