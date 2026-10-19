@@ -2258,9 +2258,13 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	if s.carriesTodos() {
 		meta["todos"] = renderTodos(s.Todos)
 	}
+	// The last message the user sent is carried in the summary unless it is
+	// one of the messages kept.
 	for i := len(s.Entries) - 1; i >= 0; i-- {
 		if s.Entries[i].Kind == "user" {
-			meta["last_user"] = s.Entries[i].Content
+			if !kept || s.Entries[i].Seq < tailSeq {
+				meta["last_user"] = s.Entries[i].Content
+			}
 			break
 		}
 	}

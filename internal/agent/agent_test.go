@@ -2763,6 +2763,21 @@ func topBrief() brief {
 // A compaction keeps the latest messages word for word, starting on an
 // assistant entry so a call stays beside its result, and the summary is sent
 // ahead of them. Dropping the summary gives everything back.
+// A run too large for the tail is summarised rather than read again after
+// the summary.
+func TestCompactionKeepsOnlyASmallTail(t *testing.T) {
+	s := newSession("sess_tail", "/p", "a", "m", config.ToolsetFull)
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "read it", InContext: true, Visible: true})
+	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
+		ToolCalls: []llm.ToolCall{{ID: "call_1", Type: "function", Function: llm.FunctionCall{Name: "read", Arguments: `{"path":"a.go"}`}}}})
+	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: "call_1", ToolName: "read",
+		Content: strings.Repeat("r", tailChars), InContext: true, Visible: true})
+	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", Content: "latest words", InContext: true, Visible: true})
+	if start := s.tailStart(); start != 3 {
+		t.Errorf("tail starts at %d, want the latest reply alone", start)
+	}
+}
+
 func TestCompactionKeepsTheTail(t *testing.T) {
 	s := newSession("sess_tail", "/p", "a", "m", config.ToolsetFull)
 	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: strings.Repeat("x", 4000), InContext: true, Visible: true})

@@ -866,9 +866,13 @@ func (s *Session) computeFill() int {
 // this would not shrink the context.
 const compactFloor = 4000
 
-// tailShare is the part of the context a compaction keeps word for word
-// rather than summarising, so the latest request and results survive intact.
-const tailShare = 0.16
+// tailChars and tailShare bound what a compaction keeps word for word rather
+// than summarising: the smaller of a fixed size and a share of the context.
+// Everything kept is read again after the summary.
+const (
+	tailChars = 16000
+	tailShare = 0.1
+)
 
 // compactable reports whether enough has been said since the last summary to
 // be worth summarising again. The messages the last one kept count, since
@@ -889,7 +893,7 @@ func (s *Session) compactable() bool {
 // a second user message after the summary. It is len(s.Entries) when nothing
 // fits. The caller holds the lock.
 func (s *Session) tailStart() int {
-	budget := int(tailShare * float64(s.estimateChars(-1)))
+	budget := min(tailChars, int(tailShare*float64(s.estimateChars(-1))))
 	start, size := len(s.Entries), 0
 	for i := len(s.Entries) - 1; i >= 0; i-- {
 		e := s.Entries[i]
