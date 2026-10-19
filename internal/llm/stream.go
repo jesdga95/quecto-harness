@@ -129,7 +129,7 @@ func (c *Client) stream(ctx context.Context, path string, body []byte, model str
 	httpReq.Header.Set("Cache-Control", "no-store")
 	c.authorize(httpReq)
 
-	resp, err := c.httpClient().Do(httpReq)
+	resp, err := c.send(httpReq)
 	if err != nil {
 		return Result{}, classify("chat", c.BaseURL, model, 0, "", err)
 	}

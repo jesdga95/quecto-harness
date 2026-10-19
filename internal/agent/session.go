@@ -814,8 +814,12 @@ func repairToolResults(entries []store.Entry, at int, calls []llm.ToolCall, imag
 
 // toolMessage is one result as the model reads it. A result with a picture is
 // an array of parts, its text first; a picture whose file has gone is left
-// out, and the text still names it.
+// out, and the text still names it. A result with no text says so, since a
+// chat template may refuse a message without content.
 func toolMessage(id string, e store.Entry, images map[string]llm.Part) llm.Message {
+	if e.Content == "" {
+		e.Content = "(no output)"
+	}
 	m := llm.Message{Role: "tool", ToolCallID: id, Name: e.ToolName, Content: e.Content}
 	var parts []llm.Part
 	for _, a := range e.Attachments {

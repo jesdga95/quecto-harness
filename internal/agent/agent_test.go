@@ -2898,3 +2898,12 @@ func TestReadsInOneReplyRunTogether(t *testing.T) {
 		t.Errorf("tool events: %d started, %d output", len(h.rec.ofType("tool_start")), len(h.rec.ofType("tool_output")))
 	}
 }
+
+// A result with no text is sent with some, since a chat template may refuse
+// a message without content.
+func TestAnEmptyToolResultIsNotSentEmpty(t *testing.T) {
+	m := toolMessage("call_1", store.Entry{Kind: "tool", ToolName: "bash"}, nil)
+	if m.Content != "(no output)" {
+		t.Errorf("content = %q", m.Content)
+	}
+}

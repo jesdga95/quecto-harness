@@ -10,9 +10,12 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -67,6 +70,34 @@ func (c *Client) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
+// send performs a request, and repeats it once on a fresh connection when a
+// kept-alive connection turns out to have been closed by the server. Some
+// servers close an idle connection without saying so, and the request sent
+// on it fails before the server has read it.
+func (c *Client) send(req *http.Request) (*http.Response, error) {
+	reused := false
+	trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) { reused = info.Reused }}
+	resp, err := c.httpClient().Do(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	if err == nil || !reused || !closedUnderneath(err) || req.GetBody == nil || req.Context().Err() != nil {
+		return resp, err
+	}
+	body, berr := req.GetBody()
+	if berr != nil {
+		return resp, err
+	}
+	again := req.Clone(req.Context())
+	again.Body = body
+	c.httpClient().CloseIdleConnections()
+	return c.httpClient().Do(again)
+}
+
+// closedUnderneath reports whether a request failed because the connection it
+// was sent on had already been closed.
+func closedUnderneath(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
+}
+
 // authorize adds the bearer token, if there is one, to any request.
 func (c *Client) authorize(req *http.Request) {
 	if c.Token != "" {
@@ -83,7 +114,7 @@ func (c *Client) getJSON(ctx context.Context, op, model, u string, v any) error 
 	}
 	req.Header.Set("Accept", "application/json")
 	c.authorize(req)
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.send(req)
 	if err != nil {
 		return classify(op, c.BaseURL, model, 0, "", err)
 	}
