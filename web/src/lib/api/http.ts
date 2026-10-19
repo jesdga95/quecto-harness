@@ -1255,6 +1255,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           type: "usage",
           prompt_tokens: prompt,
           completion_tokens: ev.completion_tokens ?? 0,
+          fill: typeof ev.fill === "number" ? ev.fill : undefined,
           n_ctx: ev.n_ctx ?? 0,
           cached_pct: prompt > 0 ? Math.round((cached / prompt) * 100) : undefined,
           breakdown: toBreakdown(ev.breakdown),
