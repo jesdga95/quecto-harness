@@ -363,13 +363,25 @@ func TestTheApprovedPlanIsCarried(t *testing.T) {
 }
 
 func TestCompactionCarriesAnOpenPlan(t *testing.T) {
-	if got, want := Compaction("did x", "", ""), "Summary of earlier work:\n\ndid x\n\nTake this summary as what you already know, and continue the work without restating it."; got != want {
+	const head = "This conversation was compacted. The summary below replaces the messages before it.\n\nSummary of earlier work:\n\ndid x\n\n"
+	const tail = "Take this summary as what you already know, and continue the work without restating it."
+	if got, want := Compaction(CompactionVars{Summary: "did x"}), head+tail; got != want {
 		t.Errorf("without a plan = %q, want %q", got, want)
 	}
-	got := Compaction("did x", "1 of 2 done\n- [x] read\n- [ ] write\n", "")
-	want := "Summary of earlier work:\n\ndid x\n\nYour todo list when this summary was written:\n1 of 2 done\n- [x] read\n- [ ] write\n\nTake this summary as what you already know, and continue the work without restating it."
+	got := Compaction(CompactionVars{Summary: "did x", Todos: "1 of 2 done\n- [x] read\n- [ ] write\n"})
+	want := head + "Your todo list when this summary was written:\n1 of 2 done\n- [x] read\n- [ ] write\n\n" + tail
 	if got != want {
 		t.Errorf("with a plan = %q, want %q", got, want)
+	}
+}
+
+func TestCompactionNamesTheLastUserMessage(t *testing.T) {
+	got := Compaction(CompactionVars{Summary: "did x", LastUser: "just ack", Kept: true})
+	if !strings.HasPrefix(got, "This conversation was compacted. The summary below replaces the messages before it, and the messages after it are kept word for word.") {
+		t.Errorf("the kept framing is missing: %q", got)
+	}
+	if !strings.Contains(got, "The last message the user sent before the compaction:\n\njust ack\n\n") {
+		t.Errorf("the last user message is missing: %q", got)
 	}
 }
 

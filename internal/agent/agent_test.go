@@ -1263,7 +1263,7 @@ func TestCompactionRewritesInContextOnly(t *testing.T) {
 	msgs := s.contextMessages(config.Agent{}, "darwin", "", topBrief(), nil)
 	s.mu.Unlock()
 	sent := msgs[len(msgs)-1]
-	if sent.Role != "user" || !strings.HasPrefix(sent.Content, "Summary of earlier work:") ||
+	if sent.Role != "user" || !strings.Contains(sent.Content, "Summary of earlier work:") ||
 		!strings.Contains(sent.Content, "wrote out.txt") {
 		t.Errorf("compaction message = %+v", sent)
 	}
@@ -1294,7 +1294,7 @@ func compactionMessage(t *testing.T, s *Session) string {
 	msgs := s.contextMessages(config.Agent{}, "darwin", "", topBrief(), nil)
 	s.mu.Unlock()
 	for _, m := range msgs {
-		if strings.HasPrefix(m.Content, "Summary of earlier work:") {
+		if strings.Contains(m.Content, "Summary of earlier work:") {
 			return m.Content
 		}
 	}

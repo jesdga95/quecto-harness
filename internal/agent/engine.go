@@ -2186,6 +2186,12 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	if s.carriesTodos() {
 		meta["todos"] = renderTodos(s.Todos)
 	}
+	for i := len(s.Entries) - 1; i >= 0; i-- {
+		if s.Entries[i].Kind == "user" {
+			meta["last_user"] = s.Entries[i].Content
+			break
+		}
+	}
 	s.appendEntry(store.Entry{Kind: "compaction", Role: "user",
 		Content: summary, InContext: true, Visible: true, Meta: meta, Usage: rec})
 	after := s.computeFill()

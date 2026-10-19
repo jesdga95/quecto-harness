@@ -637,8 +637,11 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 		e := s.Entries[summary]
 		todos, _ := e.Meta["todos"].(string)
 		carry, _ := e.Meta["carry"].(string)
+		last, _ := e.Meta["last_user"].(string)
+		_, kept := e.Meta["tail"]
 		mode = entryMode(e)
-		msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(e.Content, todos, carry)})
+		msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(prompts.CompactionVars{
+			Summary: e.Content, Todos: todos, Carry: carry, LastUser: last, Kept: kept})})
 	}
 	for i := 0; i < end; i++ {
 		e := s.Entries[i]

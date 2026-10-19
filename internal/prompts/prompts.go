@@ -208,13 +208,19 @@ func Compact(kept bool) string {
 	return strings.TrimRight(b.String(), " \t\r\n")
 }
 
+// CompactionVars fills the message a summary is sent back as. Carry is what
+// the summarised messages held that the work still needs: plan mode's rules,
+// or the approved plan. Kept says messages follow the summary word for word.
+type CompactionVars struct {
+	Summary, Todos, Carry, LastUser string
+	Kept                            bool
+}
+
 // Compaction is the message the summary is sent back as, so the entry keeps
-// the summary alone and the framing lives here with the other prompts. carry
-// is what the summarised messages held that the work still needs: plan mode's
-// rules, or the approved plan.
-func Compaction(summary, todos, carry string) string {
+// the summary alone and the framing lives here with the other prompts.
+func Compaction(v CompactionVars) string {
 	var b strings.Builder
-	if err := compactionTmpl.Execute(&b, struct{ Summary, Todos, Carry string }{summary, todos, carry}); err != nil {
+	if err := compactionTmpl.Execute(&b, v); err != nil {
 		panic("prompts: render compaction.md: " + err.Error())
 	}
 	return b.String()
