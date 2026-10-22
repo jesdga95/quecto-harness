@@ -1067,10 +1067,15 @@ const EVENT_NAMES = [
     it goes. done says its closing quote has arrived. */
 function stringField(raw: string, key: string): { text: string; done: boolean } | null {
   const match = new RegExp(`(?<!\\\\)"${key}"\\s*:\\s*"`).exec(raw);
-  if (!match) return null;
+  return match ? decodeString(raw, match.index + match[0].length) : null;
+}
+
+/** A JSON string that may be cut off, decoded from just past its opening
+    quote. done says its closing quote has arrived. */
+function decodeString(raw: string, start: number): { text: string; done: boolean } {
   const escapes: Record<string, string> = { n: "\n", t: "\t", r: "\r", b: "\b", f: "\f" };
   let out = "";
-  let i = match.index + match[0].length;
+  let i = start;
   while (i < raw.length) {
     const c = raw[i]!;
     if (c === '"') return { text: out, done: true };
@@ -1094,12 +1099,47 @@ function stringField(raw: string, key: string): { text: string; done: boolean } 
   return { text: out, done: false };
 }
 
-/** The path and the text so far of a write call still arriving, or null
-    before the path is whole. */
+/** The text so far of a write call still arriving, and its path once the
+    path is whole, or null before either has started. */
 function partialWrite(raw: string): Record<string, unknown> | null {
   const path = stringField(raw, "path");
-  if (!path?.done) return null;
-  return { path: path.text, content: stringField(raw, "content")?.text ?? "" };
+  const content = stringField(raw, "content");
+  if (!path?.done && !content) return null;
+  const args: Record<string, unknown> = { content: content?.text ?? "" };
+  if (path?.done) args.path = path.text;
+  return args;
+}
+
+/** The replacements so far of an edit call still arriving, in order, each
+    old_string opening the next one. Null before any has started. */
+function partialEdit(raw: string): Record<string, unknown> | null {
+  const edits: Record<string, string>[] = [];
+  for (const match of raw.matchAll(/(?<!\\)"(old_string|new_string)"\s*:\s*"/g)) {
+    const key = match[1]!;
+    if (key === "old_string" || edits.length === 0) edits.push({});
+    edits[edits.length - 1]![key] = decodeString(raw, match.index + match[0].length).text;
+  }
+  if (edits.length === 0) return null;
+  const args: Record<string, unknown> = { edits };
+  const path = stringField(raw, "path");
+  if (path?.done) args.path = path.text;
+  return args;
+}
+
+/** The arguments so far of a call still arriving, for the tools whose row
+    draws them as they come, or null. */
+function partialArgs(name: string, raw: string): Record<string, unknown> | null {
+  switch (name) {
+    case "write":
+      return partialWrite(raw);
+    case "edit":
+      return partialEdit(raw);
+    case "bash": {
+      const command = stringField(raw, "command");
+      return command ? { command: command.text } : null;
+    }
+  }
+  return null;
 }
 
 // Argument fragments arrive one chunk at a time and join on index rather than
@@ -1146,10 +1186,11 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       const args = parseArgs(open.args);
       if (args) {
         out.push({ type: "tool_args", id: open.id, name: open.name, args });
-      } else if (open.name === "write") {
-        // A file being written is drawn as it arrives, so its path and the
-        // text so far are read out of the unfinished arguments.
-        const partial = partialWrite(open.args);
+      } else {
+        // A file being written or edited, or a command being typed, is drawn
+        // as it arrives, so the text so far is read out of the unfinished
+        // arguments.
+        const partial = partialArgs(open.name, open.args);
         if (partial) out.push({ type: "tool_args", id: open.id, name: open.name, args: partial, partial: true });
       }
       return out;
