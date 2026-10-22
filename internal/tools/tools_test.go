@@ -54,31 +54,37 @@ func TestPathGuard(t *testing.T) {
 
 	for _, base := range []string{t.TempDir(), tmpBase} {
 		r := testRoot(t, base)
+		// A path outside the project resolves, and Outside says so for the
+		// policy to ask about.
 		cases := []struct {
 			arg     string
 			allowed bool
+			outside bool
 			says    string
 		}{
-			{"file.txt", true, ""},
-			{"sub/new.txt", true, ""},
-			{"sub/deep/new.txt", true, ""},
-			{"./file.txt", true, ""},
-			{"../outside.txt", false, "outside the project"},
-			{"sub/../../outside.txt", false, "outside the project"},
-			{"/etc/passwd", false, "outside the project"},
-			{"link_in/x.txt", true, ""},
-			{"link_out/passwd", false, "outside the project"},
-			{"sub/link_out/passwd", false, "outside the project"},
-			{"", false, "path is empty"},
-			{"a\x00b", false, "null byte"},
+			{"file.txt", true, false, ""},
+			{"sub/new.txt", true, false, ""},
+			{"sub/deep/new.txt", true, false, ""},
+			{"./file.txt", true, false, ""},
+			{"../outside.txt", true, true, ""},
+			{"sub/../../outside.txt", true, true, ""},
+			{"/etc/passwd", true, true, ""},
+			{"link_in/x.txt", true, false, ""},
+			{"link_out/passwd", true, true, ""},
+			{"sub/link_out/passwd", true, true, ""},
+			{"", false, false, "path is empty"},
+			{"a\x00b", false, false, "null byte"},
 		}
 		for _, tc := range cases {
+			if got := r.Outside(tc.arg); got != tc.outside {
+				t.Errorf("%s: Outside(%q) = %v, want %v", base, tc.arg, got, tc.outside)
+			}
 			got, err := r.resolve(tc.arg)
 			if tc.allowed {
 				if err != nil {
 					t.Errorf("%s: resolve(%q) = %v, want allowed", base, tc.arg, err)
-				} else if !strings.HasPrefix(got, r.Root) {
-					t.Errorf("%s: resolve(%q) = %q, outside the root", base, tc.arg, got)
+				} else if strings.HasPrefix(got, r.Root) == tc.outside {
+					t.Errorf("%s: resolve(%q) = %q, want outside the root %v", base, tc.arg, got, tc.outside)
 				}
 				continue
 			}
@@ -716,7 +722,6 @@ func TestReplaceInFileRefusesWhatItCannotEdit(t *testing.T) {
 	}{
 		{"missing file", `{"path":"gone.txt","old_string":"a","new_string":"b"}`, "no such file"},
 		{"binary", `{"path":"blob.bin","old_string":"a","new_string":"b"}`, "binary file"},
-		{"outside the project", `{"path":"../escape.txt","old_string":"a","new_string":"b"}`, "outside"},
 		{"no old_string", `{"path":"ok.txt","new_string":"b"}`, "needs old_string"},
 		{"nothing to change", `{"path":"ok.txt","old_string":"keep","new_string":"keep"}`, "already what you asked for"},
 	}
@@ -791,7 +796,7 @@ func TestToolsStayOutOfLinksAndTheStateDir(t *testing.T) {
 	if !strings.Contains(res.Output, "inside.txt") || strings.Contains(res.Output, "outside") || strings.Contains(res.Output, "token") {
 		t.Errorf("grep = %q, want the file inside only", res.Output)
 	}
-	if _, err := r.ReadFile(context.Background(), json.RawMessage(`{"path":".quecto-harness/token"}`)); err == nil || !strings.Contains(err.Error(), "outside") {
+	if _, err := r.ReadFile(context.Background(), json.RawMessage(`{"path":".quecto-harness/token"}`)); err == nil || !strings.Contains(err.Error(), "state folder") {
 		t.Errorf("read of the state dir = %v, want it refused", err)
 	}
 	if _, err := r.WriteFile(context.Background(), json.RawMessage(`{"path":".quecto-harness/allowlist.json","content":"{}"}`)); err == nil {
@@ -1447,7 +1452,6 @@ func TestReadImage(t *testing.T) {
 		{"file.txt", "use read"},
 		{"sub", "is a directory"},
 		{"gone.png", "no such file"},
-		{"link_out/hosts", "outside"},
 	} {
 		raw, _ := json.Marshal(ReadImageArgs{Path: c.path})
 		if _, err := r.ReadImage(context.Background(), raw); err == nil || !strings.Contains(err.Error(), c.says) {
@@ -1535,5 +1539,29 @@ func TestShellPrintCountsAsRead(t *testing.T) {
 	}
 	if got := shellSegments(`FOO=1 cat 'a b' x\ y`); len(got) != 1 || strings.Join(got[0], "|") != "FOO=1|cat|a b|x y" {
 		t.Errorf("segments = %q", got)
+	}
+}
+
+// A write outside the project lands, and keeps no copy for the change list,
+// which covers the project alone. The saved output folder is not outside.
+func TestWriteOutsideTheProject(t *testing.T) {
+	base, other := t.TempDir(), t.TempDir()
+	r := testRoot(t, base)
+	r.SpillTo(filepath.Join(other, "spill"))
+	var kept []Snapshot
+	r.Baseline = func(s Snapshot) { kept = append(kept, s) }
+	target := filepath.Join(other, "out", "file.txt")
+	raw, _ := json.Marshal(WriteFileArgs{Path: target, Content: "one\n"})
+	if _, err := r.WriteFile(context.Background(), raw); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "one\n" {
+		t.Errorf("file = %q", got)
+	}
+	if len(kept) != 0 {
+		t.Errorf("baselines = %+v, want none for a file outside", kept)
+	}
+	if !r.Outside(target) || r.Outside(filepath.Join(other, "spill", "x.txt")) {
+		t.Error("Outside got the written file or the saved output folder wrong")
 	}
 }

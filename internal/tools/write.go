@@ -69,7 +69,8 @@ func (r *Runner) WriteFile(ctx context.Context, raw json.RawMessage) (Result, er
 	if err := config.WriteAtomicNoSync(path, data, perm); err != nil {
 		return Result{}, fmt.Errorf("write %s: %s", args.Path, err)
 	}
-	if r.Baseline != nil {
+	// The change list covers the project, so a file outside keeps no copy.
+	if r.Baseline != nil && within(r.Root, path) {
 		r.Baseline(before)
 	}
 	r.noteFile(path)

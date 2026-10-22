@@ -49,14 +49,14 @@ type View struct {
 	Content string
 }
 
-// ViewFile reads a file under root the way a tool argument is resolved, so it
-// reaches nothing a tool could not. Text past limit is reported as large.
+// ViewFile reads a file under root the way a tool argument is resolved, and
+// nothing outside root. Text past limit is reported as large.
 func ViewFile(root, p string, limit int64) (View, error) {
 	r, err := NewRunner(root, config.Config{})
 	if err != nil {
 		return View{}, err
 	}
-	abs, err := r.resolve(p)
+	abs, err := r.resolveInside(p)
 	if err != nil {
 		return View{}, ErrOutside
 	}
@@ -118,7 +118,7 @@ func ListDir(root, p string) (rel string, entries []Entry, err error) {
 	if strings.TrimSpace(p) == "" {
 		p = "."
 	}
-	abs, err := r.resolve(p)
+	abs, err := r.resolveInside(p)
 	if err != nil {
 		return "", nil, ErrOutside
 	}

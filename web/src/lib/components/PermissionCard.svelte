@@ -35,7 +35,11 @@
         ? "search the web"
         : tool === "write" || tool === "edit"
           ? "change a file"
-          : "run a command";
+          : tool === "read" || tool === "read_image"
+            ? "read a file outside the project"
+            : tool === "grep"
+              ? "search outside the project"
+              : "run a command";
     return agent ? `${agent} wants to ${action}` : `Wants to ${action}`;
   }
 </script>

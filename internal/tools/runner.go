@@ -18,8 +18,8 @@ import (
 	"github.com/jesdga95/quecto-harness/internal/search"
 )
 
-// Runner executes the file and shell tools against one project root. All paths are
-// resolved against Root and may not leave it.
+// Runner executes the file and shell tools against one project root. Relative
+// paths are resolved against Root; no path may enter Hidden.
 type Runner struct {
 	Root        string
 	Shell       string

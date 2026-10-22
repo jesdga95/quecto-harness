@@ -104,16 +104,21 @@ func New(cfg *config.Store, emit func(string, Request)) *Broker {
 
 // Evaluate applies the static policy. It never blocks and never asks. ModeFull
 // is answered before the tool name is read, so nothing about the call changes
-// the answer.
-func (b *Broker) Evaluate(project, tool, command, path string, mode config.Mode) Action {
+// the answer. outside says the call's path lands outside the project, which
+// every other mode asks about for the file tools.
+func (b *Broker) Evaluate(project, tool, command, path string, outside bool, mode config.Mode) Action {
 	if mode == config.ModeFull {
 		return ActionAllow
 	}
 	auto := mode == config.ModeAllowlist
 	switch tool {
-	case "read", "read_image", "grep", "processes", "todo_write", "write_plan", "ask_user_question", "exit_plan_mode", "subagent", "send_message":
-		// grep and read_image read inside the project and nothing else, on
-		// the same guard read uses. processes lists the session's own
+	case "read", "read_image", "grep":
+		if outside {
+			return ActionPrompt
+		}
+		return ActionAllow
+	case "processes", "todo_write", "write_plan", "ask_user_question", "exit_plan_mode", "subagent", "send_message":
+		// processes lists the session's own
 		// background commands and cannot start or stop one. todo_write
 		// changes the session's own plan and touches nothing on the machine,
 		// so there is nothing to decide, and neither does write_plan.
@@ -125,7 +130,7 @@ func (b *Broker) Evaluate(project, tool, command, path string, mode config.Mode)
 	case "write", "edit":
 		// A file under .git can run code: a hook, or a config that names a
 		// program git starts. It is asked about in every mode but full.
-		if auto && !underGit(project, path) {
+		if auto && !outside && !underGit(project, path) {
 			return ActionAllow
 		}
 		return ActionPrompt

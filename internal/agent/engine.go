@@ -1398,7 +1398,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			call := res.ToolCalls[i]
 			// Calls that only read and need no card, made one after another,
 			// run at the same time.
-			if run := e.readRun(s, cfg, b.offer, res.ToolCalls, i); run > 1 {
+			if run := e.readRun(s, cfg, b.offer, runner, res.ToolCalls, i); run > 1 {
 				calls += run
 				e.runReads(ctx, s, cfg, a, runner, res.ToolCalls[i:i+run], i, &seen, &clock)
 				i += run - 1
@@ -1423,7 +1423,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				continue
 			}
 			note := seen.see(call)
-			decision, record, stopped := e.decide(ctx, s, cfg, a, call)
+			decision, record, stopped := e.decide(ctx, s, cfg, a, runner, call)
 			if stopped {
 				e.stopWith(s, call, record, clock)
 				return
@@ -1784,13 +1784,13 @@ func (e *Engine) publishUsage(s *Session) {
 
 // decide applies the policy and, when it says prompt, blocks on the browser.
 // The third result reports that the session was stopped while waiting.
-func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a config.Agent, call llm.ToolCall) (perms.Decision, *store.PermissionRecord, bool) {
+func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a config.Agent, runner *tools.Runner, call llm.ToolCall) (perms.Decision, *store.PermissionRecord, bool) {
 	tool := call.Function.Name
 	command, path := argSummary(call)
 	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
 
 	policy := cfg.Mode
-	if e.perms.Evaluate(s.Project, tool, command, path, policy) == perms.ActionAllow {
+	if e.perms.Evaluate(s.Project, tool, command, path, runner.Outside(path), policy) == perms.ActionAllow {
 		// A call skips the card two ways, and the record keeps them apart.
 		// "auto" is a policy that allowed this call, "full" is no policy.
 		record.Decision = "auto"
@@ -1884,7 +1884,7 @@ var readTools = map[string]bool{"read": true, "read_image": true, "grep": true, 
 
 // readRun is how many calls from i on only read and would run without a card,
 // so they can run at the same time.
-func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, calls []llm.ToolCall, i int) int {
+func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, runner *tools.Runner, calls []llm.ToolCall, i int) int {
 	n := 0
 	for _, call := range calls[i:] {
 		name := call.Function.Name
@@ -1892,7 +1892,7 @@ func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, calls
 			break
 		}
 		command, path := argSummary(call)
-		if e.perms.Evaluate(s.Project, name, command, path, cfg.Mode) != perms.ActionAllow {
+		if e.perms.Evaluate(s.Project, name, command, path, runner.Outside(path), cfg.Mode) != perms.ActionAllow {
 			break
 		}
 		n++
@@ -1909,7 +1909,7 @@ func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a 
 	for k, call := range calls {
 		notes[k] = seen.see(call)
 		// The policy allows each of these, so deciding asks nobody.
-		_, records[k], _ = e.decide(ctx, s, cfg, a, call)
+		_, records[k], _ = e.decide(ctx, s, cfg, a, runner, call)
 		e.publishStarted(s, runner, call, first+k)
 	}
 	e.setState(s, StateExecuting)

@@ -64,7 +64,7 @@ func (r *Runner) Find(ctx context.Context, raw json.RawMessage) (Result, error) 
 		re = textMatcher(args.Text)
 	}
 
-	f := finder{runner: r, re: re, name: args.Name, skipping: !inSkipDir(r.rel(base))}
+	f := finder{runner: r, base: base, re: re, name: args.Name, skipping: !inSkipDir(r.rel(base))}
 	if err := f.walk(ctx, base); err != nil {
 		if ctx.Err() != nil {
 			return Result{Output: "stopped"}, nil
@@ -100,6 +100,7 @@ func inSkipDir(rel string) bool {
 // finder holds the state of one walk.
 type finder struct {
 	runner   *Runner
+	base     string
 	re       *regexp.Regexp
 	name     string
 	skipping bool
@@ -133,9 +134,11 @@ func (f *finder) walk(ctx context.Context, base string) error {
 			return nil
 		}
 		// The walk does not follow a link, but opening one does, so a link is
-		// taken only when what it points at is inside the project.
+		// taken only when what it points at is inside the project or the
+		// folder searched, which is what the call was allowed to read.
 		if d.Type()&fs.ModeSymlink != 0 {
-			if _, err := f.runner.resolve(p); err != nil {
+			abs, err := f.runner.resolve(p)
+			if err != nil || !(within(f.runner.Root, abs) || within(f.base, abs)) {
 				return nil
 			}
 		}
