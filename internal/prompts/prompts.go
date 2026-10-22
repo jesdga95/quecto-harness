@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md denial.md budget_spent.md repeat.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
+//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md denial.md budget_spent.md repeat.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
 var files embed.FS
 
 // hasTool is the has the prompt templates take: whether the tools a turn sends
@@ -40,6 +40,7 @@ var (
 	resultTmpl     = template.Must(template.New("result").Parse(mustRead("subagent_result.md")))
 	denialTmpl     = template.Must(template.New("denial").Parse(mustRead("denial.md")))
 	repeatTmpl     = template.Must(template.New("repeat").Parse(mustRead("repeat.md")))
+	movedTmpl      = template.Must(template.New("moved").Parse(mustRead("bash_moved.md")))
 )
 
 func mustRead(name string) string {
@@ -297,7 +298,22 @@ func ToolExitPlanMode() string    { return mustRead("tool_exit_plan_mode.md") }
 func ToolWritePlan() string       { return mustRead("tool_write_plan.md") }
 func BudgetSpent() string         { return mustRead("budget_spent.md") }
 func NotRun() string              { return mustRead("not_run.md") }
-func OutcomeUnknown() string      { return mustRead("outcome_unknown.md") }
+
+// BashMoved is the result of a bash call whose command moved to the
+// background before it ended. Why opens the sentence; Output is what it has
+// printed so far, which may be empty.
+func BashMoved(why, id string, pid int, output string) string {
+	var b strings.Builder
+	v := struct {
+		Why, ID, Output string
+		PID             int
+	}{why, id, output, pid}
+	if err := movedTmpl.Execute(&b, v); err != nil {
+		panic("prompts: render bash_moved.md: " + err.Error())
+	}
+	return b.String()
+}
+func OutcomeUnknown() string { return mustRead("outcome_unknown.md") }
 
 // Title asks for a name for the task the opening message describes. It carries
 // that message rather than following the conversation, so the request stands on

@@ -20,10 +20,25 @@ func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 		"tool_send_message.md":      ToolSendMessage,
 		"compact.md":                func() string { return Compact(true) },
 		"title.md":                  func() string { return Title("name this") },
+		"bash_moved.md":             func() string { return BashMoved("Still running after 30s", "p-1", 7, "") },
 	} {
 		if strings.TrimSpace(get()) == "" {
 			t.Errorf("%s is empty", name)
 		}
+	}
+}
+
+// A command moved to the background is reported with what it printed, and
+// the model is told not to wait for it.
+func TestBashMovedSaysNotToWait(t *testing.T) {
+	got := BashMoved("Still running after 30s", "p-1", 7, "line one")
+	for _, want := range []string{"Still running after 30s, so it was moved to the background as p-1 (pid 7).", "Do not sleep or poll", "Output so far:\nline one"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("result %q does not say %q", got, want)
+		}
+	}
+	if strings.Contains(BashMoved("x", "p-1", 7, ""), "Output so far") {
+		t.Error("a command that printed nothing still names its output")
 	}
 }
 

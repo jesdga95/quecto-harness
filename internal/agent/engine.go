@@ -2088,13 +2088,8 @@ func (e *Engine) watchBash(ctx context.Context, s *Session, runner *tools.Runner
 			return end(false, false)
 		}
 		out, _ := pr.handle.Output(runner.OutputLimit)
-		text := fmt.Sprintf("%s, so it was moved to the background as %s (pid %d). Its exit code and last lines arrive as a message when it ends; processes shows it meanwhile.",
-			why, pr.view.ID, pr.view.PID)
-		if out != "" {
-			text += "\nOutput so far:\n" + strings.TrimRight(out, "\n")
-		}
 		return tools.Result{
-			Output: text,
+			Output: prompts.BashMoved(why, pr.view.ID, pr.view.PID, strings.TrimRight(out, "\n")),
 			Meta:   map[string]any{"command": args.Command, "process": pr.view.ID, "background": true, "spill": pr.handle.SpillPath()},
 		}, nil
 	}

@@ -1,1 +1,1 @@
-List the commands this session started in the background, with their status, how long they have run and the last lines of their output. Reach for it when a command was started with background and its result is needed.
+List the commands this session started in the background, with their status, how long they have run and the last lines of their output. The end of each arrives as a message on its own, so do not call this to wait for one; reach for it to look at one that is still running.
