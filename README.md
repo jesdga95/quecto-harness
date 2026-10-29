@@ -3,6 +3,13 @@
 A local coding agent that talks to a model server you host. One Go binary with the
 web UI compiled in. The transcript, the tools and the state stay on your machine.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/harness-dark-5.png">
+  <img alt="A session with a reply on the left and a diagram the agent wrote, drawn in the files panel on the right" src="docs/screenshots/harness-light-5.png">
+</picture>
+
+More screenshots at [quecto.jgulfo.com/harness](https://quecto.jgulfo.com/harness).
+
 ## Run
 
 You need a reachable model server: a `llama-server`, a llama.cpp router, or anything
