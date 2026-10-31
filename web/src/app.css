@@ -1208,66 +1208,6 @@
     color: var(--muted);
   }
 
-
-  /* A card per file the turn created, two to a row. */
-  .file-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 10px;
-    margin-top: 12px;
-  }
-  .file-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-width: 0;
-    padding: 12px 12px 12px 12px;
-    border: 1px solid var(--hair);
-    border-radius: 14px;
-    background: var(--surface);
-  }
-  .file-card-icon {
-    display: grid;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    flex: none;
-    border-radius: 10px;
-    background: var(--accent-bg);
-    color: var(--accent);
-  }
-  .split-btn {
-    display: flex;
-    flex: none;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-  }
-  .split-main,
-  .split-caret {
-    display: inline-flex;
-    align-items: center;
-    border: 0;
-    background: none;
-    font-size: 13px;
-    color: var(--text);
-    cursor: pointer;
-  }
-  .split-main {
-    padding: 5px 11px;
-    border-radius: 9px 0 0 9px;
-  }
-  .split-caret {
-    padding: 5px 8px;
-    border-left: 1px solid var(--border);
-    border-radius: 0 9px 9px 0;
-    color: var(--muted);
-  }
-  .split-main:hover,
-  .split-caret:hover,
-  .split-caret[aria-expanded="true"] {
-    background: var(--surface-2);
-  }
-
   /* What a write or edit put in its file: a header naming it, the lines, the
      middle of a long one folded, and the counts. */
   .wdiff {

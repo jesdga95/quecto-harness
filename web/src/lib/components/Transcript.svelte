@@ -12,7 +12,6 @@
   import Prose from "./Prose.svelte";
   import PlanCard from "./PlanCard.svelte";
   import StepRow from "./StepRow.svelte";
-  import TurnFiles from "./TurnFiles.svelte";
   import TurnFooter from "./TurnFooter.svelte";
   import type { Attached, TranscriptItem } from "../api";
   import { app, canResend, resend } from "../state/app.svelte";
@@ -221,17 +220,6 @@
     };
   }
 
-  // The writes each finished turn made, keyed by the reply that ends it, so the
-  // reply can list them above its footer.
-  const turnWrites = $derived.by(() => {
-    const out = new Map<string, TranscriptItem[]>();
-    for (const turn of turns) {
-      const end = turn.rest[lastIndex(turn.rest, (i) => i.kind === "assistant" && !!i.cost)];
-      if (end) out.set(end.id, turn.body);
-    }
-    return out;
-  });
-
   // How much the last item has to draw. A reply, a thinking block and a command
   // still running all grow line by line, and an expanded one moves the end of
   // the page as it does.
@@ -421,10 +409,6 @@
            this block is the end of one rather than a fragment between
            two tool calls. -->
       {#if item.cost}
-        {@const writes = turnWrites.get(item.id)}
-        {#if writes}
-          <TurnFiles items={writes} />
-        {/if}
         <TurnFooter text={replies.get(item.id) ?? item.text} cost={item.cost} at={item.at} />
       {/if}
     </div>

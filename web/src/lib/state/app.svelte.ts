@@ -952,10 +952,6 @@ export function openSection(section: Section): void {
   if (section === "files" && app.artifactId === "") void browse("");
 }
 
-export function showChanges(): void {
-  showSection("changes");
-}
-
 export function showRuns(): void {
   showSection("agents");
 }
