@@ -1240,6 +1240,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// model that calls tools again after being refused ends the turn.
 	noted, refused := false, false
 	var seen repeats
+	var watch todoWatch
 	// overflowed is set once a request the server found too long has been
 	// compacted and sent again, so a second overflow ends the turn.
 	overflowed := false
@@ -1400,7 +1401,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			// run at the same time.
 			if run := e.readRun(s, cfg, b.offer, runner, res.ToolCalls, i); run > 1 {
 				calls += run
-				e.runReads(ctx, s, cfg, a, runner, res.ToolCalls[i:i+run], i, &seen, &clock)
+				e.runReads(ctx, s, cfg, a, runner, res.ToolCalls[i:i+run], i, &seen, &watch, &clock)
 				i += run - 1
 				if ctx.Err() != nil {
 					e.markStopped(s, clock, nil)
@@ -1422,7 +1423,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				}))
 				continue
 			}
-			note := seen.see(call)
+			note := joinMessages(seen.see(call), watch.see(s, call))
 			decision, record, stopped := e.decide(ctx, s, cfg, a, runner, call)
 			if stopped {
 				e.stopWith(s, call, record, clock)
@@ -1903,11 +1904,11 @@ func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, runne
 // runReads runs calls that only read at the same time, and appends their
 // results in the order the model made them.
 func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a config.Agent,
-	runner *tools.Runner, calls []llm.ToolCall, first int, seen *repeats, clock *turnClock) {
+	runner *tools.Runner, calls []llm.ToolCall, first int, seen *repeats, watch *todoWatch, clock *turnClock) {
 	notes := make([]string, len(calls))
 	records := make([]*store.PermissionRecord, len(calls))
 	for k, call := range calls {
-		notes[k] = seen.see(call)
+		notes[k] = joinMessages(seen.see(call), watch.see(s, call))
 		// The policy allows each of these, so deciding asks nobody.
 		_, records[k], _ = e.decide(ctx, s, cfg, a, runner, call)
 		e.publishStarted(s, runner, call, first+k)

@@ -2416,6 +2416,9 @@
     margin-top: 2px;
     color: var(--border-2);
   }
+  .todo .spinner {
+    margin-top: 3px;
+  }
   .todo.is-done {
     color: var(--muted);
     text-decoration: line-through;

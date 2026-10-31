@@ -7,6 +7,7 @@
   let open = $state(false);
 
   const todos = $derived(app.todos);
+  const running = $derived(app.status !== "idle" && app.status !== "compacting");
   const done = $derived(todos.filter((t) => t.status === "completed").length);
   // The step in hand is what the closed row shows, since it is the one thing
   // worth reading while the turn runs.
@@ -16,7 +17,7 @@
 {#if todos.length > 0}
   <div class="plan-dock">
     <button class="plan-head" onclick={() => (open = !open)}>
-      <ListChecks />
+      {#if running && current}<span class="spinner"></span>{:else}<ListChecks />{/if}
       <span class="plan-now">{current?.content ?? "Plan"}</span>
       <span class="num text-[12px] text-muted">{done} of {todos.length}</span>
       <span class="caret" class:is-open={open}><CaretRight /></span>
@@ -24,7 +25,7 @@
 
     {#if open}
       <div class="px-4 pb-3">
-        <TodoList {todos} />
+        <TodoList {todos} live={running} />
       </div>
     {/if}
   </div>

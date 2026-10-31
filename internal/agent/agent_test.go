@@ -2077,6 +2077,66 @@ func TestWriteTodosRefusesWhatItWouldHaveToGuess(t *testing.T) {
 	}
 }
 
+// TestWriteTodosRefusesAPlanOutOfOrder asserts that a plan reads completed,
+// then one in progress, then pending, and that a finished one passes.
+func TestWriteTodosRefusesAPlanOutOfOrder(t *testing.T) {
+	step := func(content, status string) store.Todo { return store.Todo{Content: content, Status: status} }
+	for name, tc := range map[string]struct {
+		todos []store.Todo
+		want  string
+	}{
+		"two in hand":       {[]store.Todo{step("A", todoInProgress), step("B", todoInProgress)}, "both in_progress"},
+		"skipped ahead":     {[]store.Todo{step("A", todoPending), step("B", todoInProgress)}, `"B" is in_progress but comes after "A"`},
+		"done out of order": {[]store.Todo{step("A", todoInProgress), step("B", todoCompleted)}, `"B" is completed`},
+	} {
+		if err := checkOrder(tc.todos); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error = %v, want one naming %q", name, err, tc.want)
+		}
+	}
+	for _, ok := range [][]store.Todo{
+		{step("A", todoCompleted), step("B", todoInProgress), step("C", todoPending)},
+		{step("A", todoCompleted), step("B", todoCompleted)},
+		{step("A", todoPending), step("B", todoPending)},
+		{},
+	} {
+		if err := checkOrder(ok); err != nil {
+			t.Errorf("%+v: %v", ok, err)
+		}
+	}
+}
+
+// TestTodoWatchRemindsAQuietTurn asserts that the plan comes back on every
+// todoQuiet-th call without todo_write, and never once the plan is finished.
+func TestTodoWatchRemindsAQuietTurn(t *testing.T) {
+	s := &Session{Todos: []store.Todo{{Content: "Read", Status: todoCompleted}, {Content: "Write", Status: todoInProgress}}}
+	call := func(name string) llm.ToolCall { return llm.ToolCall{Function: llm.FunctionCall{Name: name}} }
+	var w todoWatch
+	var notes []int
+	for i := 1; i <= 2*todoQuiet; i++ {
+		if note := w.see(s, call("read")); note != "" {
+			notes = append(notes, i)
+			if !strings.Contains(note, "- [>] Write") || !strings.Contains(note, "The step in hand is: Write") {
+				t.Errorf("note = %q", note)
+			}
+		}
+	}
+	if len(notes) != 2 || notes[0] != todoQuiet || notes[1] != 2*todoQuiet {
+		t.Errorf("notes on calls %v, want %d and %d", notes, todoQuiet, 2*todoQuiet)
+	}
+	for i := 1; i < todoQuiet; i++ {
+		w.see(s, call("read"))
+	}
+	if note := w.see(s, call("todo_write")); note != "" || w.quiet != 0 {
+		t.Errorf("todo_write: note = %q, quiet = %d", note, w.quiet)
+	}
+	s.Todos[1].Status = todoCompleted
+	for i := 0; i < 2*todoQuiet; i++ {
+		if note := w.see(s, call("read")); note != "" {
+			t.Fatalf("a finished plan was sent back: %q", note)
+		}
+	}
+}
+
 // TestAttachmentReachesThePrompt asserts that an attached file is read once,
 // kept with the message, and inlined under it when the prompt is built.
 func TestAttachmentReachesThePrompt(t *testing.T) {

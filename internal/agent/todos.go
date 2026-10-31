@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/prompts"
 	"github.com/jesdga95/quecto-harness/internal/store"
 	"github.com/jesdga95/quecto-harness/internal/tools"
 )
@@ -19,6 +21,9 @@ const maxTodos = 20
 func (e *Engine) writeTodos(s *Session, raw json.RawMessage) (tools.Result, error) {
 	todos, err := parseTodos(raw)
 	if err != nil {
+		return tools.Result{}, err
+	}
+	if err := checkOrder(todos); err != nil {
 		return tools.Result{}, err
 	}
 	s.mu.Lock()
@@ -82,6 +87,57 @@ func parseTodos(raw json.RawMessage) ([]store.Todo, error) {
 		out = append(out, store.Todo{Content: content, Status: t.Status})
 	}
 	return out, nil
+}
+
+// checkOrder refuses a plan that does not read top to bottom: the completed
+// steps, then at most one in progress, then the ones not started. A step
+// taken out of order is moved to its place in the list first.
+func checkOrder(todos []store.Todo) error {
+	rank := map[string]int{todoCompleted: 0, todoInProgress: 1, todoPending: 2}
+	doing := ""
+	for i, t := range todos {
+		if t.Status == todoInProgress {
+			if doing != "" {
+				return fmt.Errorf("todo_write: %q and %q are both in_progress: keep one step in progress at a time", doing, t.Content)
+			}
+			doing = t.Content
+		}
+		if i > 0 && rank[t.Status] < rank[todos[i-1].Status] {
+			return fmt.Errorf("todo_write: %q is %s but comes after %q, which is %s: list completed steps first, then the one in progress, then the pending ones, moving a step you take out of order to its place",
+				t.Content, t.Status, todos[i-1].Content, todos[i-1].Status)
+		}
+	}
+	return nil
+}
+
+// todoQuiet is how many calls a turn makes without todo_write, while the plan
+// has steps left, before a result carries the plan back to the model.
+const todoQuiet = 8
+
+// todoWatch counts the calls a turn has made since the plan was last written.
+type todoWatch struct {
+	quiet int
+}
+
+// see counts one call and answers with the note its result carries: the plan
+// and the step in hand, once every todoQuiet calls, and empty otherwise.
+func (w *todoWatch) see(s *Session, call llm.ToolCall) string {
+	if call.Function.Name == "todo_write" {
+		w.quiet = 0
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if done, _ := tallyTodos(s.Todos); done == len(s.Todos) {
+		w.quiet = 0
+		return ""
+	}
+	w.quiet++
+	if w.quiet < todoQuiet {
+		return ""
+	}
+	w.quiet = 0
+	return prompts.TodoRemind(renderTodos(s.Todos), nextTodo(s.Todos))
 }
 
 // renderTodos is the plan as the model is shown it back.
