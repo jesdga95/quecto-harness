@@ -2200,6 +2200,115 @@
     padding: 4px 6px 4px;
   }
 
+  /* A passage quoted from a reply, in the composer and in the sent bubble.
+     Three lines show; the rest is still sent. */
+  .quotes {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .bubble .quotes:not(:last-child) {
+    margin-bottom: 8px;
+  }
+  .quote {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 7px 10px 7px 12px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    color: var(--text-2);
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+  .bubble .quote {
+    background: rgb(255 255 255 / 0.55);
+  }
+  :root[data-scheme="dark"] .bubble .quote {
+    background: rgb(15 23 42 / 0.35);
+  }
+  .quote-text {
+    flex: 1;
+    min-width: 0;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .quote-x {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    margin: -1px -4px 0 0;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .quote-x:hover {
+    background: var(--hair);
+    color: var(--text);
+  }
+
+  /* Floats over a selection in a reply. */
+  .quote-pop {
+    position: fixed;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px;
+    border-radius: 12px;
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+    pointer-events: none;
+    transition:
+      opacity 110ms ease,
+      transform 110ms ease;
+  }
+  .quote-pop.is-open {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+  .quote-pop-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: var(--text);
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .quote-pop-btn:hover {
+    background: var(--surface-2);
+  }
+  .quote-pop-key {
+    padding: 0 4px;
+    border: 1px solid var(--hair);
+    border-radius: 5px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 16px;
+    color: var(--muted);
+  }
+  .quote-pop-sep {
+    width: 1px;
+    height: 18px;
+    margin: 0 2px;
+    background: var(--hair);
+  }
+
   /* One tile per attachment, every tile the same square, so a picture and a
      file sit together without either stretching the other. */
   .tiles {

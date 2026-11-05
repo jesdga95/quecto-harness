@@ -25,6 +25,8 @@
     toolset,
   } from "../state/app.svelte";
   import { fileKind, fileName } from "../format";
+  import { withQuotes } from "../quote";
+  import { quoted, removeQuote, takeQuotes } from "../state/quotes.svelte";
   import { overlayOpen } from "../overlay";
 
   let {
@@ -82,6 +84,24 @@
     text;
     grow();
   });
+
+  // A passage just quoted is answered next, so the field takes the caret.
+  let seen = quoted.added;
+  $effect(() => {
+    if (quoted.added === seen) return;
+    seen = quoted.added;
+    field?.focus();
+  });
+
+  // A quote belongs to the transcript it came from.
+  let quotedIn = app.sessionId;
+  $effect(() => {
+    if (app.sessionId === quotedIn) return;
+    if (quotedIn) takeQuotes();
+    quotedIn = app.sessionId;
+  });
+
+  const empty = $derived(!text.trim() && files.length === 0 && quoted.items.length === 0);
   // Open permission cards stand above the field, so one is in reach however
   // far up the transcript is scrolled. The keys answer the oldest.
   const cards = $derived(openPermissions());
@@ -211,8 +231,8 @@
   }
 
   function submit() {
-    if (disabled || (!text.trim() && files.length === 0)) return;
-    const value = text;
+    if (disabled || empty) return;
+    const value = withQuotes(takeQuotes(), text);
     const attached = files;
     if (box) onbeforesend?.(box);
     mention = null;
@@ -256,7 +276,7 @@
     }
     const bare = !event.shiftKey && !event.repeat && !event.isComposing;
     if (bare && (event.key === "Enter" || event.key === "Escape") && cards.length > 0) {
-      if (!text.trim() && files.length === 0) {
+      if (empty) {
         event.preventDefault();
         answerCard(event.key);
         return;
@@ -304,6 +324,19 @@
                 <X />
               </button>
             </span>
+          {/each}
+        </div>
+      {/if}
+
+      {#if quoted.items.length > 0}
+        <div class="quotes mb-3">
+          {#each quoted.items as q, i (i)}
+            <div class="quote">
+              <span class="quote-text">{q}</span>
+              <button class="quote-x" aria-label="Remove quote" onclick={() => removeQuote(i)}>
+                <X size={12} />
+              </button>
+            </div>
           {/each}
         </div>
       {/if}
@@ -362,7 +395,7 @@
           <AgentChip />
           <!-- Stop keeps its place while a turn runs, and a message typed
                against that turn is sent from the button beside it. -->
-          {#if running && (text.trim() || files.length > 0)}
+          {#if running && !empty}
             <button class="round" aria-label="Send" onclick={submit}>
               <ArrowUp />
             </button>
@@ -376,7 +409,7 @@
               class="round send"
               aria-label="Send"
               onclick={submit}
-              disabled={disabled || (!text.trim() && files.length === 0)}
+              disabled={disabled || empty}
             >
               <ArrowUp />
             </button>

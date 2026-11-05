@@ -11,6 +11,7 @@
   import CopyButton from "./CopyButton.svelte";
   import Prose from "./Prose.svelte";
   import PlanCard from "./PlanCard.svelte";
+  import QuotePopover from "./QuotePopover.svelte";
   import StepRow from "./StepRow.svelte";
   import TurnFooter from "./TurnFooter.svelte";
   import type { Attached, TranscriptItem } from "../api";
@@ -18,6 +19,7 @@
   import { bytes, fileKind, fileName, timeOf } from "../format";
   import { followEnd } from "../stream.svelte";
   import { asked } from "../question";
+  import { splitQuotes } from "../quote";
   import { stepDesc, stepName } from "../steps";
 
   let scroller = $state<HTMLDivElement | null>(null);
@@ -322,6 +324,22 @@
   </div>
 {/snippet}
 
+<!-- Quoted passages lead the message as blockquotes and draw as blocks of
+     their own above what was typed. -->
+{#snippet message(text: string)}
+  {@const split = splitQuotes(text)}
+  {#if split.quotes.length > 0}
+    <div class="quotes">
+      {#each split.quotes as q, i (i)}
+        <div class="quote"><span class="quote-text">{q}</span></div>
+      {/each}
+    </div>
+  {/if}
+  {#if split.body}
+    <p class="bubble-text">{split.body}</p>
+  {/if}
+{/snippet}
+
 <!-- The clock is aria-hidden: a reader does not need it announced every
      second. -->
 {#snippet waitClock()}
@@ -373,7 +391,7 @@
         {/if}
 
         {#if item.text}
-          <p class="bubble-text">{item.text}</p>
+          {@render message(item.text)}
         {/if}
       </div>
       <div class="flex items-center gap-1">
@@ -403,7 +421,9 @@
       {#if item.text === "" && !item.streaming}
         <p class="text-[14px] text-muted">Ended without a reply.</p>
       {:else}
-        <Prose text={item.text} streaming={item.streaming} />
+        <div data-quote>
+          <Prose text={item.text} streaming={item.streaming} />
+        </div>
       {/if}
       <!-- The cost arrives when the turn ends, so it is also what says
            this block is the end of one rather than a fragment between
@@ -443,6 +463,8 @@
     <StepRow {item} live={item === app.items.at(-1) && app.status !== "idle"} />
   {/if}
 {/snippet}
+
+<QuotePopover />
 
 <div class="relative min-h-0 flex-1">
   <div bind:this={scroller} {onscroll} use:followEnd={() => atBottom} class="h-full overflow-y-auto">
@@ -546,7 +568,7 @@
               {@render attachments(app.steer.files)}
             {/if}
             {#if app.steer.text}
-              <p class="bubble-text">{app.steer.text}</p>
+              {@render message(app.steer.text)}
             {/if}
           </div>
           <span class="text-[12px] text-muted">
