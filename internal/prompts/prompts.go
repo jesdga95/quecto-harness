@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md denial.md budget_spent.md repeat.md todo_remind.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
+//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
 var files embed.FS
 
 // hasTool is the has the prompt templates take: whether the tools a turn sends
@@ -40,7 +40,7 @@ var (
 	resultTmpl     = template.Must(template.New("result").Parse(mustRead("subagent_result.md")))
 	denialTmpl     = template.Must(template.New("denial").Parse(mustRead("denial.md")))
 	repeatTmpl     = template.Must(template.New("repeat").Parse(mustRead("repeat.md")))
-	remindTmpl     = template.Must(template.New("remind").Parse(mustRead("todo_remind.md")))
+	noteTmpl       = template.Must(template.New("note").Parse(mustRead("todo_note.md")))
 	movedTmpl      = template.Must(template.New("moved").Parse(mustRead("bash_moved.md")))
 )
 
@@ -250,14 +250,13 @@ func Denial(reason string) string {
 	return strings.TrimRight(b.String(), " \t\r\n")
 }
 
-// TodoRemind is the note added to a result once the turn has gone a while
-// without todo_write and the plan has steps left. plan is the plan as the
-// tool result renders it, and next the step to take.
-func TodoRemind(plan, next string) string {
+// TodoNote is the line a tool result carries while the plan has steps left,
+// naming next, the step in hand.
+func TodoNote(next string) string {
 	var b strings.Builder
-	v := struct{ Plan, Next string }{plan, next}
-	if err := remindTmpl.Execute(&b, v); err != nil {
-		panic("prompts: render todo_remind.md: " + err.Error())
+	v := struct{ Next string }{next}
+	if err := noteTmpl.Execute(&b, v); err != nil {
+		panic("prompts: render todo_note.md: " + err.Error())
 	}
 	return strings.TrimRight(b.String(), " \t\r\n")
 }

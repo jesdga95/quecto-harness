@@ -2105,36 +2105,183 @@ func TestWriteTodosRefusesAPlanOutOfOrder(t *testing.T) {
 	}
 }
 
-// TestTodoWatchRemindsAQuietTurn asserts that the plan comes back on every
-// todoQuiet-th call without todo_write, and never once the plan is finished.
-func TestTodoWatchRemindsAQuietTurn(t *testing.T) {
-	s := &Session{Todos: []store.Todo{{Content: "Read", Status: todoCompleted}, {Content: "Write", Status: todoInProgress}}}
+// plannedSession is a session in the middle of a request whose own todo_write
+// result left a plan with one step in hand.
+func plannedSession(t *testing.T) *Session {
+	t.Helper()
+	s := newSession(store.NewID(), "/p", "agt_test", "Alpha-12B", config.ToolsetFull)
+	todos := []store.Todo{{Content: "Read the routes", Status: todoCompleted},
+		{Content: "Add the handler", Status: todoInProgress}}
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "wire the panel", InContext: true, Visible: true})
+	s.appendEntry(store.Entry{Kind: "assistant", Role: "assistant", InContext: true, Visible: true,
+		ToolCalls: []llm.ToolCall{{ID: "call_1", Type: "function",
+			Function: llm.FunctionCall{Name: "todo_write", Arguments: `{"todos":[{"content":"Read the routes","status":"completed"},{"content":"Add the handler","status":"in_progress"}]}`}}}})
+	s.Todos = todos
+	s.appendEntry(store.Entry{Kind: "tool", Role: "tool", ToolCallID: "call_1", ToolName: "todo_write",
+		Content: renderTodos(todos), InContext: true, Visible: true})
+	return s
+}
+
+// inHandNote is the line a result carries while the plan has a step in hand.
+const inHandNote = "In hand: Add the handler. If that is finished, mark it with todo_write before moving on."
+
+// TestTodoNoteNamesTheStepInHand asserts the line a result carries while the
+// plan has a step in hand, and that todo_write's own result and a plan with
+// nothing left carry none.
+func TestTodoNoteNamesTheStepInHand(t *testing.T) {
+	s := plannedSession(t)
 	call := func(name string) llm.ToolCall { return llm.ToolCall{Function: llm.FunctionCall{Name: name}} }
-	var w todoWatch
-	var notes []int
-	for i := 1; i <= 2*todoQuiet; i++ {
-		if note := w.see(s, call("read")); note != "" {
-			notes = append(notes, i)
-			if !strings.Contains(note, "- [>] Write") || !strings.Contains(note, "The step in hand is: Write") {
-				t.Errorf("note = %q", note)
+	offer := tools.Offer{Set: config.ToolsetFull, Mode: config.WorkExecute}
+	for i := 0; i < 3; i++ {
+		if note := todoNote(s, call("read"), offer); note != inHandNote {
+			t.Fatalf("note = %q, want %q", note, inHandNote)
+		}
+	}
+	if note := todoNote(s, call("todo_write"), offer); note != "" {
+		t.Errorf("todo_write carries a note: %q", note)
+	}
+	s.Todos = []store.Todo{{Content: "Read the routes", Status: todoCompleted},
+		{Content: "Add the handler", Status: todoCompleted}}
+	if note := todoNote(s, call("read"), offer); note != "" {
+		t.Errorf("a plan with every step done carries a note: %q", note)
+	}
+}
+
+// TestTodoNoteFollowsOnlyItsOwnRequest asserts that a plan still open at the end
+// of a turn brings no note into the next one.
+func TestTodoNoteFollowsOnlyItsOwnRequest(t *testing.T) {
+	s := plannedSession(t)
+	call := llm.ToolCall{Function: llm.FunctionCall{Name: "read", Arguments: `{"path":"file.txt"}`}}
+	offer := tools.Offer{Set: config.ToolsetFull, Mode: config.WorkExecute}
+	if todoNote(s, call, offer) == "" {
+		t.Fatal("the request that wrote the plan carries no note")
+	}
+	s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: "what is in the file",
+		InContext: true, Visible: true})
+	if note := todoNote(s, call, offer); note != "" {
+		t.Errorf("the old plan followed into the new request: %q", note)
+	}
+}
+
+// TestTodoNoteNamesOnlyAToolTheTurnRuns asserts that plan mode and a minimal
+// toolset, which do not offer todo_write, carry no note.
+func TestTodoNoteNamesOnlyAToolTheTurnRuns(t *testing.T) {
+	s := plannedSession(t)
+	call := llm.ToolCall{Function: llm.FunctionCall{Name: "bash", Arguments: `{"command":"go test"}`}}
+	for name, offer := range map[string]tools.Offer{
+		"plan mode":   {Set: config.ToolsetFull, Mode: config.WorkPlan},
+		"minimal set": {Set: config.ToolsetMinimal, Mode: config.WorkExecute},
+	} {
+		if note := todoNote(s, call, offer); note != "" {
+			t.Errorf("%s carries a note: %q", name, note)
+		}
+	}
+	if todoNote(s, call, tools.Offer{Set: config.ToolsetFull, Mode: config.WorkExecute}) == "" {
+		t.Error("a turn that runs todo_write carries no note")
+	}
+}
+
+// TestTodoNoteRidesBesideTheResult asserts that the entry and the tool_output
+// event keep the tool's own output, and that every request after the call sends
+// the result with its note, byte for byte the same.
+func TestTodoNoteRidesBesideTheResult(t *testing.T) {
+	h := newHarness(t, "stream_todos.txt", "stream_read.txt", "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "plan the work", nil)
+	waitIdle(t, s)
+	// A second turn sends the history again.
+	h.engine.Send(s.ID, "and now", nil)
+	waitIdle(t, s)
+
+	var read store.Entry
+	doc, _, _, _ := s.Snapshot()
+	for _, e := range doc.Entries {
+		if e.Kind == "tool" && e.ToolName == "read" {
+			read = e
+		}
+	}
+	if read.Seq == 0 {
+		t.Fatal("no read ran after the plan")
+	}
+	if read.TodoNote != inHandNote {
+		t.Errorf("note = %q, want %q", read.TodoNote, inHandNote)
+	}
+	if strings.Contains(read.Content, "In hand") {
+		t.Errorf("the note was written into the output: %q", read.Content)
+	}
+	for _, e := range h.rec.ofType("tool_output") {
+		if e.Fields["id"] != read.ToolCallID {
+			continue
+		}
+		if out, _ := e.Fields["output"].(string); strings.Contains(out, "In hand") {
+			t.Errorf("the tool_output event carries the note: %q", out)
+		}
+	}
+
+	sent := toolMessagesFor(t, h, read.ToolCallID)
+	if len(sent) < 2 {
+		t.Fatalf("%d requests carried the result, want the two that follow the call", len(sent))
+	}
+	for i, content := range sent {
+		if content != read.Content+"\n\n"+inHandNote {
+			t.Errorf("request %d sent the result as %q, want the output with the note under it", i, content)
+		}
+	}
+}
+
+// TestTodoNoteStopsAtTheRequestThatSetThePlan asserts that a list still open
+// when a turn ends carries into the next turn without its note, so only the
+// request that wrote the plan names its steps.
+func TestTodoNoteStopsAtTheRequestThatSetThePlan(t *testing.T) {
+	h := newHarness(t, "stream_todos.txt", "stream_read.txt", "stream_plain.txt",
+		"stream_read.txt", "stream_plain.txt")
+	s := h.session(t)
+	h.engine.Send(s.ID, "plan the work", nil)
+	waitIdle(t, s)
+	h.engine.Send(s.ID, "what is in the file", nil)
+	waitIdle(t, s)
+
+	doc, _, _, _ := s.Snapshot()
+	if len(doc.Todos) != 3 {
+		t.Fatalf("todos = %+v, want the open list carried into the next turn", doc.Todos)
+	}
+	var reads, noted []int
+	for _, e := range doc.Entries {
+		if e.Kind != "tool" || e.ToolName != "read" {
+			continue
+		}
+		reads = append(reads, e.Seq)
+		if e.TodoNote != "" {
+			noted = append(noted, e.Seq)
+		}
+	}
+	if len(reads) != 2 {
+		t.Fatalf("reads = %v, want one in each turn", reads)
+	}
+	if len(noted) != 1 || noted[0] != reads[0] {
+		t.Errorf("notes on the results at %v, want only the one at %d", noted, reads[0])
+	}
+}
+
+// toolMessagesFor is what every recorded request sent for one tool result, old
+// first.
+func toolMessagesFor(t *testing.T, h *harness, id string) []string {
+	t.Helper()
+	h.replay.mu.Lock()
+	defer h.replay.mu.Unlock()
+	var out []string
+	for _, req := range h.replay.Requests {
+		msgs, _ := req["messages"].([]any)
+		for _, m := range msgs {
+			msg, _ := m.(map[string]any)
+			if msg["role"] != "tool" || msg["tool_call_id"] != id {
+				continue
 			}
+			content, _ := msg["content"].(string)
+			out = append(out, content)
 		}
 	}
-	if len(notes) != 2 || notes[0] != todoQuiet || notes[1] != 2*todoQuiet {
-		t.Errorf("notes on calls %v, want %d and %d", notes, todoQuiet, 2*todoQuiet)
-	}
-	for i := 1; i < todoQuiet; i++ {
-		w.see(s, call("read"))
-	}
-	if note := w.see(s, call("todo_write")); note != "" || w.quiet != 0 {
-		t.Errorf("todo_write: note = %q, quiet = %d", note, w.quiet)
-	}
-	s.Todos[1].Status = todoCompleted
-	for i := 0; i < 2*todoQuiet; i++ {
-		if note := w.see(s, call("read")); note != "" {
-			t.Fatalf("a finished plan was sent back: %q", note)
-		}
-	}
+	return out
 }
 
 // TestAttachmentReachesThePrompt asserts that an attached file is read once,

@@ -110,34 +110,19 @@ func checkOrder(todos []store.Todo) error {
 	return nil
 }
 
-// todoQuiet is how many calls a turn makes without todo_write, while the plan
-// has steps left, before a result carries the plan back to the model.
-const todoQuiet = 8
-
-// todoWatch counts the calls a turn has made since the plan was last written.
-type todoWatch struct {
-	quiet int
-}
-
-// see counts one call and answers with the note its result carries: the plan
-// and the step in hand, once every todoQuiet calls, and empty otherwise.
-func (w *todoWatch) see(s *Session, call llm.ToolCall) string {
-	if call.Function.Name == "todo_write" {
-		w.quiet = 0
+// todoNote is the line a tool result carries while the request's own plan has
+// steps left. The turn has to offer todo_write, and todo_write's own result
+// already holds the plan.
+func todoNote(s *Session, call llm.ToolCall, offer tools.Offer) string {
+	if call.Function.Name == "todo_write" || !offer.InMode("todo_write") || !offer.InSet("todo_write") {
 		return ""
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if done, _ := tallyTodos(s.Todos); done == len(s.Todos) {
-		w.quiet = 0
+	if !s.carriesTodos() {
 		return ""
 	}
-	w.quiet++
-	if w.quiet < todoQuiet {
-		return ""
-	}
-	w.quiet = 0
-	return prompts.TodoRemind(renderTodos(s.Todos), nextTodo(s.Todos))
+	return prompts.TodoNote(nextTodo(s.Todos))
 }
 
 // renderTodos is the plan as the model is shown it back.

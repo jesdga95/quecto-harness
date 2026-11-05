@@ -21,6 +21,7 @@ func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
 		"compact.md":                func() string { return Compact(true) },
 		"title.md":                  func() string { return Title("name this") },
 		"bash_moved.md":             func() string { return BashMoved("Still running after 30s", "p-1", 7, "") },
+		"todo_note.md":              func() string { return TodoNote("write the test") },
 	} {
 		if strings.TrimSpace(get()) == "" {
 			t.Errorf("%s is empty", name)

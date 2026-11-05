@@ -38,6 +38,10 @@ type Entry struct {
 	ToolName   string         `json:"tool_name,omitempty"`
 	ExitCode   *int           `json:"exit_code,omitempty"`
 	Truncated  bool           `json:"truncated,omitempty"`
+	// TodoNote is the plan step the model reads under this result. It is kept
+	// beside the output rather than inside it, so a row shows what the tool
+	// answered and a later request sends the bytes it first sent.
+	TodoNote string `json:"todo_note,omitempty"`
 
 	Permission  *PermissionRecord `json:"permission,omitempty"`
 	Attachments []Attachment      `json:"attachments,omitempty"`

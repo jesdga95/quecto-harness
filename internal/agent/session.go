@@ -823,6 +823,9 @@ func toolMessage(id string, e store.Entry, images map[string]llm.Part) llm.Messa
 	if e.Content == "" {
 		e.Content = "(no output)"
 	}
+	if e.TodoNote != "" {
+		e.Content = joinMessages(e.Content, "\n"+e.TodoNote)
+	}
 	m := llm.Message{Role: "tool", ToolCallID: id, Name: e.ToolName, Content: e.Content}
 	var parts []llm.Part
 	for _, a := range e.Attachments {
@@ -936,7 +939,7 @@ func (s *Session) estimateChars(from int) int {
 
 // entryChars is the size of one entry as the prompt carries it.
 func entryChars(e store.Entry) int {
-	total := len(e.Content) + len(e.Reasoning)
+	total := len(e.Content) + len(e.Reasoning) + len(e.TodoNote)
 	if todos, ok := e.Meta["todos"].(string); ok && e.Kind == "compaction" {
 		total += len(todos)
 	}

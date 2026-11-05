@@ -37,6 +37,7 @@ func sample(id string, updated time.Time) *Session {
 				InContext: false, Visible: true, At: updated},
 			{Seq: 3, Kind: "tool", Role: "tool", ToolCallID: "call_0", ToolName: "bash",
 				Content: "AGENTS.md\n\nexit code: 0", ExitCode: &code,
+				TodoNote:   "In hand: Add the handler. If that is finished, mark it with todo_write before moving on.",
 				Permission: &PermissionRecord{ID: "perm_1", Tool: "bash", Command: "ls", Decision: "always", Prefix: "ls"},
 				InContext:  false, Visible: true, At: updated},
 			{Seq: 4, Kind: "compaction", Role: "user", Content: "Summary of earlier work:\nx\n\nContinue.",

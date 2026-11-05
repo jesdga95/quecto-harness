@@ -866,6 +866,72 @@ func TestMessageStopAndCompact(t *testing.T) {
 	}
 }
 
+// TestSessionRouteKeepsTheNoteOutOfARow asserts that the entry keeps the note
+// and the session route sends the tool's output without it.
+func TestSessionRouteKeepsTheNoteOutOfARow(t *testing.T) {
+	f := newFixture(t)
+	if err := os.WriteFile(filepath.Join(f.project, "routes.go"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	id := f.newSession(t)
+	// The plan leaves one step in hand, and the read that follows is the row a
+	// note would sit under.
+	f.nextFrames(
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"todo_write","arguments":`+
+			strconv.Quote(`{"todos":[{"content":"Read the routes","status":"completed"},{"content":"Add the handler","status":"in_progress"}]}`)+`}}]}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	)
+	f.nextFrames(
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"path\":\"routes.go\"}"}}]}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	)
+	f.setFrames(
+		`data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}`,
+		`data: [DONE]`,
+	)
+	if w := f.do(t, "POST", "/api/sessions/"+id+"/message",
+		map[string]string{"text": "plan it, then read the file"}); w.Code != http.StatusAccepted {
+		t.Fatalf("message = %d: %s", w.Code, w.Body.String())
+	}
+	f.waitIdle(t, id)
+
+	sess, err := f.engine.Open(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _, _, _ := sess.Snapshot()
+	noted := false
+	for _, e := range doc.Entries {
+		if e.Kind == "tool" && e.ToolName == "read" && strings.Contains(e.TodoNote, "Add the handler") {
+			noted = true
+		}
+	}
+	if !noted {
+		t.Fatal("no read result carries the step in hand on its entry")
+	}
+
+	entries, _ := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))["entries"].([]any)
+	rows := 0
+	for _, e := range entries {
+		row, _ := e.(map[string]any)
+		if row["tool_name"] != "read" {
+			continue
+		}
+		rows++
+		if content, _ := row["content"].(string); strings.Contains(content, "In hand") {
+			t.Errorf("the row's output carries the note: %q", content)
+		}
+		if _, sent := row["todo_note"]; sent {
+			t.Errorf("the note was sent to the page: %v", row)
+		}
+	}
+	if rows == 0 {
+		t.Error("the transcript reached the page with no read row")
+	}
+}
+
 func TestBusySession(t *testing.T) {
 	f := newFixture(t)
 	id := f.newSession(t)

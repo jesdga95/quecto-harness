@@ -1240,7 +1240,6 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// model that calls tools again after being refused ends the turn.
 	noted, refused := false, false
 	var seen repeats
-	var watch todoWatch
 	// overflowed is set once a request the server found too long has been
 	// compacted and sent again, so a second overflow ends the turn.
 	overflowed := false
@@ -1401,7 +1400,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			// run at the same time.
 			if run := e.readRun(s, cfg, b.offer, runner, res.ToolCalls, i); run > 1 {
 				calls += run
-				e.runReads(ctx, s, cfg, a, runner, res.ToolCalls[i:i+run], i, &seen, &watch, &clock)
+				e.runReads(ctx, s, cfg, a, runner, res.ToolCalls[i:i+run], i, &seen, b.offer, &clock)
 				i += run - 1
 				if ctx.Err() != nil {
 					e.markStopped(s, clock, nil)
@@ -1423,7 +1422,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 				}))
 				continue
 			}
-			note := joinMessages(seen.see(call), watch.see(s, call))
+			note := seen.see(call)
 			decision, record, stopped := e.decide(ctx, s, cfg, a, runner, call)
 			if stopped {
 				e.stopWith(s, call, record, clock)
@@ -1443,6 +1442,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			entry := e.execute(ctx, s, runner, call, decision, record, i)
 			if note != "" {
 				entry = e.addNote(s, entry, note)
+			}
+			if inHand := todoNote(s, call, b.offer); inHand != "" {
+				entry = e.setTodoNote(s, entry, inHand)
 			}
 			clock.tools += time.Since(began)
 			e.saveSoon(s)
@@ -1652,6 +1654,21 @@ func (e *Engine) markStarted(s *Session, call llm.ToolCall) {
 	}
 	s.mu.Unlock()
 	e.save(s)
+}
+
+// setTodoNote keeps the step in hand beside a tool entry rather than inside its
+// output, so the page draws what the tool answered while every request after
+// this one sends the note with the result it belongs to.
+func (e *Engine) setTodoNote(s *Session, entry store.Entry, note string) store.Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.Entries) - 1; i >= 0; i-- {
+		if s.Entries[i].Seq == entry.Seq {
+			s.Entries[i].TodoNote = note
+			return s.Entries[i]
+		}
+	}
+	return entry
 }
 
 // addNote puts a note after the result a tool entry carries, so the model
@@ -1904,11 +1921,11 @@ func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, runne
 // runReads runs calls that only read at the same time, and appends their
 // results in the order the model made them.
 func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a config.Agent,
-	runner *tools.Runner, calls []llm.ToolCall, first int, seen *repeats, watch *todoWatch, clock *turnClock) {
+	runner *tools.Runner, calls []llm.ToolCall, first int, seen *repeats, offer tools.Offer, clock *turnClock) {
 	notes := make([]string, len(calls))
 	records := make([]*store.PermissionRecord, len(calls))
 	for k, call := range calls {
-		notes[k] = joinMessages(seen.see(call), watch.see(s, call))
+		notes[k] = seen.see(call)
 		// The policy allows each of these, so deciding asks nobody.
 		_, records[k], _ = e.decide(ctx, s, cfg, a, runner, call)
 		e.publishStarted(s, runner, call, first+k)
@@ -1930,6 +1947,9 @@ func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a 
 		entry := e.appendTool(s, call, records[k], outs[k])
 		if notes[k] != "" {
 			entry = e.addNote(s, entry, notes[k])
+		}
+		if inHand := todoNote(s, call, offer); inHand != "" {
+			entry = e.setTodoNote(s, entry, inHand)
 		}
 		e.saveSoon(s)
 		e.publish(s.ID, ev("tool_output", map[string]any{

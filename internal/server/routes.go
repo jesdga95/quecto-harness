@@ -468,9 +468,12 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	if pending == nil {
 		pending = []perms.Request{}
 	}
-	entries := doc.Entries
-	if entries == nil {
-		entries = []store.Entry{}
+	// A row draws the tool's own output and matches on it exactly, so the step
+	// in hand the model reads under a result stays out of the page's copy.
+	entries := make([]store.Entry, len(doc.Entries))
+	copy(entries, doc.Entries)
+	for i := range entries {
+		entries[i].TodoNote = ""
 	}
 	todos := doc.Todos
 	if todos == nil {

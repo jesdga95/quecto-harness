@@ -276,6 +276,11 @@ too late to be picked up starts a turn of its own.
   the eighth, carry a note in their result telling the model to change course. `todo_write`
   and `write_plan` neither count nor break a run, and a message from outside the turn
   resets it.
+- **The step in hand.** While a request is working through a plan with steps left, every
+  result but `todo_write`'s carries one line naming the step to take, and only when that
+  request set the list and the turn offers `todo_write`. It is worked out once the
+  call has answered, is kept on the entry beside the output rather than inside it, and is
+  sent with that result in every request after.
 - **Carrying on with a plan.** A turn answering an approved plan's kickoff that ends with
   steps left is sent back to the next one by a message the transcript does not show, and a
   status line that it does. It stops after 20 rounds, after two in a row complete nothing,
