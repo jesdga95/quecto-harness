@@ -83,12 +83,12 @@ export function previewOf(path: string): Preview {
   return "source";
 }
 
-// The glyphs are phosphor's own regular weight, lifted out of the generated
-// component so the ones drawn into markup match the components exactly.
-function regular(source: string): string {
+/** A phosphor glyph at its regular weight, lifted out of the generated
+    component so a glyph drawn into markup matches the components exactly. */
+export function regular(source: string, className = "md-file-icon"): string {
   const match = /weight === "regular"\}\s*([\s\S]*?)\s*\{:else/.exec(source);
   const paths = match?.[1] ?? "";
-  return `<svg class="md-file-icon" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true">${paths}</svg>`;
+  return `<svg class="${className}" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true">${paths}</svg>`;
 }
 
 const ICONS: Record<Glyph, string> = {

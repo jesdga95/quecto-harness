@@ -1,6 +1,7 @@
 <script lang="ts">
   import Check from "phosphor-svelte/lib/Check";
   import Copy from "phosphor-svelte/lib/Copy";
+  import { COPIED_MS, copyText } from "../clipboard";
 
   // The tick stands for a second and a half, long enough to be read and short
   // enough that a second copy of the same text still shows as one.
@@ -9,11 +10,11 @@
   let copied = $state(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  function copy() {
-    void navigator.clipboard?.writeText(text);
+  async function copy() {
+    if (!(await copyText(text))) return;
     copied = true;
     clearTimeout(timer);
-    timer = setTimeout(() => (copied = false), 1500);
+    timer = setTimeout(() => (copied = false), COPIED_MS);
   }
 
   $effect(() => () => clearTimeout(timer));

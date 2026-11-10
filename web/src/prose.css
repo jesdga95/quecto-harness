@@ -214,13 +214,39 @@
   border-radius: 12px;
   background: var(--surface-2);
   overflow: hidden;
+  position: relative;
 }
 .md-code-lang {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.04em;
   color: var(--muted);
-  padding: 7px 13px 0;
+  padding: 7px 44px 0 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The copy button sits in the top corner over the label row, or over the end
+   of the first line when the fence has no label, so it adds no height. */
+.md-code-copy {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  background: var(--surface-2);
+}
+.md-code-copy:hover {
+  background: var(--border);
+}
+.md-code-copy:focus-visible {
+  outline: 2px solid var(--edge-focus);
+  outline-offset: 1px;
+}
+.md-code-copy .check-icon,
+.md-code-copy.is-copied .copy-icon {
+  display: none;
+}
+.md-code-copy.is-copied .check-icon {
+  display: block;
 }
 .prose .md-code pre {
   margin: 0;

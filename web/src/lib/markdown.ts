@@ -5,8 +5,10 @@
 
 import { Marked, type RendererObject } from "marked";
 import katex from "katex";
+import checkIconSrc from "phosphor-svelte/lib/Check?raw";
+import copyIconSrc from "phosphor-svelte/lib/Copy?raw";
 import { escapeHtml, guess, highlight } from "./highlight";
-import { fileLinkHtml, fileTarget } from "./files";
+import { fileLinkHtml, fileTarget, regular } from "./files";
 
 // Formulas are lifted out before the markdown runs and put back afterwards.
 // The slots use private use characters, which are stripped from the source
@@ -238,17 +240,23 @@ function renderMath(formula: Formula | undefined): string {
   return html;
 }
 
+const COPY_ICON = regular(copyIconSrc, "copy-icon");
+const CHECK_ICON = regular(checkIconSrc, "check-icon");
+
 const renderer: RendererObject = {
   // Fences carry their language as a label and scroll inside their own box,
   // so a long line moves the code rather than the page. The highlighter
   // escapes what it emits; an unknown language falls back to escaped text.
   code({ text, lang }) {
     const language = fenceLanguage(lang);
-    const head = language ? `<div class="md-code-lang">${escapeHtml(language)}</div>` : "";
+    const label = language ? `<div class="md-code-lang">${escapeHtml(language)}</div>` : "";
     // A model routinely opens a fence with no language, so an unlabelled
     // block is guessed at rather than left grey.
     const marked = language ? highlight(text, language.toLowerCase()) : guess(text);
-    return `<div class="md-code">${head}<pre><code>${marked ?? escapeHtml(text)}</code></pre></div>\n`;
+    const copy =
+      `<button type="button" class="icon-btn md-code-copy" data-copy title="Copy code" aria-label="Copy code">` +
+      `${COPY_ICON}${CHECK_ICON}</button>`;
+    return `<div class="md-code">${label}${copy}<pre><code>${marked ?? escapeHtml(text)}</code></pre></div>\n`;
   },
 
   // Markup written by the model is shown as the text it is, never parsed.
