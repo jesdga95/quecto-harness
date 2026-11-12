@@ -128,6 +128,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/message", s.postMessage)
 	mux.HandleFunc("POST /api/sessions/{id}/resend", s.postResend)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", s.postStop)
+	mux.HandleFunc("POST /api/sessions/{id}/answer-now", s.postAnswerNow)
 	mux.HandleFunc("POST /api/sessions/{id}/compact", s.postCompact)
 	mux.HandleFunc("GET /api/agents", s.listAgents)
 	mux.HandleFunc("POST /api/agents", s.createAgent)

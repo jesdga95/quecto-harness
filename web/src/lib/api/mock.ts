@@ -1053,6 +1053,11 @@ export class MockApi implements HarnessApi {
     this.settleQuestion(chosen);
   }
 
+  async answerNow(): Promise<boolean> {
+    await this.tick();
+    return false;
+  }
+
   async stop(session: string): Promise<void> {
     await this.tick();
     const run = this.running;

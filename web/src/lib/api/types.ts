@@ -262,6 +262,8 @@ export interface Answer {
 export type HarnessEvent =
   | { type: "delta"; text: string }
   | { type: "reasoning"; text: string }
+  /** Whether the request under way can be told to stop thinking and answer. */
+  | { type: "answer_now"; available: boolean }
   | { type: "tool_call"; id: string; name: string; args: Record<string, unknown> }
   /** Arguments stream in after the call opens, so they land in a second event. */
   /** partial marks arguments read out of JSON that is still arriving. */
@@ -612,6 +614,8 @@ export interface Transcript {
   status: TurnStatus;
   /** Whether the request under way has streamed any output yet. */
   replying?: boolean;
+  /** Whether the request under way can be told to stop thinking and answer. */
+  answerNow?: boolean;
   /** When the request under way was sent, in milliseconds since the epoch. */
   waitingSince?: number;
   /** The message waiting for a turn that is still running. */
@@ -699,6 +703,9 @@ export interface HarnessApi {
       with. The reply to it is discarded. */
   resend(id: string, seq: number, text?: string): Promise<void>;
   stop(id: string): Promise<void>;
+  /** Asks the reply under way to stop thinking and answer. False when it has
+      nothing left to end. */
+  answerNow(id: string): Promise<boolean>;
   compact(id: string): Promise<void>;
   decide(permissionId: string, decision: PermissionDecision): Promise<void>;
   answer(questionId: string, answer: Answer): Promise<void>;

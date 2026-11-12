@@ -133,3 +133,8 @@ func buildOpenAIBody(req ChatRequest) ([]byte, error) {
 	}
 	return json.Marshal(body)
 }
+
+// AnswerNow has nothing to ask: the OpenAI API cannot end a reply's thinking.
+func (b *openAIBackend) AnswerNow(context.Context, string) (bool, error) {
+	return false, nil
+}

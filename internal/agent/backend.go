@@ -10,7 +10,7 @@ import (
 
 // Backend is the model server, as much of it as a session needs. The engine
 // reaches one through Backends rather than holding it, so the turn loop never
-// learns which protocol answered and a fake needs three methods.
+// learns which protocol answered.
 //
 // Prepare carries the whole of "this model has to be ready before we can talk
 // to it". A server that keeps everything loaded returns what it knows and does
@@ -19,6 +19,8 @@ type Backend interface {
 	Chat(ctx context.Context, req llm.ChatRequest, on func(llm.Event) error) (llm.Result, error)
 	Models(ctx context.Context) ([]llm.Model, error)
 	Prepare(ctx context.Context, model string) (llm.Ready, error)
+	Props(ctx context.Context, model string) (llm.Props, error)
+	AnswerNow(ctx context.Context, requestID string) (bool, error)
 }
 
 // Backends is the model server for one agent. A turn resolves the agent it

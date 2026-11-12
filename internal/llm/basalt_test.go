@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -70,6 +71,10 @@ func TestLlamaCppIgnoresTheBasaltKey(t *testing.T) {
 	if p.Features != (Features{}) || p.Model != "Qwen 3.8 FN" {
 		t.Errorf("props = %+v", p)
 	}
+	took, err := c.AnswerNow(context.Background(), "qh-1")
+	if took || err != nil {
+		t.Errorf("llama.cpp answer now = %v %v", took, err)
+	}
 }
 
 // chatCapture answers one chat request with a short stream and keeps the
@@ -108,6 +113,39 @@ func TestOnlyBasaltIsSentSessionAndRequestID(t *testing.T) {
 	}
 	if string(body) != string(llama) {
 		t.Errorf("the two bodies differ:\n%s\n%s", llama, body)
+	}
+}
+
+func TestAnswerNow(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		took   bool
+		fails  bool
+	}{
+		{200, `{"object":"answer_now","request_id":"qh-1","state":"thinking"}`, true, false},
+		{409, `{"error":{"code":"not_thinking","state":"answering","message":"request qh-1 is already answering"}}`, false, false},
+		{404, `{"error":{"code":"unknown_request","message":"no running or recent request qh-1"}}`, false, false},
+		{400, `{"error":{"code":"no_target","message":"name the request"}}`, false, false},
+		{500, `{"error":{"message":"boom"}}`, false, true},
+	}
+	for _, tc := range cases {
+		var sent map[string]string
+		var auth, path string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path, auth = r.URL.Path, r.Header.Get("Authorization")
+			json.NewDecoder(r.Body).Decode(&sent)
+			w.WriteHeader(tc.status)
+			fmt.Fprint(w, tc.body)
+		}))
+		took, err := New(srv.URL, "key", ProtocolBasalt).AnswerNow(context.Background(), "qh-1")
+		srv.Close()
+		if took != tc.took || (err != nil) != tc.fails {
+			t.Errorf("%d: took %v err %v", tc.status, took, err)
+		}
+		if path != "/v1/answer_now" || auth != "Bearer key" || sent["request_id"] != "qh-1" {
+			t.Errorf("%d: sent %s %q %v", tc.status, path, auth, sent)
+		}
 	}
 }
 

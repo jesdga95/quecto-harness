@@ -1,0 +1,6 @@
+: shape from llama.cpp b10812-8b4b3558f
+data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Let me think about "}}],"created":1757141666,"id":"chatcmpl-9","model":"Alpha-12B","object":"chat.completion.chunk"}
+
+data: {"choices":[{"index":0,"delta":{"reasoning_content":"what the file says."}}],"created":1757141666,"id":"chatcmpl-9","model":"Alpha-12B","object":"chat.completion.chunk"}
+
+data: [HOLD]

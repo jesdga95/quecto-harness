@@ -245,6 +245,7 @@ interface WireSnapshot {
     reasoning?: string;
     tool_calls?: { index?: number; id?: string; name?: string; arguments?: string }[] | null;
     since?: string;
+    answer_now?: boolean;
   } | null;
   compactable?: boolean;
   breakdown?: { system?: number; rules?: number; tools?: number; messages?: number } | null;
@@ -255,6 +256,7 @@ interface WireEvent {
   seq?: number;
   state?: string;
   text?: string;
+  available?: boolean;
   index?: number;
   id?: string;
   name?: string;
@@ -1016,6 +1018,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
     steer: toSteer(snap.steer),
     status: toStatus(snap.state),
     replying,
+    answerNow: reply?.answer_now === true && !reply.content,
     waitingSince: Number.isFinite(sent) && sent > 0 ? sent : undefined,
     mode: toWorkMode(snap.mode),
     toolset: toToolset(snap.toolset),
@@ -1041,6 +1044,7 @@ const EVENT_NAMES = [
   "plan_draft",
   "delta",
   "reasoning",
+  "answer_now",
   "tool_call",
   "tool_start",
   "tool_output",
@@ -1171,6 +1175,9 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
 
     case "reasoning":
       return [{ type: "reasoning", text: ev.text ?? "" }];
+
+    case "answer_now":
+      return [{ type: "answer_now", available: ev.available === true }];
 
     case "tool_call": {
       const index = ev.index ?? 0;
@@ -1551,6 +1558,11 @@ class HttpApi implements HarnessApi {
 
   async stop(id: string): Promise<void> {
     await call(`/sessions/${encodeURIComponent(id)}/stop`, "POST", {});
+  }
+
+  async answerNow(id: string): Promise<boolean> {
+    const wire = await call<{ ok?: boolean }>(`/sessions/${encodeURIComponent(id)}/answer-now`, "POST", {});
+    return wire.ok === true;
   }
 
   async compact(id: string): Promise<void> {

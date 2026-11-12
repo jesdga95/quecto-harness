@@ -144,6 +144,9 @@ export const app = $state({
   // nothing. Not the "waiting" turn status, which is a permission card waiting
   // on a person.
   awaitingModel: false,
+  // The reply under way can be told to stop thinking and answer. Set by the
+  // harness when the request goes out, cleared once text or a call arrives.
+  answerNow: false,
   // When that wait began, in milliseconds since the epoch, so a session opened
   // part way through it shows how long it has really taken.
   waitSince: 0,
@@ -347,6 +350,7 @@ function clearSession(): void {
   app.draft = null;
   app.status = "idle";
   app.awaitingModel = false;
+  app.answerNow = false;
   app.changes = { files: [], added: 0, removed: 0 };
   app.procs = [];
   app.procId = "";
@@ -395,6 +399,7 @@ export async function selectSession(id: string): Promise<void> {
   app.status = t.status;
   app.waitSince = t.waitingSince ?? Date.now();
   app.awaitingModel = waiting(t);
+  app.answerNow = t.answerNow ?? false;
   app.changes = { files: [], added: 0, removed: 0 };
   app.procs = [];
   app.procId = "";
@@ -657,6 +662,14 @@ export async function resend(seq: number, text?: string): Promise<void> {
 export async function stop(): Promise<void> {
   if (!app.sessionId) return;
   await guard(() => api.stop(app.sessionId));
+}
+
+/** Tells the reply under way to stop thinking and answer. The control goes
+    either way: a refusal means the thinking had already ended. */
+export async function answerNow(): Promise<void> {
+  if (!app.sessionId || !app.answerNow) return;
+  app.answerNow = false;
+  await guard(() => api.answerNow(app.sessionId));
 }
 
 export async function compact(): Promise<void> {
@@ -1180,6 +1193,7 @@ function onEvent(event: HarnessEvent): void {
     app.status = event.transcript.status;
     app.waitSince = event.transcript.waitingSince ?? Date.now();
     app.awaitingModel = waiting(event.transcript);
+    app.answerNow = event.transcript.answerNow ?? false;
     markAnnounced();
     return;
   }
@@ -1265,6 +1279,11 @@ function onEvent(event: HarnessEvent): void {
   if (event.type === "delta" || event.type === "reasoning" || event.type === "tool_call") {
     app.awaitingModel = false;
   }
+  if (event.type === "delta" || event.type === "tool_call") app.answerNow = false;
+  if (event.type === "answer_now") {
+    app.answerNow = event.available;
+    return;
+  }
 
   // A background command's tail arrives in chunks. The transcript only ever
   // says that the command started, so the panel keeps the running text itself.
@@ -1335,6 +1354,7 @@ function onEvent(event: HarnessEvent): void {
   if (event.type === "done" || event.type === "error") {
     app.status = "idle";
     app.awaitingModel = false;
+    app.answerNow = false;
   }
 
   if (event.type === "done" && event.cost && event.cost.tokPerS > 0) {

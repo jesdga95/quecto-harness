@@ -663,6 +663,31 @@
   .composer.is-plan .qcard-tick {
     color: var(--plan);
   }
+  /* Ends the thinking of the running reply. It sits ahead of Stop at the height
+     of the send circle, tinted rather than filled so Stop stays the strong one. */
+  .answer-now {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 34px;
+    padding: 0 14px 0 12px;
+    border-radius: 999px;
+    border: 1px solid var(--edge);
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: filter 90ms ease;
+  }
+  .answer-now:hover {
+    filter: brightness(0.97);
+  }
+  .answer-now svg {
+    width: 15px;
+    height: 15px;
+  }
   .send.is-stop svg {
     width: 12px;
     height: 12px;

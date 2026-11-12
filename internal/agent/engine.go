@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1028,6 +1029,7 @@ func (e *Engine) apply(s *Session, a config.Agent, r llm.Ready) {
 		s.NCtx, s.NCtxSource = r.NCtx, r.Source
 	}
 	s.caps = r.Caps
+	s.features = r.Features
 	s.prepared = true
 	s.mu.Unlock()
 	e.save(s)
@@ -1493,6 +1495,7 @@ func (e *Engine) request(ctx context.Context, s *Session, back Backend, req llm.
 		// from its read loop, so no lock is needed here.
 		var first time.Time
 		sent := time.Now()
+		req.RequestID = e.offerAnswerNow(s, back, e.featuresOf(s))
 		res, err := back.Chat(ctx, req, func(event llm.Event) error {
 			if first.IsZero() && carriesOutput(event.Kind) {
 				first = time.Now()
@@ -1500,6 +1503,7 @@ func (e *Engine) request(ctx context.Context, s *Session, back Backend, req llm.
 			e.forward(s, event)
 			return nil
 		})
+		e.withdrawAnswerNow(s)
 		if err == nil && res.Content == "" && res.Reasoning == "" && len(res.ToolCalls) == 0 {
 			err = errEmptyReply
 		}
@@ -2398,4 +2402,60 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	e.save(s)
 	e.publish(s.ID, ev("compacted", map[string]any{"before": before, "after": after, "summary": summary}))
 	return nil
+}
+
+// answerTarget is the request an answer-now names and the server it went to.
+type answerTarget struct {
+	back Backend
+	id   string
+}
+
+// featuresOf is what the server does for the session's model.
+func (e *Engine) featuresOf(s *Session) llm.Features {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.features
+}
+
+// offerAnswerNow names the request about to be sent, when the server can end
+// its thinking, and tells the browser it may offer to. Each attempt gets an id
+// of its own, so an answer-now never reaches a request already given up on.
+func (e *Engine) offerAnswerNow(s *Session, back Backend, f llm.Features) string {
+	if !f.AnswerNow {
+		return ""
+	}
+	id := "qh-" + rand.Text()
+	s.mu.Lock()
+	s.answer = &answerTarget{back: back, id: id}
+	s.mu.Unlock()
+	e.publish(s.ID, ev("answer_now", map[string]any{"available": true}))
+	return id
+}
+
+func (e *Engine) withdrawAnswerNow(s *Session) {
+	s.mu.Lock()
+	had := s.answer != nil
+	s.answer = nil
+	s.mu.Unlock()
+	if had {
+		e.publish(s.ID, ev("answer_now", map[string]any{"available": false}))
+	}
+}
+
+// AnswerNow ends the thinking of the reply the session is streaming, so it
+// goes on to its answer in the same response. It answers false when there is
+// nothing to end: no request under way, a server that takes none, or a reply
+// already past its thinking.
+func (e *Engine) AnswerNow(ctx context.Context, id string) (bool, error) {
+	s, err := e.Get(id)
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	t := s.answer
+	s.mu.Unlock()
+	if t == nil {
+		return false, nil
+	}
+	return t.back.AnswerNow(ctx, t.id)
 }

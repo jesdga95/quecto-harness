@@ -494,3 +494,8 @@ func (s *responsesState) result() Result {
 	}
 	return res
 }
+
+// AnswerNow has nothing to ask: the OpenAI API cannot end a reply's thinking.
+func (b *responsesBackend) AnswerNow(context.Context, string) (bool, error) {
+	return false, nil
+}

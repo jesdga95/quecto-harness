@@ -856,6 +856,28 @@ func (s *Server) postStop(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"state": string(state)})
 }
 
+// postAnswerNow asks the reply under way to stop thinking and answer. A reply
+// that has nothing left to end answers ok false rather than an error, since
+// the control is gone from the page by the time the refusal would show.
+func (s *Server) postAnswerNow(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	took, err := s.engine.AnswerNow(ctx, sess.ID)
+	if err != nil {
+		var le *llm.Error
+		if !errors.As(err, &le) {
+			writeEngineError(w, err)
+			return
+		}
+		took = false
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": took})
+}
+
 func (s *Server) postCompact(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.session(w, r)
 	if !ok {

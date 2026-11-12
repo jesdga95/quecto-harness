@@ -2,6 +2,7 @@
   import AddMenu from "./AddMenu.svelte";
   import ArrowUp from "phosphor-svelte/lib/ArrowUp";
   import Square from "phosphor-svelte/lib/Square";
+  import Lightning from "phosphor-svelte/lib/Lightning";
   import AgentChip from "./AgentChip.svelte";
   import ModeChip from "./ModeChip.svelte";
   import PermissionChip from "./PermissionChip.svelte";
@@ -22,6 +23,7 @@
     setWorkMode,
     send,
     stop,
+    answerNow,
     toolset,
   } from "../state/app.svelte";
   import { fileKind, fileName } from "../format";
@@ -142,6 +144,9 @@
   const running = $derived(app.status !== "idle" && app.status !== "compacting");
   // Sending with no session creates one, so the field only needs a project.
   const disabled = $derived(blocked || (!app.sessionId && !app.projectPath));
+  // The reply is thinking and the server can end that early. The text it
+  // answers with, or a call, ends the offer.
+  const thinking = $derived(running && app.answerNow && app.items.at(-1)?.kind === "reasoning");
 
   // The dialog takes several files at once, and the harness caps a message at
   // five, so what comes back past the cap is dropped rather than sent.
@@ -398,6 +403,12 @@
           {#if running && !empty}
             <button class="round" aria-label="Send" onclick={submit}>
               <ArrowUp />
+            </button>
+          {/if}
+          {#if thinking}
+            <button class="answer-now" onclick={() => answerNow()}>
+              <Lightning />
+              Answer now
             </button>
           {/if}
           {#if running}

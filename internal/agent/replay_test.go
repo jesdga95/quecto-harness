@@ -151,6 +151,15 @@ func (r *replay) Server() *httptest.Server {
 			serveFixture(r.t, w, "v1-models.json")
 		case "/v1/chat/completions":
 			r.serveChat(w, req)
+		case "/v1/answer_now":
+			var body struct {
+				RequestID string `json:"request_id"`
+			}
+			json.NewDecoder(req.Body).Decode(&body)
+			r.mu.Lock()
+			r.Answered = append(r.Answered, body.RequestID)
+			r.mu.Unlock()
+			fmt.Fprintf(w, `{"object":"answer_now","request_id":%q,"state":"thinking"}`, body.RequestID)
 		default:
 			http.NotFound(w, req)
 		}

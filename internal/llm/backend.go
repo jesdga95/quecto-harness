@@ -5,7 +5,7 @@ import (
 )
 
 // Backend is one protocol a model server speaks. Everything above this
-// package works in these five calls and never learns which kind of server
+// package works in these six calls and never learns which kind of server
 // answered.
 //
 // Prepare carries the whole of "this model has to be ready before we can talk
@@ -17,6 +17,7 @@ type Backend interface {
 	Prepare(ctx context.Context, model string) (Ready, error)
 	Props(ctx context.Context, model string) (Props, error)
 	Chat(ctx context.Context, req ChatRequest, on func(Event) error) (Result, error)
+	AnswerNow(ctx context.Context, requestID string) (bool, error)
 }
 
 type Mode string
@@ -98,4 +99,11 @@ func (c *Client) Props(ctx context.Context, model string) (Props, error) {
 
 func (c *Client) Chat(ctx context.Context, req ChatRequest, on func(Event) error) (Result, error) {
 	return c.backend().Chat(ctx, req, on)
+}
+
+// AnswerNow asks the server to end the thinking of the request sent with
+// requestID. It answers true when the server took it, and false with no
+// error when there was nothing to end or the protocol has no way to ask.
+func (c *Client) AnswerNow(ctx context.Context, requestID string) (bool, error) {
+	return c.backend().AnswerNow(ctx, requestID)
 }

@@ -75,6 +75,8 @@ type Session struct {
 	steer *Steer
 
 	caps llm.Caps
+	// features is what the server does for this model beyond its protocol.
+	features llm.Features
 	// usageSince is the sequence number of the first entry this model could
 	// have measured. A report an earlier model made is no measure of this
 	// model's context, so it anchors nothing.
@@ -105,6 +107,9 @@ type Session struct {
 	// outside a request and cleared in the same hold that appends the entry
 	// the reply becomes.
 	live *Reply
+	// answer is where an answer-now for the request under way goes, nil
+	// outside a request or where the server takes none.
+	answer *answerTarget
 
 	state State
 	// announced is the last state published for a subagent run, which is how
@@ -142,6 +147,7 @@ func (s *Session) repoint(agentID, model string) {
 func (s *Session) forgetModel() {
 	s.NCtx, s.NCtxSource = 0, ""
 	s.caps = llm.Caps{}
+	s.features = llm.Features{}
 	s.prepared = false
 }
 
@@ -267,6 +273,8 @@ type Reply struct {
 	// Since is when the request was sent, which a page opened part way
 	// through the wait counts from.
 	Since time.Time `json:"since"`
+	// AnswerNow says the request can be told to stop thinking and answer.
+	AnswerNow bool `json:"answer_now,omitempty"`
 }
 
 // ReplyCall is one tool call as far as its fragments have arrived. Fragments
@@ -326,6 +334,7 @@ func (s *Session) View(mark func() int64) View {
 	if s.live != nil {
 		held := *s.live
 		held.ToolCalls = append([]ReplyCall(nil), s.live.ToolCalls...)
+		held.AnswerNow = s.answer != nil
 		v.Reply = &held
 	}
 	return v

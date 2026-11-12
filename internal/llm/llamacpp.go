@@ -191,6 +191,11 @@ func (b *llamaBackend) Chat(ctx context.Context, req ChatRequest, on func(Event)
 	return res, markOverflow(err, llamaOverflow)
 }
 
+// AnswerNow has nothing to ask: llama.cpp cannot end a reply's thinking.
+func (b *llamaBackend) AnswerNow(context.Context, string) (bool, error) {
+	return false, nil
+}
+
 // llamaOverflow recognises llama.cpp's refusal of a prompt longer than the
 // slot's context, which it names by error type.
 func llamaOverflow(body string) bool {
