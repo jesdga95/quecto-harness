@@ -301,6 +301,7 @@ const (
 	ProtocolLlama     = llm.ProtocolLlama
 	ProtocolChat      = llm.ProtocolChat
 	ProtocolResponses = llm.ProtocolResponses
+	ProtocolBasalt    = llm.ProtocolBasalt
 )
 
 // How many tasks one agent runs at once. A new agent starts at one, since a
@@ -337,7 +338,7 @@ const (
 
 // ProtocolNames lists what the protocol field accepts, for the note a
 // rejected value produces.
-const ProtocolNames = "llamacpp, chat or responses"
+const ProtocolNames = "llamacpp, basalt, chat or responses"
 
 type Effort = llm.Effort
 

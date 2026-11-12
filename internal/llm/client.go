@@ -1,6 +1,6 @@
-// Package llm talks to one model server. Three protocols are spoken: a
-// llama.cpp server, in router or single-model mode, an OpenAI-compatible chat
-// endpoint, and the OpenAI responses endpoint. Which one an address speaks is
+// Package llm talks to one model server. Four protocols are spoken: a
+// llama.cpp server, in router or single-model mode, a Basalt server, an
+// OpenAI-compatible chat endpoint, and the OpenAI responses endpoint. Which one an address speaks is
 // told to the client rather than discovered, so nothing here probes to find
 // out and nothing has to be re-checked when an address changes what it is.
 // The package converts HTTP and SSE into Go values and knows nothing about

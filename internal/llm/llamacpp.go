@@ -12,7 +12,30 @@ import (
 const propsPath = "/props"
 
 // llamaBackend is a llama.cpp server, holding one model or routing to many.
-type llamaBackend struct{ c *Client }
+// read decodes one /props response; a server that adds fields of its own to
+// that response brings its own reader and keeps the rest.
+type llamaBackend struct {
+	c    *Client
+	read propsReader
+}
+
+// propsReader performs one /props GET and returns the llama.cpp fields and
+// whatever the server adds beyond them.
+type propsReader func(c *Client, ctx context.Context, op, model, u string) (propsBody, Features, error)
+
+// readProps reads llama.cpp's own response, which adds nothing.
+func readProps(c *Client, ctx context.Context, op, model, u string) (propsBody, Features, error) {
+	var body propsBody
+	err := c.getJSON(ctx, op, model, u, &body)
+	return body, Features{}, err
+}
+
+func (b *llamaBackend) props(ctx context.Context, op, model, u string) (propsBody, Features, error) {
+	if b.read == nil {
+		return readProps(b.c, ctx, op, model, u)
+	}
+	return b.read(b.c, ctx, op, model, u)
+}
 
 // propsBody is one /props response, server-wide or model-scoped. Every scalar
 // is a pointer, since a field the build does not send must stay distinct from
@@ -33,8 +56,8 @@ type propsBody struct {
 // Detect reads /props with no query parameters, so it can never load a model.
 // Anything but role "router" is a single-model server.
 func (b *llamaBackend) Detect(ctx context.Context) (Info, error) {
-	var body propsBody
-	if err := b.c.getJSON(ctx, "detect", "", b.c.BaseURL+propsPath, &body); err != nil {
+	body, _, err := b.props(ctx, "detect", "", b.c.BaseURL+propsPath)
+	if err != nil {
 		return Info{Mode: ModeUnknown}, err
 	}
 	info := Info{Mode: ModeSingle, Build: deref(body.BuildInfo)}
@@ -53,12 +76,11 @@ func (b *llamaBackend) Detect(ctx context.Context) (Info, error) {
 // Props reads one model's properties. The request carries autoload=false, so
 // a model that is not loaded answers 4xx rather than being started.
 func (b *llamaBackend) Props(ctx context.Context, model string) (Props, error) {
-	var body propsBody
-	u := modelURL(b.c.BaseURL, propsPath, model, false)
-	if err := b.c.getJSON(ctx, "props", model, u, &body); err != nil {
+	body, features, err := b.props(ctx, "props", model, modelURL(b.c.BaseURL, propsPath, model, false))
+	if err != nil {
 		return Props{}, err
 	}
-	return fromPropsBody(body), nil
+	return fromPropsBody(body, features), nil
 }
 
 // Prepare makes a model answerable and reports what it answers.
@@ -71,14 +93,14 @@ func (b *llamaBackend) Props(ctx context.Context, model string) (Props, error) {
 // The model is ready when it returns, so a session never has to shape its
 // first request around an answer it does not have yet.
 func (b *llamaBackend) Prepare(ctx context.Context, model string) (Ready, error) {
-	var body propsBody
-	if err := b.c.getJSON(ctx, "prepare", "", b.c.BaseURL+propsPath, &body); err != nil {
+	body, features, err := b.props(ctx, "prepare", "", b.c.BaseURL+propsPath)
+	if err != nil {
 		return Ready{}, err
 	}
 	if deref(body.Role) != "router" {
 		// The server holds one model and it is already up, so the properties
 		// it just sent are that model's.
-		return ready(fromPropsBody(body), "props"), nil
+		return ready(fromPropsBody(body, features), "props"), nil
 	}
 	if model == "" {
 		return Ready{}, &Error{Kind: KindBadRequest, Op: "prepare",
@@ -94,11 +116,11 @@ func (b *llamaBackend) Prepare(ctx context.Context, model string) (Ready, error)
 			}
 		}
 	}
-	var scoped propsBody
-	if err := b.c.getJSON(ctx, "prepare", model, modelURL(b.c.BaseURL, propsPath, model, autoload), &scoped); err != nil {
+	scoped, features, err := b.props(ctx, "prepare", model, modelURL(b.c.BaseURL, propsPath, model, autoload))
+	if err != nil {
 		return Ready{}, err
 	}
-	return ready(fromPropsBody(scoped), "props"), nil
+	return ready(fromPropsBody(scoped, features), "props"), nil
 }
 
 type llamaModelsBody struct {
@@ -191,12 +213,13 @@ func modelURL(base, path, model string, autoload bool) string {
 
 // fromPropsBody reduces one /props response, scoped or not, to the fields the
 // harness reads.
-func fromPropsBody(body propsBody) Props {
+func fromPropsBody(body propsBody, features Features) Props {
 	p := Props{
 		Model:      deref(body.ModelAlias),
 		TotalSlots: deref(body.TotalSlots),
 		Build:      deref(body.BuildInfo),
 		Sleeping:   deref(body.IsSleeping),
+		Features:   features,
 	}
 	if body.DefaultGenerationSettings != nil {
 		p.NCtx = deref(body.DefaultGenerationSettings.NCtx)

@@ -187,6 +187,8 @@ export function protocolLabel(protocol: string): string {
       return "Chat";
     case "responses":
       return "Responses";
+    case "basalt":
+      return "Basalt";
     default:
       return "llama.cpp";
   }
@@ -197,11 +199,13 @@ export function protocolLabel(protocol: string): string {
 export function protocolHint(protocol: string): string {
   switch (protocol) {
     case "chat":
-      return "The chat completions endpoint every OpenAI-compatible server has.";
+      return "Any OpenAI-compatible chat completions endpoint.";
     case "responses":
-      return "OpenAI's newer endpoint. Its recent models take tools and thinking together only here.";
+      return "The OpenAI Responses API.";
+    case "basalt":
+      return "A Basalt local inference server.";
     default:
-      return "A llama.cpp server, which is also the only one that takes top k and repeat penalty.";
+      return "A llama.cpp server, one model or a router.";
   }
 }
 

@@ -20,7 +20,7 @@
     label: effortLabel(value),
     hint: effortHint(value),
   }));
-  const PROTOCOLS = (["llamacpp", "chat", "responses"] as Protocol[]).map((value) => ({
+  const PROTOCOLS = (["llamacpp", "basalt", "chat", "responses"] as Protocol[]).map((value) => ({
     value,
     label: protocolLabel(value),
     hint: protocolHint(value),

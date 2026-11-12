@@ -11,7 +11,7 @@ export type Effort = "auto" | "off" | "low" | "medium" | "high" | "xhigh";
 
 /** The wire protocol an address speaks. It is named rather than found: two of
     the three answer the same model list at the same address. */
-export type Protocol = "llamacpp" | "chat" | "responses";
+export type Protocol = "llamacpp" | "basalt" | "chat" | "responses";
 export type TurnStatus =
   | "idle"
   | "loading"

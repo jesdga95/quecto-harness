@@ -30,7 +30,7 @@ const (
 )
 
 // Protocol is the wire protocol an address speaks. It is named rather than
-// found: two of the three answer the same model list at the same address, so
+// found: several of them answer the same model list at the same address, so
 // no probe can tell them apart, and a probe that can be wrong about the
 // others buys nothing over being told.
 type Protocol string
@@ -39,12 +39,13 @@ const (
 	ProtocolLlama     Protocol = "llamacpp"
 	ProtocolChat      Protocol = "chat"
 	ProtocolResponses Protocol = "responses"
+	ProtocolBasalt    Protocol = "basalt"
 )
 
-// ValidProtocol reports whether s is one of the three.
+// ValidProtocol reports whether s is one of the four.
 func ValidProtocol(s string) bool {
 	switch Protocol(s) {
-	case ProtocolLlama, ProtocolChat, ProtocolResponses:
+	case ProtocolLlama, ProtocolChat, ProtocolResponses, ProtocolBasalt:
 		return true
 	}
 	return false
@@ -69,6 +70,8 @@ func (c *Client) backend() Backend {
 		return &openAIBackend{c: c}
 	case ProtocolResponses:
 		return &responsesBackend{c: c}
+	case ProtocolBasalt:
+		return newBasaltBackend(c)
 	default:
 		return &llamaBackend{c: c}
 	}
