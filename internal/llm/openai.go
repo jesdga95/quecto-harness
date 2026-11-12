@@ -108,7 +108,7 @@ func (b *openAIBackend) Chat(ctx context.Context, req ChatRequest, on func(Event
 	if err != nil {
 		return Result{}, buildError(err)
 	}
-	res, err := b.c.stream(ctx, chatPath, body, req.Model, newStreamState(), on)
+	res, err := b.c.stream(ctx, chatPath, body, nil, req.Model, newStreamState(), on)
 	return res, markOverflow(err, openAIOverflow)
 }
 

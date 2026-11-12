@@ -383,7 +383,7 @@ func chatFrames(t *testing.T, frames []string) (Result, []Event, error) {
 	srv := sseServer(t, frames)
 	defer srv.Close()
 	var events []Event
-	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), func(e Event) error {
+	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, nil, "m", newStreamState(), func(e Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -645,7 +645,7 @@ func TestChatNonStreamingReply(t *testing.T) {
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"whole"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`)
 	}))
 	defer srv.Close()
-	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), nil)
+	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, nil, "m", newStreamState(), nil)
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
@@ -658,7 +658,7 @@ func TestChatCanceled(t *testing.T) {
 	srv := sseServer(t, []string{`data: {"choices":[{"delta":{"content":"a"}}]}`})
 	defer srv.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	_, err := New(srv.URL, "", ProtocolLlama).stream(ctx, chatPath, sent, "m", newStreamState(), func(e Event) error {
+	_, err := New(srv.URL, "", ProtocolLlama).stream(ctx, chatPath, sent, nil, "m", newStreamState(), func(e Event) error {
 		cancel()
 		return nil
 	})
@@ -714,7 +714,7 @@ func TestChatCanceledClosesTheConnection(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		cancel()
 	}()
-	if _, err := New("http://"+ln.Addr().String(), "", ProtocolLlama).stream(ctx, chatPath, sent, "m", newStreamState(), nil); Kind(err) != KindCanceled {
+	if _, err := New("http://"+ln.Addr().String(), "", ProtocolLlama).stream(ctx, chatPath, sent, nil, "m", newStreamState(), nil); Kind(err) != KindCanceled {
 		t.Fatalf("kind = %q, err = %v", Kind(err), err)
 	}
 	select {
@@ -764,7 +764,7 @@ func TestChatStallsBeforeTheFirstEvent(t *testing.T) {
 	defer srv.Close()
 
 	start := time.Now()
-	_, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), nil)
+	_, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, nil, "m", newStreamState(), nil)
 	if Kind(err) != KindStalled {
 		t.Fatalf("kind = %q, err = %v", Kind(err), err)
 	}
@@ -778,7 +778,7 @@ func TestChatStallsMidStreamAndKeepsWhatArrived(t *testing.T) {
 	srv := stallServer(t, []string{`data: {"choices":[{"delta":{"content":"Hel"}}]}`}, 10*time.Second)
 	defer srv.Close()
 
-	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), nil)
+	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, nil, "m", newStreamState(), nil)
 	if Kind(err) != KindStalled {
 		t.Fatalf("kind = %q, err = %v", Kind(err), err)
 	}
@@ -810,7 +810,7 @@ func TestResponsesSilentThinkingKeepsTheFirstLimit(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := New(srv.URL, "", ProtocolResponses).stream(context.Background(), responsesPath, sent, "m", newResponsesState(), nil)
+	res, err := New(srv.URL, "", ProtocolResponses).stream(context.Background(), responsesPath, sent, nil, "m", newResponsesState(), nil)
 	if err != nil {
 		t.Fatalf("chat: %v, want the silence before the first text to fall under the first limit", err)
 	}
@@ -829,7 +829,7 @@ func TestResponsesStallsAfterOutputOnTheShortLimit(t *testing.T) {
 	defer srv.Close()
 
 	start := time.Now()
-	res, err := New(srv.URL, "", ProtocolResponses).stream(context.Background(), responsesPath, sent, "m", newResponsesState(), nil)
+	res, err := New(srv.URL, "", ProtocolResponses).stream(context.Background(), responsesPath, sent, nil, "m", newResponsesState(), nil)
 	if Kind(err) != KindStalled {
 		t.Fatalf("kind = %q, err = %v", Kind(err), err)
 	}
@@ -857,7 +857,7 @@ func TestChatSteadyStreamOutlastsTheIdleLimit(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), nil)
+	res, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, nil, "m", newStreamState(), nil)
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
@@ -874,7 +874,7 @@ func TestChatCallbackErrorAborts(t *testing.T) {
 	})
 	defer srv.Close()
 	sentinel := errors.New("stop reading")
-	_, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, "m", newStreamState(), func(e Event) error {
+	_, err := New(srv.URL, "", ProtocolLlama).stream(context.Background(), chatPath, sent, nil, "m", newStreamState(), func(e Event) error {
 		return sentinel
 	})
 	if !errors.Is(err, sentinel) {

@@ -34,6 +34,15 @@ type replay struct {
 	// NoVision refuses a request carrying an image, the way a server with
 	// vision turned off does, without using up a script.
 	NoVision bool
+	// Basalt is the "basalt" key every /props answer carries, as raw JSON.
+	// Empty sends none, which is any other server.
+	Basalt string
+	// RefuseFiles refuses a request carrying a document with this message.
+	RefuseFiles string
+	// Headers are those of each chat request, beside Requests. Answered are
+	// the request ids an answer-now named.
+	Headers  []http.Header
+	Answered []string
 	Requests []map[string]any
 	Titles   []map[string]any
 	Queries  []string
@@ -131,13 +140,13 @@ func (r *replay) Server() *httptest.Server {
 				// One capture reports a template that takes named levels and
 				// can hold thinking, the other reports neither.
 				if model == "Delta3.8-27B Q5" {
-					serveFixture(r.t, w, "props-reasoning.json")
+					r.serveProps(w, "props-reasoning.json")
 					return
 				}
-				serveFixture(r.t, w, "props-model.json")
+				r.serveProps(w, "props-model.json")
 				return
 			}
-			serveFixture(r.t, w, "props-router.json")
+			r.serveProps(w, "props-router.json")
 		case "/v1/models":
 			serveFixture(r.t, w, "v1-models.json")
 		case "/v1/chat/completions":
@@ -177,7 +186,15 @@ func (r *replay) serveChat(w http.ResponseWriter, req *http.Request) {
 
 	r.mu.Lock()
 	r.Requests = append(r.Requests, body)
+	r.Headers = append(r.Headers, req.Header.Clone())
 	r.Order = append(r.Order, "chat")
+	if r.RefuseFiles != "" && carriesPart(body, "file") {
+		msg := r.RefuseFiles
+		r.mu.Unlock()
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": msg}})
+		return
+	}
 	if r.NoVision && carriesImage(body) {
 		r.mu.Unlock()
 		w.WriteHeader(400)
@@ -269,6 +286,45 @@ func (r *replay) LastBody() map[string]any {
 	n := len(r.Requests)
 	r.mu.Unlock()
 	return r.Body(n - 1)
+}
+
+// serveProps answers a /props read from a capture, with the basalt key added
+// when the test asks for one.
+func (r *replay) serveProps(w http.ResponseWriter, name string) {
+	r.mu.Lock()
+	key := r.Basalt
+	r.mu.Unlock()
+	if key == "" {
+		serveFixture(r.t, w, name)
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		r.t.Fatalf("read fixture %s: %v", name, err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		r.t.Fatalf("decode fixture %s: %v", name, err)
+	}
+	body["basalt"] = json.RawMessage(key)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(body)
+}
+
+// carriesPart reports whether any message of a chat body holds a part of
+// the given type.
+func carriesPart(body map[string]any, kind string) bool {
+	msgs, _ := body["messages"].([]any)
+	for _, m := range msgs {
+		msg, _ := m.(map[string]any)
+		parts, _ := msg["content"].([]any)
+		for _, p := range parts {
+			if part, _ := p.(map[string]any); part["type"] == kind {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func serveFixture(t *testing.T, w http.ResponseWriter, name string) {

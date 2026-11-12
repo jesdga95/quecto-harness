@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -68,6 +69,45 @@ func TestLlamaCppIgnoresTheBasaltKey(t *testing.T) {
 	}
 	if p.Features != (Features{}) || p.Model != "Qwen 3.8 FN" {
 		t.Errorf("props = %+v", p)
+	}
+}
+
+// chatCapture answers one chat request with a short stream and keeps the
+// headers and body it was sent.
+func chatCapture(t *testing.T, got *http.Header, body *[]byte) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*got = r.Header.Clone()
+		*body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\",\"index\":0}]}\n\ndata: [DONE]\n\n")
+	}))
+}
+
+func TestOnlyBasaltIsSentSessionAndRequestID(t *testing.T) {
+	var hdr http.Header
+	var body []byte
+	srv := chatCapture(t, &hdr, &body)
+	defer srv.Close()
+	req := ChatRequest{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}},
+		Session: "sess_1", RequestID: "qh-abc"}
+
+	if _, err := New(srv.URL, "", ProtocolLlama).Chat(context.Background(), req, nil); err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if hdr.Get("X-Session-Id") != "" || hdr.Get("X-Client-Request-Id") != "" {
+		t.Errorf("llama.cpp was sent %v", hdr)
+	}
+	llama := body
+
+	if _, err := New(srv.URL, "", ProtocolBasalt).Chat(context.Background(), req, nil); err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if hdr.Get("X-Session-Id") != "sess_1" || hdr.Get("X-Client-Request-Id") != "qh-abc" {
+		t.Errorf("headers = %v", hdr)
+	}
+	if string(body) != string(llama) {
+		t.Errorf("the two bodies differ:\n%s\n%s", llama, body)
 	}
 }
 

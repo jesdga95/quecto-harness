@@ -955,7 +955,7 @@ func (e *Engine) titleSession(ctx context.Context, s *Session, back Backend, a c
 		PreserveReasoning: a.PreserveReasoning,
 		Temperature:       a.Temperature, TopP: a.TopP, TopK: a.TopK,
 		RepeatPenalty: a.RepeatPenalty, Seed: a.Seed, Caps: caps,
-		MaxTokens: titleTokens,
+		MaxTokens: titleTokens, Session: s.ID,
 	}, nil)
 	if err != nil {
 		return
@@ -1294,6 +1294,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			RepeatPenalty:     a.RepeatPenalty,
 			Seed:              a.Seed,
 			Caps:              caps,
+			Session:           s.ID,
 		}
 		// The agent's cap is the reply's. The title request sets its own,
 		// since what it asks for is not a reply.

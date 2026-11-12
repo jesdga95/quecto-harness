@@ -13,7 +13,7 @@ func responsesFrames(t *testing.T, frames []string) (Result, []Event, error) {
 	defer srv.Close()
 	var events []Event
 	res, err := New(srv.URL, "", ProtocolResponses).stream(context.Background(),
-		responsesPath, sent, "m", newResponsesState(), func(e Event) error {
+		responsesPath, sent, nil, "m", newResponsesState(), func(e Event) error {
 			events = append(events, e)
 			return nil
 		})

@@ -139,6 +139,10 @@ type ChatRequest struct {
 	// MaxTokens caps the generation. Zero leaves it to the server, which is
 	// what a turn wants; a request sent only for its usage report sets it to 1.
 	MaxTokens int
+	// Session and RequestID name the conversation and the request. Only a
+	// backend whose server reads them sends them.
+	Session   string
+	RequestID string
 }
 
 // Usage is what one request reports it spent. PromptTokens counts the cached

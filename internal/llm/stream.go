@@ -111,10 +111,10 @@ type sink interface {
 	result() Result
 }
 
-// stream sends one rendered request to path and decodes the reply with st. on
-// is called synchronously from the read loop, in stream order; returning an
-// error from it aborts the request.
-func (c *Client) stream(ctx context.Context, path string, body []byte, model string, st sink, on func(Event) error) (Result, error) {
+// stream sends one rendered request to path, with any extra headers, and
+// decodes the reply with st. on is called synchronously from the read loop, in
+// stream order; returning an error from it aborts the request.
+func (c *Client) stream(ctx context.Context, path string, body []byte, header http.Header, model string, st sink, on func(Event) error) (Result, error) {
 	// The request takes a context of its own so the idle deadline can end it
 	// without the caller's context having been cancelled.
 	reqCtx, cancel := context.WithCancel(ctx)
@@ -123,6 +123,9 @@ func (c *Client) stream(ctx context.Context, path string, body []byte, model str
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return Result{}, classify("chat", c.BaseURL, model, 0, "", err)
+	}
+	for k, v := range header {
+		httpReq.Header[k] = v
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
