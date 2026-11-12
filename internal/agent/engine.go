@@ -143,8 +143,9 @@ func (e *Engine) today() string {
 	return time.Now().Format("2006-01-02")
 }
 
-// messages builds the prompt for a session. The image bytes are read between
-// the two locks, so nothing does file IO while the session is held.
+// messages builds the prompt for a session. The bytes of images, documents
+// and videos are read between the two locks, so nothing does file IO while
+// the session is held.
 func (e *Engine) messages(s *Session, a config.Agent, b brief) []llm.Message {
 	return e.messagesUntil(s, a, b, -1)
 }
@@ -153,18 +154,23 @@ func (e *Engine) messages(s *Session, a config.Agent, b brief) []llm.Message {
 // when end is negative.
 func (e *Engine) messagesUntil(s *Session, a config.Agent, b brief, end int) []llm.Message {
 	s.mu.Lock()
-	refs := s.imageRefs()
+	refs := s.fileRefs()
+	features := s.features
 	s.mu.Unlock()
 
 	images := map[string]llm.Part{}
-	for _, id := range refs {
-		raw, err := e.files.Read(id)
-		if err != nil {
-			// A file that has gone is left out rather than failing the turn:
-			// the message still says an image was attached.
+	for _, a := range refs {
+		if _, ok := mediaPart(a, nil, features); !ok && a.Kind != "image" {
 			continue
 		}
-		images[id] = llm.ImagePart(mimeOf(raw), raw)
+		raw, err := e.files.Read(a.File)
+		if err != nil {
+			// A file that has gone is left out rather than failing the turn.
+			continue
+		}
+		if part, ok := mediaPart(a, raw, features); ok {
+			images[a.File] = part
+		}
 	}
 
 	s.mu.Lock()
@@ -457,7 +463,7 @@ func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 	if err != nil {
 		return Sent{}, err
 	}
-	attachments, err := e.readAttachments(files)
+	attachments, err := e.readAttachments(s, files)
 	if err != nil {
 		return Sent{}, err
 	}
@@ -575,9 +581,11 @@ func steerFields(held *Steer) map[string]any {
 func AttachmentFields(attachments []store.Attachment) []map[string]any {
 	out := []map[string]any{}
 	for _, a := range attachments {
-		out = append(out, map[string]any{
-			"path": a.Path, "kind": a.Kind, "bytes": a.Bytes, "file": a.File,
-		})
+		f := map[string]any{"path": a.Path, "kind": a.Kind, "bytes": a.Bytes, "file": a.File}
+		if a.Refused != "" {
+			f["refused"] = a.Refused
+		}
+		out = append(out, f)
 	}
 	return out
 }
@@ -662,7 +670,7 @@ func (e *Engine) startTurn(ctx context.Context, s *Session, cancel context.Cance
 // readAttachments reads every attached file at once, so the message is either
 // sent with all of them or not sent at all. Text is kept with the entry;
 // an image goes to the file store and the entry keeps its id.
-func (e *Engine) readAttachments(paths []string) ([]store.Attachment, error) {
+func (e *Engine) readAttachments(s *Session, paths []string) ([]store.Attachment, error) {
 	if len(paths) == 0 {
 		return nil, nil
 	}
@@ -670,14 +678,23 @@ func (e *Engine) readAttachments(paths []string) ([]store.Attachment, error) {
 		return nil, fmt.Errorf("Attach %d files: at most %d fit in one message", len(paths), maxAttachments)
 	}
 	out := make([]store.Attachment, 0, len(paths))
+	var server *readable
 	for _, p := range paths {
 		read, err := tools.ReadAttachment(p)
 		if err != nil {
 			return nil, err
 		}
+		if read.Kind == "document" || read.Kind == "video" {
+			if server == nil {
+				server = e.readableBy(s)
+			}
+			if err := server.takes(p, read.Kind); err != nil {
+				return nil, err
+			}
+		}
 		a := store.Attachment{Path: p, Kind: read.Kind, Mime: read.Mime,
 			Bytes: read.Bytes, Content: read.Content}
-		if read.Kind == "image" {
+		if read.Kind != "text" {
 			id, size, err := e.files.Put(p)
 			if err != nil {
 				return nil, err
@@ -1329,6 +1346,11 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		if llm.Kind(err) == llm.KindBadRequest && e.refuseImages(s, err) {
 			e.dropLive(s)
 			continue
+		}
+		// A refused document or video ends the turn with the reason shown,
+		// and the next message goes without it.
+		if llm.Kind(err) == llm.KindBadRequest {
+			e.refuseMedia(s, err)
 		}
 		if err != nil {
 			// What the cut call reported rides on the reply it had written, and

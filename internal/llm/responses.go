@@ -169,9 +169,10 @@ func toResponsesInput(msgs []Message) (string, []map[string]any) {
 	return instructions.String(), items
 }
 
-// userContent is the text of a message, or the parts of one carrying an
-// image. A call's output takes the same parts as a message does. The part types are this endpoint's own: what the chat endpoint calls
-// text and image_url are input_text and input_image here.
+// userContent is the text of a message, or its parts. A call's output takes
+// the same parts as a message does. The part types are this endpoint's own:
+// text, image_url, file and video_url are input_text, input_image, input_file
+// and input_video here.
 func userContent(m Message) any {
 	if len(m.Parts) == 0 {
 		return m.Content
@@ -183,6 +184,10 @@ func userContent(m Message) any {
 			out = append(out, map[string]any{"type": "input_text", "text": p.Text})
 		case p.ImageURL != nil:
 			out = append(out, map[string]any{"type": "input_image", "image_url": p.ImageURL.URL})
+		case p.File != nil:
+			out = append(out, map[string]any{"type": "input_file", "filename": p.File.Filename, "file_data": p.File.FileData})
+		case p.VideoURL != nil:
+			out = append(out, map[string]any{"type": "input_video", "video_url": p.VideoURL.URL})
 		}
 	}
 	return out

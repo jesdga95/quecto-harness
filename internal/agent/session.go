@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -604,17 +605,17 @@ func (s *Session) argumentsOf(at int, id string) (json.RawMessage, bool) {
 	return nil, false
 }
 
-// imageRefs lists the file ids the in-context messages need, so the bytes are
-// read before the lock is taken rather than under it.
-func (s *Session) imageRefs() []string {
-	var out []string
+// fileRefs lists the stored attachments the in-context messages need, so the
+// bytes are read before the lock is taken rather than under it.
+func (s *Session) fileRefs() []store.Attachment {
+	var out []store.Attachment
 	for _, e := range s.Entries {
 		if !e.InContext {
 			continue
 		}
 		for _, a := range e.Attachments {
 			if a.File != "" {
-				out = append(out, a.File)
+				out = append(out, a)
 			}
 		}
 	}
@@ -683,7 +684,7 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 			} else if m != mode {
 				switched, mode = modeRules(m, b), m
 			}
-			msgs = append(msgs, userMessage(e, images, switched))
+			msgs = append(msgs, userMessage(e, images, switched, s.features))
 		case "compaction":
 			// Sent above, ahead of the messages it kept.
 		case "assistant":
@@ -754,10 +755,10 @@ func modeRules(m config.WorkMode, b brief) string {
 }
 
 // userMessage is the message as typed, with each attached text file under it
-// and each image beside it, and rules for a mode it was the first sent in
+// and each image, document and video beside it, and rules for a mode it was the first sent in
 // ahead of it. A message with an image is an array of parts, which is the only
 // shape that carries one.
-func userMessage(e store.Entry, images map[string]llm.Part, rules string) llm.Message {
+func userMessage(e store.Entry, images map[string]llm.Part, rules string, features llm.Features) llm.Message {
 	var b strings.Builder
 	if rules != "" {
 		b.WriteString(rules)
@@ -773,17 +774,27 @@ func userMessage(e store.Entry, images map[string]llm.Part, rules string) llm.Me
 	}
 	var parts []llm.Part
 	for _, a := range e.Attachments {
-		if a.Kind == "image" {
+		switch a.Kind {
+		case "image":
 			// The picture goes as a part, so the model sees it. A path is not
 			// said: a paste lives outside the project the tools can read, and
 			// the picture itself is already in the message.
 			if part, ok := images[a.File]; ok {
 				parts = append(parts, part)
 			}
-			continue
+		case "document", "video":
+			// A document carries its own name. One the server is not sent is
+			// named in the text, so the model knows it was attached.
+			if part, ok := images[a.File]; ok {
+				parts = append(parts, part)
+				continue
+			}
+			b.WriteString("\n\n")
+			b.WriteString(prompts.NotSent(filepath.Base(a.Path), notSentReason(a, features)))
+		default:
+			b.WriteString("\n\n")
+			b.WriteString(prompts.Attachment(a.Path, a.Content))
 		}
-		b.WriteString("\n\n")
-		b.WriteString(prompts.Attachment(a.Path, a.Content))
 	}
 	if len(parts) == 0 {
 		return llm.Message{Role: "user", Content: b.String()}

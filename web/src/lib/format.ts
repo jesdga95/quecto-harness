@@ -54,7 +54,9 @@ export function fileKind(path: string): string {
 
 /** What a file weighs, for an attachment tile. */
 export function bytes(n: number): string {
-  return n < 1024 ? `${n} b` : `${Math.round(n / 1024)} kb`;
+  if (n < 1024) return `${n} b`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} kb`;
+  return `${Math.round(n / (1024 * 1024))} mb`;
 }
 
 export function shortPath(path: string): string {

@@ -3,6 +3,7 @@ import type {
   AgentPatch,
   Answer,
   Attached,
+  AttachedKind,
   Breakdown,
   Changes,
   Config,
@@ -193,7 +194,7 @@ interface WireEntry {
   exit_code?: number | null;
   truncated?: boolean;
   permission?: WirePermission | null;
-  attachments?: { path?: string; kind?: string; bytes?: number; file?: string }[] | null;
+  attachments?: WireAttachment[] | null;
   edited?: boolean;
   from?: string;
   visible?: boolean;
@@ -206,6 +207,7 @@ interface WireAttachment {
   kind?: string;
   bytes?: number;
   file?: string;
+  refused?: string;
 }
 
 interface WireSteer {
@@ -619,9 +621,10 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
   if (e.kind === "user") {
     const files: Attached[] = (e.attachments ?? []).map((a) => ({
       path: a.path ?? "",
-      kind: a.kind === "image" ? "image" : "text",
+      kind: attachedKind(a.kind),
       bytes: a.bytes ?? 0,
       file: a.file,
+      refused: a.refused,
     }));
     if (e.content || files.length > 0) {
       items.push({
@@ -880,10 +883,15 @@ function toProcess(wire: WireEvent): Process {
 function toAttached(wire: WireAttachment[] | undefined): Attached[] {
   return (wire ?? []).map((a) => ({
     path: a.path ?? "",
-    kind: a.kind === "image" ? "image" : "text",
+    kind: attachedKind(a.kind),
     bytes: a.bytes ?? 0,
     file: a.file,
+    refused: a.refused,
   }));
+}
+
+function attachedKind(kind: string | undefined): AttachedKind {
+  return kind === "image" || kind === "document" || kind === "video" ? kind : "text";
 }
 
 function toSteer(wire: WireSteer | null | undefined): Steer | null {

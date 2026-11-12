@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
+//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md not_sent.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
 var files embed.FS
 
 // hasTool is the has the prompt templates take: whether the tools a turn sends
@@ -33,6 +33,7 @@ var (
 	approvedTmpl   = template.Must(template.New("approved").Parse(mustRead("plan_approved.md")))
 	compactionTmpl = template.Must(template.New("compaction").Parse(mustRead("compaction.md")))
 	attachmentTmpl = template.Must(template.New("attachment").Parse(mustRead("attachment.md")))
+	notSentTmpl    = template.Must(template.New("not_sent").Parse(mustRead("not_sent.md")))
 	titleTmpl      = template.Must(template.New("title").Parse(mustRead("title.md")))
 	messageTmpl    = template.Must(template.New("message").Parse(mustRead("message.md")))
 	compactTmpl    = template.Must(template.New("compact").Parse(mustRead("compact.md")))
@@ -290,6 +291,16 @@ func Attachment(path, content string) string {
 	var b strings.Builder
 	if err := attachmentTmpl.Execute(&b, struct{ Path, Content string }{path, content}); err != nil {
 		panic("prompts: render attachment.md: " + err.Error())
+	}
+	return b.String()
+}
+
+// NotSent stands in for an attached file the model server was not sent, and
+// says why.
+func NotSent(name, reason string) string {
+	var b strings.Builder
+	if err := notSentTmpl.Execute(&b, struct{ Name, Reason string }{name, reason}); err != nil {
+		panic("prompts: render not_sent.md: " + err.Error())
 	}
 	return b.String()
 }

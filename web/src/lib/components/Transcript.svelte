@@ -312,10 +312,15 @@
           <img src="/api/files/{file.file}" alt={fileName(file.path)} />
         </a>
       {:else}
-        <span class="tile tile-doc" title={file.path}>
+        <span
+          class="tile tile-doc"
+          class:is-refused={file.refused}
+          title={file.refused ? `Not sent: ${file.refused}` : file.path}
+        >
           <span class="tile-kind">
             {fileKind(file.path)}
-            {#if file.bytes > 0}<span class="tile-size">{bytes(file.bytes)}</span>{/if}
+            {#if file.refused}<span class="tile-size">Not sent</span>
+            {:else if file.bytes > 0}<span class="tile-size">{bytes(file.bytes)}</span>{/if}
           </span>
           <span class="tile-name">{fileName(file.path)}</span>
         </span>

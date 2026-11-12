@@ -20,16 +20,24 @@ type Message struct {
 	Name             string     `json:"name,omitempty"`
 }
 
-// Part is one piece of a multimodal message: a run of text, or an image as a
-// data URI.
+// Part is one piece of a multimodal message: a run of text, or an image, a
+// document or a video as a data URI. The JSON tags are the chat endpoint's.
 type Part struct {
 	Type     string    `json:"type"`
 	Text     string    `json:"text,omitempty"`
 	ImageURL *ImageURL `json:"image_url,omitempty"`
+	File     *FileData `json:"file,omitempty"`
+	VideoURL *ImageURL `json:"video_url,omitempty"`
 }
 
 type ImageURL struct {
 	URL string `json:"url"`
+}
+
+// FileData is a document sent by value, under the name the model reads it by.
+type FileData struct {
+	Filename string `json:"filename"`
+	FileData string `json:"file_data"`
 }
 
 func TextPart(text string) Part { return Part{Type: "text", Text: text} }
@@ -37,9 +45,22 @@ func TextPart(text string) Part { return Part{Type: "text", Text: text} }
 // ImagePart carries the bytes inline, which is the only shape the endpoint
 // takes: it has no route to a file on this machine.
 func ImagePart(mime string, data []byte) Part {
-	return Part{Type: "image_url", ImageURL: &ImageURL{
-		URL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
-	}}
+	return Part{Type: "image_url", ImageURL: &ImageURL{URL: dataURI(mime, data)}}
+}
+
+// DocumentPart carries a whole document inline. The server reads it again on
+// every turn and gives the same text for the same bytes.
+func DocumentPart(name, mime string, data []byte) Part {
+	return Part{Type: "file", File: &FileData{Filename: name, FileData: dataURI(mime, data)}}
+}
+
+// VideoPart carries a whole video inline. Only a user message may hold one.
+func VideoPart(mime string, data []byte) Part {
+	return Part{Type: "video_url", VideoURL: &ImageURL{URL: dataURI(mime, data)}}
+}
+
+func dataURI(mime string, data []byte) string {
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 
 // MarshalJSON writes content as a string, or as the array of parts when the

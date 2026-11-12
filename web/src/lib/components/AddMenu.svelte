@@ -41,7 +41,7 @@
         <span class="min-w-0 flex-1">
           <span class="block">Attach a file</span>
           <span class="block text-[12px] text-muted">
-            Up to five. Text is read into the message, an image goes with it
+            Text, images, PDFs, docs or video if supported (up to 5)
           </span>
         </span>
       </button>

@@ -116,6 +116,31 @@ func TestOnlyBasaltIsSentSessionAndRequestID(t *testing.T) {
 	}
 }
 
+func TestPartShapes(t *testing.T) {
+	doc := DocumentPart("a.pdf", "application/pdf", []byte("%PDF-1"))
+	vid := VideoPart("video/mp4", []byte("v"))
+	raw, err := json.Marshal(Message{Role: "user", Parts: []Part{TextPart("x"), doc, vid}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"role":"user","content":[{"type":"text","text":"x"},` +
+		`{"type":"file","file":{"filename":"a.pdf","file_data":"data:application/pdf;base64,JVBERi0x"}},` +
+		`{"type":"video_url","video_url":{"url":"data:video/mp4;base64,dg=="}}]}`
+	if string(raw) != want {
+		t.Errorf("chat parts:\n got %s\nwant %s", raw, want)
+	}
+
+	got, err := json.Marshal(userContent(Message{Role: "user", Parts: []Part{doc, vid}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantResp := `[{"file_data":"data:application/pdf;base64,JVBERi0x","filename":"a.pdf","type":"input_file"},` +
+		`{"type":"input_video","video_url":"data:video/mp4;base64,dg=="}]`
+	if string(got) != wantResp {
+		t.Errorf("responses parts:\n got %s\nwant %s", got, wantResp)
+	}
+}
+
 func TestAnswerNow(t *testing.T) {
 	cases := []struct {
 		status int

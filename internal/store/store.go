@@ -70,10 +70,13 @@ type Attachment struct {
 	Kind  string `json:"kind"`
 	Mime  string `json:"mime,omitempty"`
 	Bytes int    `json:"bytes"`
-	// File is the id in the file store, for an image.
+	// File is the id in the file store, for an image, a document or a video.
 	File string `json:"file,omitempty"`
 	// Content is the whole file, for text.
 	Content string `json:"content,omitempty"`
+	// Refused is the model server's reason for not reading the file. A
+	// refused file is named in the prompt and no longer sent.
+	Refused string `json:"refused,omitempty"`
 }
 
 // CallUsage is what one model call spent, kept on the entry that call

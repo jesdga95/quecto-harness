@@ -56,6 +56,16 @@ func Kind(err error) ErrKind {
 	return ""
 }
 
+// Reason is what the server said about a failed request, or empty when the
+// error did not come from a server reply.
+func Reason(err error) string {
+	var e *Error
+	if errors.As(err, &e) {
+		return serverMessage(e.Body)
+	}
+	return ""
+}
+
 // serverMessage digs the human-readable text out of a llama.cpp error body,
 // falling back to the raw body when it is not the expected shape.
 func serverMessage(body string) string {

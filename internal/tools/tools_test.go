@@ -1565,3 +1565,50 @@ func TestWriteOutsideTheProject(t *testing.T) {
 		t.Error("Outside got the written file or the saved output folder wrong")
 	}
 }
+
+func TestReadAttachmentMedia(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, data []byte) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	zip := append([]byte("PK\x03\x04"), make([]byte, 64)...)
+	cases := []struct {
+		name string
+		data []byte
+		kind string
+		mime string
+	}{
+		{"paper.pdf", []byte("%PDF-1.7\n"), "document", "application/pdf"},
+		{"Notes.DOCX", zip, "document", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+		{"deck.pptx", zip, "document", "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+		{"sheet.xlsx", zip, "document", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+		{"clip.mp4", append([]byte{0, 0, 0, 0x20}, []byte("ftypisom\x00\x00\x02\x00")...), "video", "video/mp4"},
+		{"clip.mov", append([]byte{0, 0, 0, 0x14}, []byte("ftypqt  ")...), "video", "video/quicktime"},
+		{"old.mov", append([]byte{0, 0, 0, 0x08}, []byte("wide")...), "video", "video/quicktime"},
+		{"clip.mkv", []byte{0x1a, 0x45, 0xdf, 0xa3, 0x01}, "video", "video/x-matroska"},
+		{"clip.webm", []byte{0x1a, 0x45, 0xdf, 0xa3, 0x01}, "video", "video/webm"},
+	}
+	for _, tc := range cases {
+		got, err := ReadAttachment(write(tc.name, tc.data))
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		if got.Kind != tc.kind || got.Mime != tc.mime || got.Content != "" || got.Bytes != len(tc.data) {
+			t.Errorf("%s: got %+v", tc.name, got)
+		}
+	}
+
+	// The extension alone is not enough: text named .pdf is read as text,
+	// and a zip that is not named as an Office file is refused as before.
+	if got, err := ReadAttachment(write("fake.pdf", []byte("hello\n"))); err != nil || got.Kind != "text" {
+		t.Errorf("text named .pdf: %+v %v", got, err)
+	}
+	if _, err := ReadAttachment(write("archive.zip", zip)); err == nil {
+		t.Error("a zip was attached")
+	}
+}

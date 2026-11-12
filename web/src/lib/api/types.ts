@@ -451,13 +451,19 @@ export interface Steer {
 }
 
 /** One file attached to a message, as the transcript shows it. An image is
-    fetched back from the harness by its id; text is already in the prompt. */
+    fetched back from the harness by its id; text is already in the prompt; a
+    document or a video is sent whole on every turn. */
 export interface Attached {
   path: string;
-  kind: "text" | "image";
+  kind: AttachedKind;
   bytes: number;
   file?: string;
+  /** The model server's reason for not reading the file, which is no longer
+      sent. */
+  refused?: string;
 }
+
+export type AttachedKind = "text" | "image" | "document" | "video";
 
 /** What a file this session wrote became. Only changed and new carry hunks;
     the rest name why there is nothing to draw. */

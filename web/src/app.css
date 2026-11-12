@@ -2382,6 +2382,12 @@
   .tile-size {
     color: var(--muted);
   }
+  /* A file the model server refused stays in the message and is no longer
+     sent. */
+  .tile.is-refused .tile-name {
+    color: var(--muted);
+    text-decoration: line-through;
+  }
   /* The name is what the tile is for, so it takes as many lines as it can
      before the tile runs out. */
   .tile-name {
