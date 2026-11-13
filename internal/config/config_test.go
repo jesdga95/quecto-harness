@@ -334,12 +334,12 @@ func TestCallsAreWrittenAndReadBack(t *testing.T) {
 	if len(notes) != 0 || c.Agents[0].Calls != nil {
 		t.Fatalf("an absent calls = %+v, notes %v, want none and none", c.Agents[0], notes)
 	}
-	c.Agents[0].Calls = []string{"agt_bbbbbbbbbbbbbbbb"}
+	c.Agents[0].Calls = []string{"agt_aaaaaaaaaaaaaaaa"}
 	raw, err := json.Marshal(c.File())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"calls":["agt_bbbbbbbbbbbbbbbb"]`) {
+	if !strings.Contains(string(raw), `"calls":["agt_aaaaaaaaaaaaaaaa"]`) {
 		t.Errorf("saved file omits a named calls list: %s", raw)
 	}
 	var back File
@@ -347,7 +347,7 @@ func TestCallsAreWrittenAndReadBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, notes := back.Resolve(Defaults())
-	if len(notes) != 0 || !reflect.DeepEqual(out.Agents[0].Calls, []string{"agt_bbbbbbbbbbbbbbbb"}) {
+	if len(notes) != 0 || !reflect.DeepEqual(out.Agents[0].Calls, []string{"agt_aaaaaaaaaaaaaaaa"}) {
 		t.Errorf("second resolve = %+v, notes %v, want the list kept", out.Agents[0], notes)
 	}
 }
@@ -375,6 +375,38 @@ func TestResolveDropsDuplicateAgentIDs(t *testing.T) {
 	}
 	if len(notes) != 1 || !strings.Contains(notes[0], "Second") {
 		t.Errorf("notes = %v", notes)
+	}
+}
+
+func TestResolveDropsCallsToUnknownAgents(t *testing.T) {
+	c, notes := File{Agents: []FileAgent{
+		{ID: ptr("agt_one"), Name: ptr("First"), Calls: []string{"agt_two", "agt_gone"}},
+		{ID: ptr("agt_two"), Name: ptr("Second")},
+	}}.Resolve(Defaults())
+	if got := c.Agents[0].Calls; len(got) != 1 || got[0] != "agt_two" {
+		t.Errorf("calls = %v, want [agt_two]", got)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "agt_gone") {
+		t.Errorf("notes = %v", notes)
+	}
+}
+
+func TestRemovingAnAgentTakesItOffCallLists(t *testing.T) {
+	s := openStore(t)
+	_, worker, err := s.AddAgent(Agent{Name: "Worker", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, lead, err := s.AddAgent(Agent{Name: "Lead", Enabled: true, Calls: []string{worker.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := s.RemoveAgent(worker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := cfg.AgentByID(lead.ID); len(a.Calls) != 0 {
+		t.Errorf("calls = %v after the agent it named was removed", a.Calls)
 	}
 }
 

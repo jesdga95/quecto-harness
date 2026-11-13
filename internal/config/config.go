@@ -766,7 +766,27 @@ func resolveAgents(in []FileAgent, note func(string)) []Agent {
 		}
 		out = append(out, a)
 	}
+	for i := range out {
+		out[i].Calls = dropUnknownCalls(out[i], seen, note)
+	}
 	return out
+}
+
+// dropUnknownCalls keeps the ids in a call list that name an agent, so a list
+// written before an agent was removed does not count it.
+func dropUnknownCalls(a Agent, known map[string]bool, note func(string)) []string {
+	if a.Calls == nil {
+		return nil
+	}
+	keep := make([]string, 0, len(a.Calls))
+	for _, id := range a.Calls {
+		if known[id] {
+			keep = append(keep, id)
+		} else {
+			note("agent " + strconv.Quote(a.Name) + " calls unknown agent " + id + ", dropped")
+		}
+	}
+	return keep
 }
 
 // resolveSearch folds the search block over the defaults. A bad value falls

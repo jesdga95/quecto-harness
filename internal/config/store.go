@@ -396,6 +396,7 @@ func (s *Store) RemoveAgent(id string) (Config, error) {
 		keep := make([]Agent, 0, len(c.Agents))
 		for _, a := range c.Agents {
 			if a.ID != id {
+				a.Calls = withoutCall(a.Calls, id)
 				keep = append(keep, a)
 			}
 		}
@@ -404,6 +405,20 @@ func (s *Store) RemoveAgent(id string) (Config, error) {
 			c.AgentID = firstEnabled(keep)
 		}
 	})
+}
+
+// withoutCall copies a call list without one id, leaving nil as nil.
+func withoutCall(calls []string, id string) []string {
+	if calls == nil {
+		return nil
+	}
+	out := make([]string, 0, len(calls))
+	for _, c := range calls {
+		if c != id {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // SelectAgent points the harness at one agent. A half-configured one may be

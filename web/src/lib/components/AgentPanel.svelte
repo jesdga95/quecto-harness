@@ -296,7 +296,7 @@
           Can hand work to {agent.calls.length} agent{agent.calls.length === 1 ? "" : "s"}
         </span>
       {:else}
-        <span class="text-[12px] text-crit">Answers the person only</span>
+        <span class="text-[12px] text-muted">Answers the person only</span>
       {/if}
     </div>
     <div class="grid grid-cols-4 gap-2">
