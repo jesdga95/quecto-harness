@@ -86,7 +86,7 @@
   </button>
 
   {#if open}
-    <Popover onclose={() => (open = false)} align="right" up width={290}>
+    <Popover onclose={() => (open = false)} align="right" up width={250}>
       {#if view === "menu"}
         {#if problem}
           <p class="px-[9px] py-1.5 text-[12px] text-crit">{problem}</p>
