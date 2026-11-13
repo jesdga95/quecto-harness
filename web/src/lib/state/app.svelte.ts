@@ -505,6 +505,10 @@ export function looksLikeImage(path: string): boolean {
   return /\.(png|jpe?g|gif|webp)$/i.test(path);
 }
 
+export function looksLikeVideo(path: string): boolean {
+  return /\.(mp4|m4v|mov|mkv|webm)$/i.test(path);
+}
+
 /** Asks the host for files to attach. Empty when the dialog is dismissed. */
 export async function pickAttachments(): Promise<string[]> {
   return (await guard(() => api.pickFiles())) ?? [];
@@ -1081,6 +1085,11 @@ export async function openFile(raw: string, line = 0): Promise<void> {
   if (!app.openFiles.includes(file.path)) app.openFiles.push(file.path);
   if (line > 0) app.mark = { path: file.path, line };
   showArtifact(fileArtifactId(file.path));
+}
+
+/** Where the composer previews a file chosen in the file dialog. */
+export function pickedUrl(path: string): string {
+  return api.pickedUrl(path);
 }
 
 export function fileUrl(path: string): string {

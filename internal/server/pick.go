@@ -9,7 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+
+	"github.com/jesdga95/quecto-harness/internal/tools"
 )
 
 // errNoDialog is returned when the host has no chooser installed.
@@ -45,6 +48,7 @@ func (s *Server) postPick(w http.ResponseWriter, r *http.Request) {
 		if !pickOK(w, err) {
 			return
 		}
+		s.remember(paths)
 		writeJSON(w, http.StatusOK, map[string]any{"paths": paths})
 		return
 	}
@@ -57,6 +61,62 @@ func (s *Server) postPick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"path": path})
+}
+
+// maxPicked is how many chosen files the composer can still preview.
+const maxPicked = 64
+
+// remember keeps the files a dialog returned, newest last, so the composer can
+// draw them before the message that attaches them is sent.
+func (s *Server) remember(paths []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, p := range paths {
+		s.picked = slices.DeleteFunc(s.picked, func(q string) bool { return q == p })
+		s.picked = append(s.picked, p)
+	}
+	if n := len(s.picked) - maxPicked; n > 0 {
+		s.picked = slices.Delete(s.picked, 0, n)
+	}
+}
+
+// getPicked serves an image or a video the user chose in the file dialog, and
+// nothing else. A path the dialog did not return is refused, so this names no
+// file the user has not already pointed at.
+func (s *Server) getPicked(w http.ResponseWriter, r *http.Request) {
+	p := r.URL.Query().Get("path")
+	s.mu.Lock()
+	known := slices.Contains(s.picked, p)
+	s.mu.Unlock()
+	if !known {
+		writeError(w, http.StatusNotFound, "That file was not chosen in the file dialog")
+		return
+	}
+	a, err := tools.ReadAttachment(p)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "Read the file: "+err.Error())
+		return
+	}
+	if a.Kind != "image" && a.Kind != "video" {
+		writeError(w, http.StatusUnsupportedMediaType, "Only images and videos are previewed")
+		return
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "Read the file: check the permissions on it")
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Read the file: "+err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	w.Header().Set("Content-Type", a.Mime)
+	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 
 // pickOK writes the failure a dialog reported, and reports whether the

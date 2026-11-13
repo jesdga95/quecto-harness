@@ -698,6 +698,8 @@ export interface HarnessApi {
   listDir(id: string, path: string): Promise<ProjectDir>;
   /** Where an image in the session's project is served from. */
   fileUrl(id: string, path: string): string;
+  /** Where an image or a video chosen in the file dialog is served from. */
+  pickedUrl(path: string): string;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string): Promise<void>;
   /** Files are read by the harness and inlined into the message. What comes

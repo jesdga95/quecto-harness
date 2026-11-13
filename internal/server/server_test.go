@@ -2079,6 +2079,43 @@ func TestFolderPick(t *testing.T) {
 	}
 }
 
+// TestPickedServesOnlyChosenMedia asserts that a preview is served for a file
+// the dialog returned and refused for any other path or kind.
+func TestPickedServesOnlyChosenMedia(t *testing.T) {
+	f := newFixture(t)
+	original := filePicker
+	t.Cleanup(func() { filePicker = original })
+
+	dir := t.TempDir()
+	img := filepath.Join(dir, "shot.png")
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00")
+	if err := os.WriteFile(img, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "other.png")
+	if err := os.WriteFile(other, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	note := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(note, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	filePicker = func(context.Context) ([]string, error) { return []string{img, note}, nil }
+	f.do(t, "POST", "/api/fs/pick", map[string]string{"kind": "file"})
+
+	w := f.do(t, "GET", "/api/fs/picked?path="+url.QueryEscape(img), nil)
+	if w.Code != 200 || w.Header().Get("Content-Type") != "image/png" {
+		t.Errorf("chosen image = %d %q", w.Code, w.Header().Get("Content-Type"))
+	}
+	if w := f.do(t, "GET", "/api/fs/picked?path="+url.QueryEscape(other), nil); w.Code != http.StatusNotFound {
+		t.Errorf("unchosen file = %d, want 404", w.Code)
+	}
+	if w := f.do(t, "GET", "/api/fs/picked?path="+url.QueryEscape(note), nil); w.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("chosen text = %d, want 415", w.Code)
+	}
+}
+
 // TestPasteStoresTheFile asserts that bytes with no path of their own are
 // written under a name a person can read, and that the path they come back as
 // is one a message can attach.

@@ -6,6 +6,7 @@
   import ChatText from "phosphor-svelte/lib/ChatText";
   import CheckCircle from "phosphor-svelte/lib/CheckCircle";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
+  import Play from "phosphor-svelte/lib/Play";
   import Robot from "phosphor-svelte/lib/Robot";
   import Warning from "phosphor-svelte/lib/Warning";
   import CopyButton from "./CopyButton.svelte";
@@ -20,6 +21,7 @@
   import { followEnd } from "../stream.svelte";
   import { asked } from "../question";
   import { splitQuotes } from "../quote";
+  import { thumbFrame } from "../thumb";
   import { stepDesc, stepName } from "../steps";
 
   let scroller = $state<HTMLDivElement | null>(null);
@@ -310,6 +312,17 @@
           title={file.path}
         >
           <img src="/api/files/{file.file}" alt={fileName(file.path)} />
+        </a>
+      {:else if file.kind === "video" && file.file}
+        <a
+          class="tile tile-shot"
+          href="/api/files/{file.file}"
+          target="_blank"
+          rel="noopener noreferrer"
+          title={file.path}
+        >
+          <video use:thumbFrame src="/api/files/{file.file}" preload="metadata" muted playsinline></video>
+          <span class="tile-play"><Play weight="fill" /></span>
         </a>
       {:else}
         <span

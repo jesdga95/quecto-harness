@@ -1527,6 +1527,10 @@ class HttpApi implements HarnessApi {
     };
   }
 
+  pickedUrl(path: string): string {
+    return `${BASE}/fs/picked?path=${encodeURIComponent(path)}`;
+  }
+
   fileUrl(id: string, path: string): string {
     return `${BASE}/sessions/${encodeURIComponent(id)}/file?raw=1&path=${encodeURIComponent(path)}`;
   }

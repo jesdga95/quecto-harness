@@ -50,6 +50,7 @@ type Server struct {
 
 	mu     sync.Mutex
 	probes map[string]*probe
+	picked []string
 }
 
 // probe is what one address last said about itself and what it holds. Keyed by
@@ -104,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/models", s.getModels)
 	mux.HandleFunc("GET /api/models/props", s.getModelProps)
 	mux.HandleFunc("POST /api/fs/pick", s.postPick)
+	mux.HandleFunc("GET /api/fs/picked", s.getPicked)
 	mux.HandleFunc("POST /api/fs/paste", s.postPaste)
 	mux.HandleFunc("GET /api/files/{id}", s.getFile)
 	mux.HandleFunc("POST /api/projects", s.postProject)

@@ -589,10 +589,14 @@ const (
 	rawLimit  = 16 << 20
 )
 
+// rawVideos are the video types served as they are. A video runs nothing and
+// is read in ranges, so it has no size limit.
+var rawVideos = map[string]bool{"video/mp4": true, "video/webm": true}
+
 // getProjectFile reads one file in the session's project for the panel a file
-// link opens. Text comes back as JSON. raw=1 serves the bytes of an image and
-// of nothing else, since a page or drawing served from this origin would run
-// with the reader's session.
+// link opens. Text comes back as JSON. raw=1 serves the bytes of an image or a
+// video and of nothing else, since a page or drawing served from this origin
+// would run with the reader's session.
 func (s *Server) getProjectFile(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.session(w, r)
 	if !ok {
@@ -621,11 +625,12 @@ func (s *Server) getProjectFile(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if v.Kind != tools.ViewImage {
-		writeError(w, http.StatusUnsupportedMediaType, "Only images are served as they are")
+	video := rawVideos[v.Mime]
+	if v.Kind != tools.ViewImage && !video {
+		writeError(w, http.StatusUnsupportedMediaType, "Only images and videos are served as they are")
 		return
 	}
-	if v.Bytes > rawLimit {
+	if !video && v.Bytes > rawLimit {
 		writeError(w, http.StatusRequestEntityTooLarge, "The image is too large to show")
 		return
 	}
@@ -1120,7 +1125,7 @@ func orEmpty(v []string) []string {
 	return v
 }
 
-// getFile serves an attached image to the page that shows it. The type is
+// getFile serves an attached image or video to the page that shows it. The type is
 // read back off the bytes rather than trusted from anything stored, and the
 // id is the only thing that can name a file, so nothing here takes a path.
 func (s *Server) getFile(w http.ResponseWriter, r *http.Request) {

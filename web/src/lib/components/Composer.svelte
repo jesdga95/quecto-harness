@@ -7,6 +7,7 @@
   import ModeChip from "./ModeChip.svelte";
   import PermissionChip from "./PermissionChip.svelte";
   import X from "phosphor-svelte/lib/X";
+  import Play from "phosphor-svelte/lib/Play";
   import FileIcon from "./FileIcon.svelte";
   import PermissionCard from "./PermissionCard.svelte";
   import QuestionCard from "./QuestionCard.svelte";
@@ -20,8 +21,9 @@
     pendingQuestion,
     pickAttachments,
     findFiles,
-    fileUrl,
+    pickedUrl,
     looksLikeImage,
+    looksLikeVideo,
     setWorkMode,
     send,
     stop,
@@ -30,6 +32,7 @@
   } from "../state/app.svelte";
   import { fileKind, fileName } from "../format";
   import { withQuotes } from "../quote";
+  import { thumbFrame } from "../thumb";
   import { quoted, removeQuote, takeQuotes } from "../state/quotes.svelte";
   import { overlayOpen } from "../overlay";
 
@@ -51,15 +54,15 @@
 
   let text = $state("");
   let files = $state<string[]>([]);
-  // A pasted image is drawn from its own bytes. A picked one is fetched from
-  // the project, and falls back to a plain tile when it lives outside it.
+  // A pasted image is drawn from its own bytes, and a picked image or video is
+  // served from where it lies. One that will not load draws as a plain tile.
   let pastedImages = $state<Record<string, string>>({});
   let unshown = $state<Record<string, true>>({});
 
   function preview(path: string): string {
     if (pastedImages[path]) return pastedImages[path];
-    if (unshown[path] || !looksLikeImage(path)) return "";
-    return fileUrl(path);
+    if (unshown[path] || !(looksLikeImage(path) || looksLikeVideo(path))) return "";
+    return pickedUrl(path);
   }
 
   function setFiles(next: string[]) {
@@ -347,7 +350,17 @@
           {#each files as path (path)}
             {@const src = preview(path)}
             <span class="tile" class:tile-shot={src} class:tile-doc={!src} title={path}>
-              {#if src}
+              {#if src && looksLikeVideo(path)}
+                <video
+                  {src}
+                  use:thumbFrame
+                  preload="metadata"
+                  muted
+                  playsinline
+                  onerror={() => (unshown = { ...unshown, [path]: true })}
+                ></video>
+                <span class="tile-play"><Play weight="fill" /></span>
+              {:else if src}
                 <img
                   {src}
                   alt={fileName(path)}
