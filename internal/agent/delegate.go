@@ -13,6 +13,7 @@ import (
 
 	"github.com/jesdga95/quecto-harness/internal/config"
 	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/mcp"
 	"github.com/jesdga95/quecto-harness/internal/prompts"
 	"github.com/jesdga95/quecto-harness/internal/store"
 	"github.com/jesdga95/quecto-harness/internal/tools"
@@ -91,7 +92,7 @@ func readRules(project string) (content, name, note string) {
 // nobody and asks nobody, so it is offered neither subagent nor ask_user_question;
 // what it has instead is the launcher waiting on it. The rules file is read
 // outside the lock, like the image bytes a message carries.
-func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
+func (e *Engine) briefFor(ctx context.Context, s *Session, cfg config.Config) brief {
 	s.mu.Lock()
 	parent, mine, mode, project, set := s.Parent, s.AgentID, s.Mode, s.Project, s.Toolset
 	s.mu.Unlock()
@@ -102,10 +103,12 @@ func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 		// A subagent hands work to nobody and asks nobody, but it still
 		// searches: research delegated down is what web_search is for.
 		b.offer = tools.Offer{Set: set, Mode: mode, Message: true, Search: cfg.Search.Enabled()}
+		b.offer.MCP = e.mcpTools(ctx, s, project, set)
 		b.launcher = parent
 		return b
 	}
 	b.offer = tools.Offer{Set: set, Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}
+	b.offer.MCP = e.mcpTools(ctx, s, project, set)
 	me, _ := cfg.AgentByID(mine)
 	// What is named is what the caller may hand work to, so a list that names
 	// nothing offers the tool at all, the way a roster with no enabled agents
@@ -128,6 +131,33 @@ func (e *Engine) briefFor(s *Session, cfg config.Config) brief {
 	}
 	b.offer.Agents = len(b.agents) > 0
 	return b
+}
+
+// mcpTools reads what the MCP servers offer a turn in project. A server left
+// out is said once in the transcript, the way a rules file that cannot be read
+// is, and said again only when the reason changes.
+func (e *Engine) mcpTools(ctx context.Context, s *Session, project string, set config.Toolset) []mcp.Offered {
+	if e.mcp == nil || !tools.InSet(set, mcp.WirePrefix) {
+		return nil
+	}
+	offered, notes := e.mcp.Tools(ctx, project)
+	note := strings.Join(notes, "\n")
+	s.mu.Lock()
+	if note == s.mcpNote {
+		s.mu.Unlock()
+		return offered
+	}
+	s.mcpNote = note
+	var entry store.Entry
+	if note != "" {
+		entry = s.appendEntry(store.Entry{Kind: "status", Content: note, InContext: false, Visible: true})
+	}
+	s.mu.Unlock()
+	if note != "" {
+		e.save(s)
+		e.publish(s.ID, ev("status_entry", map[string]any{"content": entry.Content}))
+	}
+	return offered
 }
 
 // showRulesNote records that the project's rules are not in the prompt, so

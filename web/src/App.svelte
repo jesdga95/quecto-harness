@@ -5,6 +5,7 @@
   import ConfirmDialog from "./lib/components/ConfirmDialog.svelte";
   import Settings from "./lib/components/Settings.svelte";
   import Agents from "./lib/components/Agents.svelte";
+  import McpServers from "./lib/components/McpServers.svelte";
   import Backdrop from "./lib/components/Backdrop.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import Toasts from "./lib/components/Toasts.svelte";
@@ -45,6 +46,9 @@
   {/if}
   {#if app.agentsOpen}
     <Agents onclose={() => (app.agentsOpen = false)} />
+  {/if}
+  {#if app.mcpOpen}
+    <McpServers onclose={() => (app.mcpOpen = false)} />
   {/if}
 {:else}
   <div class="grid h-screen place-items-center text-[13px] text-muted">

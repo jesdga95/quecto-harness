@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -333,7 +334,7 @@ func TestASubagentKeepsItsLaunchersMode(t *testing.T) {
 	child := newSession("sess_kid", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
 	child.Parent = "sess_top"
 	child.Mode = config.WorkPlan
-	b := h.engine.briefFor(child, h.cfg.Config())
+	b := h.engine.briefFor(context.Background(), child, h.cfg.Config())
 	names := tools.Names(b.offer)
 	if b.offer.Mode != config.WorkPlan || slices.Contains(names, "exit_plan_mode") ||
 		slices.Contains(names, "write_plan") || b.offer.InMode("write") {

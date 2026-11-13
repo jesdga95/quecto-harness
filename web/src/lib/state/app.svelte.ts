@@ -20,6 +20,9 @@ import type {
   ProjectDir,
   SearchConfig,
   SearchPatch,
+  McpServer,
+  McpServerRecord,
+  McpProbe,
   SearchProbe,
   ServerMode,
   Session,
@@ -66,6 +69,10 @@ export const app = $state({
   // Whether the agents dialog is open. It is reached from the composer, four
   // components down, so the flag lives here rather than being threaded.
   agentsOpen: false,
+  // The MCP servers as the harness last answered, and whether their dialog is
+  // open. Settings opens it, then closes itself.
+  mcp: [] as McpServer[],
+  mcpOpen: false,
   projects: [] as Project[],
   models: [] as Model[],
   sessions: {} as Record<string, Session[]>,
@@ -791,6 +798,27 @@ export async function saveSearch(patch: SearchPatch): Promise<boolean> {
   if (!search) return false;
   app.search = search;
   return true;
+}
+
+/** Reads the MCP servers and where each stands. */
+export async function loadMcp(): Promise<McpServer[] | null> {
+  const servers = await guard(() => api.listMcp());
+  if (servers) app.mcp = servers;
+  return servers;
+}
+
+/** Writes every MCP server. The running ones restart where their launch
+    changed. */
+export async function saveMcp(servers: McpServerRecord[]): Promise<McpServer[] | null> {
+  const saved = await guard(() => api.saveMcp(servers));
+  if (saved) app.mcp = saved;
+  return saved;
+}
+
+/** Runs a server's Test button. A server that does not start is answered on
+    200 and read in the form. */
+export function probeMcp(server: McpServerRecord): Promise<McpProbe | null> {
+  return guard(() => api.probeMcp(server));
 }
 
 /** Runs the Test key button. A key that does not work is answered on 200 and

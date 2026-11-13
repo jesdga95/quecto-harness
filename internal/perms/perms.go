@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/mcp"
 	"github.com/jesdga95/quecto-harness/internal/prompts"
 )
 
@@ -43,16 +44,20 @@ type Request struct {
 	// SessionID is the session blocked on this and Route is the one drawing
 	// the card, which differ only when a subagent asked. Agent names who
 	// asked, for the label.
-	SessionID string    `json:"session"`
-	Route     string    `json:"route,omitempty"`
-	Agent     string    `json:"agent,omitempty"`
-	Project   string    `json:"project"`
-	Tool      string    `json:"tool"`
-	Command   string    `json:"command,omitempty"`
-	Path      string    `json:"path,omitempty"`
-	Prefix    string    `json:"prefix"`
-	Args      string    `json:"args"`
-	Created   time.Time `json:"created"`
+	SessionID string `json:"session"`
+	Route     string `json:"route,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	Project   string `json:"project"`
+	Tool      string `json:"tool"`
+	Command   string `json:"command,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Prefix    string `json:"prefix"`
+	Args      string `json:"args"`
+	// Server and MCPTool name an MCP call's server and tool as configured,
+	// which the wire name in Tool cannot be read back into.
+	Server  string    `json:"server,omitempty"`
+	MCPTool string    `json:"mcp_tool,omitempty"`
+	Created time.Time `json:"created"`
 }
 
 // route is where the card is drawn. A request that names none is drawn in the
@@ -111,6 +116,14 @@ func (b *Broker) Evaluate(project, tool, command, path string, outside bool, mod
 		return ActionAllow
 	}
 	auto := mode == config.ModeAllowlist
+	if mcp.IsWire(tool) {
+		// What an MCP tool does is the server's business, so it is shown
+		// before it runs unless the user put it on the server's allow list.
+		if auto && b.cfg.MCPAllows(tool) {
+			return ActionAllow
+		}
+		return ActionPrompt
+	}
 	switch tool {
 	case "read", "read_image", "grep":
 		if outside {
@@ -205,7 +218,12 @@ func (b *Broker) Resolve(id string, d Decision) error {
 	if !ok {
 		return ErrNoSuchRequest
 	}
-	if d.Kind == DecideAlways {
+	if d.Kind == DecideAlways && req.Server != "" {
+		if err := b.cfg.AllowMCP(req.Server, req.MCPTool); err != nil {
+			d.Kind = DecideOnce
+			d.Note = "save mcp.json: " + err.Error() + ": the tool ran, but the rule was not kept"
+		}
+	} else if d.Kind == DecideAlways {
 		if err := b.cfg.AddAllow(req.Project, d.Prefix); err != nil {
 			d.Kind = DecideOnce
 			d.Note = "save allowlist: " + err.Error() + ": the command ran, but the rule was not kept"

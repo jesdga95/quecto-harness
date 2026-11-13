@@ -144,6 +144,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/config", s.putConfig)
 	mux.HandleFunc("PUT /api/search", s.putSearch)
 	mux.HandleFunc("POST /api/search/probe", s.probeSearch)
+	mux.HandleFunc("GET /api/mcp", s.getMCP)
+	mux.HandleFunc("PUT /api/mcp", s.putMCP)
+	mux.HandleFunc("POST /api/mcp/probe", s.probeMCP)
 	mux.HandleFunc("GET /api/events", s.getEvents)
 	mux.HandleFunc("GET /api/events/sessions", s.getSessionEvents)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {

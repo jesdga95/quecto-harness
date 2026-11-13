@@ -9,6 +9,7 @@
   import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlassIcon";
   import PencilSimple from "phosphor-svelte/lib/PencilSimpleIcon";
   import PaperPlaneTilt from "phosphor-svelte/lib/PaperPlaneTiltIcon";
+  import Plug from "phosphor-svelte/lib/PlugIcon";
   import Question from "phosphor-svelte/lib/QuestionIcon";
   import Robot from "phosphor-svelte/lib/RobotIcon";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheckIcon";
@@ -24,7 +25,7 @@
   import type { TranscriptItem } from "../api";
   import { clockLabel, statusLabel } from "../format";
   import { asked } from "../question";
-  import { stepDesc, stepFailed, stepName, stringArg, todosOf } from "../steps";
+  import { mcpParts, stepDesc, stepFailed, stepName, stringArg, todosOf } from "../steps";
   import { app, shellAction, showProcesses } from "../state/app.svelte";
 
   // live marks the row the model is still writing into.
@@ -46,6 +47,24 @@
   // than the file as it stands now.
   const image = $derived(
     item.kind === "tool" && typeof item.meta?.image === "string" ? item.meta.image : "",
+  );
+
+  // An MCP call shows what it was given: a string with line breaks, such as
+  // code, as it reads, and anything else as JSON. Its pictures are kept in
+  // the file store, one id each.
+  const mcp = $derived(mcpParts(item));
+  const mcpArgs = $derived(
+    mcp && item.kind === "tool"
+      ? Object.entries(item.args).map(([key, value]) => ({
+          key,
+          text: typeof value === "string" ? value : JSON.stringify(value, null, 2),
+        }))
+      : [],
+  );
+  const mcpImages = $derived(
+    mcp && item.kind === "tool" && Array.isArray(item.meta?.images)
+      ? (item.meta.images as unknown[]).filter((id): id is string => typeof id === "string")
+      : [],
   );
 
   const command = $derived(stringArg(item, "command"));
@@ -160,6 +179,8 @@
       <Robot />
     {:else if item.kind === "tool" && item.name === "send_message"}
       <PaperPlaneTilt />
+    {:else if mcp}
+      <Plug />
     {:else}
       <Terminal />
     {/if}
@@ -225,6 +246,25 @@
         <p class="step-text">{item.message}</p>
       {:else if item.kind === "permission"}
         <pre class="mono-block">{item.command}</pre>
+      {:else if mcp && item.kind === "tool"}
+        {#each mcpArgs as arg (arg.key)}
+          <span class="text-[11.5px] text-muted">{arg.key}</span>
+          <pre class="mono-block">{arg.text}</pre>
+        {/each}
+        {#each mcpImages as id (id)}
+          <a class="step-shot" href="/api/files/{id}" target="_blank" rel="noopener noreferrer" title={mcp.tool}>
+            <img src="/api/files/{id}" alt={mcp.tool} />
+          </a>
+        {/each}
+        {#if item.output}
+          <span class="text-[11.5px]" class:text-muted={!failed} class:text-crit={failed}>
+            {failed ? "Failed" : "Result"}
+          </span>
+          <pre class="mono-block">{item.output}</pre>
+        {/if}
+        {#if item.truncated}
+          <span class="text-[11.5px] text-muted">Truncated, head and tail kept</span>
+        {/if}
       {:else if failed && item.kind === "tool"}
         <pre class="mono-block">{item.output}</pre>
       {:else if item.kind === "tool" && item.name === "todo_write"}

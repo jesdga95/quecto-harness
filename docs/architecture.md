@@ -37,7 +37,7 @@ Because the token outlives the process, an open browser tab survives a superviso
 
 ## 2. Package map
 
-`cmd` fans out to twelve packages with no import cycles. The boundaries exist so that each
+`cmd` fans out to thirteen packages with no import cycles. The boundaries exist so that each
 concern is testable in isolation:
 
 | package  | responsibility                                                    |
@@ -45,6 +45,7 @@ concern is testable in isolation:
 | `config` | owns the config files and the "optional on read" rule             |
 | `llm`    | the protocol layer; knows nothing of sessions                     |
 | `search` | the search provider layer; one interface, Exa first               |
+| `mcp`    | an MCP client for tools alone, and the manager of running servers |
 | `tools`  | executes; enforces only the path guard                            |
 | `perms`  | decides, never executes; the loop blocks on a channel while HTTP resolves it |
 | `agent`  | owns the turn order; the only session mutator                     |
@@ -58,7 +59,7 @@ concern is testable in isolation:
 ## 3. internal/config
 
 Paths live under `~/.quecto-harness` (overridable with `$QUECTO_HARNESS_HOME`):
-`config.json`, `allowlist.json`, `sessions/`, `files/`, `uploads/`, `log/`, `token`,
+`config.json`, `allowlist.json`, `mcp.json`, `mcp/`, `sessions/`, `files/`, `uploads/`, `log/`, `token`,
 `url`.
 
 - **Two shapes.** `File` is what is on disk: every field a pointer or slice, so *absent*
@@ -85,6 +86,13 @@ Paths live under `~/.quecto-harness` (overridable with `$QUECTO_HARNESS_HOME`):
   one its key. A first run writes the block with the default provider account and an empty
   key, and resolution backfills a row for any provider added in a later build, which is
   how a second provider arrives without a migration.
+
+- **`mcp.json`** is the `mcpServers` object MCP servers publish in their READMEs, with the
+  harness's own fields (`enabled`, `timeout_s`, `read_only`, `allow`) beside each entry. A
+  missing file is no servers and a first run does not create it. Servers resolve sorted by
+  name. `type` is `stdio` or `http` (two other clients' spellings of http are accepted); an
+  entry with a command and no type is stdio, and one with only a url is http. A record that
+  cannot run keeps its problem and is written back as it was, so a save loses nothing.
 
 ## 4. internal/llm
 
@@ -167,6 +175,25 @@ executes six of them; `agent` executes `todo_write`, `ask_user_question`, `subag
   results, a hit with no address dropped and counted, and the answer truncated to
   `output_limit_bytes` like every other tool. It is the one tool with no path to guard.
 
+- **MCP tools** are sent as `mcp__<server>__<tool>`, after the built-in tools, each schema
+  as the server listed it and each description capped at 2000 characters. `CallMCP` reaches
+  the server through the turn's table of offered tools, renders text, images (at most four,
+  stored like `read_image`'s), resource links and structured content, and cuts the output
+  to the limit. A result the tool marked as an error carries the error flag. Only the
+  `full` toolset carries them.
+
+**`internal/mcp`** speaks JSON-RPC 2.0 over newline-delimited stdio or Streamable HTTP,
+with the standard library alone. It declares no client capabilities, answers `ping`, and
+answers any other server request with `-32601`. `initialize` asks for `2025-06-18` and
+accepts four listed versions. A cancelled call sends `notifications/cancelled` and returns at
+once. The `Manager` starts a server the first time a turn needs it, once per project when its
+arguments, environment or folder name `{project}`, and keeps it until the harness stops or
+its launch fields change. A crash marks it failed and the next call restarts it after 1, 2,
+4, 8 then 30 s. The last good tool list is kept in memory and in `mcp/<server>.json`; a
+server that is down keeps offering it, so the head of the prompt does not change, and its
+calls answer that it is not running. `notifications/tools/list_changed` marks the list to
+be read again at the next turn start. stderr goes to `log/mcp-<server>.log`.
+
 Unknown argument fields are **tolerated** (a small model invents one and the call should
 still run); a missing required field is a one-line tool error.
 
@@ -196,6 +223,9 @@ unanswered requests after a browser reconnect.
   no shell operator. `web_search` prompts in `ask` mode: the query leaves the machine and
   the call is billed, and the allowlist holds shell prefixes, which have nothing to say
   about a query, so "allow always" is not offered for it.
+- **MCP tools** prompt in `ask` mode and run free in `allowlist` mode only when the tool is
+  on its server's `allow` list. "Allow always" on an MCP card adds the tool there, for every
+  project. The server's own `readOnlyHint` is never read.
 - **Operators** are a substring scan, not a parse: `; & | > <` backtick, `$(`, newline,
   CR. A quoted redirect still prompts. Over-prompting is the intended direction;
   `${` is not on the list.
@@ -272,6 +302,10 @@ too late to be picked up starts a turn of its own.
 - **Reads together.** Consecutive `read`, `grep` and `web_search` calls that the policy
   allows without a card run at the same time, and their results are appended in the order
   the model made them.
+- **MCP in a turn.** `briefFor` reads the offered MCP tools once per turn start from the
+  manager, which may wait up to 60 s for a server to start. A server left out is said once in
+  a status line. Plan mode runs an MCP tool only when its server is marked `read_only`, and
+  only those join a parallel read run. Every MCP call is marked started before it runs.
 - **Repeated calls.** The third identical call in a row, and the fifth and every one from
   the eighth, carry a note in their result telling the model to change course. `todo_write`
   and `write_plan` neither count nor break a run, and a message from outside the turn
@@ -360,8 +394,10 @@ auth`. A panic becomes a 500 with a stack in the log; it never takes the process
   chooser rather than listing directories, with `fs/paste` and `files/{id}` for
   attachments; project and allowlist routes; session list, get, changes, message, resend,
   stop, compact, rename (a `PUT` on the session) and delete; permission and question
-  answers (a second click is 404); and `config` (a `listen` change takes effect on
-  restart).
+  answers (a second click is 404); `config` (a `listen` change takes effect on
+  restart); and `mcp` (`GET` lists each server with its state and tool names, `PUT` writes
+  `mcp.json` and hands the list to the manager, and `mcp/probe` starts a server that may not
+  be saved, lists its tools and stops it, answering 200 either way).
 - **SSE hub.** Per session, with a 512-event replay ring. Streamed text is held and
   coalesced into windows before it goes out, so 512 events cover a turn rather than a few
   hundred deltas. `Publish` assigns a seq and does a non-blocking send per subscriber; a

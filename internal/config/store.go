@@ -21,6 +21,10 @@ type Store struct {
 	cfg   Config
 	allow map[string][]string
 	notes []string
+	// mcp is mcp.json, sorted by name. The file is written only when the
+	// servers are changed, so a first run does not create it.
+	mcp      []MCPServer
+	mcpNotes []string
 }
 
 // Open reads both files, defaulting whatever is absent and writing the
@@ -56,6 +60,12 @@ func Open(p Paths) (*Store, error) {
 		return nil, fmt.Errorf("Read %s: %w", p.Allowlist, err)
 	}
 
+	fileMCP, err := readMCP(p.MCP)
+	if err != nil {
+		return nil, err
+	}
+	s.mcp, s.mcpNotes = ResolveMCP(fileMCP)
+
 	if err := s.persistConfig(); err != nil {
 		return nil, err
 	}
@@ -80,7 +90,7 @@ func (s *Store) Config() Config {
 func (s *Store) Notes() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return append([]string(nil), s.notes...)
+	return append(append([]string(nil), s.notes...), s.mcpNotes...)
 }
 
 // Update applies fn to a copy, validates it, and persists. The lock is held

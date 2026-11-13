@@ -8,15 +8,15 @@
   import { app, saveConfig, saveSearch } from "../state/app.svelte";
   import { confirm } from "../state/confirm.svelte";
   import SettingsGeneral from "./SettingsGeneral.svelte";
-  import SettingsHarness from "./SettingsHarness.svelte";
   import SettingsPermissions from "./SettingsPermissions.svelte";
   import SettingsProjects from "./SettingsProjects.svelte";
   import SettingsSearch from "./SettingsSearch.svelte";
+  import SettingsTools from "./SettingsTools.svelte";
   import SplitDialog from "./SplitDialog.svelte";
 
   let { onclose }: { onclose: () => void } = $props();
 
-  type Pane = "general" | "permissions" | "harness" | "search" | "projects";
+  type Pane = "general" | "permissions" | "tools" | "search" | "projects";
   type PaneRef = { flush: () => void };
   interface Draft {
     config: Config;
@@ -26,7 +26,7 @@
   const PANELS: { id: Pane; label: string; line: string }[] = [
     { id: "general", label: "General", line: "How the harness listens, runs commands and spends its context." },
     { id: "permissions", label: "Permissions", line: "What a tool call may do before it is shown." },
-    { id: "harness", label: "Harness", line: "Which tools the model can reach for, in every session." },
+    { id: "tools", label: "Tools", line: "Which tools the model can reach for, in every session." },
     { id: "search", label: "Search", line: "Where a web search goes, and what it may cost." },
     { id: "projects", label: "Projects", line: "The folders the harness works in." },
   ];
@@ -102,9 +102,11 @@
     onclose();
   }
 
-  async function manage() {
+  /** Leaves for a dialog of records, which keeps its own drafts. */
+  async function manage(which: "agents" | "mcp") {
     if (!(await keepDraft())) return;
-    app.agentsOpen = true;
+    if (which === "agents") app.agentsOpen = true;
+    else app.mcpOpen = true;
     onclose();
   }
 
@@ -167,7 +169,7 @@
             <Sliders size={15} class="shrink-0" />
           {:else if panel.id === "permissions"}
             <ShieldCheck size={15} class="shrink-0" />
-          {:else if panel.id === "harness"}
+          {:else if panel.id === "tools"}
             <Wrench size={15} class="shrink-0" />
           {:else if panel.id === "search"}
             <MagnifyingGlass size={15} class="shrink-0" />
@@ -194,11 +196,11 @@
 
     <div class="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-6 pt-4 pb-6">
       {#if pane === "general"}
-        <SettingsGeneral bind:this={current} config={draft.config} onchange={editConfig} onmanage={manage} />
+        <SettingsGeneral bind:this={current} config={draft.config} onchange={editConfig} onmanage={() => manage("agents")} />
       {:else if pane === "permissions"}
         <SettingsPermissions bind:this={current} config={draft.config} onchange={editConfig} />
-      {:else if pane === "harness"}
-        <SettingsHarness bind:this={current} config={draft.config} onchange={editConfig} />
+      {:else if pane === "tools"}
+        <SettingsTools bind:this={current} config={draft.config} onchange={editConfig} onmanage={() => manage("mcp")} />
       {:else if pane === "search"}
         <SettingsSearch bind:this={current} search={draft.search} onchange={editSearch} />
       {:else}

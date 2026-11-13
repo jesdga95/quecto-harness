@@ -104,6 +104,9 @@ type SystemVars struct {
 	// NotAllTools says the list above is short of every tool the harness
 	// knows, so the rules or the history may name one the model cannot reach.
 	NotAllTools bool
+	// MCPServers names the MCP servers whose tools this turn carries. Empty
+	// leaves the prompt as it is without MCP.
+	MCPServers []string
 }
 
 // System renders the shared head around the body. It is the same in every
@@ -120,8 +123,9 @@ func System(v SystemVars) string {
 	head := struct {
 		SystemVars
 		ToolsLine string
+		MCPLine   string
 		Body      string
-	}{v, strings.Join(v.Tools, ", "), strings.TrimRight(bb.String(), " \t\r\n")}
+	}{v, strings.Join(v.Tools, ", "), strings.Join(v.MCPServers, ", "), strings.TrimRight(bb.String(), " \t\r\n")}
 	var b strings.Builder
 	if err := systemTmpl.Execute(&b, head); err != nil {
 		panic("prompts: render system.md: " + err.Error())

@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 	"github.com/jesdga95/quecto-harness/internal/agent"
 	"github.com/jesdga95/quecto-harness/internal/config"
 	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/mcp"
 	"github.com/jesdga95/quecto-harness/internal/perms"
 	"github.com/jesdga95/quecto-harness/internal/search"
 	"github.com/jesdga95/quecto-harness/internal/server"
@@ -167,6 +169,10 @@ func serve(argv []string) error {
 		hub.Publish(sessionID, agent.PermissionEvent(r))
 	})
 	engine := agent.NewEngine(ctx, cfg, sessions, blobs, agent.Clients{Pool: pool}, searches, broker, hub)
+	// No server starts here: each starts the first time a turn offers it.
+	servers := mcp.NewManager(filepath.Join(p.Home, "mcp"), p.Log, version)
+	servers.Configure(cfg.MCP())
+	engine.SetMCP(servers)
 	srv := server.New(cfg, sessions, blobs, pastes, engine, broker, pool, searches, hub, token, listen, version)
 
 	go srv.Detect(ctx)
@@ -197,6 +203,7 @@ func serve(argv []string) error {
 	stop()
 	broker.CancelAll()
 	engine.Wait(3 * time.Second)
+	servers.Close()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	httpSrv.Shutdown(shutdownCtx)

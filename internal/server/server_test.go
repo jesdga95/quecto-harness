@@ -1157,7 +1157,7 @@ func TestPermissionAlwaysIsShellOnly(t *testing.T) {
 
 	w := f.do(t, "POST", "/api/permissions/perm_search000",
 		map[string]string{"decision": "always", "prefix": "rm -rf"})
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "shell commands only") {
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "shell commands and MCP tools only") {
 		t.Errorf("always on a search card = %d %s, want the refusal", w.Code, w.Body.String())
 	}
 	if _, ok := f.cfg.AllowMatch(f.project, "rm -rf"); ok {

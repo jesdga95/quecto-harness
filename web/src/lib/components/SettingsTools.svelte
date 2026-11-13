@@ -1,14 +1,16 @@
 <script lang="ts">
   import type { Config, Toolset, ToolSpec } from "../api";
-  import { app, loadToolDebug } from "../state/app.svelte";
+  import { app, loadMcp, loadToolDebug } from "../state/app.svelte";
   import OptionPicker from "./OptionPicker.svelte";
 
   let {
     config,
     onchange,
+    onmanage,
   }: {
     config: Config;
     onchange: (patch: Partial<Config>) => void;
+    onmanage: () => void;
   } = $props();
 
   const MODES: { value: Toolset; label: string; hint: string }[] = [
@@ -23,6 +25,14 @@
   // A read of the harness, fetched on each visit. The last answer stays drawn
   // while the new one is in flight.
   void loadToolDebug();
+  void loadMcp();
+
+  const mcpLine = $derived.by(() => {
+    const n = app.mcp.length;
+    if (n === 0) return "None yet. An enabled server's tools reach every agent.";
+    const running = app.mcp.filter((s) => s.state === "running").length;
+    return `${n} ${n === 1 ? "server" : "servers"}${running ? `, ${running} running` : ""}.`;
+  });
 
   const data = $derived(app.toolDebug);
   const sentNames = $derived(data?.sent[config.toolset] ?? []);
@@ -35,6 +45,16 @@
 
   export function flush() {}
 </script>
+
+<div class="field-card">
+  <div class="flex items-center justify-between gap-4">
+    <div class="flex min-w-0 flex-col gap-0.5">
+      <h4 class="field-head">MCP servers</h4>
+      <span class="text-[12px] text-muted">{mcpLine}</span>
+    </div>
+    <button class="btn btn-sm btn-ghost shrink-0" onclick={onmanage}>Manage servers</button>
+  </div>
+</div>
 
 <div class="field-card">
   <div class="flex flex-col gap-1.5">

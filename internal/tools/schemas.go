@@ -5,6 +5,7 @@ import (
 
 	"github.com/jesdga95/quecto-harness/internal/config"
 	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/mcp"
 	"github.com/jesdga95/quecto-harness/internal/prompts"
 )
 
@@ -21,6 +22,40 @@ type Offer struct {
 	Agents  bool
 	Message bool
 	Search  bool
+	// MCP are the tools MCP servers offer this turn, in the order sent. They
+	// follow the built-in tools and only the full toolset carries them.
+	MCP []mcp.Offered
+}
+
+// MCPTool finds an MCP tool this turn offers by the name it is sent under.
+func (o Offer) MCPTool(name string) (mcp.Offered, bool) {
+	for _, t := range o.MCP {
+		if t.Wire == name {
+			return t, true
+		}
+	}
+	return mcp.Offered{}, false
+}
+
+// MCPServers names the servers whose tools this turn offers, each once, in
+// the order sent.
+func (o Offer) MCPServers() []string {
+	var out []string
+	for _, t := range o.MCP {
+		if len(out) == 0 || out[len(out)-1] != t.Server {
+			out = append(out, t.Server)
+		}
+	}
+	return out
+}
+
+// Knows reports whether a tool is one the harness has or one an MCP server
+// offers this turn.
+func (o Offer) Knows(name string) bool {
+	if _, ok := o.MCPTool(name); ok {
+		return true
+	}
+	return Known(name)
 }
 
 // modeTools is the fixed list each mode may run. Plan holds no tool that
@@ -43,22 +78,34 @@ var setTools = map[config.Toolset][]string{
 }
 
 // Schemas returns the tool definitions in the order the model sees them,
-// without the ones this turn does not offer.
+// without the ones this turn does not offer. MCP tools come last, each
+// schema as its server listed it.
 func Schemas(o Offer) []llm.Tool {
-	out := make([]llm.Tool, 0, len(schemas))
+	out := make([]llm.Tool, 0, len(schemas)+len(o.MCP))
 	for _, t := range schemas {
 		if o.Sends(t.Function.Name) {
 			out = append(out, t)
 		}
 	}
+	if !o.InSet(mcp.WirePrefix) {
+		return out
+	}
+	for _, t := range o.MCP {
+		out = append(out, llm.Tool{Type: "function", Function: llm.FunctionSpec{
+			Name: t.Wire, Description: t.Description, Parameters: t.Schema,
+		}})
+	}
 	return out
 }
 
-// Names lists the tools Schemas returns, in the same order.
+// Names lists the built-in tools Schemas returns, in the same order. MCP
+// tools are named by their servers instead.
 func Names(o Offer) []string {
 	var out []string
-	for _, t := range Schemas(o) {
-		out = append(out, t.Function.Name)
+	for _, t := range schemas {
+		if o.Sends(t.Function.Name) {
+			out = append(out, t.Function.Name)
+		}
 	}
 	return out
 }
@@ -79,8 +126,16 @@ func Known(name string) bool {
 }
 
 // InMode reports whether the offer's mode runs a tool, whatever the session is
-// offered. A call to a tool outside it is answered and not run.
+// offered. A call to a tool outside it is answered and not run. Plan mode runs
+// an MCP tool only when the user marked its server read only.
 func (o Offer) InMode(name string) bool {
+	if mcp.IsWire(name) {
+		if o.Mode != config.WorkPlan {
+			return true
+		}
+		t, ok := o.MCPTool(name)
+		return ok && t.ReadOnly
+	}
 	for _, n := range modeTools[o.Mode] {
 		if n == name {
 			return true
@@ -96,6 +151,9 @@ func (o Offer) InMode(name string) bool {
 func InSet(set config.Toolset, name string) bool {
 	if set == "" {
 		set = config.ToolsetFull
+	}
+	if mcp.IsWire(name) {
+		return set == config.ToolsetFull
 	}
 	for _, n := range setTools[set] {
 		if n == name {

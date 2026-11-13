@@ -1,7 +1,7 @@
 // Package tools executes read, read_image, grep, web_search, write,
-// edit and bash. It knows nothing about who approved a call;
-// the path guard is its only policy, and web_search has no path to guard,
-// since it leaves the project rather than reading it.
+// edit, bash and the tools of MCP servers. It knows nothing about who
+// approved a call; the path guard is its only policy, and web_search and the
+// MCP tools have no path to guard.
 package tools
 
 import (
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/mcp"
 	"github.com/jesdga95/quecto-harness/internal/search"
 )
 
@@ -57,6 +58,12 @@ type Runner struct {
 	// BackgroundAfter is how long a bash call is waited on before it moves
 	// to the background. Zero waits for its timeout.
 	BackgroundAfter time.Duration
+
+	// MCP runs the tools MCPTools names, keyed by the name each is sent
+	// under. Both are read from the turn's offer, so a tool that is sent and
+	// a tool that runs cannot disagree.
+	MCP      MCPCaller
+	MCPTools map[string]mcp.Offered
 }
 
 // Hide sets the directory no tool may reach, resolved the way Root is.
@@ -86,6 +93,8 @@ type Result struct {
 	Meta map[string]any
 	// Image is a picture sent to the model with Output, nil for text alone.
 	Image *Image
+	// Images are further pictures, from a tool that may return several.
+	Images []Image
 }
 
 // NewRunner resolves the root once, which is what makes the path guard work

@@ -86,6 +86,9 @@ type Session struct {
 	// prompt, so a file that is still too large is not named again on every
 	// turn. It is not in the document: a restart re-warns once.
 	rulesNote string
+	// mcpNote is the last report of MCP servers left out of a turn, kept so
+	// the same report is not written twice.
+	mcpNote string
 	// prepared reports that the model has been read: its window and its chat
 	// template are known and a request can be shaped for it.
 	prepared bool
@@ -635,6 +638,7 @@ func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) ll
 		Instructions: a.Instructions,
 		Tools:        names,
 		NotAllTools:  len(names) < tools.AllCount(),
+		MCPServers:   b.offer.MCPServers(),
 	})
 	return llm.Message{Role: "system", Content: content}
 }

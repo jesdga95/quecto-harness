@@ -50,6 +50,17 @@ func (f *Files) Put(src string) (string, int, error) {
 	return id, int(n), nil
 }
 
+// PutBytes stores data as a new file and returns its id.
+func (f *Files) PutBytes(data []byte) (string, int, error) {
+	id := NewFileID()
+	path := filepath.Join(f.dir, id)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		os.Remove(path)
+		return "", 0, fmt.Errorf("Store a file of %d bytes: %w", len(data), err)
+	}
+	return id, len(data), nil
+}
+
 // Read returns the whole file. Attachments are capped when they are taken in,
 // so nothing here is large enough to stream.
 func (f *Files) Read(id string) ([]byte, error) {

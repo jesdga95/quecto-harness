@@ -909,10 +909,10 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "That decision is no longer pending: the turn moved on")
 		return
 	}
-	if kind == perms.DecideAlways {
+	if kind == perms.DecideAlways && req.Server == "" {
 		if req.Tool != "bash" {
 			writeError(w, http.StatusBadRequest,
-				"Allow always applies to shell commands only: choose allow once")
+				"Allow always applies to shell commands and MCP tools only: choose allow once")
 			return
 		}
 		prefix := config.NormaliseCommand(body.Prefix)

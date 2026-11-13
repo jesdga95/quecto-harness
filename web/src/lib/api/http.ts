@@ -24,6 +24,9 @@ import type {
   SearchConfig,
   SearchPatch,
   SearchProbe,
+  McpServer,
+  McpServerRecord,
+  McpProbe,
   ServerMode,
   Session,
   SessionFeed,
@@ -1612,6 +1615,27 @@ class HttpApi implements HarnessApi {
     return toSearch(wire.search ?? {});
   }
 
+  async listMcp(): Promise<McpServer[]> {
+    const wire = await call<{ servers?: Partial<McpServer>[] }>("/mcp");
+    return (wire.servers ?? []).map(toMcp);
+  }
+
+  async saveMcp(servers: McpServerRecord[]): Promise<McpServer[]> {
+    const wire = await call<{ servers?: Partial<McpServer>[] }>("/mcp", "PUT", { servers });
+    return (wire.servers ?? []).map(toMcp);
+  }
+
+  async probeMcp(server: McpServerRecord): Promise<McpProbe> {
+    const wire = await call<Partial<McpProbe>>("/mcp/probe", "POST", server);
+    return {
+      ok: wire.ok ?? false,
+      error: wire.error ?? "",
+      server: wire.server,
+      tools: wire.tools ?? [],
+      notes: wire.notes ?? [],
+    };
+  }
+
   async probeSearch(at: { provider: string; url: string; key: string }): Promise<SearchProbe> {
     const wire = await call<{ ok?: boolean; error?: string }>("/search/probe", "POST", at);
     return { ok: wire.ok ?? false, error: wire.error ?? "" };
@@ -1838,3 +1862,26 @@ class HttpApi implements HarnessApi {
 }
 
 export const httpApi: HarnessApi = new HttpApi();
+
+/** Reads one MCP server, every field optional on the wire. */
+function toMcp(w: Partial<McpServer>): McpServer {
+  return {
+    name: w.name ?? "",
+    enabled: w.enabled ?? true,
+    transport: w.transport ?? "stdio",
+    command: w.command ?? "",
+    args: w.args ?? [],
+    env: w.env ?? {},
+    cwd: w.cwd ?? "",
+    url: w.url ?? "",
+    headers: w.headers ?? {},
+    timeout_s: w.timeout_s ?? 0,
+    read_only: w.read_only ?? false,
+    allow: w.allow ?? [],
+    problem: w.problem ?? "",
+    state: w.state ?? "idle",
+    error: w.error ?? "",
+    tools: w.tools ?? [],
+    running: w.running ?? 0,
+  };
+}

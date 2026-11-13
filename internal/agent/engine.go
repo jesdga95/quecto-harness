@@ -14,6 +14,7 @@ import (
 
 	"github.com/jesdga95/quecto-harness/internal/config"
 	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/mcp"
 	"github.com/jesdga95/quecto-harness/internal/perms"
 	"github.com/jesdga95/quecto-harness/internal/prompts"
 	"github.com/jesdga95/quecto-harness/internal/store"
@@ -65,6 +66,8 @@ type Engine struct {
 	asks     *asker
 	hub      Publisher
 	procs    *Registry
+	// mcp runs the configured MCP servers. Nil offers no MCP tools.
+	mcp *mcp.Manager
 
 	ctx context.Context
 	os  string
@@ -99,6 +102,13 @@ func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files
 	)
 	return e
 }
+
+// SetMCP gives the engine the MCP servers to offer. It is called once, before
+// the first turn.
+func (e *Engine) SetMCP(m *mcp.Manager) { e.mcp = m }
+
+// MCP is the manager SetMCP gave, nil when there is none.
+func (e *Engine) MCP() *mcp.Manager { return e.mcp }
 
 // usable reports what stops an agent answering, so a message is refused where
 // it was typed rather than part way into a turn.
@@ -780,7 +790,7 @@ func (e *Engine) Compact(id string) error {
 	go func() {
 		defer e.wg.Done()
 		defer cancel()
-		if err := e.compact(ctx, s, e.backends.For(a), a, e.briefFor(s, e.cfg.Config()), e.turnCaps(s), true); err != nil {
+		if err := e.compact(ctx, s, e.backends.For(a), a, e.briefFor(ctx, s, e.cfg.Config()), e.turnCaps(s), true); err != nil {
 			e.endWithError(s, err, 0, turnClock{}, nil)
 			return
 		}
@@ -1224,7 +1234,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	// cost a reprocess of everything before it. A change made meanwhile is used
 	// by the next turn.
 	caps := e.turnCaps(s)
-	b := e.briefFor(s, cfg)
+	b := e.briefFor(ctx, s, cfg)
 	back := e.backends.For(a)
 	// A subagent is filed under the task it was given, so nothing is spent
 	// asking the model for a name.
@@ -1242,6 +1252,10 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	runner.Hide(e.cfg.Paths().Home)
 	runner.Seen = s.seen
 	runner.SpillTo(e.store.SpillDir(s.ID))
+	if e.mcp != nil {
+		runner.MCP = e.mcp
+	}
+	runner.MCPTools = mcpTable(b.offer)
 	// The provider and the offer both read the same config, so a tool that is
 	// sent and a tool that is built cannot disagree within the turn. A
 	// provider that fails to build leaves Search nil, and the tool answers
@@ -1439,7 +1453,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			// A tool the mode does not run or the toolset does not offer is
 			// answered here; a tool withheld from this session alone reaches
 			// its own tool, which says why it is not taken.
-			if tools.Known(call.Function.Name) &&
+			if b.offer.Knows(call.Function.Name) &&
 				(!b.offer.InMode(call.Function.Name) || !b.offer.InSet(call.Function.Name)) {
 				entry := e.unavailable(s, call, b.offer)
 				e.saveSoon(s)
@@ -1490,7 +1504,8 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		// next request carries execute's prompt and tools, and the budget
 		// starts again for the work the plan describes.
 		if e.takeApproval(s) {
-			b = e.briefFor(s, cfg)
+			b = e.briefFor(ctx, s, cfg)
+			runner.MCPTools = mcpTable(b.offer)
 			calls = 0
 			e.estimateBase(s, a, b)
 		}
@@ -1659,14 +1674,14 @@ func (e *Engine) noteLimit(s *Session, calls int) {
 }
 
 // sideEffects are the tools whose call may have changed something outside the
-// session by the time a crash cut it off.
+// session by the time a crash cut it off. Every MCP tool counts as one too.
 var sideEffects = map[string]bool{"bash": true, "write": true, "edit": true, "subagent": true, "send_message": true}
 
 // markStarted records on the assistant entry that a call with side effects is
 // about to run, and saves it first. A harness that stops before the result
 // lands then knows the call may have done its work.
 func (e *Engine) markStarted(s *Session, call llm.ToolCall) {
-	if !sideEffects[call.Function.Name] {
+	if !sideEffects[call.Function.Name] && !mcp.IsWire(call.Function.Name) {
 		return
 	}
 	s.mu.Lock()
@@ -1834,6 +1849,11 @@ func (e *Engine) publishUsage(s *Session) {
 func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a config.Agent, runner *tools.Runner, call llm.ToolCall) (perms.Decision, *store.PermissionRecord, bool) {
 	tool := call.Function.Name
 	command, path := argSummary(call)
+	// An MCP call has no command or path of its own: what it is about is its
+	// arguments, which the card shows and the record keeps.
+	if _, ok := runner.MCPTools[tool]; ok {
+		command, path = string(call.Function.Arguments), ""
+	}
 	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
 
 	policy := cfg.Mode
@@ -1855,6 +1875,9 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 		Command: command, Path: path,
 		Prefix: perms.DefaultPrefix(command),
 		Args:   string(call.Function.Arguments),
+	}
+	if t, ok := runner.MCPTools[tool]; ok {
+		req.Server, req.MCPTool, req.Prefix = t.Server, t.Tool, ""
 	}
 	// A subagent's card belongs in the conversation the person has open, not
 	// in a transcript nobody is reading.
@@ -1929,13 +1952,34 @@ type outcome struct {
 // once.
 var readTools = map[string]bool{"read": true, "read_image": true, "grep": true, "web_search": true}
 
+// readsOnly reports whether a tool only reads: a built-in one on the list, or
+// an MCP tool whose server the user marked read only.
+func readsOnly(offer tools.Offer, name string) bool {
+	if t, ok := offer.MCPTool(name); ok {
+		return t.ReadOnly
+	}
+	return readTools[name]
+}
+
+// mcpTable keys the turn's MCP tools by the name each is sent under.
+func mcpTable(offer tools.Offer) map[string]mcp.Offered {
+	if len(offer.MCP) == 0 {
+		return nil
+	}
+	out := make(map[string]mcp.Offered, len(offer.MCP))
+	for _, t := range offer.MCP {
+		out[t.Wire] = t
+	}
+	return out
+}
+
 // readRun is how many calls from i on only read and would run without a card,
 // so they can run at the same time.
 func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, runner *tools.Runner, calls []llm.ToolCall, i int) int {
 	n := 0
 	for _, call := range calls[i:] {
 		name := call.Function.Name
-		if !readTools[name] || !offer.InMode(name) || !offer.InSet(name) {
+		if !readsOnly(offer, name) || !offer.InMode(name) || !offer.InSet(name) {
 			break
 		}
 		command, path := argSummary(call)
@@ -2029,6 +2073,10 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 		case "exit_plan_mode":
 			res, err = e.submitPlan(ctx, s, call)
 		default:
+			if mcp.IsWire(call.Function.Name) {
+				res, err = runner.CallMCP(ctx, call.Function.Name, args)
+				break
+			}
 			err = fmt.Errorf("no tool named %s: use read, read_image, grep, web_search, write, edit, bash, processes, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
 		}
 		if err != nil {
@@ -2041,6 +2089,11 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 		if err == nil && res.Image != nil {
 			e.keepImage(&o, res.Image)
 		}
+		if err == nil {
+			for i := range res.Images {
+				e.keepImage(&o, &res.Images[i])
+			}
+		}
 	}
 	return o
 }
@@ -2049,7 +2102,14 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 // request sends the bytes that were read rather than the file as it stands.
 // The id goes in the meta as well, which is how the transcript finds it.
 func (e *Engine) keepImage(o *outcome, img *tools.Image) {
-	id, size, err := e.files.Put(img.Abs)
+	var id string
+	var size int
+	var err error
+	if img.Data != nil {
+		id, size, err = e.files.PutBytes(img.Data)
+	} else {
+		id, size, err = e.files.Put(img.Abs)
+	}
 	if err != nil {
 		o.content = fmt.Sprintf("%s could not be kept for the model: %s", img.Path, err)
 		o.meta = map[string]any{"error": true}
@@ -2059,7 +2119,11 @@ func (e *Engine) keepImage(o *outcome, img *tools.Image) {
 	if o.meta == nil {
 		o.meta = map[string]any{}
 	}
-	o.meta["image"] = id
+	if _, first := o.meta["image"]; !first {
+		o.meta["image"] = id
+	}
+	ids, _ := o.meta["images"].([]string)
+	o.meta["images"] = append(ids, id)
 }
 
 // runBash runs a shell call. A call marked background starts the command and

@@ -375,3 +375,58 @@ func TestEvaluateAsksOutsideProject(t *testing.T) {
 		}
 	}
 }
+
+func TestEvaluateMCP(t *testing.T) {
+	cfg := newStore(t)
+	if _, err := cfg.SetMCP([]config.MCPServer{{Name: "gh", Enabled: true, Command: "x", Allow: []string{"get.issue"}}}); err != nil {
+		t.Fatal(err)
+	}
+	b := New(cfg, nil)
+	cases := []struct {
+		tool string
+		mode config.Mode
+		want Action
+	}{
+		{"mcp__gh__get_issue", config.ModeAsk, ActionPrompt},
+		{"mcp__gh__get_issue", config.ModeAllowlist, ActionAllow},
+		{"mcp__gh__create_issue", config.ModeAllowlist, ActionPrompt},
+		{"mcp__other__get_issue", config.ModeAllowlist, ActionPrompt},
+		{"mcp__gh__create_issue", config.ModeFull, ActionAllow},
+	}
+	for _, c := range cases {
+		if got := b.Evaluate("/proj", c.tool, "", "", false, c.mode); got != c.want {
+			t.Errorf("%s in %s = %s, want %s", c.tool, c.mode, got, c.want)
+		}
+	}
+}
+
+func TestResolveAlwaysOnMCPWritesTheServer(t *testing.T) {
+	cfg := newStore(t)
+	if _, err := cfg.SetMCP([]config.MCPServer{{Name: "gh", Enabled: true, Command: "x"}}); err != nil {
+		t.Fatal(err)
+	}
+	b := New(cfg, nil)
+	done := make(chan Decision, 1)
+	go func() {
+		d, _ := b.Ask(context.Background(), Request{ID: "perm_mcp", SessionID: "s", Tool: "mcp__gh__close", Server: "gh", MCPTool: "close"})
+		done <- d
+	}()
+	for {
+		if _, ok := b.Lookup("perm_mcp"); ok {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := b.Resolve("perm_mcp", Decision{Kind: DecideAlways}); err != nil {
+		t.Fatal(err)
+	}
+	if d := <-done; d.Kind != DecideAlways {
+		t.Fatalf("decision = %+v", d)
+	}
+	if srv, _ := cfg.MCPServer("gh"); !srv.Allows("close") {
+		t.Fatalf("allow = %v", srv.Allow)
+	}
+	if len(cfg.Allowlist("")) != 0 {
+		t.Fatal("an MCP rule landed in the shell allowlist")
+	}
+}

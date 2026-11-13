@@ -71,6 +71,10 @@ Nothing is written into a project folder.
 - **Web search.** `web_search` asks the provider named in settings, Exa being
   the first. A query leaves the machine and the call is billed, so in ask mode
   each search is asked.
+- **MCP tools.** Servers in `~/.quecto-harness/mcp.json`, in the `mcpServers` shape
+  their READMEs give, offer their tools to every agent. Settings > Tools opens a dialog
+  to add, test and allow them. A server starts with the first turn that needs it, and each
+  call is shown before it runs unless its tool is allowed.
 - **Attachments.** A message can carry files picked from the host and text
   pasted from anywhere; an image goes to the model as data.
 - **Context.** The meter shows how full the window is. Past the threshold the

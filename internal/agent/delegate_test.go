@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -741,7 +742,7 @@ func TestBriefFollowsTheParent(t *testing.T) {
 	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
 	// Two agents are configured, and the one answering is spending its only
 	// slot on this turn, so the one it can hand work to is the other.
-	b := h.engine.briefFor(top, cfg)
+	b := h.engine.briefFor(context.Background(), top, cfg)
 	if !b.offer.Agents || !b.offer.Ask || b.launcher != "" {
 		t.Errorf("a conversation's brief = %+v", b)
 	}
@@ -754,7 +755,7 @@ func TestBriefFollowsTheParent(t *testing.T) {
 	child := newSession("sess_kid", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
 	child.Parent = "sess_top"
 	child.Entries = []store.Entry{{Kind: "user", From: "Local", Content: "do it"}}
-	b = h.engine.briefFor(child, cfg)
+	b = h.engine.briefFor(context.Background(), child, cfg)
 	if b.offer.Agents || b.offer.Ask || !b.offer.Message || b.launcher != "sess_top" {
 		t.Errorf("a subagent's brief = %+v", b)
 	}
@@ -770,12 +771,12 @@ func TestBriefListsTheCallerWhenASlotIsFree(t *testing.T) {
 	mine := h.setAgent(t, func(a *config.Agent) { a.Calls = []string{a.ID} })
 	cfg := h.cfg.Config()
 	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
-	b := h.engine.briefFor(top, cfg)
+	b := h.engine.briefFor(context.Background(), top, cfg)
 	if len(b.agents) != 0 || b.offer.Agents {
 		t.Errorf("a single-slot agent is offered to itself: %+v", b.agents)
 	}
 	h.setAgent(t, func(a *config.Agent) { a.Concurrency = 2 })
-	b = h.engine.briefFor(top, h.cfg.Config())
+	b = h.engine.briefFor(context.Background(), top, h.cfg.Config())
 	if len(b.agents) != 1 || b.agents[0].Name != mine.Name {
 		t.Errorf("a two-slot agent is not offered to itself: %+v", b.agents)
 	}
@@ -938,7 +939,7 @@ func TestADisabledAgentTakesNoWork(t *testing.T) {
 	cfg := h.cfg.Config()
 
 	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
-	b := h.engine.briefFor(top, cfg)
+	b := h.engine.briefFor(context.Background(), top, cfg)
 	if len(b.agents) != 0 || b.offer.Agents {
 		t.Errorf("the agents it may hand work to = %+v, want none", b.agents)
 	}
@@ -967,7 +968,7 @@ func TestAnAgentOffTheListTakesNoWork(t *testing.T) {
 
 	// The list names nothing, so the brief offers no subagent at all.
 	top := newSession("sess_top", h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
-	b := h.engine.briefFor(top, cfg)
+	b := h.engine.briefFor(context.Background(), top, cfg)
 	if len(b.agents) != 0 || b.offer.Agents {
 		t.Errorf("the agents it may hand work to = %+v, want none", b.agents)
 	}

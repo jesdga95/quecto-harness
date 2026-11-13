@@ -212,6 +212,49 @@ export interface SearchProbe {
   error?: string;
 }
 
+/** Where an MCP server stands. */
+export type McpState = "idle" | "starting" | "running" | "failed";
+
+/** One MCP server: the record in mcp.json, then where it stands. */
+export interface McpServer {
+  name: string;
+  enabled: boolean;
+  /** "stdio" or "http". */
+  transport: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  cwd: string;
+  url: string;
+  headers: Record<string, string>;
+  /** Zero takes the command timeout. */
+  timeout_s: number;
+  /** The user stating that no tool on the server changes anything. */
+  read_only: boolean;
+  /** Tools that run without a card in allowlist mode. */
+  allow: string[];
+  /** Why the record cannot run as written, empty when it can. */
+  problem: string;
+  state: McpState;
+  error: string;
+  /** What the server listed last, by name. */
+  tools: string[];
+  running: number;
+}
+
+/** The fields of a server the dialog writes. */
+export type McpServerRecord = Omit<McpServer, "problem" | "state" | "error" | "tools" | "running">;
+
+/** The answer to the Test button. A failure is reported here rather than
+    thrown, so the form can draw it. */
+export interface McpProbe {
+  ok: boolean;
+  error?: string;
+  server?: { name: string; version: string; protocol: string };
+  tools?: { name: string; description: string }[];
+  notes?: string[];
+}
+
 /** What the harness is talking to: a llama.cpp router, one llama.cpp server,
     an OpenAI-compatible endpoint, or nothing that answered yet. */
 export type ServerMode = "router" | "single" | "openai" | "responses" | "unknown";
@@ -722,6 +765,12 @@ export interface HarnessApi {
   decide(permissionId: string, decision: PermissionDecision): Promise<void>;
   answer(questionId: string, answer: Answer): Promise<void>;
   updateConfig(patch: Partial<Config>): Promise<Config>;
+  /** Lists the MCP servers and where each stands. */
+  listMcp(): Promise<McpServer[]>;
+  /** Replaces every MCP server and answers with the saved list. */
+  saveMcp(servers: McpServerRecord[]): Promise<McpServer[]>;
+  /** Starts a server as drawn, lists its tools and stops it. */
+  probeMcp(server: McpServerRecord): Promise<McpProbe>;
   /** Saves the search block and answers with the resolved one. */
   updateSearch(patch: SearchPatch): Promise<SearchConfig>;
   /** Runs one cheap billed request against an address and key that may not be

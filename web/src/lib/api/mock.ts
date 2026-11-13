@@ -20,6 +20,9 @@ import type {
   SearchConfig,
   SearchPatch,
   SearchProbe,
+  McpServer,
+  McpServerRecord,
+  McpProbe,
   Sent,
   Session,
   SessionFeed,
@@ -542,6 +545,20 @@ const SCRIPT: ScriptedTurn[] = [
       "```",
     denied: "No listing then. I can still draw the hub from what I read earlier.",
   },
+  {
+    reasoning: "The user wants a cube in the open Blender file. The blender server runs Python in the live session.",
+    preface: "I'll add the cube through Blender.\n\n",
+    tool: "mcp__blender__execute_blender_code",
+    args: { code: "import bpy\nbpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 0))\nprint(bpy.context.active_object.name)" },
+    command: JSON.stringify({
+      code: "import bpy\nbpy.ops.mesh.primitive_cube_add(size=2, location=(0, 0, 0))\nprint(bpy.context.active_object.name)",
+    }),
+    output: "Cube.001",
+    exit: 0,
+    truncated: false,
+    reply: "Added a 2 m cube at the origin. Blender named it Cube.001, since the scene already had a Cube.",
+    denied: "Nothing was added to the scene.",
+  },
 ];
 
 function words(text: string): string[] {
@@ -575,6 +592,47 @@ export class MockApi implements HarnessApi {
 
   // Off by default, the way a fresh config starts: the account is there with
   // an empty key, and web_search is not offered until one is typed.
+  private mcp: McpServer[] = [
+    {
+      name: "blender",
+      enabled: true,
+      transport: "stdio",
+      command: "uvx",
+      args: ["--from", "git+https://projects.blender.org/lab/blender_mcp.git#subdirectory=mcp", "blender-mcp"],
+      env: {},
+      cwd: "",
+      url: "",
+      headers: {},
+      timeout_s: 300,
+      read_only: false,
+      allow: ["get_objects_summary"],
+      problem: "",
+      state: "running",
+      error: "",
+      tools: ["execute_blender_code", "get_objects_summary", "get_screenshot_of_window_as_image", "search_api_docs"],
+      running: 1,
+    },
+    {
+      name: "figma",
+      enabled: true,
+      transport: "http",
+      command: "",
+      args: [],
+      env: {},
+      cwd: "",
+      url: "http://127.0.0.1:3845/mcp",
+      headers: {},
+      timeout_s: 0,
+      read_only: true,
+      allow: [],
+      problem: "",
+      state: "failed",
+      error: "The last start failed: reach http://127.0.0.1:3845/mcp: connection refused",
+      tools: [],
+      running: 0,
+    },
+  ];
+
   private search: SearchConfig = {
     provider: "",
     max_hits: 10,
@@ -1021,6 +1079,60 @@ export class MockApi implements HarnessApi {
       this.search.provider !== "" &&
       (this.search.providers.find((p) => p.name === this.search.provider)?.key ?? "") !== "";
     return { ...this.search, providers: this.search.providers.map((p) => ({ ...p })) };
+  }
+
+  async listMcp(): Promise<McpServer[]> {
+    await this.tick(120);
+    return this.mcp.map((s) => structuredClone(s));
+  }
+
+  async saveMcp(servers: McpServerRecord[]): Promise<McpServer[]> {
+    await this.tick(160);
+    const names = new Set<string>();
+    for (const s of servers) {
+      if (!/^[A-Za-z0-9_-]{1,32}$/.test(s.name)) {
+        throw new Error(`Server name "${s.name}" may hold only letters, digits, - and _, up to 32`);
+      }
+      if (names.has(s.name)) throw new Error(`Two servers are named ${s.name}: give each its own name`);
+      names.add(s.name);
+    }
+    this.mcp = servers.map((s) => {
+      const was = this.mcp.find((m) => m.name === s.name);
+      const problem =
+        s.transport === "stdio" && !s.command
+          ? "A stdio server needs a command."
+          : s.transport === "http" && !/^https?:\/\//.test(s.url)
+            ? "An http server needs a url starting http:// or https://."
+            : "";
+      return {
+        ...structuredClone(s),
+        problem,
+        state: was?.state ?? "idle",
+        error: was?.error ?? "",
+        tools: was?.tools ?? [],
+        running: was?.running ?? 0,
+      };
+    });
+    return this.mcp.map((s) => structuredClone(s));
+  }
+
+  async probeMcp(server: McpServerRecord): Promise<McpProbe> {
+    await this.tick(900);
+    if (server.transport === "stdio" && !server.command) return { ok: false, error: "A stdio server needs a command." };
+    if (server.transport === "http") {
+      return { ok: false, error: `The server did not start: reach ${server.url}: connection refused` };
+    }
+    return {
+      ok: true,
+      server: { name: "Blender", version: "1.0.3", protocol: "2025-06-18" },
+      tools: [
+        { name: "execute_blender_code", description: "Run Python with full bpy access in the live Blender session." },
+        { name: "get_objects_summary", description: "The collection hierarchy and its objects." },
+        { name: "get_screenshot_of_window_as_image", description: "A screenshot of the Blender window." },
+        { name: "search_api_docs", description: "Full-text search over the bundled API reference." },
+      ],
+      notes: [],
+    };
   }
 
   async probeSearch(at: { provider: string; url: string; key: string }): Promise<SearchProbe> {

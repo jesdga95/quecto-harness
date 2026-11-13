@@ -50,6 +50,24 @@ export function todosOf(item: TranscriptItem): Todo[] {
     .filter((t) => t.content !== "");
 }
 
+/** The server and tool of an MCP call. The row's meta names both once the
+    call has answered; before that they are read from the name it was sent
+    under, which is mcp__server__tool. Null for any other call. */
+export function mcpParts(item: TranscriptItem): { server: string; tool: string } | null {
+  if (item.kind !== "tool") return null;
+  return mcpOf(item.name, item.meta);
+}
+
+export function mcpOf(name: string, meta?: Record<string, unknown> | null): { server: string; tool: string } | null {
+  if (!name.startsWith("mcp__")) return null;
+  if (typeof meta?.server === "string" && typeof meta?.tool === "string") {
+    return { server: meta.server, tool: meta.tool };
+  }
+  const rest = name.slice(5);
+  const at = rest.indexOf("__");
+  return at < 0 ? { server: rest, tool: "" } : { server: rest.slice(0, at), tool: rest.slice(at + 2) };
+}
+
 /** The word a step row opens with. */
 export function stepName(item: TranscriptItem): string {
   if (item.kind === "reasoning") return "Think";
@@ -57,6 +75,8 @@ export function stepName(item: TranscriptItem): string {
   if (item.kind === "compaction") return "Compacted";
   if (item.kind === "error") return "Error";
   if (item.kind !== "tool") return "Step";
+  const mcp = mcpParts(item);
+  if (mcp) return mcp.server;
   switch (item.name) {
     case "read":
       return "Read";
@@ -97,6 +117,8 @@ export function stepDesc(item: TranscriptItem, live: boolean, planTitle: string)
   if (item.kind === "error") return firstSentence(item.message);
   if (item.kind !== "tool") return "";
   if (stepFailed(item)) return firstLine(item.output);
+  const mcp = mcpParts(item);
+  if (mcp) return mcp.tool;
   switch (item.name) {
     case "todo_write": {
       const todos = todosOf(item);

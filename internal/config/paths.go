@@ -1,5 +1,5 @@
-// Package config owns the state directory: config.json, allowlist.json and
-// the atomic write used by everything that persists. Nothing is written into
+// Package config owns the state directory: config.json, allowlist.json,
+// mcp.json and the atomic write used by everything that persists. Nothing is written into
 // a project folder.
 package config
 
@@ -14,6 +14,7 @@ type Paths struct {
 	Home      string
 	Config    string
 	Allowlist string
+	MCP       string
 	Sessions  string
 	Files     string
 	Uploads   string
@@ -44,6 +45,7 @@ func DiscoverPathsIn(home string) Paths {
 		Home:      home,
 		Config:    filepath.Join(home, "config.json"),
 		Allowlist: filepath.Join(home, "allowlist.json"),
+		MCP:       filepath.Join(home, "mcp.json"),
 		Sessions:  filepath.Join(home, "sessions"),
 		Files:     filepath.Join(home, "files"),
 		Uploads:   filepath.Join(home, "uploads"),

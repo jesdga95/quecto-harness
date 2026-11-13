@@ -16,12 +16,14 @@ type ReadImageArgs struct {
 }
 
 // Image is a picture a result carries beside its text. Abs is where it was
-// found; the caller copies it from there before the next request.
+// found; the caller copies it from there before the next request. A picture
+// that arrived as bytes, from an MCP server, has Data and no Abs.
 type Image struct {
 	Abs   string
 	Path  string
 	Mime  string
 	Bytes int
+	Data  []byte
 }
 
 // imageNames is what the result calls each format.
