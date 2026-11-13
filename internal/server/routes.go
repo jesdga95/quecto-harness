@@ -481,7 +481,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	}
 	body := map[string]any{
 		"id": doc.ID, "project": doc.Project, "model": doc.Model, "parent": doc.Parent,
-		"updated": doc.Updated, "mode": string(doc.Mode), "toolset": string(doc.Toolset), "plan": doc.Plan, "draft": doc.Draft,
+		"updated": doc.Updated, "mode": string(doc.Mode), "effort": string(doc.Effort), "toolset": string(doc.Toolset), "plan": doc.Plan, "draft": doc.Draft,
 		// A subagent run is reachable only from the transcript that launched
 		// it, so a launcher carries the list of what it launched.
 		"children": s.children(doc.ID),
@@ -734,6 +734,26 @@ func (s *Server) putMode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": sess.ID, "mode": body.Mode})
 }
 
+// putEffort sets the thinking level the session uses in place of its agent's.
+// Empty goes back to the agent's own.
+func (s *Server) putEffort(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Effort string `json:"effort"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := s.engine.SetEffort(sess.ID, config.Effort(body.Effort)); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": sess.ID, "effort": body.Effort})
+}
+
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.session(w, r)
 	if !ok {
@@ -757,9 +777,18 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		Attachments []string `json:"attachments"`
 		// Mode is the mode the message is sent in. Empty keeps the session's.
 		Mode string `json:"mode"`
+		// Effort replaces the agent's thinking level for the session. Absent
+		// keeps what the session has; empty goes back to the agent's.
+		Effort *string `json:"effort"`
 	}
 	if !readJSON(w, r, &body) {
 		return
+	}
+	if body.Effort != nil {
+		if err := s.engine.SetEffort(sess.ID, config.Effort(*body.Effort)); err != nil {
+			writeEngineError(w, err)
+			return
+		}
 	}
 	if body.Mode != "" {
 		if err := s.engine.SetMode(sess.ID, config.WorkMode(body.Mode)); err != nil {

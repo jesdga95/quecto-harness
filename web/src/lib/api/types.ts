@@ -185,6 +185,9 @@ export interface SearchAccount {
 export interface SearchConfig {
   /** The provider a search goes to. Empty is off: web_search is not offered. */
   provider: string;
+  /** Off with the provider kept named, so turning search back on needs no
+      setup. */
+  paused: boolean;
   /** How many results one search may ask for. */
   max_hits: number;
   /** What one search may carry in total, shared across its results rather
@@ -673,6 +676,9 @@ export interface Transcript {
   steer: Steer | null;
   /** The mode the next turn runs in. */
   mode: WorkMode;
+  /** The thinking level the session uses in place of its agent's. Empty is
+      the agent's own. */
+  effort?: Effort | "";
   /** The toolset the session was created with, which every turn of it is
       offered. */
   toolset: Toolset;
@@ -752,8 +758,11 @@ export interface HarnessApi {
   /** Files are read by the harness and inlined into the message. What comes
       back is the attachments as it stored them, ids included, and the
       sequence number the message was stored under. */
-  sendMessage(id: string, text: string, files?: string[], mode?: WorkMode): Promise<Sent>;
+  sendMessage(id: string, text: string, files?: string[], mode?: WorkMode, effort?: Effort | ""): Promise<Sent>;
   setMode(id: string, mode: WorkMode): Promise<void>;
+  /** Sets the thinking level the session uses in place of its agent's. Empty
+      goes back to the agent's own. */
+  setEffort(id: string, effort: Effort | ""): Promise<void>;
   /** Runs the last message again, with text in place of the words it was sent
       with. The reply to it is discarded. */
   resend(id: string, seq: number, text?: string): Promise<void>;

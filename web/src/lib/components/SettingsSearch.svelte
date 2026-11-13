@@ -162,6 +162,8 @@
       <span class="text-[12px] text-muted">
         {#if search.provider === ""}
           Off leaves web_search out of every request.
+        {:else if search.paused}
+          Turned off in the composer's + menu, which turns it back on.
         {:else if !search.ready}
           Named but no working key yet: the tool is not offered until a key is saved.
         {:else}

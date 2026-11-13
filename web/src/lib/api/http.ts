@@ -137,6 +137,7 @@ interface WireSearchAccount {
 
 interface WireSearch {
   provider?: string;
+  paused?: boolean;
   max_hits?: number;
   max_chars?: number;
   timeout_s?: number;
@@ -243,6 +244,7 @@ interface WireSnapshot {
   children?: { id?: string; title?: string; agent?: string; state?: string; fill?: number }[] | null;
   steer?: WireSteer | null;
   mode?: string;
+  effort?: string;
   toolset?: string;
   draft?: unknown;
   last_seq?: number;
@@ -790,6 +792,7 @@ function toConfig(c: WireConfig): Config {
 function toSearch(s: WireSearch): SearchConfig {
   return {
     provider: s.provider ?? "",
+    paused: s.paused === true,
     max_hits: s.max_hits ?? 10,
     max_chars: s.max_chars ?? 4000,
     timeout_s: s.timeout_s ?? 20,
@@ -1035,6 +1038,7 @@ function toTranscript(snap: WireSnapshot): Transcript {
     answerNow: reply?.answer_now === true && !reply.content,
     waitingSince: Number.isFinite(sent) && sent > 0 ? sent : undefined,
     mode: toWorkMode(snap.mode),
+    effort: EFFORTS.find((e) => e === snap.effort) ?? "",
     toolset: toToolset(snap.toolset),
     draft: toPlan(snap.draft),
   };
@@ -1560,11 +1564,21 @@ class HttpApi implements HarnessApi {
     summaries.delete(id);
   }
 
-  async sendMessage(id: string, text: string, files: string[] = [], mode?: WorkMode): Promise<Sent> {
+  async setEffort(id: string, effort: Effort | ""): Promise<void> {
+    await call<unknown>(`/sessions/${encodeURIComponent(id)}/effort`, "PUT", { effort });
+  }
+
+  async sendMessage(
+    id: string,
+    text: string,
+    files: string[] = [],
+    mode?: WorkMode,
+    effort?: Effort | "",
+  ): Promise<Sent> {
     const wire = await call<WireSent>(
       `/sessions/${encodeURIComponent(id)}/message`,
       "POST",
-      { text, attachments: files, mode },
+      { text, attachments: files, mode, effort },
     );
     if (wire.queued) {
       return { queued: true, seq: 0, files: [], steer: toSteer(wire.steer) };

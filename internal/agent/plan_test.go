@@ -370,3 +370,35 @@ func TestCompactionCarriesTheModeAndThePlan(t *testing.T) {
 		t.Errorf("carry with the approval kept = %q, want nothing", carry)
 	}
 }
+
+// A session's effort reaches the request in place of the agent's, leaves the
+// agent's own setting alone, and goes when the session moves to another agent.
+func TestSessionEffortReplacesTheAgents(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt")
+	s := h.sessionWith(t, "Delta3.8-27B Q5")
+	if err := h.engine.SetEffort(s.ID, config.Effort("huge")); err != ErrBadEffort {
+		t.Errorf("an unknown effort = %v, want ErrBadEffort", err)
+	}
+	if err := h.engine.SetEffort(s.ID, config.EffortLow); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.Send(s.ID, "hello", nil)
+	waitIdle(t, s)
+
+	if got := h.replay.Body(0)["reasoning_effort"]; got != "low" {
+		t.Errorf("reasoning_effort = %v, want the session's low", got)
+	}
+	if a, _ := h.cfg.Config().AgentByID(h.agent.ID); a.Effort != config.EffortMedium {
+		t.Errorf("agent effort = %q, want medium untouched", a.Effort)
+	}
+
+	s.mu.Lock()
+	s.repoint(h.agent.ID, "Other-7B")
+	kept := s.Effort
+	s.repoint("another-agent", "Other-7B")
+	gone := s.Effort
+	s.mu.Unlock()
+	if kept != config.EffortLow || gone != "" {
+		t.Errorf("effort after a model change = %q, after an agent change = %q", kept, gone)
+	}
+}

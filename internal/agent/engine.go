@@ -878,6 +878,11 @@ func (e *Engine) point(s *Session) (config.Agent, error) {
 		return config.Agent{}, err
 	}
 	e.pointTo(s, a.ID, a.Model)
+	s.mu.Lock()
+	if s.Effort != "" {
+		a.Effort = s.Effort
+	}
+	s.mu.Unlock()
 	return a, nil
 }
 

@@ -91,9 +91,12 @@
   // itself and leaves the dialog open.
   $effect(() => pushOverlay(onclose));
 
+  // The path is the one the click was sent along, so a row that swaps the
+  // popover's contents still counts as inside after it leaves the page.
   function away(event: MouseEvent) {
-    if (!ready || !el) return;
-    if (!el.parentElement?.contains(event.target as Node)) onclose();
+    const anchor = el?.parentElement;
+    if (!ready || !anchor) return;
+    if (!event.composedPath().includes(anchor)) onclose();
   }
 </script>
 

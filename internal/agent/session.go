@@ -49,6 +49,9 @@ type Session struct {
 	// Mode is the work mode the next turn runs in. A turn reads it once, at
 	// its start, and holds it for the turn.
 	Mode config.WorkMode
+	// Effort replaces the agent's thinking level while the session stays on
+	// the agent it was picked for. Empty is the agent's own.
+	Effort config.Effort
 	// Toolset is fixed at creation and never written after.
 	Toolset config.Toolset
 	// Plan is the last plan the user approved, which execute mode carries in
@@ -138,6 +141,11 @@ type Session struct {
 // previous model's tokenizer implied. The transcript says nothing about it: the
 // chip already shows which agent a session is on. The caller holds the lock.
 func (s *Session) repoint(agentID, model string) {
+	// An effort was picked against one agent's model, so another starts on
+	// its own.
+	if s.AgentID != agentID {
+		s.Effort = ""
+	}
 	s.AgentID = agentID
 	s.Model = model
 	s.forgetModel()
@@ -184,7 +192,7 @@ func newSession(id, project, agentID, model string, set config.Toolset) *Session
 func fromDoc(d *store.Session) *Session {
 	return &Session{
 		ID: d.ID, Project: d.Project, AgentID: d.Agent, Parent: d.Parent, Model: d.Model,
-		Mode: d.Mode, Toolset: d.Toolset, Plan: d.Plan, Draft: d.Draft,
+		Mode: d.Mode, Effort: d.Effort, Toolset: d.Toolset, Plan: d.Plan, Draft: d.Draft,
 		Created: d.Created, Updated: d.Updated, Title: d.Title, Named: d.Named,
 		Entries:     append([]store.Entry(nil), d.Entries...),
 		NCtx:        d.NCtx,
@@ -230,7 +238,7 @@ func (s *Session) doc() *store.Session {
 	}
 	return &store.Session{
 		ID: s.ID, Project: s.Project, Agent: s.AgentID, Parent: s.Parent,
-		Model: s.Model, Mode: s.Mode, Toolset: s.Toolset, Plan: copyPlan(s.Plan), Draft: copyPlan(s.Draft), Title: s.Title, Named: s.Named,
+		Model: s.Model, Mode: s.Mode, Effort: s.Effort, Toolset: s.Toolset, Plan: copyPlan(s.Plan), Draft: copyPlan(s.Draft), Title: s.Title, Named: s.Named,
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, ContextBase: s.ContextBase,

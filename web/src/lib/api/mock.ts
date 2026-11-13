@@ -1,5 +1,6 @@
 import type {
   Agent,
+  Effort,
   AgentPatch,
   Answer,
   Attached,
@@ -635,6 +636,7 @@ export class MockApi implements HarnessApi {
 
   private search: SearchConfig = {
     provider: "",
+    paused: false,
     max_hits: 10,
     max_chars: 4000,
     timeout_s: 20,
@@ -871,9 +873,16 @@ export class MockApi implements HarnessApi {
       // so a subagent left part way through still reads as working.
       status: run ? (run.compacting ? "compacting" : "streaming") : t.status,
       mode: t.mode,
+      effort: t.effort ?? "",
       toolset: t.toolset,
       draft: t.draft,
     };
+  }
+
+  async setEffort(id: string, effort: Effort | ""): Promise<void> {
+    await this.tick();
+    const t = this.transcripts.get(id);
+    if (t) t.effort = effort;
   }
 
   async setMode(id: string, mode: WorkMode): Promise<void> {
@@ -1076,6 +1085,7 @@ export class MockApi implements HarnessApi {
       providers: (patch.providers ?? this.search.providers).map((p) => ({ ...p })),
     };
     this.search.ready =
+      !this.search.paused &&
       this.search.provider !== "" &&
       (this.search.providers.find((p) => p.name === this.search.provider)?.key ?? "") !== "";
     return { ...this.search, providers: this.search.providers.map((p) => ({ ...p })) };

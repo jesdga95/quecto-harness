@@ -730,6 +730,11 @@
     font-weight: 400;
     color: var(--muted);
   }
+  /* The thinking level beside the model, in the accent while the session
+     overrides the agent's. */
+  .chip-effort {
+    font-size: 12px;
+  }
   .composer.is-compact .chip-model,
   .composer.is-compact .chip-mode-label {
     display: none;
@@ -859,6 +864,38 @@
     background: var(--btn);
   }
 
+  .key-pair {
+    display: inline-flex;
+    flex: none;
+    gap: 2px;
+  }
+  /* The icon of a row with a subtitle, on a square that spans both lines. */
+  .item-tile {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    flex: none;
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--muted);
+  }
+  .item-tile > svg {
+    width: 15px;
+    height: 15px;
+  }
+  .popover-item:has(> .item-tile) {
+    gap: 10px;
+  }
+  .item-tile.is-warn {
+    background: var(--warn-bg);
+    color: var(--warn);
+  }
+  .popover-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--hair);
+  }
   .popover-head {
     padding: 7px 9px 3px;
     font-size: 10.5px;

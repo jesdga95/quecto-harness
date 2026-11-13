@@ -157,6 +157,7 @@
   // else: not a field, not a control, not an open dialog, and not while the
   // composer is hidden. The field itself answers when it is empty.
   function onpagekey(event: KeyboardEvent) {
+    if (attachKey(event)) return;
     if (event.key !== "Enter" && event.key !== "Escape") return;
     if (event.defaultPrevented || event.isComposing || event.repeat) return;
     if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
@@ -167,6 +168,18 @@
     }
     event.preventDefault();
     answerCard(event.key);
+  }
+
+  // Cmd+U, or Ctrl+U off a Mac, opens the file picker from anywhere the
+  // composer is on screen and can take another file.
+  function attachKey(event: KeyboardEvent): boolean {
+    if (event.key.toLowerCase() !== "u" || event.altKey || event.shiftKey) return false;
+    if (!(event.metaKey || event.ctrlKey) || event.defaultPrevented || event.repeat) return false;
+    if (disabled || files.length >= maxFiles || overlayOpen()) return false;
+    if (!box || box.getClientRects().length === 0) return false;
+    event.preventDefault();
+    void attach();
+    return true;
   }
 
   // Both cards take their answer on the card itself, so the field waits for

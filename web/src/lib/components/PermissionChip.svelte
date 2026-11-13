@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Component } from "svelte";
   import CaretDown from "phosphor-svelte/lib/CaretDownIcon";
-  import Flame from "phosphor-svelte/lib/FlameIcon";
+  import RocketLaunch from "phosphor-svelte/lib/RocketLaunchIcon";
   import Lightning from "phosphor-svelte/lib/LightningIcon";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheckIcon";
   import Popover from "./Popover.svelte";
@@ -15,20 +15,20 @@
     {
       value: "ask",
       label: "Ask before commands",
-      hint: "Every command waits for your approval.",
+      hint: "Every command waits for approval.",
       icon: ShieldCheck,
     },
     {
       value: "allowlist",
       label: "Auto with allowlist",
-      hint: "Allowlisted prefixes run on their own.",
+      hint: "Allowlisted commands run freely.",
       icon: Lightning,
     },
     {
       value: "full",
       label: "Full auto",
-      hint: "Anything runs, anywhere, unreviewed.",
-      icon: Flame,
+      hint: "Everything runs, unreviewed.",
+      icon: RocketLaunch,
     },
   ] as const satisfies readonly {
     value: PermMode;
@@ -56,9 +56,10 @@
   </button>
 
   {#if open}
-    <Popover onclose={() => (open = false)} up width={280}>
+    <Popover onclose={() => (open = false)} up width={300}>
       {#each modes as m (m.value)}
         <button class="popover-item" onclick={() => pick(m.value)}>
+          <span class="item-tile" class:is-warn={m.value === "full"}><m.icon /></span>
           <span class="min-w-0 flex-1">
             <span class="block" class:text-accent={m.value === current.value}>{m.label}</span>
             <span class="block text-[12px] text-muted">{m.hint}</span>

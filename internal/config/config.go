@@ -62,6 +62,7 @@ type FileAgent struct {
 // FileSearch mirrors the search block.
 type FileSearch struct {
 	Provider *string `json:"provider,omitempty"`
+	Paused   *bool   `json:"paused,omitempty"`
 	MaxHits  *int    `json:"max_hits,omitempty"`
 	MaxChars *int    `json:"max_chars,omitempty"`
 	TimeoutS *int    `json:"timeout_s,omitempty"`
@@ -104,9 +105,11 @@ type Config struct {
 
 // Search is where a web search goes. Provider names the service; empty is
 // off. Every provider keeps its own account, so naming another and coming
-// back does not cost the first one's key.
+// back does not cost the first one's key. Paused turns search off and keeps
+// the provider named.
 type Search struct {
 	Provider SearchProvider
+	Paused   bool
 	MaxHits  int
 	MaxChars int
 	Timeout  time.Duration
@@ -138,11 +141,11 @@ func (s Search) Account() (SearchAccount, bool) {
 	return SearchAccount{}, false
 }
 
-// Enabled reports whether a turn is offered web_search: a known provider is
-// named and its account holds a key. Without a key the endpoint answers every
+// Enabled reports whether a turn is offered web_search: search is not paused,
+// a known provider is named and its account holds a key. Without a key the endpoint answers every
 // request with a price, so an offered tool would only fail.
 func (s Search) Enabled() bool {
-	if s.Provider == "" || !search.ValidName(string(s.Provider)) {
+	if s.Paused || s.Provider == "" || !search.ValidName(string(s.Provider)) {
 		return false
 	}
 	a, ok := s.Account()
@@ -571,7 +574,7 @@ func (c Config) File() File {
 	after := int(c.BackgroundAfter / time.Second)
 	maxCalls, agent := c.MaxToolCalls, c.AgentID
 	sProvider, sMaxHits, sMaxChars := string(c.Search.Provider), c.Search.MaxHits, c.Search.MaxChars
-	sTimeout := int(c.Search.Timeout / time.Second)
+	sTimeout, sPaused := int(c.Search.Timeout/time.Second), c.Search.Paused
 	sAccounts := make([]FileSearchAccount, 0, len(c.Search.Accounts))
 	for _, a := range c.Search.Accounts {
 		name, url, key := string(a.Name), a.URL, a.Key
@@ -579,6 +582,7 @@ func (c Config) File() File {
 	}
 	block := FileSearch{
 		Provider:  &sProvider,
+		Paused:    &sPaused,
 		MaxHits:   &sMaxHits,
 		MaxChars:  &sMaxChars,
 		TimeoutS:  &sTimeout,
@@ -785,6 +789,9 @@ func resolveSearch(f *FileSearch, d Search, note func(string)) Search {
 			note("provider " + strconv.Quote(*f.Provider) + " is not in the list of allowed providers, leaving search off")
 			c.Provider = ""
 		}
+	}
+	if f.Paused != nil {
+		c.Paused = *f.Paused
 	}
 	if f.MaxHits != nil {
 		if *f.MaxHits >= 1 && *f.MaxHits <= MaxSearchMaxHits {

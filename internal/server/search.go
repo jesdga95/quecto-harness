@@ -17,6 +17,7 @@ import (
 // show what it holds cannot be cleared by emptying it.
 type searchJSON struct {
 	Provider  string              `json:"provider"`
+	Paused    bool                `json:"paused"`
 	MaxHits   int                 `json:"max_hits"`
 	MaxChars  int                 `json:"max_chars"`
 	TimeoutS  int                 `json:"timeout_s"`
@@ -45,6 +46,7 @@ func toSearchJSON(s config.Search) searchJSON {
 	}
 	return searchJSON{
 		Provider:  string(s.Provider),
+		Paused:    s.Paused,
 		MaxHits:   s.MaxHits,
 		MaxChars:  s.MaxChars,
 		TimeoutS:  int(s.Timeout / time.Second),
@@ -62,6 +64,7 @@ func (s *Server) writeSearch(w http.ResponseWriter, status int, cfg config.Confi
 // what the dialog cannot set. A field it leaves out keeps the value it has.
 type searchBody struct {
 	Provider  *string             `json:"provider"`
+	Paused    *bool               `json:"paused"`
 	MaxHits   *int                `json:"max_hits"`
 	MaxChars  *int                `json:"max_chars"`
 	TimeoutS  *int                `json:"timeout_s"`
@@ -109,6 +112,9 @@ func (b searchBody) apply(c *config.Config) {
 	s := c.Search
 	if b.Provider != nil {
 		s.Provider = config.SearchProvider(strings.TrimSpace(*b.Provider))
+	}
+	if b.Paused != nil {
+		s.Paused = *b.Paused
 	}
 	if b.MaxHits != nil {
 		s.MaxHits = *b.MaxHits

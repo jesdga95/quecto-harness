@@ -842,3 +842,25 @@ func TestSearchEnabledNeedsAKey(t *testing.T) {
 		t.Error("a named provider with a key is on")
 	}
 }
+
+// Paused turns search off and keeps the provider named, through a write and a
+// read back.
+func TestSearchPausedKeepsTheProvider(t *testing.T) {
+	d := Defaults()
+	c, _ := File{Search: &FileSearch{
+		Provider:  ptr("exa"),
+		Paused:    ptr(true),
+		Providers: []FileSearchAccount{{Name: ptr("exa"), Key: ptr("k")}},
+	}}.Resolve(d)
+	if c.Search.Enabled() || c.Search.Provider != "exa" {
+		t.Errorf("paused search = %+v, want off with exa named", c.Search)
+	}
+	back, _ := c.File().Resolve(d)
+	if !back.Search.Paused || back.Search.Enabled() {
+		t.Errorf("read back %+v, want still paused", back.Search)
+	}
+	back.Search.Paused = false
+	if !back.Search.Enabled() {
+		t.Error("unpaused search with a key is not on")
+	}
+}

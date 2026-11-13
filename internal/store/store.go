@@ -176,6 +176,9 @@ type Session struct {
 	Model  string `json:"model"`
 	// Mode is the work mode the next turn runs in.
 	Mode config.WorkMode `json:"mode"`
+	// Effort replaces the agent's thinking level for this session. Empty is
+	// the agent's own.
+	Effort config.Effort `json:"effort,omitempty"`
 	// Toolset is the set every turn is offered, fixed when the session was
 	// created. Empty reads as full.
 	Toolset config.Toolset `json:"toolset"`

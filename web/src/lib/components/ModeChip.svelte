@@ -2,7 +2,7 @@
   import type { Component } from "svelte";
   import CaretDown from "phosphor-svelte/lib/CaretDownIcon";
   import ListChecks from "phosphor-svelte/lib/ListChecksIcon";
-  import Play from "phosphor-svelte/lib/PlayIcon";
+  import TerminalWindow from "phosphor-svelte/lib/TerminalWindowIcon";
   import Popover from "./Popover.svelte";
   import type { WorkMode } from "../api";
   import { app, setWorkMode } from "../state/app.svelte";
@@ -14,14 +14,14 @@
     {
       value: "plan",
       label: "Plan",
-      hint: "Reads, designs, then sends a plan to approve. Files are read only.",
+      hint: "Reads, then proposes a plan.",
       icon: ListChecks,
     },
     {
       value: "execute",
       label: "Execute",
       hint: "Changes files and runs commands.",
-      icon: Play,
+      icon: TerminalWindow,
     },
   ] as const satisfies readonly {
     value: WorkMode;
@@ -58,6 +58,7 @@
     <Popover onclose={() => (open = false)} up width={300}>
       {#each modes as m (m.value)}
         <button class="popover-item" onclick={() => pick(m.value)}>
+          <span class="item-tile"><m.icon /></span>
           <span class="min-w-0 flex-1">
             <span
               class="block"

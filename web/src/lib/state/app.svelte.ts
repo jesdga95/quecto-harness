@@ -1,6 +1,7 @@
 import { ApiError, api } from "../api";
 import { dismissSticky, toast } from "./toast.svelte";
 import type {
+  Effort,
   Agent,
   AgentPatch,
   Attached,
@@ -95,6 +96,9 @@ export const app = $state({
   // The toolset the open session was created with. With none open, the
   // configured one is what the next session gets.
   sessionToolset: null as Toolset | null,
+  // The thinking level this session uses in place of its agent's, empty for
+  // the agent's own. With no session open it rides on the first message.
+  sessionEffort: "" as Effort | "",
   // The plan plan mode is writing, or the one last approved.
   draft: null as Plan | null,
   changes: { files: [], added: 0, removed: 0 } as Changes,
@@ -360,6 +364,7 @@ function clearSession(): void {
   app.steer = null;
   app.workMode = "execute";
   app.sessionToolset = null;
+  app.sessionEffort = "";
   app.draft = null;
   app.status = "idle";
   app.awaitingModel = false;
@@ -405,6 +410,7 @@ export async function selectSession(id: string): Promise<void> {
   app.steer = t.steer;
   app.workMode = t.mode;
   app.sessionToolset = t.toolset;
+  app.sessionEffort = t.effort ?? "";
   app.draft = t.draft;
   // A session opened while its turn runs is running, and the snapshot is the
   // only thing that says so. A request with nothing streamed yet draws nothing
@@ -571,7 +577,7 @@ export async function send(text: string, files: string[] = []): Promise<void> {
   // The harness reads the attachments, so a file it refuses refuses the whole
   // message. The bubble comes back off the transcript when that happens.
   const item = app.items[app.items.length - 1];
-  const sent = await guard(() => api.sendMessage(app.sessionId, message, files, app.workMode));
+  const sent = await guard(() => api.sendMessage(app.sessionId, message, files, app.workMode, app.sessionEffort));
   if (sent === null) {
     app.items = app.items.filter((i) => i.id !== item?.id && i.id !== divider?.id);
     // A refused first message leaves the session it created behind, and the
@@ -771,6 +777,9 @@ export async function removeAgent(id: string): Promise<void> {
     choice: the next message that needs the model is what loads it. */
 export async function setActiveAgent(id: string): Promise<void> {
   if (app.config?.agent === id) return;
+  // An effort was picked against the previous agent's model. The harness
+  // drops it on the session's next turn, and the chip stops showing it now.
+  app.sessionEffort = "";
   // The split was estimated against the previous prompt, so it goes with it
   // rather than being shown beside a total the new model reported.
   app.usage.breakdown = undefined;
@@ -793,6 +802,29 @@ export async function saveConfig(patch: Partial<Config>): Promise<boolean> {
   app.config = config;
   syncWorkMode();
   return true;
+}
+
+/** The thinking level the next turn uses: the session's when it set one,
+    otherwise the agent's. */
+export function effectiveEffort(): Effort | "" {
+  return app.sessionEffort || activeAgent()?.effort || "";
+}
+
+/** Sets the thinking level for this session only. Picking the agent's own
+    level clears the override, so the session follows later edits to it. */
+export async function setSessionEffort(effort: Effort | ""): Promise<void> {
+  const next = effort === activeAgent()?.effort ? "" : effort;
+  const before = app.sessionEffort;
+  app.sessionEffort = next;
+  if (!app.sessionId) return;
+  if ((await guard(() => api.setEffort(app.sessionId, next))) === null) app.sessionEffort = before;
+}
+
+/** Turns web search off or on and keeps the provider named. */
+export async function setSearchPaused(paused: boolean): Promise<void> {
+  if (!app.search) return;
+  app.search.paused = paused;
+  if (!(await saveSearch({ paused })) && app.search) app.search.paused = !paused;
 }
 
 /** Saves the search block. The answer is the resolved block, which is what the
@@ -875,21 +907,6 @@ export function samplingIndex(steps: (number | null)[], value: number | null): n
     }
   }
   return best;
-}
-
-/** What the tool call limit rotates through. Zero is no limit. */
-export const TOOL_CALL_STEPS = [25, 50, 100, 0];
-
-export function maxToolCalls(): number {
-  return app.config?.max_tool_calls ?? 50;
-}
-
-/** Advances to the next step. A hand-edited number lands on the next one above it. */
-export function nextToolCallLimit(): void {
-  const current = maxToolCalls();
-  const next = TOOL_CALL_STEPS.find((v) => v > current) ?? 0;
-  if (app.config) app.config.max_tool_calls = next;
-  void guard(() => api.updateConfig({ max_tool_calls: next }));
 }
 
 export function permMode(): PermMode {

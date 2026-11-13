@@ -56,6 +56,7 @@
     };
     const search: SearchConfig = app.search ?? {
       provider: "",
+      paused: false,
       max_hits: 10,
       max_chars: 4000,
       timeout_s: 20,

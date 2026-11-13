@@ -17,6 +17,9 @@ import (
 // ErrBadMode is a work mode outside the three the harness knows.
 var ErrBadMode = errors.New("The mode is not plan or execute")
 
+// ErrBadEffort is a thinking level outside the six the harness knows.
+var ErrBadEffort = errors.New("The effort is not " + config.EffortNames + ". Leave it empty to use the agent's own")
+
 // The two answers a plan card offers. The first approves; anything else,
 // including words typed instead, sends the plan back.
 const (
@@ -53,6 +56,35 @@ func (e *Engine) SetMode(id string, mode config.WorkMode) error {
 	e.save(s)
 	e.publish(s.ID, ev("mode", map[string]any{"mode": string(mode)}))
 	return nil
+}
+
+// SetEffort sets the thinking level the session's next turns use in place of
+// the agent's. Empty goes back to the agent's own. A turn already running
+// keeps the level it started with.
+func (e *Engine) SetEffort(id string, effort config.Effort) error {
+	if effort != "" && !llm.ValidEffort(string(effort)) {
+		return ErrBadEffort
+	}
+	s, err := e.Get(id)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	changed := s.Effort != effort
+	s.Effort = effort
+	s.mu.Unlock()
+	if changed {
+		e.save(s)
+	}
+	return nil
+}
+
+// SessionEffort is the thinking level the session sets in place of the
+// agent's, or empty.
+func (s *Session) SessionEffort() config.Effort {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Effort
 }
 
 // WorkMode is the mode a session's next turn runs in.
