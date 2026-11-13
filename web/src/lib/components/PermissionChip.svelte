@@ -1,9 +1,9 @@
 <script lang="ts">
   import type { Component } from "svelte";
-  import CaretDown from "phosphor-svelte/lib/CaretDown";
-  import Flame from "phosphor-svelte/lib/Flame";
-  import Lightning from "phosphor-svelte/lib/Lightning";
-  import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
+  import CaretDown from "phosphor-svelte/lib/CaretDownIcon";
+  import Flame from "phosphor-svelte/lib/FlameIcon";
+  import Lightning from "phosphor-svelte/lib/LightningIcon";
+  import ShieldCheck from "phosphor-svelte/lib/ShieldCheckIcon";
   import Popover from "./Popover.svelte";
   import type { PermMode } from "../api";
   import { permMode, setPermMode } from "../state/app.svelte";

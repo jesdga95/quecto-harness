@@ -1,8 +1,8 @@
 <script lang="ts">
-  import ArrowsInLineVertical from "phosphor-svelte/lib/ArrowsInLineVertical";
-  import ArrowsOutLineVertical from "phosphor-svelte/lib/ArrowsOutLineVertical";
-  import CaretRight from "phosphor-svelte/lib/CaretRight";
-  import GitDiff from "phosphor-svelte/lib/GitDiff";
+  import ArrowsInLineVertical from "phosphor-svelte/lib/ArrowsInLineVerticalIcon";
+  import ArrowsOutLineVertical from "phosphor-svelte/lib/ArrowsOutLineVerticalIcon";
+  import CaretRight from "phosphor-svelte/lib/CaretRightIcon";
+  import GitDiff from "phosphor-svelte/lib/GitDiffIcon";
   import CopyButton from "./CopyButton.svelte";
   import DiffBlock from "./DiffBlock.svelte";
   import type { ChangeStatus, FileChange } from "../api";

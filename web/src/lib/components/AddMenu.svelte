@@ -1,6 +1,6 @@
 <script lang="ts">
-  import Paperclip from "phosphor-svelte/lib/Paperclip";
-  import Plus from "phosphor-svelte/lib/Plus";
+  import Paperclip from "phosphor-svelte/lib/PaperclipIcon";
+  import Plus from "phosphor-svelte/lib/PlusIcon";
   import Popover from "./Popover.svelte";
   import { maxToolCalls, nextToolCallLimit } from "../state/app.svelte";
 

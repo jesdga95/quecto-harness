@@ -1,6 +1,6 @@
 <script lang="ts">
-  import FolderOpen from "phosphor-svelte/lib/FolderOpen";
-  import X from "phosphor-svelte/lib/X";
+  import FolderOpen from "phosphor-svelte/lib/FolderOpenIcon";
+  import X from "phosphor-svelte/lib/XIcon";
   import { shortPath } from "../format";
   import { app, pickAndAddProject, removeProject, sessionsOf } from "../state/app.svelte";
   import { confirm } from "../state/confirm.svelte";

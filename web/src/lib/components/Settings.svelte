@@ -1,9 +1,9 @@
 <script lang="ts">
-  import FolderOpen from "phosphor-svelte/lib/FolderOpen";
-  import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
-  import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
-  import Sliders from "phosphor-svelte/lib/Sliders";
-  import Wrench from "phosphor-svelte/lib/Wrench";
+  import FolderOpen from "phosphor-svelte/lib/FolderOpenIcon";
+  import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlassIcon";
+  import ShieldCheck from "phosphor-svelte/lib/ShieldCheckIcon";
+  import Sliders from "phosphor-svelte/lib/SlidersIcon";
+  import Wrench from "phosphor-svelte/lib/WrenchIcon";
   import type { Config, SearchConfig } from "../api";
   import { app, saveConfig, saveSearch } from "../state/app.svelte";
   import { confirm } from "../state/confirm.svelte";

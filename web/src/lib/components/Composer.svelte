@@ -1,12 +1,12 @@
 <script lang="ts">
   import AddMenu from "./AddMenu.svelte";
-  import ArrowUp from "phosphor-svelte/lib/ArrowUp";
-  import Square from "phosphor-svelte/lib/Square";
-  import Lightning from "phosphor-svelte/lib/Lightning";
+  import ArrowUp from "phosphor-svelte/lib/ArrowUpIcon";
+  import Square from "phosphor-svelte/lib/SquareIcon";
+  import Lightning from "phosphor-svelte/lib/LightningIcon";
   import AgentChip from "./AgentChip.svelte";
   import ModeChip from "./ModeChip.svelte";
   import PermissionChip from "./PermissionChip.svelte";
-  import X from "phosphor-svelte/lib/X";
+  import X from "phosphor-svelte/lib/XIcon";
   import FileIcon from "./FileIcon.svelte";
   import PermissionCard from "./PermissionCard.svelte";
   import QuestionCard from "./QuestionCard.svelte";

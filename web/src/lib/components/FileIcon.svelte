@@ -1,8 +1,8 @@
 <script lang="ts">
-  import File from "phosphor-svelte/lib/File";
-  import FileCode from "phosphor-svelte/lib/FileCode";
-  import FileImage from "phosphor-svelte/lib/FileImage";
-  import FileText from "phosphor-svelte/lib/FileText";
+  import File from "phosphor-svelte/lib/FileIcon";
+  import FileCode from "phosphor-svelte/lib/FileCodeIcon";
+  import FileImage from "phosphor-svelte/lib/FileImageIcon";
+  import FileText from "phosphor-svelte/lib/FileTextIcon";
   import { glyphOf } from "../files";
 
   // The same glyph a file link in a reply draws, so a file looks the same in

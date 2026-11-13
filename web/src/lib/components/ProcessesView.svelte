@@ -1,7 +1,7 @@
 <script lang="ts">
-  import FileText from "phosphor-svelte/lib/FileText";
-  import Stop from "phosphor-svelte/lib/Stop";
-  import Terminal from "phosphor-svelte/lib/Terminal";
+  import FileText from "phosphor-svelte/lib/FileTextIcon";
+  import Stop from "phosphor-svelte/lib/StopIcon";
+  import Terminal from "phosphor-svelte/lib/TerminalIcon";
   import CopyButton from "./CopyButton.svelte";
   import { app, loadProcessOutput, showProcesses, stopProcess } from "../state/app.svelte";
   import type { Process } from "../api";

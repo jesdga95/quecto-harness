@@ -1,6 +1,6 @@
 <script lang="ts">
-  import ArrowsIn from "phosphor-svelte/lib/ArrowsIn";
-  import ChartPie from "phosphor-svelte/lib/ChartPie";
+  import ArrowsIn from "phosphor-svelte/lib/ArrowsInIcon";
+  import ChartPie from "phosphor-svelte/lib/ChartPieIcon";
   import type { TurnCost } from "../api";
   import { app, compact, contextUse, turnStats } from "../state/app.svelte";
   import { duration, k, level } from "../format";

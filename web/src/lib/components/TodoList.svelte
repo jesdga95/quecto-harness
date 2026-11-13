@@ -1,7 +1,7 @@
 <script lang="ts">
-  import Check from "phosphor-svelte/lib/Check";
-  import CaretRight from "phosphor-svelte/lib/CaretRight";
-  import CircleDashed from "phosphor-svelte/lib/CircleDashed";
+  import Check from "phosphor-svelte/lib/CheckIcon";
+  import CaretRight from "phosphor-svelte/lib/CaretRightIcon";
+  import CircleDashed from "phosphor-svelte/lib/CircleDashedIcon";
   import type { Todo } from "../api";
 
   // live is set while the turn runs, so the step in hand spins only then.

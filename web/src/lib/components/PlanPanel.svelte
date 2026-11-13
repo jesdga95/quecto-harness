@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CaretRight from "phosphor-svelte/lib/CaretRight";
-  import ListChecks from "phosphor-svelte/lib/ListChecks";
+  import CaretRight from "phosphor-svelte/lib/CaretRightIcon";
+  import ListChecks from "phosphor-svelte/lib/ListChecksIcon";
   import TodoList from "./TodoList.svelte";
   import { app } from "../state/app.svelte";
 

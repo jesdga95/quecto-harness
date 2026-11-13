@@ -1,7 +1,7 @@
 <script lang="ts">
-  import DotsThree from "phosphor-svelte/lib/DotsThree";
-  import PencilSimple from "phosphor-svelte/lib/PencilSimple";
-  import Trash from "phosphor-svelte/lib/Trash";
+  import DotsThree from "phosphor-svelte/lib/DotsThreeIcon";
+  import PencilSimple from "phosphor-svelte/lib/PencilSimpleIcon";
+  import Trash from "phosphor-svelte/lib/TrashIcon";
   import Popover from "./Popover.svelte";
 
   let {

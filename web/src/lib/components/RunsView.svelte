@@ -1,6 +1,6 @@
 <script lang="ts">
-  import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOut";
-  import UsersThree from "phosphor-svelte/lib/UsersThree";
+  import ArrowSquareOut from "phosphor-svelte/lib/ArrowSquareOutIcon";
+  import UsersThree from "phosphor-svelte/lib/UsersThreeIcon";
   import Prose from "./Prose.svelte";
   import StepRow from "./StepRow.svelte";
   import { app, openRun, selectSession } from "../state/app.svelte";

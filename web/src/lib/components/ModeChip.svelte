@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { Component } from "svelte";
-  import CaretDown from "phosphor-svelte/lib/CaretDown";
-  import ListChecks from "phosphor-svelte/lib/ListChecks";
-  import Play from "phosphor-svelte/lib/Play";
+  import CaretDown from "phosphor-svelte/lib/CaretDownIcon";
+  import ListChecks from "phosphor-svelte/lib/ListChecksIcon";
+  import Play from "phosphor-svelte/lib/PlayIcon";
   import Popover from "./Popover.svelte";
   import type { WorkMode } from "../api";
   import { app, setWorkMode } from "../state/app.svelte";

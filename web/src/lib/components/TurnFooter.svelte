@@ -1,6 +1,6 @@
 <script lang="ts">
-  import Clock from "phosphor-svelte/lib/Clock";
-  import Database from "phosphor-svelte/lib/Database";
+  import Clock from "phosphor-svelte/lib/ClockIcon";
+  import Database from "phosphor-svelte/lib/DatabaseIcon";
   import CopyButton from "./CopyButton.svelte";
   import Popover from "./Popover.svelte";
   import type { TurnCost } from "../api";

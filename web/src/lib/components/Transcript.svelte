@@ -1,13 +1,13 @@
 <script lang="ts">
-  import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
-  import ArrowDown from "phosphor-svelte/lib/ArrowDown";
-  import ArrowsLeftRight from "phosphor-svelte/lib/ArrowsLeftRight";
-  import CaretRight from "phosphor-svelte/lib/CaretRight";
-  import ChatText from "phosphor-svelte/lib/ChatText";
-  import CheckCircle from "phosphor-svelte/lib/CheckCircle";
-  import PencilSimple from "phosphor-svelte/lib/PencilSimple";
-  import Robot from "phosphor-svelte/lib/Robot";
-  import Warning from "phosphor-svelte/lib/Warning";
+  import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwiseIcon";
+  import ArrowDown from "phosphor-svelte/lib/ArrowDownIcon";
+  import ArrowsLeftRight from "phosphor-svelte/lib/ArrowsLeftRightIcon";
+  import CaretRight from "phosphor-svelte/lib/CaretRightIcon";
+  import ChatText from "phosphor-svelte/lib/ChatTextIcon";
+  import CheckCircle from "phosphor-svelte/lib/CheckCircleIcon";
+  import PencilSimple from "phosphor-svelte/lib/PencilSimpleIcon";
+  import Robot from "phosphor-svelte/lib/RobotIcon";
+  import Warning from "phosphor-svelte/lib/WarningIcon";
   import CopyButton from "./CopyButton.svelte";
   import Prose from "./Prose.svelte";
   import PlanCard from "./PlanCard.svelte";

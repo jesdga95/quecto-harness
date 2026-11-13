@@ -1,5 +1,5 @@
 <script lang="ts">
-  import X from "phosphor-svelte/lib/X";
+  import X from "phosphor-svelte/lib/XIcon";
   import type { Config, PermMode } from "../api";
   import { app, confirmFullAuto, removeAllowed } from "../state/app.svelte";
   import OptionPicker from "./OptionPicker.svelte";

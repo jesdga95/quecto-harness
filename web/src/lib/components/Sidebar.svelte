@@ -1,15 +1,15 @@
 <script lang="ts">
-  import CaretRight from "phosphor-svelte/lib/CaretRight";
-  import Folder from "phosphor-svelte/lib/Folder";
-  import FolderOpen from "phosphor-svelte/lib/FolderOpen";
-  import PlusCircle from "phosphor-svelte/lib/PlusCircle";
+  import CaretRight from "phosphor-svelte/lib/CaretRightIcon";
+  import Folder from "phosphor-svelte/lib/FolderIcon";
+  import FolderOpen from "phosphor-svelte/lib/FolderOpenIcon";
+  import PlusCircle from "phosphor-svelte/lib/PlusCircleIcon";
   import RowMenu from "./RowMenu.svelte";
   import { confirm } from "../state/confirm.svelte";
-  import FolderPlus from "phosphor-svelte/lib/FolderPlus";
-  import Gear from "phosphor-svelte/lib/Gear";
-  import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
-  import Plus from "phosphor-svelte/lib/Plus";
-  import SidebarSimple from "phosphor-svelte/lib/SidebarSimple";
+  import FolderPlus from "phosphor-svelte/lib/FolderPlusIcon";
+  import Gear from "phosphor-svelte/lib/GearIcon";
+  import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlassIcon";
+  import Plus from "phosphor-svelte/lib/PlusIcon";
+  import SidebarSimple from "phosphor-svelte/lib/SidebarSimpleIcon";
   import Logo from "./Logo.svelte";
   import ThemeButton from "./ThemeButton.svelte";
   import {

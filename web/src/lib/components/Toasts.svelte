@@ -1,7 +1,7 @@
 <script lang="ts">
-  import Warning from "phosphor-svelte/lib/Warning";
-  import WifiSlash from "phosphor-svelte/lib/WifiSlash";
-  import X from "phosphor-svelte/lib/X";
+  import Warning from "phosphor-svelte/lib/WarningIcon";
+  import WifiSlash from "phosphor-svelte/lib/WifiSlashIcon";
+  import X from "phosphor-svelte/lib/XIcon";
   import { dismiss, toasts } from "../state/toast.svelte";
 </script>
 

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import Check from "phosphor-svelte/lib/Check";
-  import Copy from "phosphor-svelte/lib/Copy";
+  import Check from "phosphor-svelte/lib/CheckIcon";
+  import Copy from "phosphor-svelte/lib/CopyIcon";
   import { COPIED_MS, copyText } from "../clipboard";
 
   // The tick stands for a second and a half, long enough to be read and short

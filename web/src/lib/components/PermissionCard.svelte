@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import ShieldCheck from "phosphor-svelte/lib/ShieldCheck";
+  import ShieldCheck from "phosphor-svelte/lib/ShieldCheckIcon";
   import type { PermissionDecision, TranscriptItem } from "../api";
   import { decide } from "../state/app.svelte";
 

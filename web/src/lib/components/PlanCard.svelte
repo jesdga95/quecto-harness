@@ -1,5 +1,5 @@
 <script lang="ts">
-  import ListChecks from "phosphor-svelte/lib/ListChecks";
+  import ListChecks from "phosphor-svelte/lib/ListChecksIcon";
   import type { TranscriptItem } from "../api";
   import { PLAN_ID } from "../artifacts";
   import { answer, app, showArtifact } from "../state/app.svelte";

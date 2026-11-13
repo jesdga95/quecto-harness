@@ -1,6 +1,6 @@
 <script lang="ts">
-  import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
-  import ImageIcon from "phosphor-svelte/lib/Image";
+  import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwiseIcon";
+  import ImageIcon from "phosphor-svelte/lib/ImageIcon";
   import Picker from "./Picker.svelte";
   import PickerRow from "./PickerRow.svelte";
   import type { Model, Probe } from "../api";

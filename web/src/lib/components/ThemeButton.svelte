@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { Component } from "svelte";
-  import Monitor from "phosphor-svelte/lib/Monitor";
-  import Moon from "phosphor-svelte/lib/Moon";
-  import Sun from "phosphor-svelte/lib/Sun";
+  import Monitor from "phosphor-svelte/lib/MonitorIcon";
+  import Moon from "phosphor-svelte/lib/MoonIcon";
+  import Sun from "phosphor-svelte/lib/SunIcon";
   import Popover from "./Popover.svelte";
   import { setTheme, theme } from "../state/theme.svelte";
   import type { ThemePref } from "../state/theme.svelte";

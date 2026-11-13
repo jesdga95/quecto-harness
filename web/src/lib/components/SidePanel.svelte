@@ -1,14 +1,14 @@
 <script lang="ts">
-  import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
-  import Browser from "phosphor-svelte/lib/Browser";
-  import Code from "phosphor-svelte/lib/Code";
-  import Eye from "phosphor-svelte/lib/Eye";
-  import DownloadSimple from "phosphor-svelte/lib/DownloadSimple";
-  import FileCode from "phosphor-svelte/lib/FileCode";
-  import Folder from "phosphor-svelte/lib/Folder";
-  import ListChecks from "phosphor-svelte/lib/ListChecks";
-  import PenNib from "phosphor-svelte/lib/PenNib";
-  import X from "phosphor-svelte/lib/X";
+  import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwiseIcon";
+  import Browser from "phosphor-svelte/lib/BrowserIcon";
+  import Code from "phosphor-svelte/lib/CodeIcon";
+  import Eye from "phosphor-svelte/lib/EyeIcon";
+  import DownloadSimple from "phosphor-svelte/lib/DownloadSimpleIcon";
+  import FileCode from "phosphor-svelte/lib/FileCodeIcon";
+  import Folder from "phosphor-svelte/lib/FolderIcon";
+  import ListChecks from "phosphor-svelte/lib/ListChecksIcon";
+  import PenNib from "phosphor-svelte/lib/PenNibIcon";
+  import X from "phosphor-svelte/lib/XIcon";
   import AttachmentsView from "./AttachmentsView.svelte";
   import ArtifactPage from "./ArtifactPage.svelte";
   import ArtifactSvg from "./ArtifactSvg.svelte";

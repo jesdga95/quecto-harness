@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import CaretDown from "phosphor-svelte/lib/CaretDown";
+  import CaretDown from "phosphor-svelte/lib/CaretDownIcon";
   import Popover from "./Popover.svelte";
 
   let {

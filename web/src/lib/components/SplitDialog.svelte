@@ -1,5 +1,5 @@
 <script lang="ts">
-  import X from "phosphor-svelte/lib/X";
+  import X from "phosphor-svelte/lib/XIcon";
   import type { Snippet } from "svelte";
   import Dialog from "./Dialog.svelte";
 

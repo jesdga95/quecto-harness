@@ -5,8 +5,8 @@
 
 import { Marked, type RendererObject } from "marked";
 import katex from "katex";
-import checkIconSrc from "phosphor-svelte/lib/Check?raw";
-import copyIconSrc from "phosphor-svelte/lib/Copy?raw";
+import checkIconSrc from "phosphor-svelte/lib/CheckIcon?raw";
+import copyIconSrc from "phosphor-svelte/lib/CopyIcon?raw";
 import { escapeHtml, guess, highlight } from "./highlight";
 import { fileLinkHtml, fileTarget, regular } from "./files";
 

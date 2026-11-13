@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CheckSquare from "phosphor-svelte/lib/CheckSquare";
-  import Square from "phosphor-svelte/lib/Square";
+  import CheckSquare from "phosphor-svelte/lib/CheckSquareIcon";
+  import Square from "phosphor-svelte/lib/SquareIcon";
   import type { TranscriptItem } from "../api";
   import { answer, stop } from "../state/app.svelte";
   import { asked } from "../question";

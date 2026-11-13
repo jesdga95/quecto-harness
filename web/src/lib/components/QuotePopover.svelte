@@ -1,7 +1,7 @@
 <script lang="ts">
-  import Check from "phosphor-svelte/lib/Check";
-  import Copy from "phosphor-svelte/lib/Copy";
-  import Quotes from "phosphor-svelte/lib/Quotes";
+  import Check from "phosphor-svelte/lib/CheckIcon";
+  import Copy from "phosphor-svelte/lib/CopyIcon";
+  import Quotes from "phosphor-svelte/lib/QuotesIcon";
   import { addQuote } from "../state/quotes.svelte";
 
   // Floats over text selected inside a reply. Only a selection that starts and

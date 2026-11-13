@@ -1,7 +1,7 @@
 <script lang="ts">
-  import Plus from "phosphor-svelte/lib/Plus";
-  import Robot from "phosphor-svelte/lib/Robot";
-  import User from "phosphor-svelte/lib/User";
+  import Plus from "phosphor-svelte/lib/PlusIcon";
+  import Robot from "phosphor-svelte/lib/RobotIcon";
+  import User from "phosphor-svelte/lib/UserIcon";
   import type { Agent, AgentPatch } from "../api";
   import {
     addAgent,

@@ -3,10 +3,10 @@
 // extensions rather than by asking the harness, so a reply renders without a
 // request and a method call such as os.path.join is never taken for a file.
 
-import fileSrc from "phosphor-svelte/lib/File?raw";
-import fileCodeSrc from "phosphor-svelte/lib/FileCode?raw";
-import fileImageSrc from "phosphor-svelte/lib/FileImage?raw";
-import fileTextSrc from "phosphor-svelte/lib/FileText?raw";
+import fileSrc from "phosphor-svelte/lib/FileIcon?raw";
+import fileCodeSrc from "phosphor-svelte/lib/FileCodeIcon?raw";
+import fileImageSrc from "phosphor-svelte/lib/FileImageIcon?raw";
+import fileTextSrc from "phosphor-svelte/lib/FileTextIcon?raw";
 import { escapeHtml } from "./highlight";
 
 export type Glyph = "image" | "code" | "text" | "file";

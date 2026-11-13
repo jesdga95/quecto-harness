@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import Check from "phosphor-svelte/lib/Check";
+  import Check from "phosphor-svelte/lib/CheckIcon";
 
   let {
     label,

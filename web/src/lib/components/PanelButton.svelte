@@ -1,11 +1,11 @@
 <script lang="ts">
-  import ArrowsIn from "phosphor-svelte/lib/ArrowsIn";
-  import ArrowsOut from "phosphor-svelte/lib/ArrowsOut";
-  import Folder from "phosphor-svelte/lib/Folder";
-  import GitDiff from "phosphor-svelte/lib/GitDiff";
-  import Paperclip from "phosphor-svelte/lib/Paperclip";
-  import Terminal from "phosphor-svelte/lib/Terminal";
-  import UsersThree from "phosphor-svelte/lib/UsersThree";
+  import ArrowsIn from "phosphor-svelte/lib/ArrowsInIcon";
+  import ArrowsOut from "phosphor-svelte/lib/ArrowsOutIcon";
+  import Folder from "phosphor-svelte/lib/FolderIcon";
+  import GitDiff from "phosphor-svelte/lib/GitDiffIcon";
+  import Paperclip from "phosphor-svelte/lib/PaperclipIcon";
+  import Terminal from "phosphor-svelte/lib/TerminalIcon";
+  import UsersThree from "phosphor-svelte/lib/UsersThreeIcon";
   import {
     app,
     artifacts,

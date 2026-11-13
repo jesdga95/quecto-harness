@@ -1,14 +1,14 @@
 <script lang="ts">
   import type { Component } from "svelte";
-  import CheckCircle from "phosphor-svelte/lib/CheckCircle";
-  import Database from "phosphor-svelte/lib/Database";
-  import FileCode from "phosphor-svelte/lib/FileCode";
-  import ListNumbers from "phosphor-svelte/lib/ListNumbers";
-  import Question from "phosphor-svelte/lib/Question";
-  import SealCheck from "phosphor-svelte/lib/SealCheck";
-  import Target from "phosphor-svelte/lib/Target";
-  import TestTube from "phosphor-svelte/lib/TestTube";
-  import Warning from "phosphor-svelte/lib/Warning";
+  import CheckCircle from "phosphor-svelte/lib/CheckCircleIcon";
+  import Database from "phosphor-svelte/lib/DatabaseIcon";
+  import FileCode from "phosphor-svelte/lib/FileCodeIcon";
+  import ListNumbers from "phosphor-svelte/lib/ListNumbersIcon";
+  import Question from "phosphor-svelte/lib/QuestionIcon";
+  import SealCheck from "phosphor-svelte/lib/SealCheckIcon";
+  import Target from "phosphor-svelte/lib/TargetIcon";
+  import TestTube from "phosphor-svelte/lib/TestTubeIcon";
+  import Warning from "phosphor-svelte/lib/WarningIcon";
   import { escapeHtml } from "../highlight";
   import type { Plan } from "../plan";
   import { app } from "../state/app.svelte";

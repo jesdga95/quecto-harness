@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CaretDown from "phosphor-svelte/lib/CaretDown";
-  import Check from "phosphor-svelte/lib/Check";
-  import FolderPlus from "phosphor-svelte/lib/FolderPlus";
+  import CaretDown from "phosphor-svelte/lib/CaretDownIcon";
+  import Check from "phosphor-svelte/lib/CheckIcon";
+  import FolderPlus from "phosphor-svelte/lib/FolderPlusIcon";
   import Popover from "./Popover.svelte";
   import { app, pickAndAddProject, selectProject } from "../state/app.svelte";
 

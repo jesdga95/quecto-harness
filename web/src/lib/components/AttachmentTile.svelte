@@ -1,6 +1,6 @@
 <script lang="ts">
-  import Play from "phosphor-svelte/lib/Play";
-  import X from "phosphor-svelte/lib/X";
+  import Play from "phosphor-svelte/lib/PlayIcon";
+  import X from "phosphor-svelte/lib/XIcon";
   import type { PreviewKind } from "../attachments";
   import { sheetText } from "../attachments";
   import { bytes, fileKind, fileName } from "../format";

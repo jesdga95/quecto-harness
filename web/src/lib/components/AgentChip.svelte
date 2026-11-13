@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CaretDown from "phosphor-svelte/lib/CaretDown";
-  import Check from "phosphor-svelte/lib/Check";
-  import Sliders from "phosphor-svelte/lib/Sliders";
-  import Robot from "phosphor-svelte/lib/Robot";
+  import CaretDown from "phosphor-svelte/lib/CaretDownIcon";
+  import Check from "phosphor-svelte/lib/CheckIcon";
+  import Sliders from "phosphor-svelte/lib/SlidersIcon";
+  import Robot from "phosphor-svelte/lib/RobotIcon";
   import Popover from "./Popover.svelte";
   import { activeAgent, agentReady, app, setActiveAgent } from "../state/app.svelte";
   import { probeMessage } from "../format";

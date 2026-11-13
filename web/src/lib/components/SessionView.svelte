@@ -1,5 +1,5 @@
 <script lang="ts">
-  import ArrowUUpLeft from "phosphor-svelte/lib/ArrowUUpLeft";
+  import ArrowUUpLeft from "phosphor-svelte/lib/ArrowUUpLeftIcon";
   import Composer from "./Composer.svelte";
   import PanelButton from "./PanelButton.svelte";
   import SidePanel from "./SidePanel.svelte";
