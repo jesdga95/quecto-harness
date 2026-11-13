@@ -20,6 +20,8 @@
     pendingQuestion,
     pickAttachments,
     findFiles,
+    fileUrl,
+    looksLikeImage,
     setWorkMode,
     send,
     stop,
@@ -49,6 +51,27 @@
 
   let text = $state("");
   let files = $state<string[]>([]);
+  // A pasted image is drawn from its own bytes. A picked one is fetched from
+  // the project, and falls back to a plain tile when it lives outside it.
+  let pastedImages = $state<Record<string, string>>({});
+  let unshown = $state<Record<string, true>>({});
+
+  function preview(path: string): string {
+    if (pastedImages[path]) return pastedImages[path];
+    if (unshown[path] || !looksLikeImage(path)) return "";
+    return fileUrl(path);
+  }
+
+  function setFiles(next: string[]) {
+    for (const [path, url] of Object.entries(pastedImages)) {
+      if (!next.includes(path)) URL.revokeObjectURL(url);
+    }
+    pastedImages = Object.fromEntries(
+      Object.entries(pastedImages).filter(([path]) => next.includes(path)),
+    );
+    unshown = Object.fromEntries(Object.entries(unshown).filter(([path]) => next.includes(path)));
+    files = next;
+  }
   let field = $state<HTMLTextAreaElement | null>(null);
   let box = $state<HTMLDivElement | null>(null);
 
@@ -156,7 +179,7 @@
     for (const path of picked) {
       if (!next.includes(path) && next.length < maxFiles) next.push(path);
     }
-    files = next;
+    setFiles(next);
   }
 
   // A paste the field cannot hold: an image, which has no path of its own,
@@ -187,7 +210,11 @@
   async function addPasted(name: string, blob: Blob) {
     if (files.length >= maxFiles) return;
     const path = await pasteFile(name, blob);
-    if (path && !files.includes(path)) files = [...files, path];
+    if (!path || files.includes(path)) return;
+    if (blob.type.startsWith("image/")) {
+      pastedImages = { ...pastedImages, [path]: URL.createObjectURL(blob) };
+    }
+    files = [...files, path];
   }
 
   // An @ before the caret, and the word after it, is a file being named. The
@@ -243,7 +270,7 @@
     mention = null;
     hits = [];
     text = "";
-    files = [];
+    setFiles([]);
     void send(value, attached);
   }
 
@@ -318,13 +345,22 @@
       {#if files.length > 0}
         <div class="tiles mb-3">
           {#each files as path (path)}
-            <span class="tile tile-doc" title={path}>
-              <span class="tile-kind">{fileKind(path)}</span>
-              <span class="tile-name">{fileName(path)}</span>
+            {@const src = preview(path)}
+            <span class="tile" class:tile-shot={src} class:tile-doc={!src} title={path}>
+              {#if src}
+                <img
+                  {src}
+                  alt={fileName(path)}
+                  onerror={() => (unshown = { ...unshown, [path]: true })}
+                />
+              {:else}
+                <span class="tile-kind">{fileKind(path)}</span>
+                <span class="tile-name">{fileName(path)}</span>
+              {/if}
               <button
                 class="tile-x"
                 aria-label="Remove {fileName(path)}"
-                onclick={() => (files = files.filter((f) => f !== path))}
+                onclick={() => setFiles(files.filter((f) => f !== path))}
               >
                 <X />
               </button>
