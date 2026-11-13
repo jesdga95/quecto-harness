@@ -113,9 +113,11 @@
     // An edit carries a list of replacements; one stored before it did names
     // a single one at the top level.
     const list = Array.isArray(item.args.edits) ? (item.args.edits as Record<string, unknown>[]) : null;
+    const field = (e: Record<string, unknown>, key: string) =>
+      e && typeof e[key] === "string" ? (e[key] as string) : "";
     const side = (key: string) =>
       list
-        ? list.map((e) => (e && typeof e[key] === "string" ? (e[key] as string) : "")).join("\n")
+        ? list.map((e) => field(e, key)).join("\n")
         : text(key);
     const added = item.name === "write" ? text("content") : side("new_string");
     const removed = item.name === "write" ? "" : side("old_string");
@@ -125,7 +127,17 @@
       typeof meta?.added === "number" && typeof meta?.removed === "number"
         ? { added: meta.added, removed: meta.removed }
         : { added: count(added), removed: count(removed) };
-    return { added, removed, counts };
+    // Each replacement is drawn as a diff of its own, counted from its own
+    // arguments, since the harness keeps counts only for the call as a whole.
+    const parts =
+      list && list.length > 1
+        ? list.map((e) => {
+            const a = field(e, "new_string");
+            const r = field(e, "old_string");
+            return { added: a, removed: r, counts: { added: count(a), removed: count(r) } };
+          })
+        : [{ added, removed, counts }];
+    return { added, removed, counts, parts };
   });
   // A write that failed carries the error as its output, which is what the
   // row opens on instead of the text it did not write.
@@ -329,7 +341,9 @@
       {:else if item.kind === "tool" && item.name === "web_search"}
         <SearchResults item={item} />
       {:else if edit && wrote && path}
-        <WriteDiff {path} added={edit.added} removed={edit.removed} counts={edit.counts} />
+        {#each edit.parts as part, i (i)}
+          <WriteDiff {path} added={part.added} removed={part.removed} counts={part.counts} />
+        {/each}
       {:else if item.kind === "tool"}
         {#if item.output}
           <pre class="mono-block">{item.output}</pre>
