@@ -80,9 +80,9 @@ func (s *Server) remember(paths []string) {
 	}
 }
 
-// getPicked serves an image or a video the user chose in the file dialog, and
-// nothing else. A path the dialog did not return is refused, so this names no
-// file the user has not already pointed at.
+// getPicked serves an image, a video, a PDF or text the user chose in the file
+// dialog, for the composer to draw. A path the dialog did not return is
+// refused, so this names no file the user has not already pointed at.
 func (s *Server) getPicked(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Query().Get("path")
 	s.mu.Lock()
@@ -97,8 +97,9 @@ func (s *Server) getPicked(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Read the file: "+err.Error())
 		return
 	}
-	if a.Kind != "image" && a.Kind != "video" {
-		writeError(w, http.StatusUnsupportedMediaType, "Only images and videos are previewed")
+	pdf := a.Kind == "document" && a.Mime == "application/pdf"
+	if a.Kind != "image" && a.Kind != "video" && a.Kind != "text" && !pdf {
+		writeError(w, http.StatusUnsupportedMediaType, "Only images, videos, PDFs and text are previewed")
 		return
 	}
 	f, err := os.Open(p)
@@ -114,8 +115,16 @@ func (s *Server) getPicked(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
-	w.Header().Set("Content-Type", a.Mime)
+	// The browser will not draw a PDF in a sandboxed document. Its reader runs
+	// apart from this origin, so the PDF goes without one.
+	if !pdf {
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	}
+	mime := a.Mime
+	if a.Kind == "text" {
+		mime = "text/plain; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", mime)
 	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 

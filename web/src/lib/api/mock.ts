@@ -910,6 +910,10 @@ export class MockApi implements HarnessApi {
     return { root: this.config.projects[0] ?? "", path, entries };
   }
 
+  attachmentUrl(file: string): string {
+    return `/api/files/${encodeURIComponent(file)}`;
+  }
+
   pickedUrl(path: string): string {
     return `/api/fs/picked?path=${encodeURIComponent(path)}`;
   }

@@ -2080,7 +2080,8 @@ func TestFolderPick(t *testing.T) {
 }
 
 // TestPickedServesOnlyChosenMedia asserts that a preview is served for a file
-// the dialog returned and refused for any other path or kind.
+// the dialog returned and refused for any other path, or for a kind that has
+// no preview.
 func TestPickedServesOnlyChosenMedia(t *testing.T) {
 	f := newFixture(t)
 	original := filePicker
@@ -2111,8 +2112,34 @@ func TestPickedServesOnlyChosenMedia(t *testing.T) {
 	if w := f.do(t, "GET", "/api/fs/picked?path="+url.QueryEscape(other), nil); w.Code != http.StatusNotFound {
 		t.Errorf("unchosen file = %d, want 404", w.Code)
 	}
-	if w := f.do(t, "GET", "/api/fs/picked?path="+url.QueryEscape(note), nil); w.Code != http.StatusUnsupportedMediaType {
-		t.Errorf("chosen text = %d, want 415", w.Code)
+	w = f.do(t, "GET", "/api/fs/picked?path="+url.QueryEscape(note), nil)
+	if w.Code != 200 || w.Body.String() != "hello" || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/plain") {
+		t.Errorf("chosen text = %d %q %q", w.Code, w.Header().Get("Content-Type"), w.Body.String())
+	}
+	if w.Header().Get("Content-Security-Policy") == "" {
+		t.Error("text must be served sandboxed")
+	}
+	pdf := filepath.Join(dir, "spec.pdf")
+	if err := os.WriteFile(pdf, []byte("%PDF-1.4\n%%EOF\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	filePicker = func(context.Context) ([]string, error) { return []string{pdf}, nil }
+	f.do(t, "POST", "/api/fs/pick", map[string]string{"kind": "file"})
+	w = f.do(t, "GET", "/api/fs/picked?path="+url.QueryEscape(pdf), nil)
+	if w.Code != 200 || w.Header().Get("Content-Type") != "application/pdf" {
+		t.Errorf("chosen pdf = %d %q", w.Code, w.Header().Get("Content-Type"))
+	}
+	if w.Header().Get("Content-Security-Policy") != "" {
+		t.Error("a pdf served sandboxed does not draw")
+	}
+	zip := filepath.Join(dir, "deck.pptx")
+	if err := os.WriteFile(zip, []byte("PK\x03\x04rest"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	filePicker = func(context.Context) ([]string, error) { return []string{zip}, nil }
+	f.do(t, "POST", "/api/fs/pick", map[string]string{"kind": "file"})
+	if w := f.do(t, "GET", "/api/fs/picked?path="+url.QueryEscape(zip), nil); w.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("chosen deck = %d, want 415", w.Code)
 	}
 }
 

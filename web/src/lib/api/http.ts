@@ -207,6 +207,7 @@ interface WireAttachment {
   kind?: string;
   bytes?: number;
   file?: string;
+  content?: string;
   refused?: string;
 }
 
@@ -886,6 +887,7 @@ function toAttached(wire: WireAttachment[] | undefined): Attached[] {
     kind: attachedKind(a.kind),
     bytes: a.bytes ?? 0,
     file: a.file,
+    content: typeof a.content === "string" ? a.content : undefined,
     refused: a.refused,
   }));
 }
@@ -1525,6 +1527,10 @@ class HttpApi implements HarnessApi {
         .filter((e) => typeof e.name === "string" && e.name !== "")
         .map((e) => ({ name: e.name!, dir: e.dir === true, bytes: e.bytes ?? 0 })),
     };
+  }
+
+  attachmentUrl(file: string): string {
+    return `${BASE}/files/${encodeURIComponent(file)}`;
   }
 
   pickedUrl(path: string): string {

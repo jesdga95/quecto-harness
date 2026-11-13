@@ -2371,6 +2371,125 @@
   .tile-doc {
     padding: 9px 10px;
   }
+  .tile.is-open {
+    cursor: pointer;
+    transition: border-color 120ms ease;
+  }
+  .tile.is-open:hover {
+    border-color: var(--border-2);
+  }
+  .tile.is-on,
+  .tile.is-on:hover {
+    border-color: var(--accent);
+  }
+  /* A page in miniature: the file's first lines, faded into its name. */
+  .tile-paper {
+    padding: 0;
+  }
+  .tile-sheet {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    padding: 9px 10px;
+    background: var(--page);
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: 6.2px;
+    line-height: 1.45;
+    white-space: pre;
+    pointer-events: none;
+  }
+  .tile-sheet.is-md {
+    font-family: var(--font-sans);
+    font-size: 6.6px;
+    line-height: 1.5;
+    white-space: normal;
+  }
+  .tile-sheet.is-md :is(h1, h2, h3, h4) {
+    margin: 0 0 3px;
+    font-size: 8.5px;
+    font-weight: 500;
+    line-height: 1.2;
+    color: var(--text);
+  }
+  .tile-sheet.is-md :is(p, ul, ol, blockquote) {
+    margin: 0 0 3px;
+  }
+  .tile-sheet.is-md :is(ul, ol) {
+    padding-left: 9px;
+  }
+  .tile-sheet.is-md :is(pre, table, img, .code-block) {
+    display: none;
+  }
+  .tile-sheet.is-pdf {
+    padding: 0;
+    background: #ffffff;
+  }
+  .tile-sheet.is-pdf iframe {
+    width: 448px;
+    height: 580px;
+    border: 0;
+    transform: scale(0.25);
+    transform-origin: 0 0;
+    background: #ffffff;
+  }
+  .tile-plate {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 26px 8px 7px;
+    background: linear-gradient(to bottom, transparent, var(--surface-2) 40%);
+    pointer-events: none;
+  }
+  .tile-plate .tile-kind {
+    font-size: 9.5px;
+  }
+  .tile-plate .tile-name {
+    -webkit-line-clamp: 2;
+    font-size: 11.5px;
+  }
+  /* The panel's strip: a smaller tile that names its kind and nothing else. */
+  .tile.is-small {
+    width: 64px;
+    height: 64px;
+    border-radius: 10px;
+  }
+  .tile.is-small.tile-doc {
+    display: grid;
+    place-items: center;
+    padding: 0;
+  }
+  .tile.is-small .tile-name,
+  .tile.is-small .tile-size {
+    display: none;
+  }
+  .tile.is-small .tile-plate {
+    padding: 14px 5px 4px;
+  }
+  .tile.is-small .tile-sheet {
+    padding: 5px 6px;
+    font-size: 4px;
+  }
+  .tile.is-small .tile-sheet.is-md {
+    font-size: 4.2px;
+  }
+  .tile.is-small .tile-sheet.is-md :is(h1, h2, h3, h4) {
+    font-size: 5.5px;
+  }
+  .tile.is-small .tile-sheet.is-pdf iframe {
+    transform: scale(0.143);
+  }
+  .tile.is-small .tile-play {
+    left: 3px;
+    bottom: 3px;
+    width: 16px;
+    height: 16px;
+    font-size: 8px;
+  }
   /* Marks a video's first frame as something that plays. */
   .tile-play {
     position: absolute;
@@ -2606,8 +2725,8 @@
     cursor: pointer;
   }
 
-  /* The column beside the transcript, scrolling on its own. Five tabs across
-     the top hold it, and the panel below shows what is inside the one it is on. */
+  /* The column beside the transcript, scrolling on its own. It shows the
+     section the session header has open. */
   .dock {
     width: 460px;
     flex: none;
@@ -2659,96 +2778,43 @@
     max-height: 280px;
     overflow-y: auto;
   }
-  /* The dock's tabs: five sections, always there, each with what sits in it.
-     The active one is underlined on the hairline the panel sits below. */
-  .dock-tabs {
+  /* The session header, over the conversation and the panel. Its buttons
+     open and close the panel's sections. */
+  .session-head {
     display: flex;
     align-items: center;
-    gap: 2px;
-    padding: 6px 8px 0 10px;
-    border-bottom: 1px solid var(--hair);
-  }
-  /* A name and what the section holds. A tab gives way before its name
-     vanishes: the name shortens last. */
-  .tab {
-    display: flex;
-    align-items: baseline;
-    flex: 0 1 auto;
-    gap: 6px;
-    min-width: 0;
-    padding: 9px 10px 8px;
-    border: 0;
-    border-bottom: 2px solid transparent;
-    background: none;
-    font-size: 13px;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  .tab:hover {
-    color: var(--text);
-  }
-  .tab.is-on {
-    color: var(--text);
-    font-weight: 500;
-    border-bottom-color: var(--accent);
-  }
-  .tab .tab-icon {
+    gap: 12px;
+    height: 56px;
     flex: none;
-    align-self: center;
+    padding: 0 14px 0 24px;
+    border-bottom: 1px solid transparent;
   }
-  .tab-label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .session-head.is-split {
+    border-bottom-color: var(--hair);
   }
-  /* The number sits in its own small box, apart from the name. */
-  .tab-count {
-    flex: none;
-    align-self: center;
-    padding: 0 4px;
-    border-radius: 4px;
-    background: var(--surface-2);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 400;
-    line-height: 16px;
-    color: var(--muted);
-  }
-  .tab.is-on .tab-count {
-    background: var(--border);
-    color: var(--text-2);
-  }
-  .tab-count.is-warn {
-    background: var(--warn-bg);
-    color: var(--warn);
-  }
-  .tab-count.is-crit {
-    background: var(--crit-bg);
-    color: var(--crit);
-  }
-  /* The header's way into the panel: a button per section in one group,
-     each with that section's news beside its icon. */
   .entry-group {
     display: flex;
     align-items: center;
     gap: 2px;
-    padding: 2px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
   }
   .entry-btn {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
-    height: 28px;
-    padding: 0 8px;
+    min-width: 34px;
+    height: 34px;
+    padding: 0 9px;
     border: 0;
-    border-radius: 7px;
+    border-radius: 9px;
     background: none;
     font-size: 12px;
     color: var(--muted);
     cursor: pointer;
+  }
+  .entry-btn.is-on {
+    background: var(--surface-2);
+    color: var(--text);
   }
   .entry-btn.has-news {
     color: var(--text-2);
@@ -2765,9 +2831,13 @@
   }
   .entry-divider {
     width: 1px;
-    height: 16px;
-    margin: 0 3px;
+    height: 18px;
+    margin: 0 6px;
     background: var(--border);
+  }
+  .entry-btn.is-hidden,
+  .entry-divider.is-hidden {
+    visibility: hidden;
   }
   .entry-ring {
     width: 16px;
@@ -2806,6 +2876,291 @@
     font-size: 12.5px;
     line-height: 1.55;
     color: var(--muted);
+  }
+  /* The session's attachments: a row per file, grouped by message, newest
+     first. A file opens in the same section, one at a time. */
+  .att-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 6px 0 20px;
+  }
+  .att-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 16px 6px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .att-who {
+    font-weight: 500;
+    color: var(--text-2);
+  }
+  .att-time {
+    font-size: 10.5px;
+  }
+  .att-row {
+    display: flex;
+    align-items: center;
+    padding-right: 10px;
+  }
+  .att-row:hover {
+    background: var(--surface-2);
+  }
+  .att-open {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+    padding: 6px 0 6px 16px;
+    border: 0;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+  }
+  .att-dl {
+    visibility: hidden;
+  }
+  .att-row:hover .att-dl,
+  .att-dl:focus-visible {
+    visibility: visible;
+  }
+  .att-thumb {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    flex: none;
+    overflow: hidden;
+    border: 1px solid var(--hair);
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--text-2);
+  }
+  .att-thumb img,
+  .att-thumb video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .att-thumb .tile-play {
+    left: 3px;
+    bottom: 3px;
+    width: 14px;
+    height: 14px;
+    font-size: 7px;
+  }
+  .att-txt {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+  }
+  .att-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .att-sub {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .att-head {
+    gap: 6px;
+    padding-left: 6px;
+    padding-right: 8px;
+  }
+  .att-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .att-meta .att-name {
+    flex: none;
+    max-width: 60%;
+    font-size: 12.5px;
+  }
+  .att-sep {
+    width: 1px;
+    height: 16px;
+    margin: 0 4px;
+    background: var(--border);
+  }
+  .att-step {
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .att-zoom {
+    min-width: 44px;
+    height: 26px;
+    border: 0;
+    border-radius: 7px;
+    background: none;
+    font-size: 11.5px;
+    color: var(--text-2);
+    cursor: pointer;
+  }
+  .att-zoom:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  /* An image sits on the page at its own shape, on a faint check so a
+     transparent edge shows. */
+  .att-image {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    place-items: center;
+    overflow: auto;
+    padding: 20px;
+    cursor: zoom-in;
+  }
+  .att-image img {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    border: 1px solid var(--hair);
+    border-radius: 8px;
+    background-color: var(--surface-2);
+    background-image:
+      linear-gradient(45deg, var(--hair) 25%, transparent 25%, transparent 75%, var(--hair) 75%),
+      linear-gradient(45deg, var(--hair) 25%, transparent 25%, transparent 75%, var(--hair) 75%);
+    background-size: 14px 14px;
+    background-position:
+      0 0,
+      7px 7px;
+  }
+  .att-image.is-zoomed {
+    place-items: start;
+    cursor: zoom-out;
+  }
+  .att-image.is-zoomed img {
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+  }
+  /* A video sits on the page too, with its controls under it. */
+  .att-video {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 10px;
+    padding: 20px;
+  }
+  .att-frame {
+    position: relative;
+    min-height: 0;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+  }
+  .att-frame video {
+    display: block;
+    max-width: 100%;
+    max-height: calc(100vh - 240px);
+    border-radius: 10px;
+    background: #000;
+  }
+  .att-bigplay {
+    position: absolute;
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    border-radius: 999px;
+    background: rgb(15 23 42 / 0.6);
+    color: #fff;
+    font-size: 19px;
+    pointer-events: none;
+    transition: opacity 140ms ease;
+  }
+  .att-video.is-playing .att-bigplay {
+    opacity: 0;
+  }
+  .att-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: none;
+    height: 32px;
+    font-size: 11.5px;
+    color: var(--text-2);
+  }
+  .att-track {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1;
+    height: 18px;
+    cursor: pointer;
+  }
+  .att-track::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 3px;
+    border-radius: 3px;
+    background: var(--border);
+  }
+  .att-fill {
+    position: absolute;
+    left: 0;
+    height: 3px;
+    border-radius: 3px;
+    background: var(--accent);
+  }
+  .att-knob {
+    position: absolute;
+    width: 11px;
+    height: 11px;
+    margin-left: -5.5px;
+    border-radius: 999px;
+    background: var(--text);
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .att-track:hover .att-knob {
+    opacity: 1;
+  }
+  .att-pdf {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    border: 0;
+  }
+  .att-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 30px;
+    margin-top: 8px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: none;
+    font-size: 12.5px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .att-btn:hover {
+    background: var(--surface-2);
   }
   /* Agents and commands: one row each, the chosen one shown below the list. */
   .dock-list {

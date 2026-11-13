@@ -458,6 +458,8 @@ export interface Attached {
   kind: AttachedKind;
   bytes: number;
   file?: string;
+  /** The whole file, for text. */
+  content?: string;
   /** The model server's reason for not reading the file, which is no longer
       sent. */
   refused?: string;
@@ -698,8 +700,10 @@ export interface HarnessApi {
   listDir(id: string, path: string): Promise<ProjectDir>;
   /** Where an image in the session's project is served from. */
   fileUrl(id: string, path: string): string;
-  /** Where an image or a video chosen in the file dialog is served from. */
+  /** Where a file chosen in the file dialog is served from, for a preview. */
   pickedUrl(path: string): string;
+  /** Where a file the harness stored for a message is served from. */
+  attachmentUrl(file: string): string;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string): Promise<void>;
   /** Files are read by the harness and inlined into the message. What comes

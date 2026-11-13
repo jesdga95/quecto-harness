@@ -1,13 +1,6 @@
 <script lang="ts">
   import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwise";
-  import ArrowsIn from "phosphor-svelte/lib/ArrowsIn";
-  import ArrowsOut from "phosphor-svelte/lib/ArrowsOut";
   import Browser from "phosphor-svelte/lib/Browser";
-  import ChartPie from "phosphor-svelte/lib/ChartPie";
-  import FolderOpen from "phosphor-svelte/lib/FolderOpen";
-  import GitDiff from "phosphor-svelte/lib/GitDiff";
-  import Terminal from "phosphor-svelte/lib/Terminal";
-  import UsersThree from "phosphor-svelte/lib/UsersThree";
   import Code from "phosphor-svelte/lib/Code";
   import Eye from "phosphor-svelte/lib/Eye";
   import DownloadSimple from "phosphor-svelte/lib/DownloadSimple";
@@ -16,6 +9,7 @@
   import ListChecks from "phosphor-svelte/lib/ListChecks";
   import PenNib from "phosphor-svelte/lib/PenNib";
   import X from "phosphor-svelte/lib/X";
+  import AttachmentsView from "./AttachmentsView.svelte";
   import ArtifactPage from "./ArtifactPage.svelte";
   import ArtifactSvg from "./ArtifactSvg.svelte";
   import ChangesView from "./ChangesView.svelte";
@@ -27,23 +21,17 @@
   import Prose from "./Prose.svelte";
   import RunsView from "./RunsView.svelte";
   import type { Artifact } from "../artifacts";
-  import { level } from "../format";
   import { escapeHtml, sourceHtml } from "../highlight";
   import { Streamed } from "../stream.svelte";
   import {
     app,
     artifacts,
     browse,
-    closePanel,
-    contextUse,
     closeTab,
     fileUrl,
     loadFile,
     openFile,
-    openSection,
     showArtifact,
-    toggleArtifactsWide,
-    type Section,
   } from "../state/app.svelte";
 
   // A page over this size is shown as its source. Nothing that large is a page
@@ -62,19 +50,6 @@
       ? (list.find((a) => a.id === app.artifactId) ?? list.at(-1))
       : undefined,
   );
-
-  // The tabs never change: five sections, named short so all five fit a narrow
-  // dock. Files carries no count, since its own tabs sit right under it; the
-  // rest count what they hold, when anything, and Context its share.
-  const sections = $derived([
-    { id: "files" as Section, label: "Files", count: 0 },
-    { id: "changes" as Section, label: "Diff", count: app.changes.files.length },
-    { id: "agents" as Section, label: "Agents", count: app.runs.length },
-    { id: "processes" as Section, label: "Shell", count: app.procs.length },
-    { id: "context" as Section, label: "Context", count: 0 },
-  ]);
-  const use = $derived(contextUse());
-  const tone = $derived(level(use.ratio));
 
   // The files open in the Files section, read through the list, since a
   // resend can drop the reply one came from.
@@ -269,48 +244,6 @@
 {/snippet}
 
 <aside class="dock dock-wide" class:dock-full={app.artifactsWide}>
-  <nav class="dock-tabs" aria-label="Dock sections">
-    {#each sections as section (section.id)}
-      <button
-        class="tab"
-        class:is-on={app.section === section.id}
-        aria-current={app.section === section.id ? "true" : undefined}
-        onclick={() => openSection(section.id)}
-      >
-        {#if section.id === "files"}
-          <FolderOpen size={15} weight="fill" class="tab-icon" />
-        {:else if section.id === "changes"}
-          <GitDiff size={15} class="tab-icon" />
-        {:else if section.id === "agents"}
-          <UsersThree size={15} class="tab-icon" />
-        {:else if section.id === "processes"}
-          <Terminal size={15} class="tab-icon" />
-        {:else}
-          <ChartPie size={15} class="tab-icon" />
-        {/if}
-        <span class="tab-label">{section.label}</span>
-        {#if section.id === "context" && use.limited}
-          <span class="tab-count" class:is-warn={tone === "warn"} class:is-crit={tone === "crit"}>{use.percent}%</span>
-        {:else if section.count > 0}
-          <span class="tab-count">{section.count}</span>
-        {/if}
-      </button>
-    {/each}
-    <div class="ml-auto flex shrink-0 items-center gap-0.5">
-      <button
-        class="icon-btn"
-        aria-label={app.artifactsWide ? "Show the conversation" : "Hide the conversation"}
-        title={app.artifactsWide ? "Collapse" : "Expand"}
-        onclick={toggleArtifactsWide}
-      >
-        {#if app.artifactsWide}<ArrowsIn />{:else}<ArrowsOut />{/if}
-      </button>
-      <button class="icon-btn changes-copy" aria-label="Close" title="Close" onclick={closePanel}>
-        <X />
-      </button>
-    </div>
-  </nav>
-
   <div class="panel">
     {#if app.section === "files"}
       <div class="panel-stack">
@@ -348,6 +281,8 @@
       <ProcessesView />
     {:else if app.section === "context"}
       <ContextView />
+    {:else if app.section === "attachments"}
+      <AttachmentsView />
     {:else}
       <div class="panel-path">
         <div class="panel-crumbs">

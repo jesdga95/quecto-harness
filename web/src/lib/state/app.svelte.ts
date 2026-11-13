@@ -52,7 +52,7 @@ const TAIL_LINES = 200;
 
 // The dock's five sections. They are always there; what the conversation opens
 // joins the one it belongs to.
-export type Section = "files" | "changes" | "agents" | "processes" | "context";
+export type Section = "files" | "changes" | "agents" | "processes" | "context" | "attachments";
 
 // Every screen reads this one object. It holds what the server would hold plus
 // the little the browser owns, like which panel is open and whether the last
@@ -112,6 +112,8 @@ export const app = $state({
   // the transcript.
   artifactId: "",
   artifactPinned: false,
+  // The attachment the Attachments section shows. Empty shows the list.
+  attachment: "",
   artifactsDismissed: false,
   artifactsWide: false,
   // Files in the project as last read, by the path the harness named them
@@ -503,10 +505,6 @@ export async function deleteSession(id: string): Promise<void> {
     decides what a file really is when the message arrives. */
 export function looksLikeImage(path: string): boolean {
   return /\.(png|jpe?g|gif|webp)$/i.test(path);
-}
-
-export function looksLikeVideo(path: string): boolean {
-  return /\.(mp4|m4v|mov|mkv|webm)$/i.test(path);
 }
 
 /** Asks the host for files to attach. Empty when the dialog is dismissed. */
@@ -969,6 +967,12 @@ export function openSection(section: Section): void {
   if (section === "files" && app.artifactId === "") void browse("");
 }
 
+/** Opens a section, or closes the panel when that section is the one open. */
+export function toggleSection(section: Section): void {
+  if (app.panel && app.section === section) closePanel();
+  else openSection(section);
+}
+
 export function showRuns(): void {
   showSection("agents");
 }
@@ -1024,6 +1028,37 @@ export function closeTab(id: string): void {
   const next = app.tabs[at] ?? app.tabs[at - 1];
   app.artifactId = next ?? "";
   app.artifactPinned = next !== undefined;
+}
+
+/** One file attached to a message, with the key the panel names it by. */
+export interface SessionAttachment extends Attached {
+  key: string;
+}
+
+/** The files attached in this session, a group per message, newest first. */
+export function sessionAttachments(): { id: string; at?: number; files: SessionAttachment[] }[] {
+  const groups: { id: string; at?: number; files: SessionAttachment[] }[] = [];
+  for (const item of app.items) {
+    if (item.kind !== "user" || item.files.length === 0) continue;
+    groups.unshift({
+      id: item.id,
+      at: item.at,
+      files: item.files.map((f, i) => ({ ...f, key: `${item.id}:${i}` })),
+    });
+  }
+  return groups;
+}
+
+/** Where a sent attachment is served from, for one the harness stored. */
+export function attachmentUrl(file: Attached): string {
+  return file.file ? api.attachmentUrl(file.file) : "";
+}
+
+/** Shows one attachment in the Attachments section, or the list of them all
+    when the key is empty. */
+export function openAttachment(key: string): void {
+  showSection("attachments");
+  app.attachment = key;
 }
 
 /** Shows the project folder in the Files section. */
@@ -1092,6 +1127,17 @@ export function pickedUrl(path: string): string {
   return api.pickedUrl(path);
 }
 
+/** The text of a file chosen in the file dialog, for its tile. Null when the
+    harness will not serve it. */
+export async function pickedText(path: string): Promise<string | null> {
+  try {
+    const res = await fetch(api.pickedUrl(path));
+    return res.ok ? await res.text() : null;
+  } catch {
+    return null;
+  }
+}
+
 export function fileUrl(path: string): string {
   return app.sessionId ? api.fileUrl(app.sessionId, path) : "";
 }
@@ -1107,6 +1153,7 @@ function resetArtifacts(): void {
   app.browseError = "";
   app.artifactId = "";
   app.artifactPinned = false;
+  app.attachment = "";
   app.artifactsDismissed = false;
   app.artifactsWide = false;
   announced = new Set();

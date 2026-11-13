@@ -7,7 +7,6 @@
   import ModeChip from "./ModeChip.svelte";
   import PermissionChip from "./PermissionChip.svelte";
   import X from "phosphor-svelte/lib/X";
-  import Play from "phosphor-svelte/lib/Play";
   import FileIcon from "./FileIcon.svelte";
   import PermissionCard from "./PermissionCard.svelte";
   import QuestionCard from "./QuestionCard.svelte";
@@ -21,18 +20,17 @@
     pendingQuestion,
     pickAttachments,
     findFiles,
+    pickedText,
     pickedUrl,
-    looksLikeImage,
-    looksLikeVideo,
     setWorkMode,
     send,
     stop,
     answerNow,
     toolset,
   } from "../state/app.svelte";
-  import { fileKind, fileName } from "../format";
+  import { previewKind, sheetText } from "../attachments";
+  import AttachmentTile from "./AttachmentTile.svelte";
   import { withQuotes } from "../quote";
-  import { thumbFrame } from "../thumb";
   import { quoted, removeQuote, takeQuotes } from "../state/quotes.svelte";
   import { overlayOpen } from "../overlay";
 
@@ -54,25 +52,39 @@
 
   let text = $state("");
   let files = $state<string[]>([]);
-  // A pasted image is drawn from its own bytes, and a picked image or video is
-  // served from where it lies. One that will not load draws as a plain tile.
+  // A pasted file is drawn from its own bytes, and a picked one is served from
+  // where it lies. One that will not load draws as a plain tile.
   let pastedImages = $state<Record<string, string>>({});
+  let texts = $state<Record<string, string>>({});
   let unshown = $state<Record<string, true>>({});
 
   function preview(path: string): string {
     if (pastedImages[path]) return pastedImages[path];
-    if (unshown[path] || !(looksLikeImage(path) || looksLikeVideo(path))) return "";
+    const kind = previewKind(path);
+    if (unshown[path] || !(kind === "image" || kind === "video" || kind === "pdf")) return "";
     return pickedUrl(path);
+  }
+
+  async function readText(path: string) {
+    const kind = previewKind(path);
+    if (kind !== "text" && kind !== "markdown") return;
+    const read = await pickedText(path);
+    if (!files.includes(path)) return;
+    if (read === null) unshown = { ...unshown, [path]: true };
+    else texts = { ...texts, [path]: sheetText(read) };
+  }
+
+  function keep<T>(map: Record<string, T>, next: string[]): Record<string, T> {
+    return Object.fromEntries(Object.entries(map).filter(([path]) => next.includes(path)));
   }
 
   function setFiles(next: string[]) {
     for (const [path, url] of Object.entries(pastedImages)) {
       if (!next.includes(path)) URL.revokeObjectURL(url);
     }
-    pastedImages = Object.fromEntries(
-      Object.entries(pastedImages).filter(([path]) => next.includes(path)),
-    );
-    unshown = Object.fromEntries(Object.entries(unshown).filter(([path]) => next.includes(path)));
+    pastedImages = keep(pastedImages, next);
+    texts = keep(texts, next);
+    unshown = keep(unshown, next);
     files = next;
   }
   let field = $state<HTMLTextAreaElement | null>(null);
@@ -183,6 +195,7 @@
       if (!next.includes(path) && next.length < maxFiles) next.push(path);
     }
     setFiles(next);
+    for (const path of picked) void readText(path);
   }
 
   // A paste the field cannot hold: an image, which has no path of its own,
@@ -216,6 +229,8 @@
     if (!path || files.includes(path)) return;
     if (blob.type.startsWith("image/")) {
       pastedImages = { ...pastedImages, [path]: URL.createObjectURL(blob) };
+    } else {
+      texts = { ...texts, [path]: sheetText(await blob.text()) };
     }
     files = [...files, path];
   }
@@ -348,36 +363,14 @@
       {#if files.length > 0}
         <div class="tiles mb-3">
           {#each files as path (path)}
-            {@const src = preview(path)}
-            <span class="tile" class:tile-shot={src} class:tile-doc={!src} title={path}>
-              {#if src && looksLikeVideo(path)}
-                <video
-                  {src}
-                  use:thumbFrame
-                  preload="metadata"
-                  muted
-                  playsinline
-                  onerror={() => (unshown = { ...unshown, [path]: true })}
-                ></video>
-                <span class="tile-play"><Play weight="fill" /></span>
-              {:else if src}
-                <img
-                  {src}
-                  alt={fileName(path)}
-                  onerror={() => (unshown = { ...unshown, [path]: true })}
-                />
-              {:else}
-                <span class="tile-kind">{fileKind(path)}</span>
-                <span class="tile-name">{fileName(path)}</span>
-              {/if}
-              <button
-                class="tile-x"
-                aria-label="Remove {fileName(path)}"
-                onclick={() => setFiles(files.filter((f) => f !== path))}
-              >
-                <X />
-              </button>
-            </span>
+            <AttachmentTile
+              {path}
+              kind={previewKind(path)}
+              src={preview(path)}
+              text={texts[path]}
+              onremove={() => setFiles(files.filter((f) => f !== path))}
+              onfail={() => (unshown = { ...unshown, [path]: true })}
+            />
           {/each}
         </div>
       {/if}

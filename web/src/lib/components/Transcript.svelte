@@ -6,7 +6,6 @@
   import ChatText from "phosphor-svelte/lib/ChatText";
   import CheckCircle from "phosphor-svelte/lib/CheckCircle";
   import PencilSimple from "phosphor-svelte/lib/PencilSimple";
-  import Play from "phosphor-svelte/lib/Play";
   import Robot from "phosphor-svelte/lib/Robot";
   import Warning from "phosphor-svelte/lib/Warning";
   import CopyButton from "./CopyButton.svelte";
@@ -16,12 +15,13 @@
   import StepRow from "./StepRow.svelte";
   import TurnFooter from "./TurnFooter.svelte";
   import type { Attached, TranscriptItem } from "../api";
-  import { app, canResend, resend } from "../state/app.svelte";
-  import { bytes, fileKind, fileName, timeOf } from "../format";
+  import { app, attachmentUrl, canResend, openAttachment, resend } from "../state/app.svelte";
+  import { previewKind } from "../attachments";
+  import AttachmentTile from "./AttachmentTile.svelte";
+  import { timeOf } from "../format";
   import { followEnd } from "../stream.svelte";
   import { asked } from "../question";
   import { splitQuotes } from "../quote";
-  import { thumbFrame } from "../thumb";
   import { stepDesc, stepName } from "../steps";
 
   let scroller = $state<HTMLDivElement | null>(null);
@@ -300,44 +300,20 @@
   }
 </script>
 
-{#snippet attachments(files: Attached[])}
+<!-- A tile opens its file in the panel, once the message is stored and the
+     tile has a key the panel can name it by. -->
+{#snippet attachments(files: Attached[], owner = "")}
   <div class="tiles">
-    {#each files as file (file.path)}
-      {#if file.kind === "image" && file.file}
-        <a
-          class="tile tile-shot"
-          href="/api/files/{file.file}"
-          target="_blank"
-          rel="noopener noreferrer"
-          title={file.path}
-        >
-          <img src="/api/files/{file.file}" alt={fileName(file.path)} />
-        </a>
-      {:else if file.kind === "video" && file.file}
-        <a
-          class="tile tile-shot"
-          href="/api/files/{file.file}"
-          target="_blank"
-          rel="noopener noreferrer"
-          title={file.path}
-        >
-          <video use:thumbFrame src="/api/files/{file.file}" preload="metadata" muted playsinline></video>
-          <span class="tile-play"><Play weight="fill" /></span>
-        </a>
-      {:else}
-        <span
-          class="tile tile-doc"
-          class:is-refused={file.refused}
-          title={file.refused ? `Not sent: ${file.refused}` : file.path}
-        >
-          <span class="tile-kind">
-            {fileKind(file.path)}
-            {#if file.refused}<span class="tile-size">Not sent</span>
-            {:else if file.bytes > 0}<span class="tile-size">{bytes(file.bytes)}</span>{/if}
-          </span>
-          <span class="tile-name">{fileName(file.path)}</span>
-        </span>
-      {/if}
+    {#each files as file, i (file.path)}
+      <AttachmentTile
+        path={file.path}
+        kind={previewKind(file.path, file.kind)}
+        size={file.bytes}
+        src={attachmentUrl(file)}
+        text={file.content}
+        refused={file.refused}
+        onopen={owner ? () => openAttachment(`${owner}:${i}`) : undefined}
+      />
     {/each}
   </div>
 {/snippet}
@@ -405,7 +381,7 @@
       {/if}
       <div class="bubble">
         {#if item.files.length > 0}
-          {@render attachments(item.files)}
+          {@render attachments(item.files, item.id)}
         {/if}
 
         {#if item.text}
