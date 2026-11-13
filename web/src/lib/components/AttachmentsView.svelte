@@ -18,7 +18,7 @@
   import Prose from "./Prose.svelte";
   import { previewKind } from "../attachments";
   import { bytes, fileKind, fileName, timeOf } from "../format";
-  import { sourceHtml } from "../highlight";
+  import { escapeHtml, languageOfPath, sourceHtml } from "../highlight";
   import { app, attachmentUrl, openAttachment, sessionAttachments, type SessionAttachment } from "../state/app.svelte";
   import { thumbFrame } from "../thumb";
 
@@ -108,8 +108,14 @@
   const text = $derived(shown?.content ?? "");
   const lines = $derived(text === "" ? 0 : text.replace(/\n$/, "").split("\n").length);
   const gutter = $derived(Array.from({ length: lines }, (_, i) => i + 1).join("\n"));
+  // A file with no known language is shown as it is, not guessed at: prose
+  // pasted as text reads as a language often enough to be coloured wrong.
   const markup = $derived(
-    shown && (kind === "text" || (kind === "markdown" && code)) ? sourceHtml(text, shown.path) : "",
+    !shown || !(kind === "text" || (kind === "markdown" && code))
+      ? ""
+      : languageOfPath(shown.path)
+        ? sourceHtml(text, shown.path)
+        : escapeHtml(text),
   );
   const sub = $derived.by(() => {
     if (!shown) return "";

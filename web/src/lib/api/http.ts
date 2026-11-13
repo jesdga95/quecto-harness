@@ -625,6 +625,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
       kind: attachedKind(a.kind),
       bytes: a.bytes ?? 0,
       file: a.file,
+      content: a.content,
       refused: a.refused,
     }));
     if (e.content || files.length > 0) {

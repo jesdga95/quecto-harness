@@ -828,24 +828,16 @@ func (s *Server) postResend(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// sentMessage describes the message that was just appended. The content of a
-// text file is left out: the page has no use for it and it is already in the
-// prompt.
+// sentMessage describes the message that was just appended, with a text
+// file's content so the page can show it.
 func sentMessage(sess *agent.Session) (int, []map[string]any) {
 	doc, _, _, _ := sess.Snapshot()
-	out := []map[string]any{}
 	for i := len(doc.Entries) - 1; i >= 0; i-- {
-		if doc.Entries[i].Kind != "user" {
-			continue
+		if doc.Entries[i].Kind == "user" {
+			return doc.Entries[i].Seq, agent.AttachmentFields(doc.Entries[i].Attachments)
 		}
-		for _, a := range doc.Entries[i].Attachments {
-			out = append(out, map[string]any{
-				"path": a.Path, "kind": a.Kind, "bytes": a.Bytes, "file": a.File,
-			})
-		}
-		return doc.Entries[i].Seq, out
 	}
-	return 0, out
+	return 0, []map[string]any{}
 }
 
 func (s *Server) postStop(w http.ResponseWriter, r *http.Request) {

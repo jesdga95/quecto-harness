@@ -575,13 +575,15 @@ func steerFields(held *Steer) map[string]any {
 		"attachments": AttachmentFields(held.Attachments)}
 }
 
-// AttachmentFields is what a browser needs to draw an attachment. The content
-// of a text file is left out: the page has no use for it and it is already in
-// the prompt.
+// AttachmentFields is what a browser needs to draw an attachment, a text
+// file's content included so the page can show it.
 func AttachmentFields(attachments []store.Attachment) []map[string]any {
 	out := []map[string]any{}
 	for _, a := range attachments {
 		f := map[string]any{"path": a.Path, "kind": a.Kind, "bytes": a.Bytes, "file": a.File}
+		if a.Content != "" {
+			f["content"] = a.Content
+		}
 		if a.Refused != "" {
 			f["refused"] = a.Refused
 		}

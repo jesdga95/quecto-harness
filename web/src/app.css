@@ -80,6 +80,12 @@
   --plan-edge-focus: rgb(124 58 237 / 0.55);
   --surface: #ffffff;
   --surface-2: #f1f5f9;
+  /* A card in the dock, which is white: a faint fill and an edge. */
+  --card: #f8fafc;
+  --card-edge: #e2e8f0;
+  /* The session header and the dock's file tabs: a tint lighter than the
+     panel, over a dock that is page white. */
+  --head: #f9fbfc;
   --border: #e2e8f0;
   --border-2: #cbd5e1;
   --text: #0f172a;
@@ -142,6 +148,9 @@
   --plan-edge-focus: rgb(167 139 250 / 0.55);
   --surface: #1a2436;
   --surface-2: #263145;
+  --card: #1d2739;
+  --card-edge: #2e3b50;
+  --head: #121a2b;
   --border: #2e3b50;
   --border-2: #475569;
   --text: #f1f5f9;
@@ -1459,13 +1468,13 @@
     background: var(--c-agents);
   }
   .seg-a2 {
-    background: color-mix(in srgb, var(--c-agents) 66%, var(--panel));
+    background: color-mix(in srgb, var(--c-agents) 66%, var(--page));
   }
   .seg-a3 {
-    background: color-mix(in srgb, var(--c-agents) 40%, var(--panel));
+    background: color-mix(in srgb, var(--c-agents) 40%, var(--page));
   }
   .seg-a4 {
-    background: color-mix(in srgb, var(--c-agents) 22%, var(--panel));
+    background: color-mix(in srgb, var(--c-agents) 22%, var(--page));
   }
   /* A window with no measured parts has only its fill. */
   .seg-plain {
@@ -1546,7 +1555,7 @@
     stroke-width: 12;
   }
   .ctxv-ring-track {
-    stroke: var(--surface-2);
+    stroke: var(--border);
   }
   .ctxv-arc {
     transition: stroke-dasharray 220ms ease;
@@ -1744,7 +1753,7 @@
   }
   .ctxv-point {
     fill: var(--c-msg);
-    stroke: var(--panel);
+    stroke: var(--page);
     stroke-width: 2;
   }
   .ctxv-tip {
@@ -1795,8 +1804,9 @@
     gap: 6px;
     min-width: 0;
     padding: 9px 10px 10px;
+    border: 1px solid var(--card-edge);
     border-radius: 8px;
-    background: var(--surface-2);
+    background: var(--card);
   }
   .ctxv-card-label {
     font-size: 11px;
@@ -2734,7 +2744,7 @@
     flex-direction: column;
     min-height: 0;
     border-left: 1px solid var(--hair);
-    background: var(--panel);
+    background: var(--page);
   }
 
   /* What the launcher told the subagent: its task, and anything sent after.
@@ -2787,10 +2797,8 @@
     height: 56px;
     flex: none;
     padding: 0 14px 0 24px;
-    border-bottom: 1px solid transparent;
-  }
-  .session-head.is-split {
-    border-bottom-color: var(--hair);
+    border-bottom: 1px solid var(--hair);
+    background: var(--head);
   }
   .entry-group {
     display: flex;
@@ -3347,6 +3355,7 @@
     height: 36px;
     flex: none;
     border-bottom: 1px solid var(--hair);
+    background: var(--head);
   }
   .stack-home {
     display: grid;
@@ -3698,6 +3707,8 @@
     text-align: right;
     color: var(--muted);
     user-select: none;
+    /* Above the code, which is positioned and would otherwise pass over it. */
+    z-index: 1;
   }
   /* The line a file link named: one row of the code's own line height, marked
      across the column and held to its left edge. The code sits above it so the

@@ -17,7 +17,7 @@
 <!-- One header over the conversation and the panel. Its buttons open and
      close the panel's sections, so the panel carries no tabs of its own. -->
 <div class="flex min-h-0 min-w-0 flex-1 flex-col">
-  <header class="session-head" class:is-split={showPanel}>
+  <header class="session-head">
     {#if session?.parent}
       <button
         class="icon-btn shrink-0"
