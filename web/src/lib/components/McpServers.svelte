@@ -6,7 +6,7 @@
   import OptionPicker from "./OptionPicker.svelte";
   import SplitDialog from "./SplitDialog.svelte";
 
-  let { onclose }: { onclose: () => void } = $props();
+  let { onclose, onback }: { onclose: () => void; onback?: () => void } = $props();
 
   const TRANSPORTS: { value: string; label: string; hint: string }[] = [
     { value: "stdio", label: "Stdio", hint: "The harness starts the command and talks to it over stdin and stdout." },
@@ -132,6 +132,11 @@
   async function leave() {
     if (!(await letGo())) return;
     onclose();
+  }
+
+  async function back() {
+    if (!(await letGo())) return;
+    onback?.();
   }
 
   async function create() {
@@ -289,7 +294,7 @@
   }
 </script>
 
-<SplitDialog label="MCP servers" title="MCP servers" onclose={leave}>
+<SplitDialog label="MCP servers" title="MCP servers" onclose={leave} onback={onback ? back : undefined}>
   {#snippet rail()}
     <nav class="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
       {#each app.mcp as s (s.name)}

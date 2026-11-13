@@ -2,7 +2,8 @@
   import Plus from "phosphor-svelte/lib/PlusIcon";
   import Robot from "phosphor-svelte/lib/RobotIcon";
   import User from "phosphor-svelte/lib/UserIcon";
-  import type { Agent, AgentPatch } from "../api";
+  import type { Agent, AgentPatch, Probe } from "../api";
+  import { probeMessage } from "../format";
   import {
     addAgent,
     agentById,
@@ -14,7 +15,7 @@
   import AgentPanel from "./AgentPanel.svelte";
   import SplitDialog from "./SplitDialog.svelte";
 
-  let { onclose }: { onclose: () => void } = $props();
+  let { onclose, onback }: { onclose: () => void; onback?: () => void } = $props();
 
   let chosen = $state("");
   let panel = $state<ReturnType<typeof AgentPanel> | null>(null);
@@ -22,6 +23,38 @@
   // dialog left open changes nothing.
   let draft = $state<Agent | null>(null);
   let saving = $state(false);
+  // The panel's last reading of the address. Test asks for a fresh one, and
+  // what it found is reported here, once, above the form.
+  let reading = $state<{ probe: Probe | null; checking: boolean }>({ probe: null, checking: false });
+  let asked = $state("");
+  let body: HTMLElement | null = $state(null);
+  const testKey = $derived(draft ? [draft.url, draft.key, draft.protocol, draft.model].join(" ") : "");
+
+  /** One line on the reading, and whether it is a failure. A good reading is
+      only reported after Test; a failure is reported whenever it is seen. */
+  const verdict = $derived.by(() => {
+    const result = reading.probe;
+    if (!result || !draft || draft.url === "") return null;
+    const problem = probeMessage(result, draft.key !== "");
+    if (problem) return { text: problem, bad: true };
+    const unlisted = draft.model !== "" && !result.models.some((m) => m.id === draft!.model);
+    if (asked !== testKey) {
+      return unlisted ? { text: `${draft.model} is not in the list, and it is sent as typed.`, bad: false, muted: true } : null;
+    }
+    const n = result.models.length;
+    const listed = `The address answered and lists ${n} ${n === 1 ? "model" : "models"}.`;
+    if (draft.model === "") return { text: listed, bad: false };
+    if (unlisted) return { text: `${listed} ${draft.model} is not one of them.`, bad: true };
+    return { text: `${listed} ${draft.model} is one of them.`, bad: false };
+  });
+
+  function test() {
+    if (!draft || reading.checking) return;
+    asked = testKey;
+    body?.scrollTo({ top: 0, behavior: "smooth" });
+    panel?.test();
+  }
+
 
   const stored = $derived(
     agentById(chosen) ?? agentById(app.config?.agent ?? "") ?? app.agents[0],
@@ -51,12 +84,18 @@
     if (id === stored?.id) return;
     if (!(await letGo())) return;
     draft = null;
+    asked = "";
     chosen = id;
   }
 
   async function leave() {
     if (!(await letGo())) return;
     onclose();
+  }
+
+  async function back() {
+    if (!(await letGo())) return;
+    onback?.();
   }
 
   function edit(patch: AgentPatch) {
@@ -129,7 +168,7 @@
   }
 </script>
 
-<SplitDialog label="Agents" title="Agents" onclose={leave}>
+<SplitDialog label="Agents" title="Agents" onclose={leave} onback={onback ? back : undefined}>
   {#snippet rail()}
     <nav class="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
       {#each app.agents as agent (agent.id)}
@@ -178,9 +217,32 @@
         </div>
       </header>
 
-      <div class="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-6 pt-4 pb-6">
+      <div bind:this={body} class="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-6 pt-4 pb-6">
+        {#if reading.checking || verdict}
+          <div class="field-card gap-1.5">
+            {#if reading.checking}
+              <p class="flex items-center gap-2 text-[12px] text-muted">
+                <span class="spinner"></span> Checking the address
+              </p>
+            {:else if verdict}
+              <p
+                class="text-[12px]"
+                class:text-crit={verdict.bad}
+                class:text-ok={!verdict.bad && !verdict.muted}
+                class:text-muted={verdict.muted}
+              >
+                {verdict.text}
+              </p>
+            {/if}
+          </div>
+        {/if}
         {#key stored.id}
-          <AgentPanel bind:this={panel} agent={draft} onchange={edit} />
+          <AgentPanel
+            bind:this={panel}
+            agent={draft}
+            onchange={edit}
+            onprobe={(probe, checking) => (reading = { probe, checking })}
+          />
         {/key}
       </div>
 
@@ -189,6 +251,14 @@
       >
         <button class="btn btn-danger !border-transparent" onclick={remove}>Delete</button>
         <button class="btn btn-ghost !border-transparent" onclick={clone}>Clone</button>
+        <button
+          class="btn btn-ghost !border-transparent"
+          disabled={reading.checking}
+          title="Reads the address and its model list. No model is loaded."
+          onclick={test}
+        >
+          {reading.checking ? "Testing" : "Test"}
+        </button>
         <button class="btn btn-primary" disabled={!dirty || saving} onclick={save}>
           {saving ? "Saving" : "Save"}
         </button>

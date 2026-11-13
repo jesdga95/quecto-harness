@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ArrowLeft from "phosphor-svelte/lib/ArrowLeftIcon";
   import X from "phosphor-svelte/lib/XIcon";
   import type { Snippet } from "svelte";
   import Dialog from "./Dialog.svelte";
@@ -7,6 +8,7 @@
     label,
     title,
     onclose,
+    onback,
     rail,
     detail,
   }: {
@@ -15,6 +17,8 @@
     /** The name on the rail. */
     title: string;
     onclose: () => void;
+    /** Set when the dialog was opened from another, which back returns to. */
+    onback?: () => void;
     /** The list on the left, one row per record or category. */
     rail: Snippet;
     /** The record on the right. It keeps its own three parts: a shrink-0
@@ -25,7 +29,14 @@
 
 <Dialog {label} width={880} height={620} row {onclose}>
   <div class="rail w-[216px] shrink-0">
-    <p class="rail-head">{title}</p>
+    {#if onback}
+      <button class="rail-head rail-back" title="Back to settings" onclick={onback}>
+        <ArrowLeft size={14} />
+        {title}
+      </button>
+    {:else}
+      <p class="rail-head">{title}</p>
+    {/if}
     {@render rail()}
   </div>
 

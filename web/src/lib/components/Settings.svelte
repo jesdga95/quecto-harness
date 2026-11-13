@@ -4,6 +4,7 @@
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheckIcon";
   import Sliders from "phosphor-svelte/lib/SlidersIcon";
   import Wrench from "phosphor-svelte/lib/WrenchIcon";
+  import { untrack } from "svelte";
   import type { Config, SearchConfig } from "../api";
   import { app, saveConfig, saveSearch } from "../state/app.svelte";
   import { confirm } from "../state/confirm.svelte";
@@ -14,7 +15,7 @@
   import SettingsTools from "./SettingsTools.svelte";
   import SplitDialog from "./SplitDialog.svelte";
 
-  let { onclose }: { onclose: () => void } = $props();
+  let { start = "general", onclose }: { start?: string; onclose: () => void } = $props();
 
   type Pane = "general" | "permissions" | "tools" | "search" | "projects";
   type PaneRef = { flush: () => void };
@@ -31,7 +32,9 @@
     { id: "projects", label: "Projects", line: "The folders the harness works in." },
   ];
 
-  let pane = $state<Pane>("general");
+  // The pane it opens on; moving between panes afterwards is the dialog's own.
+  const opening = untrack(() => start);
+  let pane = $state<Pane>(PANELS.some((p) => p.id === opening) ? (opening as Pane) : "general");
   let saving = $state(false);
   let current = $state<PaneRef | null>(null);
 
@@ -105,6 +108,7 @@
   /** Leaves for a dialog of records, which keeps its own drafts. */
   async function manage(which: "agents" | "mcp") {
     if (!(await keepDraft())) return;
+    app.backToSettings = pane;
     if (which === "agents") app.agentsOpen = true;
     else app.mcpOpen = true;
     onclose();

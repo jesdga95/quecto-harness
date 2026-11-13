@@ -73,6 +73,10 @@ export const app = $state({
   // open. Settings opens it, then closes itself.
   mcp: [] as McpServer[],
   mcpOpen: false,
+  // The Settings pane on screen, empty while Settings is closed, and the pane
+  // a dialog Settings opened goes back to.
+  settingsAt: "",
+  backToSettings: "",
   projects: [] as Project[],
   models: [] as Model[],
   sessions: {} as Record<string, Session[]>,

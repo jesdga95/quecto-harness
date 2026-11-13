@@ -4316,6 +4316,22 @@
     font-weight: 500;
     color: var(--term-ink);
   }
+  .rail-back {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    border: 0;
+    background: none;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .rail-back svg {
+    opacity: 0.7;
+  }
+  .rail-back:hover svg {
+    opacity: 1;
+  }
   .rail-row {
     display: flex;
     align-items: center;

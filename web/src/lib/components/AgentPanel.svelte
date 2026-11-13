@@ -30,12 +30,15 @@
     agent,
     onchange,
     compact = false,
+    onprobe,
   }: {
     agent: Agent;
     onchange: (patch: AgentPatch) => void;
     /** Leaves out what only means something once the agent is answering, which
         is what the first-run screen wants. */
     compact?: boolean;
+    /** Takes each reading of the address, for a dialog that reports it itself. */
+    onprobe?: (probe: Probe | null, checking: boolean) => void;
   } = $props();
 
   // The drafts are filled from the agent below, and refilled when the panel is
@@ -73,13 +76,12 @@
     concurrency = String(agent.concurrency);
     probe = null;
     probedAt = "";
-    void look(agent.url, agent.key, agent.protocol, false);
   });
 
   // The address is read with the key beside it, so an agent that has not been
   // stored yet is still read with the key the reader typed for it. A reading
-  // is a call to the address, so it is taken when the panel is pointed at an
-  // agent and when either field is left, never while one is being typed into.
+  // is a call to the address, so it is taken on Test, when the model list
+  // opens and when either field is left, never just for showing the agent.
   async function look(addr: string, token: string, how: Protocol, refresh: boolean) {
     if (addr === "") return;
     const asked = addr + " " + token + " " + how;
@@ -90,8 +92,17 @@
       { agent: agent.id, url: addr, key: token, protocol: how },
       refresh,
     );
+    // A reading overtaken by a newer one is dropped, and so is its end.
+    if (asked !== probedAt) return;
     checking = false;
-    if (asked === probedAt) probe = got;
+    probe = got;
+  }
+
+  $effect(() => onprobe?.(probe, checking));
+
+  /** Reads the address again as it stands in the form. */
+  export function test() {
+    void look(url.trim(), key, agent.protocol, true);
   }
 
   const models = $derived(probe?.models ?? []);
@@ -255,6 +266,8 @@
       hasAddress={agent.url !== ""}
       onpick={(model) => onchange({ model })}
       onrefresh={() => void look(url.trim(), key, agent.protocol, true)}
+      quiet={onprobe !== undefined}
+      onlist={() => void look(url.trim(), key, agent.protocol, false)}
     />
   </div>
 {:else}
@@ -367,6 +380,8 @@
         hasAddress={agent.url !== ""}
         onpick={(model) => onchange({ model })}
         onrefresh={() => void look(url.trim(), key, agent.protocol, true)}
+      quiet={onprobe !== undefined}
+      onlist={() => void look(url.trim(), key, agent.protocol, false)}
       />
     </div>
   </div>

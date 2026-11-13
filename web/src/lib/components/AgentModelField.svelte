@@ -15,6 +15,8 @@
     hasAddress,
     onpick,
     onrefresh,
+    quiet = false,
+    onlist,
   }: {
     value: string;
     models: Model[];
@@ -24,6 +26,10 @@
     hasAddress: boolean;
     onpick: (id: string) => void;
     onrefresh: () => void;
+    /** Set when the reading is reported elsewhere, so the field says nothing of it. */
+    quiet?: boolean;
+    /** Called as the list opens, so the address is read when the list is wanted. */
+    onlist?: () => void;
   } = $props();
 
   let open = $state(false);
@@ -74,7 +80,10 @@
   label="Choose from the models this address lists"
   {open}
   caretOpens
-  onopen={() => (open = true)}
+  onopen={() => {
+    open = true;
+    onlist?.();
+  }}
   onclose={close}
 >
   {#snippet trigger()}
@@ -103,9 +112,11 @@
       </PickerRow>
     {:else}
       <p class="px-[9px] py-1.5 text-[12px] text-muted">
-        {models.length === 0
-          ? "This address listed no models."
-          : "Nothing in the list matches what you typed."}
+        {models.length > 0
+          ? "Nothing in the list matches what you typed."
+          : checking
+            ? "Checking the address"
+            : "This address listed no models."}
       </p>
     {/each}
   </div>
@@ -122,6 +133,8 @@
 
 {#if !hasAddress}
   <p class="mt-1.5 text-[12px] text-muted">Enter an address to list models.</p>
+{:else if quiet}
+  <!-- Reported above the form. -->
 {:else if checking}
   <p class="mt-1.5 flex items-center gap-2 text-[12px] text-muted">
     <span class="spinner"></span> Checking the address
