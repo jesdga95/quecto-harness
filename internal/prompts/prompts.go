@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md not_sent.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md
+//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md not_sent.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md commit_message.md
 var files embed.FS
 
 // hasTool is the has the prompt templates take: whether the tools a turn sends
@@ -35,6 +35,7 @@ var (
 	attachmentTmpl = template.Must(template.New("attachment").Parse(mustRead("attachment.md")))
 	notSentTmpl    = template.Must(template.New("not_sent").Parse(mustRead("not_sent.md")))
 	titleTmpl      = template.Must(template.New("title").Parse(mustRead("title.md")))
+	commitTmpl     = template.Must(template.New("commit").Parse(mustRead("commit_message.md")))
 	messageTmpl    = template.Must(template.New("message").Parse(mustRead("message.md")))
 	compactTmpl    = template.Must(template.New("compact").Parse(mustRead("compact.md")))
 	continueTmpl   = template.Must(template.New("continue").Parse(mustRead("plan_continue.md")))
@@ -341,6 +342,21 @@ func BashMoved(why, id string, pid int, output string) string {
 	return b.String()
 }
 func OutcomeUnknown() string { return mustRead("outcome_unknown.md") }
+
+// CommitMessage asks for a commit message for a diff. Recent is the newest
+// subjects in the repository, and Cut says the diff was shortened to fit.
+func CommitMessage(diff string, recent []string, cut bool) string {
+	var b strings.Builder
+	vars := struct {
+		Diff   string
+		Recent []string
+		Cut    bool
+	}{diff, recent, cut}
+	if err := commitTmpl.Execute(&b, vars); err != nil {
+		panic("prompts: render commit_message.md: " + err.Error())
+	}
+	return b.String()
+}
 
 // Title asks for a name for the task the opening message describes. It carries
 // that message rather than following the conversation, so the request stands on

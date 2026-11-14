@@ -1253,7 +1253,6 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		e.fail(s, rerr, clock)
 		return
 	}
-	runner.Baseline = func(sn tools.Snapshot) { e.recordBaseline(s, sn) }
 	runner.Hide(e.cfg.Paths().Home)
 	runner.Seen = s.seen
 	runner.SpillTo(e.store.SpillDir(s.ID))
@@ -2321,60 +2320,6 @@ func (e *Engine) refuseImages(s *Session, err error) bool {
 	e.save(s)
 	e.publish(s.ID, ev("resync", nil))
 	return true
-}
-
-// recordBaseline keeps one file as it stood before this session first wrote
-// to it. Later writes to the same path are ignored, so the comparison stays
-// against the state the session started from.
-func (e *Engine) recordBaseline(s *Session, sn tools.Snapshot) {
-	if sn.Path == "" {
-		return
-	}
-	s.mu.Lock()
-	for _, b := range s.Baselines {
-		if b.Path == sn.Path {
-			s.mu.Unlock()
-			return
-		}
-	}
-	s.mu.Unlock()
-
-	b := store.Baseline{Path: sn.Path, State: baselineState(sn.State), At: time.Now().UTC()}
-	if b.State == store.BaselineText {
-		b.Blob = store.BlobName(sn.Path)
-		if err := e.store.WriteBlob(s.ID, b.Blob, sn.Content); err != nil {
-			// Nothing was kept, so the file is left out of the change list
-			// rather than listed against a copy that is not there.
-			e.publish(s.ID, ev("error", map[string]any{"kind": "save", "message": err.Error()}))
-			return
-		}
-	}
-
-	s.mu.Lock()
-	// The lock was dropped for the copy, so the path is checked once more.
-	for _, have := range s.Baselines {
-		if have.Path == b.Path {
-			s.mu.Unlock()
-			return
-		}
-	}
-	s.Baselines = append(s.Baselines, b)
-	s.mu.Unlock()
-	e.saveSoon(s)
-}
-
-// baselineState maps what the tool saw onto what the session stores.
-func baselineState(snapshot string) string {
-	switch snapshot {
-	case tools.SnapshotText:
-		return store.BaselineText
-	case tools.SnapshotBinary:
-		return store.BaselineBinary
-	case tools.SnapshotLarge:
-		return store.BaselineLarge
-	default:
-		return store.BaselineNew
-	}
 }
 
 // argSummary pulls the command and the path out of the raw arguments for the

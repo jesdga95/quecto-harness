@@ -9,7 +9,7 @@
   import Backdrop from "./lib/components/Backdrop.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import Toasts from "./lib/components/Toasts.svelte";
-  import { app, init } from "./lib/state/app.svelte";
+  import { app, init, loadGit } from "./lib/state/app.svelte";
 
   // Setup shows until there is an agent to answer with. An address that stops
   // answering later is not this screen's business: the fix is to switch agents
@@ -17,6 +17,12 @@
   const setup = $derived(app.agents.length === 0);
 
   void init();
+
+  // Work done in an editor or a terminal while the tab was away shows when it
+  // comes back.
+  function refocus() {
+    if (app.projectPath) void loadGit();
+  }
 
   function closeAgents() {
     app.agentsOpen = false;
@@ -42,6 +48,8 @@
     document.documentElement.classList.toggle("mode-plan", app.workMode === "plan");
   });
 </script>
+
+<svelte:window onfocus={refocus} />
 
 {#if app.ready && setup}
   <Onboarding />

@@ -71,7 +71,6 @@ type Session struct {
 	ContextBase *store.ContextBase
 	Compactions int
 	Todos       []store.Todo
-	Baselines   []store.Baseline
 
 	// steer is the message waiting for the running turn to pick it up. It is
 	// not part of the document: a message that outlives the turn it was typed
@@ -200,7 +199,6 @@ func fromDoc(d *store.Session) *Session {
 		ContextBase: d.ContextBase,
 		Compactions: d.Compactions,
 		Todos:       append([]store.Todo(nil), d.Todos...),
-		Baselines:   append([]store.Baseline(nil), d.Baselines...),
 		state:       StateIdle,
 		seen:        tools.NewSeen(),
 	}
@@ -242,9 +240,8 @@ func (s *Session) doc() *store.Session {
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
 		Compactions: s.Compactions, ContextBase: s.ContextBase,
-		Todos:     append([]store.Todo(nil), s.Todos...),
-		Baselines: append([]store.Baseline(nil), s.Baselines...),
-		Entries:   entries,
+		Todos:   append([]store.Todo(nil), s.Todos...),
+		Entries: entries,
 	}
 }
 

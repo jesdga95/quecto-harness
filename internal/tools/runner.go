@@ -39,10 +39,6 @@ type Runner struct {
 	SearchChars   int
 	SearchTimeout time.Duration
 
-	// Baseline receives each written file as it stood before the write, when
-	// something is keeping them. Nil runs the tools with nothing recorded.
-	Baseline func(Snapshot)
-
 	// Seen is what the session has read, which write and edit check a file
 	// against. Nil runs the tools with no such check.
 	Seen *Seen

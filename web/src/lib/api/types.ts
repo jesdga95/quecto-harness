@@ -513,17 +513,6 @@ export interface Attached {
 
 export type AttachedKind = "text" | "image" | "document" | "video";
 
-/** What a file this session wrote became. Only changed and new carry hunks;
-    the rest name why there is nothing to draw. */
-export type ChangeStatus =
-  | "changed"
-  | "new"
-  | "deleted"
-  | "same"
-  | "binary"
-  | "large"
-  | "lost";
-
 export type DiffKind = "context" | "added" | "removed";
 
 /** One row of a hunk. The text carries no sign; the kind is the sign. */
@@ -540,20 +529,126 @@ export interface DiffHunk {
   lines: DiffLine[];
 }
 
-export interface FileChange {
-  path: string;
-  status: ChangeStatus;
-  added: number;
-  removed: number;
-  /** Lines past the server's limit that were counted but not sent. */
-  omitted: number;
-  hunks: DiffHunk[];
+/** What happened to a file on one side of the index. */
+export type GitState = "changed" | "new" | "deleted" | "untracked" | "conflict";
+
+/** A hunk with git's own counts, which name it when it is staged on its own
+    even when its lines were cut. */
+export interface GitHunk extends DiffHunk {
+  old_lines: number;
+  new_lines: number;
 }
 
-export interface Changes {
-  files: FileChange[];
+/** One path on one side of the index: staged against HEAD, or unstaged
+    against the index. */
+export interface GitFile {
+  path: string;
+  state: GitState;
+  binary: boolean;
   added: number;
   removed: number;
+  /** Diff lines past the server's limit that were counted but not sent. */
+  omitted: number;
+  hunks: GitHunk[];
+}
+
+export interface GitStatus {
+  branch: string;
+  detached: boolean;
+  /** Short hash of HEAD, empty on a branch with no commits. */
+  head: string;
+  upstream: string;
+  ahead: number;
+  behind: number;
+  remotes: boolean;
+  staged: GitFile[];
+  unstaged: GitFile[];
+  /** Files past the list limit, not sent. */
+  hidden: number;
+}
+
+/** The project's repository. available is false with no git binary, and repo
+    false for a folder outside any repository. */
+export interface Git {
+  available: boolean;
+  repo: boolean;
+  status: GitStatus | null;
+}
+
+export interface GitCommit {
+  hash: string;
+  short: string;
+  subject: string;
+  body: string;
+  author: string;
+  /** Seconds since the epoch. */
+  when: number;
+  /** A remote branch holds it. */
+  pushed: boolean;
+}
+
+export interface GitCommitFile {
+  path: string;
+  state: GitState;
+  added: number;
+  removed: number;
+  binary: boolean;
+}
+
+export interface GitBranch {
+  name: string;
+  current: boolean;
+  upstream: string;
+  ahead: number;
+  behind: number;
+}
+
+export interface GitBranches {
+  local: GitBranch[];
+  remote: string[];
+}
+
+export type GitOp =
+  | "stage"
+  | "unstage"
+  | "discard"
+  | "hunk"
+  | "commit"
+  | "undo"
+  | "fetch"
+  | "pull"
+  | "push"
+  | "stash"
+  | "checkout";
+
+export interface GitHunkRef {
+  path: string;
+  staged: boolean;
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
+}
+
+/** The fields a git action reads; each takes only its own. */
+export interface GitActionBody {
+  paths?: string[];
+  hunk?: GitHunkRef;
+  action?: "stage" | "unstage" | "discard";
+  message?: string;
+  amend?: boolean;
+  all?: boolean;
+  push?: boolean;
+  branch?: string;
+  create?: boolean;
+  start?: string;
+  stash?: boolean;
+}
+
+export interface GitActionResult {
+  hash?: string;
+  /** The commit stood but the push after it failed. */
+  push_error?: string;
 }
 
 /** One command the harness started in the background. tail is the last lines
@@ -728,9 +823,17 @@ export interface HarnessApi {
   createSession(project: string): Promise<Session>;
   /** Points an idle session at another model, keeping its history. */
   getSession(id: string): Promise<Transcript>;
-  /** Every file the session wrote, against the copy kept before its first
-      write and the file on disk now. */
-  getChanges(id: string): Promise<Changes>;
+  /** The project's repository and working tree. */
+  getGit(project: string): Promise<Git>;
+  gitLog(project: string): Promise<GitCommit[]>;
+  gitShow(project: string, hash: string): Promise<GitCommitFile[]>;
+  gitBranches(project: string): Promise<GitBranches>;
+  /** Every uncommitted change in the project as one unified diff. */
+  gitPatch(project: string): Promise<string>;
+  gitInit(project: string): Promise<void>;
+  gitAction(project: string, op: GitOp, body?: GitActionBody): Promise<GitActionResult>;
+  /** A commit message from the session's model for what would be committed. */
+  gitDraft(session: string): Promise<{ summary: string; body: string }>;
   /** The commands this session started in the background, oldest first. */
   listProcesses(id: string): Promise<Process[]>;
   /** Ends one of them. A command that already went is not an error. */

@@ -465,6 +465,12 @@
   .toast.is-warn > svg {
     color: var(--warn);
   }
+  .toast.is-ok > svg {
+    color: var(--ok);
+  }
+  .toast.is-info > svg {
+    color: var(--muted);
+  }
   .toast-x {
     flex: none;
     border: 0;
@@ -3929,6 +3935,362 @@
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--muted);
+  }
+
+  /* The git section. Rows are the change rows above with actions that take
+     the place of the counts while the row is hovered. */
+  .entry-branch {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+  }
+  .change-badge.is-untracked {
+    background: var(--surface-2);
+    color: var(--muted);
+  }
+  .change-badge.is-conflict {
+    background: var(--warn-bg);
+    color: var(--warn);
+  }
+  .changes-file.is-flat {
+    cursor: default;
+  }
+  /* A fixed height, so the actions that replace the counts on hover do not
+     move the rows below. */
+  .git-file {
+    height: 34px;
+    padding: 0 10px 0 14px;
+  }
+  .git-counts {
+    flex: none;
+    font-size: 11.5px;
+  }
+  .git-row-acts {
+    display: none;
+    flex: none;
+    gap: 1px;
+  }
+  .git-file:hover .git-row-acts,
+  .git-file:focus-within .git-row-acts {
+    display: flex;
+  }
+  .git-file:hover .git-counts,
+  .git-file:focus-within .git-counts {
+    display: none;
+  }
+  .git-row-acts .icon-btn {
+    width: 22px;
+    height: 22px;
+  }
+  .icon-btn.is-danger:hover:not(:disabled) {
+    background: var(--crit-bg);
+    color: var(--crit);
+  }
+  .icon-btn.is-on {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .dock-action svg {
+    width: 13px;
+    height: 13px;
+  }
+  .dock-action:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .diff-hunk.has-acts {
+    display: flex;
+    align-items: center;
+    min-height: 26px;
+    padding-top: 0;
+    padding-bottom: 0;
+    padding-right: 8px;
+  }
+  /* The track is as wide as the longest line, so the buttons hold to the
+     visible right edge rather than the end of the track. */
+  .hunk-acts {
+    position: sticky;
+    right: 8px;
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+    padding-left: 16px;
+    font-family: var(--font-sans);
+    visibility: hidden;
+  }
+  .diff-hunk.has-acts:hover .hunk-acts,
+  .diff-hunk.has-acts:focus-within .hunk-acts {
+    visibility: visible;
+  }
+  .hunk-acts .dock-action {
+    height: 20px;
+    font-size: 11.5px;
+    background: var(--surface-2);
+  }
+  .hunk-acts .dock-action:hover {
+    background: var(--page);
+  }
+  .hunk-acts .dock-action.is-danger:hover {
+    background: var(--crit-bg);
+  }
+  .git-branch-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    height: 28px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .git-branch-btn:hover,
+  .git-branch-btn.is-open {
+    background: var(--surface-2);
+  }
+  .git-branch-btn svg {
+    flex: none;
+    color: var(--muted);
+  }
+  .git-sync {
+    display: inline-flex;
+    flex: none;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .git-branch-list {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .git-branch-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+  }
+  .git-branch-side {
+    flex: none;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .git-group-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 10px 0 14px;
+    border-bottom: 1px solid var(--hair);
+    background: var(--head);
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text-2);
+  }
+  .git-group-head .dock-action {
+    height: 24px;
+    padding: 0 8px;
+  }
+  .git-filter-note {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px 7px 14px;
+    border-bottom: 1px solid var(--hair);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .git-commit {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-top: 1px solid var(--hair);
+    background: var(--page);
+  }
+  .git-draft {
+    position: absolute;
+    top: 50%;
+    right: 5px;
+    transform: translateY(-50%);
+  }
+  .git-draft .spinner {
+    width: 12px;
+    height: 12px;
+  }
+  .git-commit-note {
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .git-commit-files {
+    position: relative;
+    padding: 4px 0 8px 14px;
+  }
+  .git-commit-files.has-rail::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 17px;
+    width: 2px;
+    background: var(--border);
+  }
+  .git-commit-files .changes-file {
+    min-height: 30px;
+    padding-left: 24px;
+    border-bottom: 0;
+  }
+  .git-commit-body {
+    padding: 4px 14px 8px 24px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--text-2);
+    white-space: pre-wrap;
+  }
+  .git-commit-acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px 14px 4px 18px;
+  }
+  .git-msg-closed {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 38px;
+    padding: 0 38px 0 11px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--page);
+    font-size: 13px;
+    color: var(--muted);
+    text-align: left;
+    cursor: text;
+  }
+  .git-msg-closed:hover {
+    border-color: var(--border-2);
+    color: var(--text-2);
+  }
+  .git-msg {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--page);
+  }
+  .git-msg:focus-within {
+    border-color: transparent;
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+  .git-msg-summary,
+  .git-msg-body {
+    display: block;
+    width: 100%;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: var(--text);
+    font-family: inherit;
+  }
+  .git-msg-summary {
+    padding: 9px 38px 9px 11px;
+    font-size: 13px;
+  }
+  .git-msg-body {
+    min-height: 76px;
+    padding: 8px 11px 10px;
+    resize: none;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .git-msg-summary::placeholder,
+  .git-msg-body::placeholder {
+    color: var(--muted);
+  }
+  .git-msg-sep {
+    height: 1px;
+    margin: 0 11px;
+    background: var(--hair);
+  }
+
+  /* The history rail: a dot per entry on one line. Uncommitted work is amber
+     on a dashed segment above HEAD; commits not pushed are teal, pushed grey. */
+  .git-hist-row {
+    min-height: 48px;
+    padding-left: 6px;
+    border-radius: 0;
+  }
+  /* The row's own padding would break the line, so the rail reaches past it
+     to the row's edges. */
+  .git-rail {
+    position: relative;
+    flex: none;
+    align-self: stretch;
+    width: 24px;
+    margin: -5px 0;
+  }
+  .git-seg {
+    position: absolute;
+    left: 11px;
+    width: 2px;
+    background: var(--border);
+  }
+  .git-seg.is-up {
+    top: 0;
+    bottom: 50%;
+  }
+  .git-seg.is-down {
+    top: 50%;
+    bottom: 0;
+  }
+  .git-seg.is-dashed {
+    background: repeating-linear-gradient(to bottom, var(--warn) 0 3px, transparent 3px 7px);
+  }
+  .git-dot {
+    position: absolute;
+    top: 50%;
+    left: 12px;
+    z-index: 1;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--border-2);
+    transform: translate(-50%, -50%);
+  }
+  .git-hist-row.is-local .git-dot {
+    background: var(--accent);
+  }
+  .git-hist-row.is-head .git-dot,
+  .git-hist-row.is-on .git-dot {
+    width: 13px;
+    height: 13px;
+  }
+  .git-hist-row.is-dirty .git-dot {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--warn);
+    background: var(--page);
+  }
+  .git-hist-row.is-dirty .dock-row-side {
+    color: var(--warn);
   }
 
   .stat-add {

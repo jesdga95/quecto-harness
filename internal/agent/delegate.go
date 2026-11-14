@@ -489,7 +489,7 @@ func (e *Engine) report(child *Session) {
 	if err != nil {
 		return
 	}
-	e.rollUp(child, parent)
+	e.announceWrites(parent)
 
 	from, _ := e.cfg.Config().AgentByID(agentID)
 	limit := e.cfg.Config().OutputLimitBytes
@@ -546,54 +546,10 @@ func (e *Engine) answerOf(child *Session) string {
 	return answer
 }
 
-// rollUp copies a subagent's baselines onto its launcher, so the files it
-// wrote are in the launcher's change panel. A path the launcher wrote first
-// keeps the launcher's older copy, which is the state the work started from.
-func (e *Engine) rollUp(child, parent *Session) {
-	child.mu.Lock()
-	from := append([]store.Baseline(nil), child.Baselines...)
-	childID := child.ID
-	child.mu.Unlock()
-	if len(from) == 0 {
-		return
-	}
-
-	added := false
-	for _, b := range from {
-		parent.mu.Lock()
-		held := false
-		for _, have := range parent.Baselines {
-			if have.Path == b.Path {
-				held = true
-				break
-			}
-		}
-		parent.mu.Unlock()
-		if held {
-			continue
-		}
-		if b.Blob != "" {
-			data, err := e.store.Blob(childID, b.Blob)
-			if err != nil {
-				// Nothing was kept, so the file is left out rather than listed
-				// against a copy that is not there.
-				continue
-			}
-			if err := e.store.WriteBlob(parent.ID, b.Blob, data); err != nil {
-				continue
-			}
-		}
-		parent.mu.Lock()
-		parent.Baselines = append(parent.Baselines, b)
-		parent.mu.Unlock()
-		added = true
-	}
-	if added {
-		e.save(parent)
-	}
-	// The launcher's own stream carries no tool output for a file a subagent
-	// wrote, and a path it already kept a copy of moves the diff without moving
-	// the list, so this is the only thing that says its change panel is stale.
+// announceWrites tells a launcher that a subagent has finished, since its own
+// stream carries no tool output for the files the subagent wrote and the
+// working tree it shows may have moved.
+func (e *Engine) announceWrites(parent *Session) {
 	e.publish(parent.ID, ev("changed", nil))
 }
 

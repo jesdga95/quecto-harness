@@ -198,10 +198,7 @@ type Session struct {
 	// ContextBase is the estimated fixed part of every prompt this model sees.
 	ContextBase *ContextBase `json:"context_base,omitempty"`
 	Todos       []Todo       `json:"todos,omitempty"`
-	// Baselines are the files this session has written to, as they stood
-	// before its first write to each. The copies live beside this document.
-	Baselines []Baseline `json:"baselines,omitempty"`
-	Entries   []Entry    `json:"entries"`
+	Entries     []Entry      `json:"entries"`
 }
 
 // ContextBase is the estimated token cost of the three parts of a prompt that
@@ -243,7 +240,6 @@ type Sessions struct {
 
 var (
 	namePattern = regexp.MustCompile(`^sess_[a-z2-7]{16}\.json$`)
-	blobPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )
 
 // Open builds the index once. A file that does not parse is named and
@@ -388,11 +384,22 @@ func (s *Sessions) save(sess *Session, sync bool) error {
 	return nil
 }
 
+// filesDir is the side folder holding one session's saved tool output.
+func (s *Sessions) filesDir(id string) string {
+	return filepath.Join(s.dir, id+".files")
+}
+
+// SpillDir is where a session's cut-off tool output is saved whole. It is
+// inside the session's own folder, so it goes when the session does.
+func (s *Sessions) SpillDir(id string) string {
+	return filepath.Join(s.filesDir(id), "spill")
+}
+
 func (s *Sessions) Delete(id string) error {
 	lock := s.lockFor(id)
 	lock.Lock()
 	err := os.Remove(s.path(id))
-	// The baseline copies belong to this session alone, so they go with it.
+	// The session's side folder holds its saved tool output, and goes with it.
 	rmErr := os.RemoveAll(s.filesDir(id))
 	lock.Unlock()
 	if rmErr != nil {

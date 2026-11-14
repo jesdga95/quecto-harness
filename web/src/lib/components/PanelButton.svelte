@@ -2,7 +2,7 @@
   import ArrowsIn from "phosphor-svelte/lib/ArrowsInIcon";
   import ArrowsOut from "phosphor-svelte/lib/ArrowsOutIcon";
   import Folder from "phosphor-svelte/lib/FolderIcon";
-  import GitDiff from "phosphor-svelte/lib/GitDiffIcon";
+  import GitBranch from "phosphor-svelte/lib/GitBranchIcon";
   import Paperclip from "phosphor-svelte/lib/PaperclipIcon";
   import Terminal from "phosphor-svelte/lib/TerminalIcon";
   import UsersThree from "phosphor-svelte/lib/UsersThreeIcon";
@@ -19,8 +19,8 @@
 
   // The header's sections: a button each, carrying that section's news. The
   // open one is lit, and pressing it again closes the panel. Files shows the
-  // spinner while one is being written, Diff its line counts, Agents and Shell
-  // the sidebar's marks.
+  // spinner while one is being written, Git its branch and line counts, Agents
+  // and Shell the sidebar's marks.
   const writing = $derived(app.status !== "idle" && artifacts().some((a) => !a.complete));
   const agentMark = $derived(
     app.runs.some((r) => r.status === "waiting")
@@ -30,6 +30,12 @@
         : "",
   );
   const running = $derived(app.procs.some((p) => p.status === "running"));
+  // The repository's branch and the lines changed across both sides of the
+  // index, when the project is one.
+  const repo = $derived(app.git?.repo ? app.git.status : null);
+  const gitFiles = $derived(repo ? [...repo.staged, ...repo.unstaged] : []);
+  const gitAdded = $derived(gitFiles.reduce((n, f) => n + f.added, 0));
+  const gitRemoved = $derived(gitFiles.reduce((n, f) => n + f.removed, 0));
   // Context and Attachments are the session's rather than the project's, so
   // they sit apart, each once there is something in it.
   const use = $derived(contextUse());
@@ -39,7 +45,7 @@
 
   const LABELS: Record<Section, string> = {
     files: "Files",
-    changes: "Diff",
+    git: "Git",
     agents: "Agents",
     processes: "Shell",
     context: "Context",
@@ -62,13 +68,16 @@
     {#if section === "files"}
       <Folder size={16} />
       {#if writing}<span class="spinner"></span>{/if}
-    {:else if section === "changes"}
-      <GitDiff size={16} />
-      {#if app.changes.files.length > 0}
-        <span class="num">
-          <span class="stat-add">+{app.changes.added}</span>
-          <span class="stat-del">&minus;{app.changes.removed}</span>
-        </span>
+    {:else if section === "git"}
+      <GitBranch size={16} />
+      {#if repo}
+        <span class="entry-branch">{repo.detached ? repo.head : repo.branch}</span>
+        {#if gitFiles.length > 0}
+          <span class="num">
+            <span class="stat-add">+{gitAdded}</span>
+            <span class="stat-del">&minus;{gitRemoved}</span>
+          </span>
+        {/if}
       {/if}
     {:else if section === "agents"}
       <UsersThree size={16} />
@@ -104,7 +113,7 @@
   </button>
   <span class="entry-divider" class:is-hidden={!app.panel}></span>
   {@render button("files", writing)}
-  {@render button("changes", app.changes.files.length > 0)}
+  {@render button("git", !!repo)}
   {@render button("agents", app.runs.length > 0)}
   {@render button("processes", app.procs.length > 0)}
   {#if use.measured || attached > 0}

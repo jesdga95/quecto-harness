@@ -5,9 +5,12 @@ import type {
   Agent,
   AgentPatch,
   Attached,
-  Changes,
   Child,
   Config,
+  Git,
+  GitActionBody,
+  GitActionResult,
+  GitOp,
   HarnessEvent,
   Model,
   Answer,
@@ -56,7 +59,7 @@ const TAIL_LINES = 200;
 
 // The dock's five sections. They are always there; what the conversation opens
 // joins the one it belongs to.
-export type Section = "files" | "changes" | "agents" | "processes" | "context" | "attachments";
+export type Section = "files" | "git" | "agents" | "processes" | "context" | "attachments";
 
 // Every screen reads this one object. It holds what the server would hold plus
 // the little the browser owns, like which panel is open and whether the last
@@ -101,7 +104,9 @@ export const app = $state({
   sessionEffort: "" as Effort | "",
   // The plan plan mode is writing, or the one last approved.
   draft: null as Plan | null,
-  changes: { files: [], added: 0, removed: 0 } as Changes,
+  // The project's repository as last read, null before the first read and
+  // with no project chosen.
+  git: null as Git | null,
   // Whether the dock beside the transcript is open.
   panel: false,
   // The section the dock is showing.
@@ -369,12 +374,12 @@ function clearSession(): void {
   app.status = "idle";
   app.awaitingModel = false;
   app.answerNow = false;
-  app.changes = { files: [], added: 0, removed: 0 };
   app.procs = [];
   app.procId = "";
   app.procOutput = {};
   app.procErrors = {};
   closePanel();
+  void loadGit();
   app.runs = [];
   resetArtifacts();
   // Nothing is known about the next session's context until its model has
@@ -419,25 +424,24 @@ export async function selectSession(id: string): Promise<void> {
   app.waitSince = t.waitingSince ?? Date.now();
   app.awaitingModel = waiting(t);
   app.answerNow = t.answerNow ?? false;
-  app.changes = { files: [], added: 0, removed: 0 };
   app.procs = [];
   app.procId = "";
   app.procOutput = {};
   app.procErrors = {};
   // A reloaded page reads which subagents are still working from the snapshot,
   // since their state only reaches the launcher's stream when it changes.
-  // The changes tab stays open across sessions; the others were this one's.
+  // The git section stays open across sessions; the others were this one's.
   closeRuns();
-  const keepChanges = app.panel && app.section === "changes";
+  const keepGit = app.panel && app.section === "git";
   app.runs = t.session.children;
   resetArtifacts();
-  if (keepChanges) showSection("changes");
+  if (keepGit) showSection("git");
   else app.panel = false;
   markAnnounced();
   // Opening a session is reading its finished turn.
   delete app.finished[id];
   unsubscribe = api.events(id, onEvent);
-  void loadChanges();
+  void loadGit();
   void loadProcesses();
 }
 
@@ -962,17 +966,40 @@ export async function setPermMode(mode: PermMode): Promise<void> {
   void guard(() => api.updateConfig({ permissions: mode }));
 }
 
-/** Refetches the change list. It fails quietly: the panel is a second view of
+// Reads overlap when writes land close together, so only the newest answer
+// is kept.
+let gitRead = 0;
+
+/** Rereads the repository. It fails quietly: the panel is a second view of
     work the transcript already reported, so a stale list is better than a
     toast on every write. */
-export async function loadChanges(): Promise<void> {
-  const id = app.sessionId;
-  if (!id) return;
+export async function loadGit(): Promise<void> {
+  const project = app.projectPath;
+  const seq = ++gitRead;
+  if (!project) {
+    app.git = null;
+    return;
+  }
   try {
-    const changes = await api.getChanges(id);
-    if (app.sessionId === id) app.changes = changes;
+    const git = await api.getGit(project);
+    if (seq === gitRead && app.projectPath === project) app.git = git;
   } catch {
     // Keep what was there.
+  }
+}
+
+/** Runs one git write and rereads the repository, whatever the turn is doing.
+    A failure is a toast with what git said, and answers null. */
+export async function gitAction(op: GitOp, body: GitActionBody = {}): Promise<GitActionResult | null> {
+  try {
+    const result = await api.gitAction(app.projectPath, op, body);
+    if (result.push_error) toast(result.push_error, "warn");
+    return result;
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err));
+    return null;
+  } finally {
+    void loadGit();
   }
 }
 
@@ -1355,7 +1382,7 @@ function onEvent(event: HarnessEvent): void {
   // The harness says the files moved for a reason this stream cannot show,
   // which is a subagent having written one.
   if (event.type === "changed") {
-    void loadChanges();
+    void loadGit();
     return;
   }
 
@@ -1420,17 +1447,12 @@ function onEvent(event: HarnessEvent): void {
   if (event.type === "delta" || event.type === "tool_args") announceArtifacts();
 
   // The event carries an id rather than a name, so the card it filled is what
-  // names it. A write moves the list by definition. A command can create,
-  // change or delete anything, but only a path some write already kept a copy
-  // of can appear in the list, so an empty list stays empty and is not refetched.
+  // names it. A write or a command can change the working tree.
   if (event.type === "tool_output") {
     const card = app.items.find((i) => i.id === event.id);
     const touched =
-      card?.kind === "tool" &&
-      (card.name === "write" ||
-        card.name === "edit" ||
-        (card.name === "bash" && app.changes.files.length > 0));
-    if (touched) void loadChanges();
+      card?.kind === "tool" && (card.name === "write" || card.name === "edit" || card.name === "bash");
+    if (touched) void loadGit();
     // A file the panel holds is read again once a write to it lands.
     if (card?.kind === "tool" && (card.name === "write" || card.name === "edit")) {
       const path = typeof card.args.path === "string" ? inProject(card.args.path, app.projectPath) : "";

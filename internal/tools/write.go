@@ -13,9 +13,9 @@ import (
 	"github.com/jesdga95/quecto-harness/internal/diff"
 )
 
-// baselineLimit is the largest file kept as a baseline. Past it the write
-// still happens and the change is still listed, with nothing to compare.
-const baselineLimit = 2 << 20
+// snapshotLimit is the largest file read before a write to count the lines it
+// changes. Past it the write still happens, with no counts.
+const snapshotLimit = 2 << 20
 
 // The state of a file before a write, as the snapshot reports it. Content is
 // carried only for text.
@@ -26,8 +26,8 @@ const (
 	SnapshotLarge  = "large"
 )
 
-// Snapshot is one file as it stood before a write, handed to whatever wants
-// to keep it. Path is relative to the project root.
+// Snapshot is one file as it stood before a write, for counting the lines the
+// write changes. Path is relative to the project root.
 type Snapshot struct {
 	Path    string
 	State   string
@@ -68,10 +68,6 @@ func (r *Runner) WriteFile(ctx context.Context, raw json.RawMessage) (Result, er
 	data := []byte(args.Content)
 	if err := config.WriteAtomicNoSync(path, data, perm); err != nil {
 		return Result{}, fmt.Errorf("write %s: %s", args.Path, err)
-	}
-	// The change list covers the project, so a file outside keeps no copy.
-	if r.Baseline != nil && within(r.Root, path) {
-		r.Baseline(before)
 	}
 	r.noteFile(path)
 
@@ -118,16 +114,6 @@ func lineCounts(before Snapshot, after string) map[string]any {
 	return map[string]any{"added": d.Added, "removed": d.Removed}
 }
 
-// Current describes a file in the project as it stands now. A missing file
-// comes back as new, which for a file that was written earlier means gone.
-func (r *Runner) Current(rel string) (Snapshot, error) {
-	path, err := r.resolve(rel)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	return r.snapshot(path), nil
-}
-
 // snapshot describes a file as it is now. A file that cannot be read is
 // reported as new, since the comparison it would feed has nothing either way.
 func (r *Runner) snapshot(path string) Snapshot {
@@ -136,7 +122,7 @@ func (r *Runner) snapshot(path string) Snapshot {
 	if err != nil {
 		return s
 	}
-	if info.Size() > baselineLimit {
+	if info.Size() > snapshotLimit {
 		s.State = SnapshotLarge
 		return s
 	}

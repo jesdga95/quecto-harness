@@ -1,7 +1,9 @@
 // Transient messages. A failure the user can act on becomes a toast; a state
 // that persists, like a lost connection, stays until it clears.
 
-export type ToastKind = "error" | "warn" | "info";
+// ok confirms something the user asked for went through; info is a notice
+// that needs no action.
+export type ToastKind = "error" | "warn" | "info" | "ok";
 
 export type Toast = {
   id: number;

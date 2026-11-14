@@ -2,8 +2,6 @@ package agent
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -265,9 +263,9 @@ func TestASubagentThatSpokeStillReportsItsAnswer(t *testing.T) {
 	}
 }
 
-// The launcher is told its change panel is stale when a subagent writes, since
-// nothing else on its stream mentions a file it did not write itself.
-func TestARollUpTellsTheLauncherItsFilesMoved(t *testing.T) {
+// The launcher is told its working tree may have moved when a subagent
+// finishes, since nothing else on its stream mentions a file it did not write.
+func TestALauncherIsToldItsFilesMoved(t *testing.T) {
 	h, _ := launcher(t)
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
 	h.replay.forModel("Alpha-12B", "stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
@@ -282,12 +280,6 @@ func TestARollUpTellsTheLauncherItsFilesMoved(t *testing.T) {
 
 	if len(h.rec.ofType("changed")) == 0 {
 		t.Error("the launcher was never told its files moved")
-	}
-	s.mu.Lock()
-	held := len(s.Baselines)
-	s.mu.Unlock()
-	if held == 0 {
-		t.Error("nothing rolled up, so the event proved nothing")
 	}
 }
 
@@ -646,70 +638,6 @@ func TestDeleteRemovesChildren(t *testing.T) {
 	}
 }
 
-// The files a subagent wrote belong in the launcher's change panel, and a path
-// the launcher wrote first keeps the launcher's older copy.
-func TestChildBaselinesRollUp(t *testing.T) {
-	h, _ := launcher(t)
-	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
-	h.replay.forModel("Alpha-12B", "stream_read.txt", "stream_write_once.txt", "stream_plain.txt",
-		"stream_subagent.txt", "stream_plain.txt", "stream_plain.txt")
-	h.replay.forModel("Beta-30B", "stream_read.txt", "stream_write_once.txt", "stream_write.txt", "stream_plain.txt")
-
-	// The launcher writes file.txt first, so the copy kept is the one from
-	// before either of them touched it.
-	s := h.session(t)
-	h.engine.Send(s.ID, "write the file", nil)
-	waitIdle(t, s)
-	mine := baselineOf(t, s, "file.txt")
-	before, err := h.store.Blob(s.ID, mine.Blob)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(before) != "one\ntwo\n" {
-		t.Fatalf("the launcher's copy = %q, want the file as it started", before)
-	}
-
-	h.engine.Send(s.ID, "now have the reviewer work on it", nil)
-	child := childOf(t, h, s)
-	waitForEntryFrom(t, s, "Reviewer")
-	waitIdle(t, child)
-
-	// out.txt is the subagent's alone and comes across.
-	rolled := baselineOf(t, s, "out.txt")
-	if rolled.State != store.BaselineNew {
-		t.Errorf("out.txt = %+v, want it recorded as new", rolled)
-	}
-	// file.txt is a path both wrote, and the launcher's older copy stands.
-	after := baselineOf(t, s, "file.txt")
-	got, err := h.store.Blob(s.ID, after.Blob)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(before) {
-		t.Errorf("the launcher's baseline was overwritten with %q, want %q", got, before)
-	}
-	changes, err := h.engine.Changes(s.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(changes) != 2 {
-		t.Errorf("the change panel lists %d files, want both", len(changes))
-	}
-}
-
-func baselineOf(t *testing.T, s *Session, path string) store.Baseline {
-	t.Helper()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, b := range s.Baselines {
-		if b.Path == path {
-			return b
-		}
-	}
-	t.Fatalf("%s is not in the change list: %+v", path, s.Baselines)
-	return store.Baseline{}
-}
-
 // A name nothing matches is a tool error the turn carries on from.
 func TestUnknownAgentIsAToolError(t *testing.T) {
 	h, _ := launcher(t)
@@ -897,36 +825,6 @@ func TestAnUntitledCallIsAToolError(t *testing.T) {
 	if last.Kind != "assistant" {
 		t.Errorf("the turn ended on a %s entry, want it to have carried on", last.Kind)
 	}
-}
-
-// A file the harness never wrote is not in the change list, so a project with
-// nothing done to it stays empty.
-func TestRollUpSkipsAMissingBlob(t *testing.T) {
-	h, _ := launcher(t)
-	parent := newSession(store.NewID(), h.project, h.agent.ID, "Alpha-12B", config.ToolsetFull)
-	child := newSession(store.NewID(), h.project, h.agent.ID, "Beta-30B", config.ToolsetFull)
-	child.Parent = parent.ID
-	child.Baselines = []store.Baseline{{Path: "gone.txt", State: store.BaselineText, Blob: store.BlobName("gone.txt")}}
-	h.engine.rollUp(child, parent)
-	if len(parent.Baselines) != 0 {
-		t.Errorf("a baseline with no copy was listed: %+v", parent.Baselines)
-	}
-
-	// One with a copy comes across.
-	if err := h.store.WriteBlob(child.ID, store.BlobName("here.txt"), []byte("old\n")); err != nil {
-		t.Fatal(err)
-	}
-	child.Baselines = append(child.Baselines, store.Baseline{
-		Path: "here.txt", State: store.BaselineText, Blob: store.BlobName("here.txt")})
-	h.engine.rollUp(child, parent)
-	if len(parent.Baselines) != 1 || parent.Baselines[0].Path != "here.txt" {
-		t.Fatalf("baselines = %+v", parent.Baselines)
-	}
-	got, err := h.store.Blob(parent.ID, parent.Baselines[0].Blob)
-	if err != nil || string(got) != "old\n" {
-		t.Errorf("copy = %q %v", got, err)
-	}
-	_ = os.WriteFile(filepath.Join(h.project, "here.txt"), []byte("new\n"), 0o644)
 }
 
 // A disabled agent is not in the list the prompt names, and a name the model

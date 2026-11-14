@@ -29,6 +29,11 @@
 
       <div class="mt-5 flex justify-end gap-2">
         <button class="btn btn-ghost" onclick={() => answer(false)}>Cancel</button>
+        {#if dialog.current.alternateLabel}
+          <button class="btn btn-ghost" onclick={() => answer("alternate")}>
+            {dialog.current.alternateLabel}
+          </button>
+        {/if}
         <button
           bind:this={confirmButton}
           class="btn"

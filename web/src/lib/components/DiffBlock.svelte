@@ -1,4 +1,5 @@
-<script lang="ts">
+<script lang="ts" generics="H extends DiffHunk">
+  import type { Snippet } from "svelte";
   import type { DiffHunk } from "../api";
   import { codeHtml, languageOfPath } from "../highlight";
   import { hunkHeader } from "../patch";
@@ -7,7 +8,14 @@
     hunks,
     omitted,
     path = "",
-  }: { hunks: DiffHunk[]; omitted: number; path?: string } = $props();
+    actions,
+  }: {
+    hunks: H[];
+    omitted: number;
+    path?: string;
+    /** Buttons for one hunk, shown on its header while it is hovered. */
+    actions?: Snippet<[H]>;
+  } = $props();
 
   const sign = { added: "+", removed: "−", context: " " };
   // A diff line is coloured on its own, since the lines around it may not be
@@ -33,7 +41,14 @@
   <div class="diff-body">
     {#each hunks as hunk, h (h)}
       {@const numbers = numbered(hunk)}
-      <div class="diff-hunk">{hunkHeader(hunk)}</div>
+      {#if actions}
+        <div class="diff-hunk has-acts">
+          <span>{hunkHeader(hunk)}</span>
+          <span class="hunk-acts">{@render actions(hunk)}</span>
+        </div>
+      {:else}
+        <div class="diff-hunk">{hunkHeader(hunk)}</div>
+      {/if}
       {#each hunk.lines as line, i (i)}
         <div
           class="diff-line"

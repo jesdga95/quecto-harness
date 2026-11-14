@@ -12,7 +12,7 @@
   import AttachmentsView from "./AttachmentsView.svelte";
   import ArtifactPage from "./ArtifactPage.svelte";
   import ArtifactSvg from "./ArtifactSvg.svelte";
-  import ChangesView from "./ChangesView.svelte";
+  import GitView from "./GitView.svelte";
   import ContextView from "./ContextView.svelte";
   import CopyButton from "./CopyButton.svelte";
   import FileIcon from "./FileIcon.svelte";
@@ -273,8 +273,8 @@
       </div>
     {/if}
 
-    {#if app.section === "changes"}
-      <ChangesView />
+    {#if app.section === "git"}
+      <GitView />
     {:else if app.section === "agents"}
       <RunsView />
     {:else if app.section === "processes"}

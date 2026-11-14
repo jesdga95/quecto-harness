@@ -4,10 +4,18 @@ import type {
   AgentPatch,
   Answer,
   Attached,
-  Changes,
   Config,
   EventHandler,
-  FileChange,
+  DiffKind,
+  Git,
+  GitActionBody,
+  GitActionResult,
+  GitBranches,
+  GitCommit,
+  GitCommitFile,
+  GitFile,
+  GitHunk,
+  GitOp,
   ProjectFile,
   ProjectDir,
   HarnessApi,
@@ -181,65 +189,130 @@ function split(usage: Usage): Usage {
   };
 }
 
-// One of every row the panel has to draw, so the states with no diff are
-// exercised as well as the ones with one.
-function mockChanges(): FileChange[] {
+// An in-memory repository, with one of each state the panel draws: a file
+// split across both sides, a new file, a deletion, an untracked file and a
+// binary one.
+type MockFile = GitFile & { staged: boolean };
+
+const hunk = (old_start: number, new_start: number, lines: [DiffKind, string][], section?: string): GitHunk => ({
+  old_start,
+  new_start,
+  old_lines: lines.filter(([k]) => k !== "added").length,
+  new_lines: lines.filter(([k]) => k !== "removed").length,
+  section,
+  lines: lines.map(([kind, text]) => ({ kind, text })),
+});
+
+function counted(f: Omit<MockFile, "added" | "removed" | "omitted">): MockFile {
+  let added = 0;
+  let removed = 0;
+  for (const h of f.hunks)
+    for (const l of h.lines) {
+      if (l.kind === "added") added++;
+      if (l.kind === "removed") removed++;
+    }
+  return { ...f, added, removed, omitted: 0 };
+}
+
+function mockFiles(): MockFile[] {
   return [
-    {
+    counted({
       path: "internal/server/hub.go",
-      status: "changed",
-      added: 9,
-      removed: 3,
-      omitted: 0,
+      state: "changed",
+      binary: false,
+      staged: true,
       hunks: [
-        {
-          old_start: 41,
-          new_start: 41,
-          lines: [
-            { kind: "context", text: "func (h *Hub) Publish(session string, ev agent.Event) {" },
-            { kind: "context", text: "\th.mu.RLock()" },
-            { kind: "removed", text: "\tch := h.subs[session]" },
-            { kind: "removed", text: "\th.mu.RUnlock()" },
-            { kind: "removed", text: "\tch <- ev" },
-            { kind: "added", text: "\tsubs := append([]chan agent.Event(nil), h.subs[session]...)" },
-            { kind: "added", text: "\th.mu.RUnlock()" },
-            { kind: "added", text: "\tfor _, ch := range subs {" },
-            { kind: "added", text: "\t\tselect {" },
-            { kind: "added", text: "\t\tcase ch <- ev:" },
-            { kind: "added", text: "\t\tdefault:" },
-            { kind: "added", text: "\t\t\th.drop(session, ch)" },
-            { kind: "added", text: "\t\t}" },
-            { kind: "added", text: "\t}" },
-            { kind: "context", text: "}" },
+        hunk(
+          41,
+          41,
+          [
+            ["context", "func (h *Hub) Publish(session string, ev agent.Event) {"],
+            ["context", "\th.mu.RLock()"],
+            ["removed", "\tch := h.subs[session]"],
+            ["removed", "\th.mu.RUnlock()"],
+            ["removed", "\tch <- ev"],
+            ["added", "\tsubs := append([]chan agent.Event(nil), h.subs[session]...)"],
+            ["added", "\th.mu.RUnlock()"],
+            ["added", "\tfor _, ch := range subs {"],
+            ["added", "\t\tselect {"],
+            ["added", "\t\tcase ch <- ev:"],
+            ["added", "\t\tdefault:"],
+            ["added", "\t\t\th.drop(session, ch)"],
+            ["added", "\t\t}"],
+            ["added", "\t}"],
+            ["context", "}"],
           ],
-        },
+          "func (h *Hub) Publish(session string, ev agent.Event) {",
+        ),
       ],
-    },
-    {
+    }),
+    counted({
+      path: "internal/server/hub.go",
+      state: "changed",
+      binary: false,
+      staged: false,
+      hunks: [
+        hunk(88, 95, [
+          ["context", "func (h *Hub) drop(session string, ch chan agent.Event) {"],
+          ["removed", "\tclose(ch)"],
+          ["added", "\th.mu.Lock()"],
+          ["added", "\tdefer h.mu.Unlock()"],
+          ["added", "\tclose(ch)"],
+          ["context", "}"],
+        ]),
+      ],
+    }),
+    counted({
       path: "internal/server/fanout_test.go",
-      status: "new",
-      added: 4,
-      removed: 0,
-      omitted: 0,
+      state: "untracked",
+      binary: false,
+      staged: false,
       hunks: [
-        {
-          old_start: 1,
-          new_start: 1,
-          lines: [
-            { kind: "added", text: "package server" },
-            { kind: "added", text: "" },
-            { kind: "added", text: "func TestTwoTabsBothGetTheEvent(t *testing.T) {" },
-            { kind: "added", text: "}" },
-          ],
-        },
+        hunk(0, 1, [
+          ["added", "package server"],
+          ["added", ""],
+          ["added", "func TestTwoTabsBothGetTheEvent(t *testing.T) {"],
+          ["added", "}"],
+        ]),
       ],
-    },
-    { path: "docs/scratch.md", status: "deleted", added: 0, removed: 0, omitted: 0, hunks: [] },
-    { path: "web/src/app.css", status: "same", added: 0, removed: 0, omitted: 0, hunks: [] },
-    { path: "internal/web/dist/logo.png", status: "binary", added: 0, removed: 0, omitted: 0, hunks: [] },
-    { path: "web/package-lock.json", status: "large", added: 0, removed: 0, omitted: 0, hunks: [] },
+    }),
+    counted({
+      path: "docs/scratch.md",
+      state: "deleted",
+      binary: false,
+      staged: false,
+      hunks: [hunk(1, 0, [["removed", "# Scratch"], ["removed", "notes"]])],
+    }),
+    counted({ path: "web/src/logo.png", state: "changed", binary: true, staged: false, hunks: [] }),
   ];
 }
+
+function mockCommits(): GitCommit[] {
+  const now = Math.floor(Date.now() / 1000);
+  const subjects = [
+    "Show each replacement in an edit as its own diff",
+    "Narrow the agent popover",
+    "Drop delegation entries for agents that no longer exist",
+    "Rework the composer menus, and set effort per session",
+  ];
+  return subjects.map((subject, i) => ({
+    hash: `${i}f3a9c1d2e`.padEnd(40, "0"),
+    short: `${i}f3a9c1`,
+    subject,
+    body: "",
+    author: "Mock",
+    when: now - (i + 1) * 5400,
+    pushed: i > 1,
+  }));
+}
+
+const repo = {
+  initialized: true,
+  branch: "feat/fanout",
+  files: mockFiles(),
+  commits: mockCommits(),
+  branches: ["main", "feat/fanout", "fix/router-autoload"],
+};
 
 class Cancelled extends Error {}
 
@@ -891,14 +964,163 @@ export class MockApi implements HarnessApi {
     if (t) t.mode = mode;
   }
 
-  async getChanges(id: string): Promise<Changes> {
+  async getGit(_project: string): Promise<Git> {
     await this.tick();
-    if (!this.transcripts.has(id)) throw new Error(`session ${id} not found`);
-    const files = mockChanges();
+    if (!repo.initialized) return { available: true, repo: false, status: null };
+    const strip = ({ staged: _, ...f }: MockFile): GitFile => f;
+    const ahead = repo.commits.filter((c) => !c.pushed).length;
     return {
-      files,
-      added: files.reduce((n, f) => n + f.added, 0),
-      removed: files.reduce((n, f) => n + f.removed, 0),
+      available: true,
+      repo: true,
+      status: {
+        branch: repo.branch,
+        detached: false,
+        head: repo.commits[0]?.short ?? "",
+        upstream: `origin/${repo.branch}`,
+        ahead,
+        behind: 0,
+        remotes: true,
+        staged: repo.files.filter((f) => f.staged).map(strip),
+        unstaged: repo.files.filter((f) => !f.staged).map(strip),
+        hidden: 0,
+      },
+    };
+  }
+
+  async gitLog(_project: string): Promise<GitCommit[]> {
+    await this.tick();
+    return repo.commits.map((c) => ({ ...c }));
+  }
+
+  async gitShow(_project: string, hash: string): Promise<GitCommitFile[]> {
+    await this.tick();
+    const n = hash.charCodeAt(0) % 3;
+    const files: GitCommitFile[] = [
+      { path: "web/src/lib/components/WriteDiff.svelte", state: "changed", added: 48 - n, removed: 12, binary: false },
+      { path: "internal/tools/replace.go", state: "changed", added: 9, removed: 3 + n, binary: false },
+    ];
+    return files.slice(0, n + 1);
+  }
+
+  async gitBranches(_project: string): Promise<GitBranches> {
+    await this.tick();
+    return {
+      local: repo.branches.map((name) => ({
+        name,
+        current: name === repo.branch,
+        upstream: `origin/${name}`,
+        ahead: name === repo.branch ? repo.commits.filter((c) => !c.pushed).length : 0,
+        behind: name === "fix/router-autoload" ? 3 : 0,
+      })),
+      remote: ["origin/main", "origin/dev"],
+    };
+  }
+
+  async gitPatch(_project: string): Promise<string> {
+    await this.tick();
+    return repo.files
+      .filter((f) => f.hunks.length > 0)
+      .map((f) =>
+        [
+          `diff --git a/${f.path} b/${f.path}`,
+          `--- a/${f.path}`,
+          `+++ b/${f.path}`,
+          ...f.hunks.flatMap((h) => [
+            `@@ -${h.old_start},${h.old_lines} +${h.new_start},${h.new_lines} @@`,
+            ...h.lines.map((l) => ({ added: "+", removed: "-", context: " " })[l.kind] + l.text),
+          ]),
+        ].join("\n"),
+      )
+      .join("\n");
+  }
+
+  async gitInit(_project: string): Promise<void> {
+    await this.tick();
+    repo.initialized = true;
+  }
+
+  async gitAction(_project: string, op: GitOp, body: GitActionBody = {}): Promise<GitActionResult> {
+    await this.tick();
+    const paths = new Set(body.paths ?? []);
+    const merge = (path: string) => {
+      const both = repo.files.filter((f) => f.path === path);
+      if (both.length < 2) return;
+      const [a, b] = both as [MockFile, MockFile];
+      repo.files = repo.files.filter((f) => f !== b);
+      a.hunks = [...a.hunks, ...b.hunks];
+      Object.assign(a, counted(a));
+    };
+    switch (op) {
+      case "stage":
+      case "unstage":
+        for (const f of repo.files) if (paths.has(f.path)) f.staged = op === "stage";
+        for (const p of paths) merge(p);
+        break;
+      case "discard":
+        repo.files = repo.files.filter((f) => f.staged || !paths.has(f.path));
+        break;
+      case "hunk": {
+        const ref = body.hunk;
+        const file = repo.files.find((f) => f.path === ref?.path && f.staged === ref?.staged);
+        if (!file || !ref) throw new Error("That hunk has changed since it was shown: look again and retry");
+        const h = file.hunks.find((x) => x.old_start === ref.old_start && x.new_start === ref.new_start);
+        if (!h) throw new Error("That hunk has changed since it was shown: look again and retry");
+        file.hunks = file.hunks.filter((x) => x !== h);
+        Object.assign(file, counted(file));
+        if (file.hunks.length === 0) repo.files = repo.files.filter((f) => f !== file);
+        if (body.action !== "discard") {
+          const staged = body.action === "stage";
+          const other = repo.files.find((f) => f.path === file.path && f.staged === staged);
+          if (other) Object.assign(other, counted({ ...other, hunks: [...other.hunks, h] }));
+          else repo.files.push(counted({ ...file, staged, hunks: [h] }));
+        }
+        break;
+      }
+      case "commit": {
+        if (!body.message?.trim() && !body.amend) throw new Error("Commit failed: a commit needs a message");
+        const taken = body.all ? repo.files : repo.files.filter((f) => f.staged);
+        if (taken.length === 0 && !body.amend) throw new Error("Commit failed: nothing to commit, working tree clean");
+        repo.files = repo.files.filter((f) => !taken.includes(f));
+        const short = Math.random().toString(16).slice(2, 9);
+        const [subject = "", ...rest] = (body.message ?? "").split("\n");
+        const commit: GitCommit = {
+          hash: short.padEnd(40, "0"),
+          short,
+          subject,
+          body: rest.join("\n").trim(),
+          author: "Mock",
+          when: Math.floor(Date.now() / 1000),
+          pushed: !!body.push,
+        };
+        if (body.amend) repo.commits[0] = { ...commit, subject: subject || (repo.commits[0]?.subject ?? "") };
+        else repo.commits.unshift(commit);
+        return { hash: short };
+      }
+      case "undo":
+        repo.commits.shift();
+        break;
+      case "push":
+        for (const c of repo.commits) c.pushed = true;
+        break;
+      case "stash":
+        repo.files = [];
+        break;
+      case "checkout": {
+        const name = (body.branch ?? "").replace(/^origin\//, "");
+        if (body.create || !repo.branches.includes(name)) repo.branches.push(name);
+        if (body.stash) repo.files = [];
+        repo.branch = name;
+        break;
+      }
+    }
+    return {};
+  }
+
+  async gitDraft(_session: string): Promise<{ summary: string; body: string }> {
+    await new Promise((r) => setTimeout(r, 900));
+    return {
+      summary: "Fan events out to every tab watching a session",
+      body: "A second tab used to steal the channel from the first. Each subscriber now gets its own copy, and a slow one is dropped instead of blocking the turn.",
     };
   }
 

@@ -64,8 +64,7 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 	}
 	content := before.Content
 	if before.State == SnapshotLarge {
-		// A file past the baseline limit is still edited; only the copy kept
-		// for the change panel is skipped.
+		// A file past the snapshot limit is still edited, read again whole.
 		content, err = os.ReadFile(path)
 		if err == nil && looksBinary(content[:min(len(content), 8192)]) {
 			return Result{}, fmt.Errorf("%s looks like a binary file, not edited", args.Path)
@@ -119,10 +118,6 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 	}
 	if err := config.WriteAtomicNoSync(path, []byte(updated), info.Mode().Perm()); err != nil {
 		return Result{}, fmt.Errorf("write %s: %s", args.Path, err)
-	}
-	// The change list covers the project, so a file outside keeps no copy.
-	if r.Baseline != nil && within(r.Root, path) {
-		r.Baseline(before)
 	}
 	r.noteFile(path)
 

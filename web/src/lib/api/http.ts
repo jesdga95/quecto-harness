@@ -5,10 +5,19 @@ import type {
   Attached,
   AttachedKind,
   Breakdown,
-  Changes,
   Config,
   Effort,
-  FileChange,
+  Git,
+  GitActionBody,
+  GitActionResult,
+  GitBranch,
+  GitBranches,
+  GitCommit,
+  GitCommitFile,
+  GitFile,
+  GitHunk,
+  GitOp,
+  GitState,
   EventHandler,
   HarnessApi,
   HarnessEvent,
@@ -844,29 +853,74 @@ function toToolsetDebug(w: WireToolsetDebug): ToolsetDebug {
   };
 }
 
-interface WireChanges {
-  files?: FileChange[];
+interface WireGitFile {
+  path?: string;
+  state?: GitState;
+  binary?: boolean;
   added?: number;
   removed?: number;
+  omitted?: number;
+  hunks?: Partial<GitHunk>[] | null;
 }
 
 // Every field is optional on the wire, so a row missing its hunks still draws
 // as a row rather than throwing the panel away.
-function toChanges(wire: WireChanges): Changes {
-  const files = (wire.files ?? []).map((f) => ({
+function toGitFile(f: WireGitFile): GitFile {
+  return {
     path: f.path ?? "",
-    status: f.status ?? "changed",
+    state: f.state ?? "changed",
+    binary: f.binary ?? false,
     added: f.added ?? 0,
     removed: f.removed ?? 0,
     omitted: f.omitted ?? 0,
     hunks: (f.hunks ?? []).map((h) => ({
       old_start: h.old_start ?? 0,
+      old_lines: h.old_lines ?? 0,
       new_start: h.new_start ?? 0,
+      new_lines: h.new_lines ?? 0,
       section: typeof h.section === "string" && h.section !== "" ? h.section : undefined,
       lines: h.lines ?? [],
     })),
-  }));
-  return { files, added: wire.added ?? 0, removed: wire.removed ?? 0 };
+  };
+}
+
+interface WireGit {
+  available?: boolean;
+  repo?: boolean;
+  status?: {
+    branch?: string;
+    detached?: boolean;
+    head?: string;
+    upstream?: string;
+    ahead?: number;
+    behind?: number;
+    remotes?: boolean;
+    staged?: WireGitFile[] | null;
+    unstaged?: WireGitFile[] | null;
+    hidden?: number;
+  } | null;
+}
+
+function toGit(w: WireGit): Git {
+  const st = w.status;
+  return {
+    available: w.available ?? true,
+    repo: w.repo ?? false,
+    status: st
+      ? {
+          branch: st.branch ?? "",
+          detached: st.detached ?? false,
+          head: st.head ?? "",
+          upstream: st.upstream ?? "",
+          ahead: st.ahead ?? 0,
+          behind: st.behind ?? 0,
+          remotes: st.remotes ?? false,
+          staged: (st.staged ?? []).map(toGitFile),
+          unstaged: (st.unstaged ?? []).map(toGitFile),
+          hidden: st.hidden ?? 0,
+        }
+      : null,
+  };
 }
 
 /** One background command, as the process list and the stream both send it. */
@@ -1469,9 +1523,72 @@ class HttpApi implements HarnessApi {
     return toTranscript({ ...wire, id: wire.id ?? id });
   }
 
-  async getChanges(id: string): Promise<Changes> {
-    const wire = await call<WireChanges>(`/sessions/${encodeURIComponent(id)}/changes`);
-    return toChanges(wire);
+  async getGit(project: string): Promise<Git> {
+    return toGit(await call<WireGit>(`/git?project=${encodeURIComponent(project)}`));
+  }
+
+  async gitLog(project: string): Promise<GitCommit[]> {
+    const wire = await call<{ commits?: Partial<GitCommit>[] | null }>(`/git/log?project=${encodeURIComponent(project)}`);
+    return (wire.commits ?? []).map((c) => ({
+      hash: c.hash ?? "",
+      short: c.short ?? "",
+      subject: c.subject ?? "",
+      body: c.body ?? "",
+      author: c.author ?? "",
+      when: c.when ?? 0,
+      pushed: c.pushed ?? false,
+    }));
+  }
+
+  async gitShow(project: string, hash: string): Promise<GitCommitFile[]> {
+    const wire = await call<{ files?: Partial<GitCommitFile>[] | null }>(
+      `/git/show?project=${encodeURIComponent(project)}&hash=${encodeURIComponent(hash)}`,
+    );
+    return (wire.files ?? []).map((f) => ({
+      path: f.path ?? "",
+      state: f.state ?? "changed",
+      added: f.added ?? 0,
+      removed: f.removed ?? 0,
+      binary: f.binary ?? false,
+    }));
+  }
+
+  async gitBranches(project: string): Promise<GitBranches> {
+    const wire = await call<{ local?: Partial<GitBranch>[] | null; remote?: string[] | null }>(
+      `/git/branches?project=${encodeURIComponent(project)}`,
+    );
+    return {
+      local: (wire.local ?? []).map((b) => ({
+        name: b.name ?? "",
+        current: b.current ?? false,
+        upstream: b.upstream ?? "",
+        ahead: b.ahead ?? 0,
+        behind: b.behind ?? 0,
+      })),
+      remote: wire.remote ?? [],
+    };
+  }
+
+  async gitPatch(project: string): Promise<string> {
+    const wire = await call<{ patch?: string }>(`/git/patch?project=${encodeURIComponent(project)}`);
+    return wire.patch ?? "";
+  }
+
+  async gitInit(project: string): Promise<void> {
+    await call("/git/init", "POST", { project });
+  }
+
+  async gitAction(project: string, op: GitOp, body: GitActionBody = {}): Promise<GitActionResult> {
+    return call<GitActionResult>(`/git/${op}`, "POST", { project, ...body });
+  }
+
+  async gitDraft(session: string): Promise<{ summary: string; body: string }> {
+    const wire = await call<{ summary?: string; body?: string }>(
+      `/sessions/${encodeURIComponent(session)}/git/draft`,
+      "POST",
+      {},
+    );
+    return { summary: wire.summary ?? "", body: wire.body ?? "" };
   }
 
   async listProcesses(id: string): Promise<Process[]> {

@@ -660,9 +660,6 @@ func TestReplaceInFileChangesOneRun(t *testing.T) {
 	target := filepath.Join(base, "hub.go")
 	os.WriteFile(target, []byte("one\ntwo\nthree\n"), 0o640)
 
-	var kept Snapshot
-	r.Baseline = func(s Snapshot) { kept = s }
-
 	res, err := r.ReplaceInFile(context.Background(),
 		json.RawMessage(`{"path":"hub.go","old_string":"two","new_string":"TWO"}`))
 	if err != nil {
@@ -681,9 +678,6 @@ func TestReplaceInFileChangesOneRun(t *testing.T) {
 	info, _ := os.Stat(target)
 	if info.Mode().Perm() != 0o640 {
 		t.Errorf("mode = %v, want 0640 preserved", info.Mode().Perm())
-	}
-	if kept.Path != "hub.go" || string(kept.Content) != "one\ntwo\nthree\n" {
-		t.Errorf("the baseline is %+v, want the file as it was before the edit", kept)
 	}
 }
 
@@ -907,12 +901,12 @@ func TestReplaceInFileMatchesCRLF(t *testing.T) {
 	}
 }
 
-// A file past the baseline limit is still edited, with nothing kept to compare.
+// A file past the snapshot limit is still edited.
 func TestReplaceInFileEditsALargeFile(t *testing.T) {
 	base := t.TempDir()
 	r := testRoot(t, base)
 	target := filepath.Join(base, "big.txt")
-	big := strings.Repeat("filler line\n", baselineLimit/12+10) + "needle\n"
+	big := strings.Repeat("filler line\n", snapshotLimit/12+10) + "needle\n"
 	os.WriteFile(target, []byte(big), 0o644)
 
 	if _, err := r.ReplaceInFile(context.Background(),
@@ -1542,14 +1536,11 @@ func TestShellPrintCountsAsRead(t *testing.T) {
 	}
 }
 
-// A write outside the project lands, and keeps no copy for the change list,
-// which covers the project alone. The saved output folder is not outside.
+// A write outside the project lands. The saved output folder is not outside.
 func TestWriteOutsideTheProject(t *testing.T) {
 	base, other := t.TempDir(), t.TempDir()
 	r := testRoot(t, base)
 	r.SpillTo(filepath.Join(other, "spill"))
-	var kept []Snapshot
-	r.Baseline = func(s Snapshot) { kept = append(kept, s) }
 	target := filepath.Join(other, "out", "file.txt")
 	raw, _ := json.Marshal(WriteFileArgs{Path: target, Content: "one\n"})
 	if _, err := r.WriteFile(context.Background(), raw); err != nil {
@@ -1557,9 +1548,6 @@ func TestWriteOutsideTheProject(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(target); string(got) != "one\n" {
 		t.Errorf("file = %q", got)
-	}
-	if len(kept) != 0 {
-		t.Errorf("baselines = %+v, want none for a file outside", kept)
 	}
 	if !r.Outside(target) || r.Outside(filepath.Join(other, "spill", "x.txt")) {
 		t.Error("Outside got the written file or the saved output folder wrong")
