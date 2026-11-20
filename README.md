@@ -97,6 +97,10 @@ compiled in. `make check` runs gofmt, vet and the race tests.
 For UI work, run `make run` for a backend-only binary and `npm run dev` in
 `web/`, which serves the page on Vite's port and proxies `/api` to the harness.
 
+`make desktop` wraps the same binary in a macOS app and packs it into a DMG
+under `desktop/dist`. The app is ad-hoc signed, so another Mac asks for approval
+under Privacy & Security the first time it opens.
+
 ## License
 
 MIT, in `LICENSE`. The embedded Poppins typeface is under the SIL Open Font

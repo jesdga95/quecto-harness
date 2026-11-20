@@ -1,0 +1,61 @@
+{
+  "name": "quecto-harness-desktop",
+  "productName": "Quecto Harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Quecto Harness in a desktop window",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac dmg"
+  },
+  "build": {
+    "appId": "dev.quecto.harness",
+    "productName": "Quecto Harness",
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "bin/quecto-harness",
+        "to": "quecto-harness"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg"
+      ],
+      "identity": "-",
+      "hardenedRuntime": false
+    },
+    "dmg": {
+      "artifactName": "Quecto-Harness-${version}-${arch}.${ext}",
+      "iconSize": 128,
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 180,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "icon": "build/icon.png"
+  },
+  "devDependencies": {
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0"
+  }
+}

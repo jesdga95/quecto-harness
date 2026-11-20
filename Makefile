@@ -7,7 +7,7 @@ LDFLAGS := -s -w \
 	-X main.commit=$(COMMIT) \
 	-X main.date=$(DATE)
 
-.PHONY: all web build test fmt vet check clean run
+.PHONY: all web build test fmt vet check clean run desktop
 
 all: build
 
@@ -38,5 +38,12 @@ check: fmt vet test
 run: backend
 	./$(BINARY)
 
+# The desktop app bundles the binary built for this machine's architecture.
+desktop: build
+	mkdir -p desktop/bin
+	cp $(BINARY) desktop/bin/$(BINARY)
+	cd desktop && npm ci && npm run dist
+
 clean:
 	rm -f $(BINARY)
+	rm -rf desktop/dist desktop/bin
