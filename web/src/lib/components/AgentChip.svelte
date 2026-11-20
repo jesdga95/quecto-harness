@@ -74,7 +74,7 @@
   >
     {#if current}
       <Robot class={problem ? "text-crit" : app.status === "loading" ? "text-warn" : ""} />
-      <span class="max-w-[190px] truncate">{current.name}</span>
+      <span class="chip-agent-name max-w-[190px] truncate">{current.name}</span>
       {#if effort}
         <span class="chip-effort {overridden ? 'text-accent' : 'text-muted'}">{effortLabel(effort)}</span>
       {/if}

@@ -1,15 +1,15 @@
 <script lang="ts">
-  import CaretRight from "phosphor-svelte/lib/CaretRightIcon";
   import Folder from "phosphor-svelte/lib/FolderIcon";
   import FolderOpen from "phosphor-svelte/lib/FolderOpenIcon";
   import PlusCircle from "phosphor-svelte/lib/PlusCircleIcon";
   import RowMenu from "./RowMenu.svelte";
   import { confirm } from "../state/confirm.svelte";
+  import CaretDown from "phosphor-svelte/lib/CaretDownIcon";
   import FolderPlus from "phosphor-svelte/lib/FolderPlusIcon";
   import Gear from "phosphor-svelte/lib/GearIcon";
   import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlassIcon";
-  import Plus from "phosphor-svelte/lib/PlusIcon";
   import SidebarSimple from "phosphor-svelte/lib/SidebarSimpleIcon";
+  import X from "phosphor-svelte/lib/XIcon";
   import Logo from "./Logo.svelte";
   import ThemeButton from "./ThemeButton.svelte";
   import {
@@ -28,12 +28,42 @@
     renameSession,
     reorderProjects,
   } from "../state/app.svelte";
-  import { since } from "../format";
+  import { keyLabels, SEARCH_EVENT } from "../keys";
+  import { tick } from "svelte";
 
-  let { onsettings }: { onsettings: () => void } = $props();
+  // As an overlay on a narrow window its collapse button closes it.
+  let {
+    onsettings,
+    overlay = false,
+    onclose,
+  }: { onsettings: () => void; overlay?: boolean; onclose?: () => void } = $props();
 
+  // Search is a row until pressed, then a field in its place. Escape, the
+  // clear button or leaving the field empty puts the row back.
   let searching = $state(false);
   let query = $state("");
+  let searchField = $state<HTMLInputElement | null>(null);
+  const keys = keyLabels();
+
+  async function openSearch(): Promise<void> {
+    searching = true;
+    await tick();
+    searchField?.focus();
+  }
+  function closeSearch(): void {
+    query = "";
+    searching = false;
+  }
+
+  $effect(() => {
+    const open = () => void openSearch();
+    window.addEventListener(SEARCH_EVENT, open);
+    return () => window.removeEventListener(SEARCH_EVENT, open);
+  });
+
+  function searchKey(e: KeyboardEvent): void {
+    if (e.key === "Escape") closeSearch();
+  }
   let renaming = $state("");
   let draft = $state("");
 
@@ -110,15 +140,7 @@
   // preference, so it lives in local storage and a blocked store costs only
   // the memory of it.
   const FOLDED_KEY = "quecto.folded-projects";
-  let folded = $state<string[]>(readFolded());
-  function readFolded(): string[] {
-    try {
-      const raw = JSON.parse(localStorage.getItem(FOLDED_KEY) ?? "[]");
-      return Array.isArray(raw) ? raw.filter((p): p is string => typeof p === "string") : [];
-    } catch {
-      return [];
-    }
-  }
+  let folded = $state<string[]>(readList(FOLDED_KEY));
   function toggleFold(path: string): void {
     folded = folded.includes(path) ? folded.filter((p) => p !== path) : [...folded, path];
     try {
@@ -129,6 +151,46 @@
   }
   // A search shows every match, folded or not.
   const isFolded = (path: string) => query.trim() === "" && folded.includes(path);
+
+  // A project shows its first sessions and offers the rest; a project opened
+  // to show them all stays open, remembered the same way as a fold.
+  const SHOWN = 10;
+  const EXPANDED_KEY = "quecto.expanded-projects";
+  let expanded = $state<string[]>(readList(EXPANDED_KEY));
+  function readList(key: string): string[] {
+    try {
+      const raw = JSON.parse(localStorage.getItem(key) ?? "[]");
+      return Array.isArray(raw) ? raw.filter((p): p is string => typeof p === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+  function toggleExpanded(path: string): void {
+    expanded = expanded.includes(path) ? expanded.filter((p) => p !== path) : [...expanded, path];
+    try {
+      localStorage.setItem(EXPANDED_KEY, JSON.stringify(expanded));
+    } catch {
+      // It holds for this page.
+    }
+  }
+  // The open session always shows, even when it sits past the first few.
+  function visible(path: string) {
+    const list = sessions(path);
+    if (query.trim() || expanded.includes(path)) return list;
+    const open = list.findIndex((s) => s.id === app.sessionId);
+    return list.slice(0, Math.max(SHOWN, open + 1));
+  }
+
+  // A project's row picks it as the one new sessions go to, opening it if it
+  // was folded. Pressing the current project folds or opens it.
+  function pressProject(path: string): void {
+    if (path !== app.projectPath) {
+      void selectProject(path);
+      if (folded.includes(path)) toggleFold(path);
+    } else {
+      toggleFold(path);
+    }
+  }
 
 
   function sessions(path: string) {
@@ -146,53 +208,61 @@
   }
 </script>
 
-{#if app.sidebar}
-  <aside class="flex w-[276px] shrink-0 flex-col border-r border-hair bg-panel">
-    <div class="flex h-[64px] items-center gap-2 px-4">
-      <Logo size={28} />
+<!-- Two edges line everything up: icons, the logo and labels start 20px in,
+     and icons, counts and times end 20px from the right. Row backgrounds run
+     from 12px in on each side. -->
+<aside class="flex w-[276px] shrink-0 flex-col border-r border-hair bg-panel">
+    <div class="side-brand flex h-[56px] items-center gap-2 pr-[15px] pl-5">
+      <Logo size={24} text={12} />
       <span class="chip-harness">Harness</span>
       <button
         class="icon-btn ml-auto"
-        aria-label="Collapse sidebar"
-        onclick={() => (app.sidebar = false)}
+        aria-label={overlay ? "Close sidebar" : "Collapse sidebar"}
+        onclick={() => (overlay ? onclose?.() : (app.sidebar = false))}
       >
         <SidebarSimple />
       </button>
     </div>
 
-    <div class="px-3 pb-3">
-      <button class="new-session" onclick={() => newSession()}>
-        <PlusCircle /> New session
-      </button>
+    <div class="px-3">
+      {#if searching}
+        <label class="side-search">
+          <MagnifyingGlass />
+          <input
+            bind:this={searchField}
+            bind:value={query}
+            onkeydown={searchKey}
+            onblur={() => query.trim() === "" && closeSearch()}
+            placeholder="Search sessions"
+            aria-label="Search sessions"
+          />
+          <button class="side-search-clear" aria-label="Close the search" onclick={closeSearch}>
+            <X />
+          </button>
+        </label>
+      {:else}
+        <button class="side-act" onclick={() => newSession()}>
+          <PlusCircle /> New session
+          <span class="side-kbd">{keys.newSession}</span>
+        </button>
+        <button class="side-act" onclick={() => void openSearch()}>
+          <MagnifyingGlass /> Search
+          <span class="side-kbd">{keys.search}</span>
+        </button>
+      {/if}
     </div>
 
-    <div class="flex items-center gap-1 px-4 pb-1">
+    <div class="flex items-center gap-1 pt-3 pr-[15px] pb-1.5 pl-5">
       <span class="label flex-1">Projects</span>
-      <button
-        class="icon-btn"
-        aria-label="Search sessions"
-        onclick={() => {
-          searching = !searching;
-          if (!searching) query = "";
-        }}
-      >
-        <MagnifyingGlass />
-      </button>
       <button class="icon-btn" aria-label="Add project" onclick={() => pickAndAddProject()}>
         <FolderPlus />
       </button>
     </div>
 
-    {#if searching}
-      <div class="px-3 pb-2">
-        <input class="input" placeholder="Search" bind:value={query} />
-      </div>
-    {/if}
-
     <!-- The top padding lets the drop line above the first row stay inside
          the scroll box, which would otherwise clip it. -->
     <nav
-      class="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-3"
+      class="min-h-0 flex-1 overflow-y-auto px-3 pt-1 pb-3"
       ondragover={navDragOver}
       ondrop={drop}
     >
@@ -216,23 +286,14 @@
               draggable={canDrag}
               ondragstart={(e) => startDrag(e, { kind: "project", id: project.path })}
               ondragend={endDrag}
-              onclick={() => selectProject(project.path)}
+              onclick={() => pressProject(project.path)}
+              aria-expanded={!isFolded(project.path)}
             >
-              <span class="folder-glyph">
-                {#if project.path === app.projectPath}<FolderOpen weight="fill" />{:else}<Folder />{/if}
+              <span class="folder-glyph" class:is-open={!isFolded(project.path)}>
+                {#if isFolded(project.path)}<Folder />{:else}<FolderOpen />{/if}
               </span>
               <span class="min-w-0 flex-1 truncate">{project.name}</span>
             </button>
-            {#if sessions(project.path).length > 0}
-              <button
-                class="fold-toggle"
-                aria-label={isFolded(project.path) ? `Show the sessions in ${project.name}` : `Hide the sessions in ${project.name}`}
-                aria-expanded={!isFolded(project.path)}
-                onclick={() => toggleFold(project.path)}
-              >
-                <span class="caret" class:is-open={!isFolded(project.path)}><CaretRight /></span>
-              </button>
-            {/if}
             <div class="row-act">
               <RowMenu
                 deleteLabel="Remove"
@@ -255,9 +316,9 @@
             </div>
           </div>
 
-          {#if !isFolded(project.path)}
-            <div class="mb-3 pl-3">
-              {#each sessions(project.path) as session (session.id)}
+          {#if !isFolded(project.path) && sessions(project.path).length > 0}
+            <div class="side-tree">
+              {#each visible(project.path) as session (session.id)}
                 {#if renaming === session.id}
                   <input
                     class="input mb-[3px]"
@@ -292,11 +353,9 @@
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{session.title}</span>
                     {#if held}
-                      <span class="text-[11px] text-warn">Pending</span>
+                      <span class="side-meta text-[11px] text-warn">Pending</span>
                     {:else if back}
-                      <span class="text-[11px] text-tools">Background</span>
-                    {:else}
-                      <span class="num text-[11px] text-muted">{since(session.updated)}</span>
+                      <span class="side-meta text-[11px] text-tools">Background</span>
                     {/if}
                   </button>
                   <div class="row-act">
@@ -318,6 +377,14 @@
                 </div>
               {/if}
             {/each}
+              {#if !query.trim() && (expanded.includes(project.path) ? sessions(project.path).length > SHOWN : sessions(project.path).length > visible(project.path).length)}
+                <button class="side-row session-row side-more" onclick={() => toggleExpanded(project.path)}>
+                  <span class="side-more-mark" class:is-open={expanded.includes(project.path)}><CaretDown /></span>
+                  {expanded.includes(project.path)
+                    ? "Show less"
+                    : `Show ${sessions(project.path).length - visible(project.path).length} more`}
+                </button>
+              {/if}
             </div>
           {:else}
             <div class="mb-2"></div>
@@ -329,7 +396,7 @@
       {/each}
     </nav>
 
-    <div class="flex items-center gap-1 px-2 pb-3">
+    <div class="flex items-center gap-1 pr-[15px] pb-3 pl-3">
       <button class="side-row min-w-0 flex-1" onclick={onsettings}>
         <Gear />
         Settings
@@ -337,29 +404,4 @@
       <ThemeButton />
     </div>
   </aside>
-{:else}
-  <!-- 61px, because the 1px right border is inside the width: that leaves 60px
-       of content, and a centred 28px mark then starts at 16px, exactly where
-       the expanded header's padding puts it. -->
-  <aside class="flex w-[61px] shrink-0 flex-col items-center border-r border-hair bg-panel">
-    <div class="flex h-[64px] items-center">
-      <Logo size={28} wordmark={false} />
-    </div>
-    <button
-      class="icon-btn"
-      aria-label="Expand sidebar"
-      onclick={() => (app.sidebar = true)}
-    >
-      <SidebarSimple />
-    </button>
-    <button class="icon-btn mt-2" aria-label="New session" onclick={() => newSession()}>
-      <Plus />
-    </button>
-    <div class="mt-auto mb-2">
-      <ThemeButton align="left" />
-    </div>
-    <button class="icon-btn mb-4" aria-label="Settings" onclick={onsettings}>
-      <Gear />
-    </button>
-  </aside>
-{/if}
+

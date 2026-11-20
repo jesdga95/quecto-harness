@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CaretRight from "phosphor-svelte/lib/CaretRightIcon";
+  import Plug from "phosphor-svelte/lib/PlugIcon";
   import Plus from "phosphor-svelte/lib/PlusIcon";
   import type { McpProbe, McpServer, McpServerRecord } from "../api";
   import { app, loadMcp, probeMcp, saveMcp } from "../state/app.svelte";
@@ -292,25 +294,39 @@
     }
     return "Starts with the next turn";
   }
+
+  const summary = $derived.by(() => {
+    const on = app.mcp.filter((s) => s.enabled).length;
+    const count = app.mcp.length === 1 ? "1 server" : `${app.mcp.length} servers`;
+    return `${count}, ${on} enabled`;
+  });
 </script>
 
-<SplitDialog label="MCP servers" title="MCP servers" onclose={leave} onback={onback ? back : undefined}>
+<SplitDialog label="MCP servers" title="MCP servers" {summary} onclose={leave} onback={onback ? back : undefined}>
   {#snippet rail()}
     <nav class="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
+      <div class="rail-group">
       {#each app.mcp as s (s.name)}
         <button class="rail-row" class:is-active={!fresh && s.name === stored?.name} onclick={() => select(s.name)}>
-          <span class="min-w-0 flex-1 truncate" class:opacity-55={!s.enabled}>{s.name}</span>
+          <span class="rail-tile is-extra" class:is-off={!s.enabled}><Plug /></span>
+          <span class="min-w-0 flex-1" class:opacity-55={!s.enabled}>
+            <span class="block truncate">{s.name}</span>
+            <span class="rail-sub rail-mono">{s.transport === "http" ? s.url : [s.command, ...s.args].join(" ")}</span>
+          </span>
           {#if railWord(s)}
             <span class="shrink-0 text-[11px] text-muted">{railWord(s)}</span>
           {/if}
+          <CaretRight size={14} class="rail-chevron" />
         </button>
       {/each}
       {#if fresh}
         <button class="rail-row is-active">
           <span class="min-w-0 flex-1 truncate">{draft?.name || "New server"}</span>
           <span class="shrink-0 text-[11px] text-muted">Not saved</span>
+          <CaretRight size={14} class="rail-chevron" />
         </button>
       {/if}
+      </div>
     </nav>
 
     <button class="rail-add" onclick={create}>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { COPIED_MS, copyText } from "../clipboard";
   import { render } from "../markdown";
-  import { openFile } from "../state/app.svelte";
+  import { fileLinks } from "../fileclick";
   import { Streamed } from "../stream.svelte";
 
   let { text, streaming = false }: { text: string; streaming?: boolean } = $props();
@@ -26,20 +26,6 @@
     stream.draw(box, html);
     if (copied !== null) box.querySelectorAll("[data-copy]")[copied]?.classList.add("is-copied");
   });
-
-  // A file link is markup rather than a component, so one listener on the
-  // block answers for every link in it, and each stays a real button.
-  function fileLinks(node: HTMLElement) {
-    const click = (event: MouseEvent) => {
-      const link = (event.target as HTMLElement).closest<HTMLElement>("[data-file]");
-      if (!link || !node.contains(link)) return;
-      event.preventDefault();
-      const line = Number(link.dataset.line ?? 0);
-      void openFile(link.dataset.file ?? "", Number.isFinite(line) ? line : 0);
-    };
-    node.addEventListener("click", click);
-    return { destroy: () => node.removeEventListener("click", click) };
-  }
 
   // The nth code block of the whole source, which the reveal may not have
   // drawn in full yet.

@@ -99,10 +99,12 @@
 {/snippet}
 
 <div class="entry-group" role="group" aria-label="Panel sections">
-  <!-- Held in place while the panel is shut, so opening it moves nothing. -->
+  <!-- Held in place while the panel is shut, so opening it moves nothing. A
+       crowded window already gives the panel all of it. -->
   <button
     class="entry-btn"
     class:is-hidden={!app.panel}
+    class:hidden={app.dockCrowded}
     tabindex={app.panel ? undefined : -1}
     aria-hidden={app.panel ? undefined : "true"}
     aria-label={app.artifactsWide ? "Show the conversation" : "Hide the conversation"}
@@ -111,7 +113,7 @@
   >
     {#if app.artifactsWide}<ArrowsIn size={16} />{:else}<ArrowsOut size={16} />{/if}
   </button>
-  <span class="entry-divider" class:is-hidden={!app.panel}></span>
+  <span class="entry-divider" class:is-hidden={!app.panel} class:hidden={app.dockCrowded}></span>
   {@render button("files", writing)}
   {@render button("git", !!repo)}
   {@render button("agents", app.runs.length > 0)}

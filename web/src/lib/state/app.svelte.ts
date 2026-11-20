@@ -1,3 +1,5 @@
+import { tick } from "svelte";
+import { COMPOSE_EVENT } from "../keys";
 import { ApiError, api } from "../api";
 import { dismissSticky, toast } from "./toast.svelte";
 import type {
@@ -136,6 +138,9 @@ export const app = $state({
   attachment: "",
   artifactsDismissed: false,
   artifactsWide: false,
+  // Set by the session view when the window is too narrow for the panel to
+  // sit beside the conversation.
+  dockCrowded: false,
   // Files in the project as last read, by the path the harness named them
   // under, and the ones the reader opened, in the order they were opened.
   files: {} as Record<string, ProjectFile | undefined>,
@@ -448,8 +453,11 @@ export async function selectSession(id: string): Promise<void> {
 /** Clears the screen for a new conversation. The harness is told about it when
     the first message is sent, so nothing is written and no row appears in the
     sidebar until there is something in it. */
+/** Clears the screen for a new session and puts the caret in the composer
+    once the empty screen is drawn. */
 export function newSession(): void {
   clearSession();
+  void tick().then(() => window.dispatchEvent(new Event(COMPOSE_EVENT)));
 }
 
 /** Creates the session the empty screen has been standing in for. It is not

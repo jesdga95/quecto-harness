@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CaretRight from "phosphor-svelte/lib/CaretRightIcon";
   import FolderOpen from "phosphor-svelte/lib/FolderOpenIcon";
   import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlassIcon";
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheckIcon";
@@ -30,6 +31,11 @@
     { id: "tools", label: "Tools", line: "Which tools the model can reach for, in every session." },
     { id: "search", label: "Search", line: "Where a web search goes, and what it may cost." },
     { id: "projects", label: "Projects", line: "The folders the harness works in." },
+  ];
+  // The rail's order. The labels show only when the list has the dialog to itself.
+  const GROUPS: { label: string; panes: Pane[] }[] = [
+    { label: "Harness", panes: ["general", "tools", "search"] },
+    { label: "Access", panes: ["permissions", "projects"] },
   ];
 
   // The pane it opens on; moving between panes afterwards is the dialog's own.
@@ -164,25 +170,36 @@
 <SplitDialog label="Settings" title="Settings" onclose={leave}>
   {#snippet rail()}
     <nav class="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
-      {#each PANELS as panel (panel.id)}
-        <button
-          class="rail-row"
-          class:is-active={pane === panel.id}
-          onclick={() => choose(panel.id)}
-        >
-          {#if panel.id === "general"}
-            <Sliders size={15} class="shrink-0" />
-          {:else if panel.id === "permissions"}
-            <ShieldCheck size={15} class="shrink-0" />
-          {:else if panel.id === "tools"}
-            <Wrench size={15} class="shrink-0" />
-          {:else if panel.id === "search"}
-            <MagnifyingGlass size={15} class="shrink-0" />
-          {:else}
-            <FolderOpen size={15} class="shrink-0" />
-          {/if}
-          <span class="min-w-0 flex-1 truncate">{panel.label}</span>
-        </button>
+      {#each GROUPS as group (group.label)}
+        <p class="rail-label">{group.label}</p>
+        <div class="rail-group">
+          {#each PANELS.filter((p) => group.panes.includes(p.id)) as panel (panel.id)}
+            <button
+              class="rail-row"
+              class:is-active={pane === panel.id}
+              onclick={() => choose(panel.id)}
+            >
+              <span class="rail-tile" class:is-warn={panel.id === "permissions"}>
+                {#if panel.id === "general"}
+                  <Sliders size={15} class="shrink-0" />
+                {:else if panel.id === "permissions"}
+                  <ShieldCheck size={15} class="shrink-0" />
+                {:else if panel.id === "tools"}
+                  <Wrench size={15} class="shrink-0" />
+                {:else if panel.id === "search"}
+                  <MagnifyingGlass size={15} class="shrink-0" />
+                {:else}
+                  <FolderOpen size={15} class="shrink-0" />
+                {/if}
+              </span>
+              <span class="min-w-0 flex-1">
+                <span class="block truncate">{panel.label}</span>
+                <span class="rail-sub">{panel.line}</span>
+              </span>
+              <CaretRight size={14} class="rail-chevron" />
+            </button>
+          {/each}
+        </div>
       {/each}
     </nav>
   {/snippet}

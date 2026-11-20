@@ -19,7 +19,7 @@
     <button class="plan-head" onclick={() => (open = !open)}>
       {#if running && current}<span class="spinner"></span>{:else}<ListChecks />{/if}
       <span class="plan-now">{current?.content ?? "Plan"}</span>
-      <span class="num text-[12px] text-muted">{done} of {todos.length}</span>
+      <span class="num text-[12px] text-muted">{done}/{todos.length}</span>
       <span class="caret" class:is-open={open}><CaretRight /></span>
     </button>
 

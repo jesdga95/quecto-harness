@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CaretRight from "phosphor-svelte/lib/CaretRightIcon";
   import Plus from "phosphor-svelte/lib/PlusIcon";
   import Robot from "phosphor-svelte/lib/RobotIcon";
   import User from "phosphor-svelte/lib/UserIcon";
@@ -166,19 +167,34 @@
     chosen = "";
     await removeAgent(gone.id);
   }
+
+  const summary = $derived.by(() => {
+    const all = app.agents;
+    const on = all.filter((a) => a.enabled);
+    const working = all.filter((a) => on.some((x) => x.calls.includes(a.id))).length;
+    const count = all.length === 1 ? "1 agent" : `${all.length} agents`;
+    return `${count}, ${on.length} enabled, ${working} ${working === 1 ? "takes" : "take"} work`;
+  });
 </script>
 
-<SplitDialog label="Agents" title="Agents" onclose={leave} onback={onback ? back : undefined}>
+<SplitDialog label="Agents" title="Agents" {summary} onclose={leave} onback={onback ? back : undefined}>
   {#snippet rail()}
     <nav class="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
+      <div class="rail-group">
       {#each app.agents as agent (agent.id)}
         <button
           class="rail-row"
           class:is-active={agent.id === stored?.id}
           onclick={() => select(agent.id)}
         >
-          <span class="min-w-0 flex-1 truncate" class:opacity-55={!agent.enabled}>
-            {agent.name}
+          <span class="rail-tile is-extra" class:is-off={!agent.enabled}><Robot /></span>
+          <span class="min-w-0 flex-1" class:opacity-55={!agent.enabled}>
+            <span class="block truncate">{agent.name}</span>
+            <span class="rail-sub">
+              {agent.model || "No model chosen"}{agent.url ? " · " : ""}<span class="rail-mono"
+                >{agent.url.replace(/^https?:\/\//, "")}</span
+              >
+            </span>
           </span>
           {#if !agent.enabled}
             <span class="shrink-0 text-[11px] text-muted">Disabled</span>
@@ -193,8 +209,10 @@
               {/if}
             </span>
           {/if}
+          <CaretRight size={14} class="rail-chevron" />
         </button>
       {/each}
+      </div>
     </nav>
 
     <button class="rail-add" onclick={create}>

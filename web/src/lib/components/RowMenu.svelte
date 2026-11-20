@@ -37,7 +37,7 @@
   </button>
 
   {#if open}
-    <Popover onclose={close} align="right" width={180}>
+    <Popover onclose={close} align="right" width={180} float>
       {#if onrename}
         <button
           class="popover-item"

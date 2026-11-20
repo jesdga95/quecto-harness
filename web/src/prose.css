@@ -194,6 +194,16 @@
   outline-offset: 2px;
   border-radius: 5px;
 }
+/* In a typed message the bubble already wears the chip's tint, so the chip
+   takes a deeper one. */
+.bubble .md-file.is-code {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.bubble .md-file.is-code code {
+  padding: 0;
+  background: none;
+  color: inherit;
+}
 /* Plan mode carries its colour into file links, the chip's tint with them. */
 .mode-plan .md-file {
   color: var(--plan);

@@ -243,7 +243,7 @@
   {/if}
 {/snippet}
 
-<aside class="dock dock-wide" class:dock-full={app.artifactsWide}>
+<aside class="dock dock-wide" class:dock-full={app.artifactsWide || app.dockCrowded}>
   <div class="panel">
     {#if app.section === "files"}
       <div class="panel-stack">

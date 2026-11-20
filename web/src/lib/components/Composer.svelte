@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { COMPOSE_EVENT } from "../keys";
   import AddMenu from "./AddMenu.svelte";
   import ArrowUp from "phosphor-svelte/lib/ArrowUpIcon";
   import Square from "phosphor-svelte/lib/SquareIcon";
@@ -123,6 +124,13 @@
   $effect(() => {
     text;
     grow();
+  });
+
+  // A new session is typed into next.
+  $effect(() => {
+    const focus = () => field?.focus();
+    window.addEventListener(COMPOSE_EVENT, focus);
+    return () => window.removeEventListener(COMPOSE_EVENT, focus);
   });
 
   // A passage just quoted is answered next, so the field takes the caret.

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { fileLinks } from "../fileclick";
+  import { fileLinkHtml, mentions } from "../files";
   import ArrowClockwise from "phosphor-svelte/lib/ArrowClockwiseIcon";
   import ArrowDown from "phosphor-svelte/lib/ArrowDownIcon";
   import ArrowsLeftRight from "phosphor-svelte/lib/ArrowsLeftRightIcon";
@@ -330,7 +332,8 @@
     </div>
   {/if}
   {#if split.body}
-    <p class="bubble-text">{split.body}</p>
+    <!-- A file quoted with @ opens in the panel, as a file named in a reply does. -->
+    <p class="bubble-text" use:fileLinks>{#each mentions(split.body) as part, i (i)}{#if "ref" in part}{@html fileLinkHtml(part.ref, part.label, true)}{:else}{part.text}{/if}{/each}</p>
   {/if}
 {/snippet}
 

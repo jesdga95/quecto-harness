@@ -1941,8 +1941,9 @@
     cursor: default;
   }
 
-  /* The row and its menu share one line. The menu is always there, so a row
-     never changes shape when the pointer crosses it. */
+  /* The row and its menu share one line. The menu shows on hover and on the
+     open session, over the row's status word, which keeps its room so the
+     title never moves. */
   .row-wrap {
     position: relative;
     display: flex;
@@ -1953,6 +1954,19 @@
     right: 4px;
     display: flex;
     align-items: center;
+    opacity: 0;
+  }
+  .row-wrap:hover .row-act,
+  .row-wrap:focus-within .row-act,
+  .row-wrap:has(.is-active) .row-act,
+  .row-act:has(.is-open) {
+    opacity: 1;
+  }
+  .row-wrap:hover .side-meta,
+  .row-wrap:focus-within .side-meta,
+  .row-wrap:has(.is-active) .side-meta,
+  .row-wrap:has(.row-menu.is-open) .side-meta {
+    visibility: hidden;
   }
   .row-menu {
     display: grid;
@@ -1982,7 +1996,7 @@
     align-items: center;
     gap: 8px;
     width: 100%;
-    padding: 6px 30px 6px 9px;
+    padding: 6px 8px;
     /* Rows carry their own gap, so a hover background never runs into the one
        above or below it. */
     margin-bottom: 3px;
@@ -2054,97 +2068,156 @@
     bottom: 3px;
   }
 
-  /* The one filled control in the sidebar: starting a session is what the
-     sidebar is most often opened for. */
-  .new-session {
+  /* New session and Search are plain rows above the projects, each showing
+     its shortcut while the pointer is on it. */
+  .side-act {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 8px;
+    gap: 10px;
     width: 100%;
-    padding: 10px 12px;
-    border: 1px solid var(--hair);
-    border-radius: 12px;
-    background: rgb(100 116 139 / 0.14);
-    font-size: 14px;
-    font-weight: 500;
+    height: 34px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    font-family: inherit;
+    font-size: 13.5px;
     color: var(--text);
+    text-align: left;
     cursor: pointer;
-    transition:
-      background 90ms ease,
-      border-color 90ms ease;
   }
-  .new-session:hover {
-    background: rgb(100 116 139 / 0.22);
-    border-color: var(--border-2);
+  .side-act:hover {
+    background: rgb(100 116 139 / 0.12);
   }
-  .new-session:focus-visible {
-    outline: none;
-    border-color: var(--edge-focus);
-  }
-  .new-session svg {
+  .side-act > svg {
     width: 17px;
     height: 17px;
+    flex: none;
+    color: var(--text-2);
+  }
+  .side-act .side-kbd {
+    visibility: hidden;
+  }
+  .side-act:hover .side-kbd,
+  .side-act:focus-visible .side-kbd {
+    visibility: visible;
+  }
+  .side-kbd {
+    flex: none;
+    margin-left: auto;
+    padding: 1px 5px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--surface);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 400;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+  /* The search field takes the place of the two rows and narrows every
+     project. */
+  .side-search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 34px;
+    padding: 0 5px 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--muted);
+    cursor: text;
+  }
+  .side-search:focus-within {
+    border-color: var(--edge-focus);
+  }
+  .side-search > svg {
+    width: 17px;
+    height: 17px;
+    flex: none;
+  }
+  .side-search input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: none;
+    background: none;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .side-search input::placeholder {
+    color: var(--muted);
+  }
+  .side-search-clear {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    flex: none;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .side-search-clear:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .side-search-clear svg {
+    width: 13px;
+    height: 13px;
   }
 
-  /* The project a new session goes to: its folder is open and in the accent.
-     Its name stays plain, since the open session is marked below it. */
+  /* A project's folder is open and in the accent while its sessions show. The
+     project a new session goes to has its name in full weight. */
   .project-row {
-    padding-right: 54px;
+    font-weight: 500;
   }
   .project-row.is-current {
     color: var(--text);
-    font-weight: 500;
   }
-  .project-row.is-current .folder-glyph svg {
+  .folder-glyph.is-open svg {
     color: var(--accent);
   }
   .folder-glyph {
     display: inline-grid;
     place-items: center;
   }
-  /* Folds a project's sessions. It shows on hover, and stays while folded so
-     a folded project says it has more. */
-  .fold-toggle {
-    position: absolute;
-    right: 28px;
-    display: grid;
-    place-items: center;
-    width: 22px;
-    height: 22px;
-    border: 0;
-    border-radius: 7px;
-    background: none;
-    color: var(--muted);
-    cursor: pointer;
-    opacity: 0;
+  /* A project's sessions sit further in than it. The room left of a title is
+     where the working mark goes, so the title never moves. */
+  .side-tree {
+    margin: 0 0 10px 12px;
   }
-  .row-wrap:hover .fold-toggle,
-  .fold-toggle:focus-visible,
-  .fold-toggle[aria-expanded="false"] {
-    opacity: 1;
-  }
-  .fold-toggle:hover {
-    background: rgb(100 116 139 / 0.16);
-    color: var(--text);
-  }
-  .fold-toggle .caret {
-    display: inline-grid;
-    transition: transform 120ms ease;
-  }
-  .fold-toggle .caret.is-open {
-    transform: rotate(90deg);
-  }
-  .fold-toggle svg {
-    width: 12px;
-    height: 12px;
-  }
-
-  /* A session row sits further in than its project, and the room on its left
-     is where the working mark goes, so the title never moves. */
   .session-row {
     position: relative;
+    padding-right: 30px;
     padding-left: 24px;
+  }
+  /* Show more is a row like the sessions above it, muted, with a caret in
+     the room a working mark would take. */
+  .side-more {
+    color: var(--muted);
+  }
+  .side-more-mark {
+    position: absolute;
+    left: 7px;
+    top: 50%;
+    display: grid;
+    place-items: center;
+    width: 12px;
+    height: 12px;
+    margin-top: -6px;
+    transition: transform 120ms ease;
+  }
+  .side-more-mark.is-open {
+    transform: rotate(180deg);
+  }
+  .side-more .side-more-mark svg {
+    width: 11px;
+    height: 11px;
   }
   /* A session at work: a small square that turns a quarter and eases down to
      half, then back, in the room left of the title. */
@@ -5099,4 +5172,341 @@
   .mode-plan .spinner {
     --spin-run: var(--plan);
   }
+}
+
+/* The macOS desktop window has no title bar. The sidebar's first row is the
+   title row: 56px like the session header, so the traffic lights sit on one
+   line across both. Windowed, the row holds the lights and the wordmark;
+   fullscreen hides the lights and the full logo takes their place, so nothing
+   below moves. Unlayered, so these win over the utilities they adjust. */
+.window-drag {
+  display: none;
+}
+:root.desktop-mac .side-brand {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+:root.desktop-mac .side-brand button {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+:root.desktop-mac:not(.is-fullscreen) .side-brand {
+  padding-left: 92px;
+}
+:root.desktop-mac:not(.is-fullscreen) .side-brand > span:first-child > svg,
+:root.desktop-mac:not(.is-fullscreen) .side-brand .chip-harness {
+  display: none;
+}
+:root.desktop-mac .window-drag {
+  display: block;
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 40px;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+:root.desktop-mac .session-head {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+:root.desktop-mac .session-head :is(button, a, input, select, textarea) {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+@layer components {
+  /* While the sidebar is away its toggle and New session sit at the header's
+     top left, and the header leaves room for them. */
+  .top-tools {
+    position: absolute;
+    top: 15px;
+    left: 16px;
+    z-index: 20;
+    display: flex;
+    gap: 6px;
+  }
+  :root.sidebar-away .session-head {
+    padding-left: 86px;
+  }
+  .drawer-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgb(15 23 42 / 0.28);
+  }
+  .drawer {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 41;
+    display: flex;
+  }
+  /* The header and the composer drop words before anything is cut off. */
+  .session-head {
+    container-type: inline-size;
+  }
+  @container (max-width: 620px) {
+    .session-head .entry-branch,
+    .session-head .entry-btn .num {
+      display: none;
+    }
+  }
+  @container (max-width: 480px) {
+    .session-path {
+      display: none;
+    }
+  }
+  .composer {
+    container-type: inline-size;
+  }
+  @container (max-width: 560px) {
+    .chip-mode-label,
+    .chip-perm-label,
+    .chip-effort {
+      display: none;
+    }
+  }
+  @container (max-width: 400px) {
+    .chip-agent-name {
+      display: none;
+    }
+  }
+}
+
+/* The macOS window keeps its traffic lights in the header while the sidebar
+   is away, so the header and the drawer button start after them. */
+:root.desktop-mac.sidebar-away .session-head {
+  padding-left: 158px;
+}
+:root.desktop-mac .top-tools {
+  left: 88px;
+}
+:root.desktop-mac .top-tools button {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* Fullscreen hides the traffic lights, so nothing makes room for them. */
+:root.desktop-mac.is-fullscreen.sidebar-away .session-head {
+  padding-left: 86px;
+}
+:root.desktop-mac.is-fullscreen .top-tools {
+  left: 16px;
+}
+
+/* The dark list runs to the card's edge, so the card's light border would
+   show as a rim around it. */
+.dialog-row {
+  border: 0;
+}
+
+/* A dark dialog over a dimmed dark page has nothing to separate it, so dark
+   gives every dialog a faint light rim and pushes the page further back. */
+:root[data-scheme="dark"] .dialog-scrim {
+  background: rgb(2 6 23 / 0.55);
+}
+:root[data-scheme="dark"] .dialog-scrim > [role="dialog"] {
+  border: 1px solid rgb(255 255 255 / 0.08);
+}
+
+/* Second lines, chevrons, tiles, group labels and the summary belong to the
+   narrow list alone. In the rail a tile is only its icon. */
+.rail-sub,
+.rail-chevron,
+.rail-label,
+.rail-summary,
+.rail-tile.is-extra {
+  display: none;
+}
+.rail-tile {
+  display: contents;
+}
+
+/* On a narrow window the dialog shows its list or its record at full width.
+   Unlayered, so these win over the utilities they replace. */
+@media (max-width: 720px) {
+  .dialog-scrim {
+    padding: 12px;
+  }
+  .dialog-row {
+    flex-direction: column;
+  }
+  /* The list as a page of its own: the panel tone behind white groups, a
+     large title with a summary, a tinted tile per row, and the add button
+     pinned below as the primary button. */
+  .split-rail {
+    position: relative;
+    flex: 1;
+    width: auto;
+    min-height: 0;
+    gap: 0;
+    padding: 0;
+    background: var(--list-bg);
+    --list-bg: var(--panel);
+    --list-group: var(--surface);
+    --list-hover: var(--surface-2);
+  }
+  /* Dark raises the list off the chat behind the scrim: the panel tone is
+     too close to the page there. */
+  :root[data-scheme="dark"] .split-rail {
+    --list-bg: var(--surface);
+    --list-group: var(--surface-2);
+    --list-hover: var(--card-edge);
+  }
+  .split-rail .rail-head {
+    flex: none;
+    padding: 44px 20px 0;
+    font-size: 22px;
+    color: var(--text);
+  }
+  .split-rail .rail-back {
+    gap: 10px;
+  }
+  .split-rail .rail-back svg {
+    width: 18px;
+    height: 18px;
+  }
+  .rail-summary {
+    display: block;
+    flex: none;
+    padding: 2px 20px 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .rail-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+  }
+  .split-rail nav {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 16px 16px 16px;
+  }
+  .rail-label {
+    display: block;
+    padding: 8px 4px 0;
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .split-rail .rail-group {
+    overflow: hidden;
+    border: 1px solid var(--card-edge);
+    border-radius: 14px;
+    background: var(--list-group);
+  }
+  .split-rail .rail-row {
+    gap: 12px;
+    margin: 0;
+    padding: 12px 14px;
+    border-radius: 0;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .split-rail .rail-row + .rail-row {
+    border-top: 1px solid var(--hair);
+  }
+  .split-rail .rail-row:hover {
+    background: var(--list-hover);
+    color: var(--text);
+  }
+  .split-rail .rail-row.is-active {
+    background: none;
+  }
+  .split-rail .rail-row.is-active:hover {
+    background: var(--list-hover);
+  }
+  .split-rail .rail-tile,
+  .split-rail .rail-tile.is-extra {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    flex: none;
+    border-radius: 10px;
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+  .split-rail .rail-tile svg {
+    width: 18px;
+    height: 18px;
+  }
+  .split-rail .rail-tile.is-off {
+    background: var(--surface-2);
+    color: var(--muted);
+  }
+  .split-rail .rail-tile.is-warn {
+    background: var(--warn-bg);
+    color: var(--warn);
+  }
+  .split-rail .rail-sub {
+    display: block;
+    margin-top: 1px;
+    overflow: hidden;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--muted);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .split-rail .rail-mono {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+  }
+  .split-rail .rail-chevron {
+    display: block;
+    flex: none;
+    color: var(--border-2);
+  }
+  .split-rail .rail-add {
+    flex: none;
+    width: auto;
+    height: 44px;
+    margin: 12px 16px 16px;
+    padding: 0;
+    border-radius: 12px;
+    background: var(--btn);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--btn-text);
+  }
+  .split-rail .rail-add:hover {
+    background: var(--btn);
+    filter: brightness(1.08);
+  }
+  .dialog-row footer {
+    flex-wrap: wrap;
+    padding-inline: 16px;
+  }
+}
+.detail-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 12px 0 10px;
+  border-bottom: 1px solid var(--hair);
+}
+.detail-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+.detail-back:hover {
+  background: var(--surface-2);
 }

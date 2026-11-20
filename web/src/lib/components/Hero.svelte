@@ -35,6 +35,7 @@
   });
 </script>
 
+<div class="window-drag"></div>
 <div class="hero">
   <div class="hero-col">
     <div class="hero-project rise">

@@ -111,6 +111,30 @@ export function fileLinkHtml(ref: FileRef, label: string, code: boolean): string
   );
 }
 
+/** A run of a typed message: plain text, or a file quoted with @. */
+export type Part = { text: string } | { ref: FileRef; label: string };
+
+/** Splits a message at the files quoted in it with @, as the composer writes
+    them. An @ counts only at the start or after a space, so an address is left
+    alone, and punctuation closing a sentence stays outside the name. */
+export function mentions(text: string): Part[] {
+  const parts: Part[] = [];
+  const quoted = /(^|\s)@(\S+)/g;
+  let last = 0;
+  for (let m = quoted.exec(text); m; m = quoted.exec(text)) {
+    const start = m.index + m[1].length;
+    const trail = /[.,;:!?)\]}'"]+$/.exec(m[2])?.[0] ?? "";
+    const name = m[2].slice(0, m[2].length - trail.length);
+    const ref = fileTarget(name);
+    if (!ref) continue;
+    if (start > last) parts.push({ text: text.slice(last, start) });
+    parts.push({ ref, label: name });
+    last = start + 1 + name.length;
+  }
+  if (last < text.length) parts.push({ text: text.slice(last) });
+  return parts;
+}
+
 /** A path as the project names it: relative to its root, which is how the
     harness answers for a file and so how two spellings of one are matched. */
 export function inProject(raw: string, root: string): string {

@@ -51,7 +51,7 @@
     <!-- Anything runs unreviewed, so the icon takes the colour kept for what
          needs a look. -->
     <Icon class={current.value === "full" ? "text-warn" : ""} />
-    {current.label}
+    <span class="chip-perm-label">{current.label}</span>
     <CaretDown class="chip-caret" />
   </button>
 

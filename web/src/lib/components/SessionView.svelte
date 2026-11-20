@@ -10,13 +10,20 @@
 
   const session = $derived(activeSession());
   const showPanel = $derived(app.panel);
+  // Below this width the conversation and the panel cannot sit side by side,
+  // so an open panel takes all of it.
+  const SIDE_BY_SIDE = 760;
+  let width = $state(0);
+  $effect(() => {
+    app.dockCrowded = width > 0 && width < SIDE_BY_SIDE;
+  });
   // Hidden rather than removed, so a message being typed survives the expand.
-  const hideMain = $derived(showPanel && app.artifactsWide);
+  const hideMain = $derived(showPanel && (app.artifactsWide || app.dockCrowded));
 </script>
 
 <!-- One header over the conversation and the panel. Its buttons open and
      close the panel's sections, so the panel carries no tabs of its own. -->
-<div class="flex min-h-0 min-w-0 flex-1 flex-col">
+<div class="flex min-h-0 min-w-0 flex-1 flex-col" bind:clientWidth={width}>
   <header class="session-head">
     {#if session?.parent}
       <button
@@ -32,7 +39,7 @@
       {#if session?.parent}
         <span class="shrink-0 text-[12.5px] text-muted">Working for another agent</span>
       {:else}
-        <span class="truncate text-[12.5px] text-muted">{shortPath(app.projectPath)}</span>
+        <span class="session-path truncate text-[12.5px] text-muted">{shortPath(app.projectPath)}</span>
       {/if}
     </div>
     <div class="ml-auto flex shrink-0 items-center">

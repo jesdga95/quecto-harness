@@ -4,7 +4,8 @@
     size = 26,
     wordmark = true,
     panel = false,
-  }: { size?: number; wordmark?: boolean; panel?: boolean } = $props();
+    text,
+  }: { size?: number; wordmark?: boolean; panel?: boolean; text?: number } = $props();
 
   // The braces carry the amber on the plate and on the dark panel alike.
   const stroke = "#FCD34D";
@@ -13,7 +14,8 @@
   const box = $derived(panel ? "23.7 20.7 56.6 62.6" : "0 0 104 104");
   const height = $derived(panel ? Math.round((size * 62.6) / 56.6) : size);
 
-  const type = $derived(Math.round(size * 0.47 * 10) / 10);
+  // The wordmark's size follows the mark's unless a row sets its own.
+  const type = $derived(text ?? Math.round(size * 0.47 * 10) / 10);
   const gap = $derived(Math.round(size * 0.27));
 </script>
 

@@ -61,7 +61,7 @@
 </script>
 
 <div
-  class="fixed inset-0 z-50 grid place-items-center bg-[rgb(15_23_42/0.42)] p-6"
+  class="dialog-scrim fixed inset-0 z-50 grid place-items-center bg-[rgb(15_23_42/0.42)] p-6"
   role="presentation"
   onclick={(e) => e.target === e.currentTarget && onclose()}
 >
@@ -70,6 +70,7 @@
     class="card flex max-h-full w-full overflow-hidden"
     class:flex-col={!row}
     class:flex-row={row}
+    class:dialog-row={row}
     style="max-width:{width}px{height ? `;height:${height}px` : ''}"
     role="dialog"
     aria-modal="true"
