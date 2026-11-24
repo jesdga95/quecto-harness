@@ -2703,7 +2703,7 @@
   }
   .plan-head {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     width: 100%;
     padding: 11px 16px;
@@ -2715,9 +2715,18 @@
     color: var(--text);
     cursor: pointer;
   }
+  .plan-head .head-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 14px;
+    height: 14px;
+    margin-top: 2px;
+  }
   .plan-head svg {
-    width: 15px;
-    height: 15px;
+    width: 14px;
+    height: 14px;
     flex: none;
     color: var(--accent);
   }
@@ -2727,6 +2736,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .plan-head .head-mark .spinner {
+    padding: 2px;
+    border-radius: 3.5px;
+  }
+  .plan-head .num,
+  .plan-head .caret {
+    align-self: center;
   }
   .plan-head .caret {
     display: inline-grid;
@@ -2750,29 +2767,42 @@
     line-height: 1.5;
     color: var(--text-2);
   }
-  .todo svg {
+  /* The three states carry the same 14px square with a 2px stroke, so the
+     marker does not grow or shrink as work moves between states. */
+  .todo .box,
+  .todo .spinner {
+    flex: none;
     width: 14px;
     height: 14px;
-    flex: none;
     margin-top: 2px;
-    color: var(--border-2);
+  }
+  .todo .box {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dotted var(--border-2);
+    border-radius: 3.5px;
+    background: transparent;
+  }
+  .todo .box.is-done {
+    border: 2px solid var(--ok);
+    color: var(--ok);
+  }
+  .todo .box.is-doing {
+    border: 2px solid var(--accent);
+    color: var(--accent);
   }
   .todo .spinner {
-    margin-top: 3px;
+    padding: 2px;
+    border-radius: 3.5px;
   }
   .todo.is-done {
     color: var(--muted);
     text-decoration: line-through;
     text-decoration-color: var(--border-2);
   }
-  .todo.is-done svg {
-    color: var(--ok);
-  }
   .todo.is-doing {
     color: var(--text);
-  }
-  .todo.is-doing svg {
-    color: var(--accent);
   }
 
   /* One command drawn as the console it ran in. */

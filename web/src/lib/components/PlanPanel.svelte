@@ -17,14 +17,14 @@
 {#if todos.length > 0}
   <div class="plan-dock">
     <button class="plan-head" onclick={() => (open = !open)}>
-      {#if running && current}<span class="spinner"></span>{:else}<ListChecks />{/if}
+      {#if running && current}<span class="head-mark"><span class="spinner"></span></span>{:else}<span class="head-mark"><ListChecks /></span>{/if}
       <span class="plan-now">{current?.content ?? "Plan"}</span>
       <span class="num text-[12px] text-muted">{done}/{todos.length}</span>
       <span class="caret" class:is-open={open}><CaretRight /></span>
     </button>
 
     {#if open}
-      <div class="px-4 pb-3">
+      <div class="px-5 pb-3">
         <TodoList {todos} live={running} />
       </div>
     {/if}
