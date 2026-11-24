@@ -1880,6 +1880,12 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 		Prefix: perms.DefaultPrefix(command),
 		Args:   string(call.Function.Arguments),
 	}
+	if tool == "bash" {
+		var a tools.RunShellArgs
+		if json.Unmarshal([]byte(call.Function.Arguments), &a) == nil {
+			req.Description = strings.TrimSpace(a.Description)
+		}
+	}
 	if t, ok := runner.MCPTools[tool]; ok {
 		req.Server, req.MCPTool, req.Prefix = t.Server, t.Tool, ""
 	}

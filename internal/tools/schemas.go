@@ -406,9 +406,10 @@ func buildSchemas() []llm.Tool {
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"command":    map[string]any{"type": "string", "description": "The command line to run."},
-					"timeout_s":  map[string]any{"type": "integer", "description": "Seconds before the command is killed. Default 120.", "minimum": 1},
-					"background": map[string]any{"type": "boolean", "description": "Start the command and return at once, with no deadline. Default false."},
+					"command":     map[string]any{"type": "string", "description": "The command line to run."},
+					"description": map[string]any{"type": "string", "description": "A few words saying what the command does, in plain language."},
+					"timeout_s":   map[string]any{"type": "integer", "description": "Seconds before the command is killed. Default 120.", "minimum": 1},
+					"background":  map[string]any{"type": "boolean", "description": "Start the command and return at once, with no deadline. Default false."},
 				},
 				"required":             []string{"command"},
 				"additionalProperties": false,

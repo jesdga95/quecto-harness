@@ -1645,6 +1645,7 @@ export class MockApi implements HarnessApi {
           tool: script.tool,
           agent: "",
           command: script.command,
+          description: "",
           prefix: prefixOf(script.command),
         });
         const decision = await this.ask(permId, session, turn);

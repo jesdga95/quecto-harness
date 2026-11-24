@@ -187,6 +187,7 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
         tool: event.tool,
         command: event.command,
         prefix: event.prefix,
+        description: event.description ?? "",
         outcome: null,
         agent: event.agent,
       });

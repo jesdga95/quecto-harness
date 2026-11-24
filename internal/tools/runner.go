@@ -177,8 +177,11 @@ type FindArgs struct {
 }
 
 type RunShellArgs struct {
-	Command  string `json:"command"`
-	TimeoutS *int   `json:"timeout_s"`
+	Command string `json:"command"`
+	// Description is a short plain-language account of the command, shown
+	// to the person asked to allow it.
+	Description string `json:"description"`
+	TimeoutS    *int   `json:"timeout_s"`
 	// Background starts the command and returns at once. It then has no
 	// deadline, and its output is read as it arrives.
 	Background bool `json:"background"`

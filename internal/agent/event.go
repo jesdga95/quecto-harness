@@ -25,11 +25,12 @@ type Publisher interface {
 // it from whichever goroutine is blocked on the decision.
 func PermissionEvent(r perms.Request) Event {
 	return ev("permission", map[string]any{
-		"id":      r.ID,
-		"tool":    r.Tool,
-		"command": r.Command,
-		"path":    r.Path,
-		"prefix":  r.Prefix,
-		"args":    r.Args,
+		"id":          r.ID,
+		"tool":        r.Tool,
+		"command":     r.Command,
+		"path":        r.Path,
+		"prefix":      r.Prefix,
+		"args":        r.Args,
+		"description": r.Description,
 	})
 }

@@ -53,6 +53,8 @@ type Request struct {
 	Path      string `json:"path,omitempty"`
 	Prefix    string `json:"prefix"`
 	Args      string `json:"args"`
+	// Description is the caller's own plain-language account of the command.
+	Description string `json:"description,omitempty"`
 	// Server and MCPTool name an MCP call's server and tool as configured,
 	// which the wire name in Tool cannot be read back into.
 	Server  string    `json:"server,omitempty"`

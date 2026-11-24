@@ -73,6 +73,10 @@
     {/if}
   </div>
 
+  {#if item.description}
+    <p class="mx-4 mt-1.5 text-[13px] text-muted">{item.description}</p>
+  {/if}
+
   <pre class="mono-block mx-4 mt-2.5">{shown}</pre>
 
   <div class="flex flex-wrap items-center gap-2 px-4 py-3">

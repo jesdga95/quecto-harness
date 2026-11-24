@@ -190,6 +190,7 @@ interface WirePermission {
   path?: string;
   prefix?: string;
   args?: string;
+  description?: string;
   agent?: string;
   decision?: string;
   reason?: string;
@@ -282,6 +283,7 @@ interface WireEvent {
   command?: string;
   path?: string;
   prefix?: string;
+  description?: string;
   args?: string;
   output?: string;
   exit_code?: number | null;
@@ -565,6 +567,7 @@ function toPermission(p: WirePermission, outcome: string | null, fallback = ""):
     tool: p.tool ?? "",
     command: p.command || p.path || p.args || "",
     prefix: p.prefix ?? "",
+    description: p.description ?? "",
     outcome,
     agent: p.agent ?? "",
   };
@@ -1312,6 +1315,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           tool: ev.tool ?? "",
           command: ev.command || ev.path || ev.args || "",
           prefix: ev.prefix ?? "",
+          description: ev.description ?? "",
           agent: ev.agent ?? "",
         },
       ];

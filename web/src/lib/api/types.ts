@@ -333,6 +333,7 @@ export type HarnessEvent =
       tool: string;
       command: string;
       prefix: string;
+      description: string;
       agent: string;
     }
   /** The card was answered, or a stop answered it, and every tab closes it. */
@@ -467,6 +468,8 @@ export type TranscriptItem =
       tool: string;
       command: string;
       prefix: string;
+      /** What the call says the command does, in plain language. */
+      description: string;
       outcome: string | null;
       /** The subagent that asked. Empty is this conversation's own turn, and
           only that one blocks the composer. */
