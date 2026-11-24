@@ -396,8 +396,10 @@
       {/each}
     </nav>
 
-    <div class="flex items-center gap-1 pr-[15px] pb-3 pl-3">
-      <button class="side-row min-w-0 flex-1" onclick={onsettings}>
+    <!-- The list ends against a hairline, so its last row never runs into
+         Settings. -->
+    <div class="flex items-center gap-2 border-t border-hair pt-1.5 pr-[15px] pb-2 pl-3">
+      <button class="side-row mb-0 min-w-0 flex-1" onclick={onsettings}>
         <Gear />
         Settings
       </button>
