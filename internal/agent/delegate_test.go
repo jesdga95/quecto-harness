@@ -369,7 +369,7 @@ func TestAMessageToAnIdleLauncherIsPublished(t *testing.T) {
 
 	drawn := false
 	for _, e := range h.rec.ofType("message") {
-		if e.Fields["from"] == "Reviewer" && e.Fields["seq"] == got.Seq {
+		if e.Fields["from"] == "Reviewer" && e.Fields["entry"] == got.Seq {
 			drawn = true
 		}
 	}
@@ -601,7 +601,7 @@ func TestChildCardIsDrawnInTheLauncher(t *testing.T) {
 func TestLaunchingAnAgentIsNotCarded(t *testing.T) {
 	h, _ := launcher(t)
 	for _, tool := range []string{"subagent", "send_message"} {
-		if got := h.broker.Evaluate(h.project, tool, "", "", perms.InProject, config.ModeAsk); got != perms.ActionAllow {
+		if got := h.broker.Evaluate(h.project, h.project, tool, "", "", perms.InProject, config.ModeAsk); got != perms.ActionAllow {
 			t.Errorf("%s = %v in ask mode, want allow", tool, got)
 		}
 	}

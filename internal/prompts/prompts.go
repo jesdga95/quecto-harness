@@ -73,7 +73,10 @@ type AgentBrief struct {
 // parsed, so a template action inside one is text.
 type SystemVars struct {
 	Project string
-	OS      string
+	// Folder is the folder of a conversation without a project, which takes
+	// the project's place in the prompt. Empty is a conversation in Project.
+	Folder string
+	OS     string
 	// Date is the calendar day the session runs on, YYYY-MM-DD in the host's
 	// zone. It is the one value the clock moves, and at the day's granularity
 	// it moves at most once a day: a running conversation keeps the same first

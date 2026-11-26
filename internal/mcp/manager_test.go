@@ -241,3 +241,22 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// A turn with no project starts no per-project server, neither to list its
+// tools nor to call one, and still reaches the servers that run once.
+func TestManagerNoProjectStartsNoPerProjectServer(t *testing.T) {
+	per := fakeServer("per")
+	per.Cwd = "{project}"
+	m := newTestManager(t, per, fakeServer("once"))
+	ctx := context.Background()
+	offered, notes := m.Tools(ctx, "")
+	if got := wires(offered); strings.Contains(got, "mcp__per__") || !strings.Contains(got, "mcp__once__echo") || len(notes) != 0 {
+		t.Fatalf("tools = %s, notes %q", got, notes)
+	}
+	if _, err := m.Call(ctx, "", "per", "echo", nil, time.Minute); err == nil {
+		t.Fatal("called a per-project server with no project")
+	}
+	if st := stateOf(m, "per"); st.Running != 0 {
+		t.Fatalf("the per-project server started: %+v", st)
+	}
+}

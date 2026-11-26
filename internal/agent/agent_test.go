@@ -28,6 +28,8 @@ type recorder struct {
 	mu      sync.Mutex
 	events  []Event
 	dropped []string
+	// onPublish, when set, sees each event before it is recorded.
+	onPublish func(Event)
 }
 
 func (r *recorder) Drop(sessionID string) {
@@ -44,8 +46,16 @@ func (r *recorder) droppedIDs() []string {
 
 func (r *recorder) Publish(_ string, e Event) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	hook := r.onPublish
+	r.mu.Unlock()
+	// The hook runs before the event is recorded, as a slow transport would
+	// hold it.
+	if hook != nil {
+		hook(e)
+	}
+	r.mu.Lock()
 	r.events = append(r.events, e)
+	r.mu.Unlock()
 }
 
 func (r *recorder) ofType(kind string) []Event {

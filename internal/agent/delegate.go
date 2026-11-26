@@ -44,6 +44,10 @@ type brief struct {
 	// writes nothing. scratchErr says why one that should have it does not.
 	scratch    string
 	scratchErr error
+	// folder is what a conversation without a folder works in, made before
+	// the turn reads anything. folderErr says why it could not be.
+	folder    string
+	folderErr error
 }
 
 // findRulesFile names the rules file in a project root, exact case first and
@@ -99,23 +103,34 @@ func readRules(project string) (content, name, note string) {
 // outside the lock, like the image bytes a message carries.
 func (e *Engine) briefFor(ctx context.Context, s *Session, cfg config.Config) brief {
 	s.mu.Lock()
-	id, parent, mine, mode, project, set := s.ID, s.Parent, s.AgentID, s.Mode, s.Project, s.Toolset
+	id, parent, mine, mode, project, set, loose := s.ID, s.Parent, s.AgentID, s.Mode, s.Project, s.Toolset, s.Loose
 	s.mu.Unlock()
-	rules, rulesName, note := readRules(project)
-	e.showRulesNote(s, note)
-	b := brief{rules: rules, rulesName: rulesName}
+	var b brief
+	// A conversation without a folder has no rules: a file the model wrote
+	// in its folder does not become its instructions.
+	if loose {
+		b.folder, b.folderErr = e.looseFolder(s)
+	} else {
+		var note string
+		b.rules, b.rulesName, note = readRules(project)
+		e.showRulesNote(s, note)
+	}
 	if parent != "" {
 		// A subagent hands work to nobody and asks nobody, but it still
 		// searches: research delegated down is what web_search is for.
 		b.offer = tools.Offer{Set: set, Mode: mode, Message: true, Search: cfg.Search.Enabled()}
 		b.offer.MCP = e.mcpTools(ctx, s, project, set)
 		b.launcher = parent
-		b.scratch, b.scratchErr = e.scratchFor(parent, b.offer)
+		if !loose {
+			b.scratch, b.scratchErr = e.scratchFor(parent, b.offer)
+		}
 		return b
 	}
 	b.offer = tools.Offer{Set: set, Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}
 	b.offer.MCP = e.mcpTools(ctx, s, project, set)
-	b.scratch, b.scratchErr = e.scratchFor(id, b.offer)
+	if !loose {
+		b.scratch, b.scratchErr = e.scratchFor(id, b.offer)
+	}
 	me, _ := cfg.AgentByID(mine)
 	// What is named is what the caller may hand work to, so a list that names
 	// nothing offers the tool at all, the way a roster with no enabled agents
@@ -389,7 +404,7 @@ func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (
 
 	cfg := e.cfg.Config()
 	s.mu.Lock()
-	mine, project, mode := s.AgentID, s.Project, s.Mode
+	mine, project, mode, loose := s.AgentID, s.Project, s.Mode, s.Loose
 	s.mu.Unlock()
 	me, _ := cfg.AgentByID(mine)
 
@@ -410,7 +425,13 @@ func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (
 
 	// A subagent keeps its launcher's toolset, so it is never sent a tool the
 	// launcher was not.
-	child := newSession(store.NewID(), project, target.ID, target.Model, s.Toolset)
+	id := store.NewID()
+	if loose {
+		id = store.NewLooseID()
+	}
+	child := newSession(id, project, target.ID, target.Model, s.Toolset)
+	// A run works where its launcher does, so it has no folder either.
+	child.Loose = loose
 	child.Parent = s.ID
 	// A subagent works in the mode of the session that launched it, so a
 	// planner's researcher changes no files either.
@@ -418,17 +439,45 @@ func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (
 	child.Title = title
 	child.Named = true
 	child.waiter = waiter
+	// A run without a folder is kept only under a launcher already on disk.
+	if loose {
+		e.save(s)
+		if !e.store.Has(s.ID) {
+			return nil, config.Agent{}, errors.New("subagent: this conversation could not be saved, so no run can be filed under it")
+		}
+	}
+	// The run is live before its first write, so a reader finds this one
+	// instance rather than one read back from disk, and it is on disk before
+	// it is given its task: a run that cannot be kept never starts.
 	e.mu.Lock()
 	e.live[child.ID] = child
 	e.mu.Unlock()
 	e.save(child)
+	if !e.store.Has(child.ID) {
+		child.mu.Lock()
+		child.gone = true
+		child.mu.Unlock()
+		e.mu.Lock()
+		delete(e.live, child.ID)
+		e.removed[child.ID] = true
+		e.mu.Unlock()
+		return nil, config.Agent{}, errors.New("subagent: the run could not be saved: check the permissions on the sessions folder")
+	}
+	if e.launched != nil {
+		e.launched(child.ID)
+	}
 
 	if _, err := e.deliverFrom(child, sender{Name: me.Name, Session: s.ID}, task, nil); err != nil {
 		return nil, config.Agent{}, fmt.Errorf("subagent: %s", err)
 	}
+	// The run may have been renamed since it was listed, so its launcher is
+	// told the title it has now.
+	child.mu.Lock()
+	shown := child.Title
+	child.mu.Unlock()
 	e.publish(s.ID, ev("child", map[string]any{
 		"call_id": call.ID, "session": child.ID, "agent": target.Name,
-		"title": child.Title, "state": string(StatePreflight)}))
+		"title": shown, "state": string(StatePreflight)}))
 	return child, target, nil
 }
 

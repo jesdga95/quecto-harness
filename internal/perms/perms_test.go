@@ -67,7 +67,7 @@ func TestEvaluateMatrix(t *testing.T) {
 		{"unknown_tool", "", config.ModeFull, ActionAllow},
 	}
 	for _, tc := range cases {
-		if got := b.Evaluate("/proj", tc.tool, tc.command, "", InProject, tc.mode); got != tc.want {
+		if got := b.Evaluate("/proj", "/proj", tc.tool, tc.command, "", InProject, tc.mode); got != tc.want {
 			t.Errorf("Evaluate(%s, %q, mode=%s) = %s, want %s", tc.tool, tc.command, tc.mode, got, tc.want)
 		}
 	}
@@ -79,11 +79,11 @@ func TestEvaluateOperatorsAlwaysPrompt(t *testing.T) {
 	b := New(cfg, nil)
 	for _, op := range []string{";", "&", "&&", "|", "||", ">", "<", "`", "$(", "\n", "\r"} {
 		cmd := "go test " + op + " rm -rf /"
-		if got := b.Evaluate("/proj", "bash", cmd, "", InProject, config.ModeAllowlist); got != ActionPrompt {
+		if got := b.Evaluate("/proj", "/proj", "bash", cmd, "", InProject, config.ModeAllowlist); got != ActionPrompt {
 			t.Errorf("operator %q was allowed", op)
 		}
 	}
-	if got := b.Evaluate("/proj", "bash", "go test ${HOME}", "", InProject, config.ModeAllowlist); got != ActionAllow {
+	if got := b.Evaluate("/proj", "/proj", "bash", "go test ${HOME}", "", InProject, config.ModeAllowlist); got != ActionAllow {
 		t.Errorf("parameter expansion prompted, it cannot start a second command")
 	}
 }
@@ -96,14 +96,14 @@ func TestEvaluateAsksAboutGit(t *testing.T) {
 	os.Symlink(filepath.Join(project, ".git"), filepath.Join(project, "meta"))
 	b := New(newStore(t), nil)
 	for _, path := range []string{".git/config", ".git/hooks/pre-commit", "sub/../.git/config", "meta/config"} {
-		if got := b.Evaluate(project, "write", "", path, InProject, config.ModeAllowlist); got != ActionPrompt {
+		if got := b.Evaluate(project, project, "write", "", path, InProject, config.ModeAllowlist); got != ActionPrompt {
 			t.Errorf("write to %s = %s, want prompt", path, got)
 		}
 	}
-	if got := b.Evaluate(project, "edit", "", "src/.gitignore", InProject, config.ModeAllowlist); got != ActionAllow {
+	if got := b.Evaluate(project, project, "edit", "", "src/.gitignore", InProject, config.ModeAllowlist); got != ActionAllow {
 		t.Errorf("an ordinary file = %s, want allow", got)
 	}
-	if got := b.Evaluate(project, "write", "", ".git/config", InProject, config.ModeFull); got != ActionAllow {
+	if got := b.Evaluate(project, project, "write", "", ".git/config", InProject, config.ModeFull); got != ActionAllow {
 		t.Errorf("full mode = %s, want allow", got)
 	}
 }
@@ -366,11 +366,11 @@ func TestEvaluateAsksOutsideProject(t *testing.T) {
 	b := New(newStore(t), nil)
 	for _, tool := range []string{"read", "read_image", "grep", "write", "edit"} {
 		for _, mode := range []config.Mode{config.ModeAsk, config.ModeAllowlist} {
-			if got := b.Evaluate("/proj", tool, "", "/tmp/x", Outside, mode); got != ActionPrompt {
+			if got := b.Evaluate("/proj", "/proj", tool, "", "/tmp/x", Outside, mode); got != ActionPrompt {
 				t.Errorf("%s outside in %s = %s, want prompt", tool, mode, got)
 			}
 		}
-		if got := b.Evaluate("/proj", tool, "", "/tmp/x", Outside, config.ModeFull); got != ActionAllow {
+		if got := b.Evaluate("/proj", "/proj", tool, "", "/tmp/x", Outside, config.ModeFull); got != ActionAllow {
 			t.Errorf("%s outside in full = %s, want allow", tool, got)
 		}
 	}
@@ -383,22 +383,22 @@ func TestEvaluateLetsTheFileToolsWorkInScratch(t *testing.T) {
 	scratch := "/state/sessions/sess_aaaaaaaaaaaaaaaa.files/scratch"
 	for _, mode := range []config.Mode{config.ModeAsk, config.ModeAllowlist, config.ModeFull} {
 		for _, tool := range []string{"read", "read_image", "grep", "write", "edit"} {
-			if got := b.Evaluate("/proj", tool, "", scratch+"/a.txt", InScratch, mode); got != ActionAllow {
+			if got := b.Evaluate("/proj", "/proj", tool, "", scratch+"/a.txt", InScratch, mode); got != ActionAllow {
 				t.Errorf("%s in scratch in %s = %s, want allow", tool, mode, got)
 			}
 		}
 	}
 	for _, mode := range []config.Mode{config.ModeAsk, config.ModeAllowlist} {
 		for _, tool := range []string{"write", "edit"} {
-			if got := b.Evaluate("/proj", tool, "", scratch+"/repo/.git/hooks/pre-commit", InScratch, mode); got != ActionPrompt {
+			if got := b.Evaluate("/proj", "/proj", tool, "", scratch+"/repo/.git/hooks/pre-commit", InScratch, mode); got != ActionPrompt {
 				t.Errorf("%s under .git in scratch in %s = %s, want prompt", tool, mode, got)
 			}
 		}
 	}
-	if got := b.Evaluate("/proj", "bash", "ls", "", InScratch, config.ModeAsk); got != ActionPrompt {
+	if got := b.Evaluate("/proj", "/proj", "bash", "ls", "", InScratch, config.ModeAsk); got != ActionPrompt {
 		t.Errorf("bash in ask = %s, want prompt", got)
 	}
-	if got := b.Evaluate("/proj", "write", "", "a.txt", InProject, config.ModeAsk); got != ActionPrompt {
+	if got := b.Evaluate("/proj", "/proj", "write", "", "a.txt", InProject, config.ModeAsk); got != ActionPrompt {
 		t.Errorf("write in the project in ask = %s, want prompt as before", got)
 	}
 }
@@ -416,7 +416,7 @@ func TestEvaluateFollowsAWriteIntoGitThroughNewFolders(t *testing.T) {
 	}
 	path := filepath.Join(dir, "repo", "hooks", "new", "pre-commit")
 	for _, mode := range []config.Mode{config.ModeAsk, config.ModeAllowlist} {
-		if got := b.Evaluate("/proj", "write", "", path, InScratch, mode); got != ActionPrompt {
+		if got := b.Evaluate("/proj", "/proj", "write", "", path, InScratch, mode); got != ActionPrompt {
 			t.Errorf("write through a link into .git in %s = %s, want prompt", mode, got)
 		}
 	}
@@ -427,7 +427,7 @@ func TestEvaluateFollowsAWriteIntoGitThroughNewFolders(t *testing.T) {
 func TestEvaluateTakesGitInAnyCasing(t *testing.T) {
 	b := New(newStore(t), nil)
 	for _, path := range []string{".GIT/hooks/pre-commit", "sub/.Git/config"} {
-		if got := b.Evaluate("/proj", "write", "", path, InProject, config.ModeAllowlist); got != ActionPrompt {
+		if got := b.Evaluate("/proj", "/proj", "write", "", path, InProject, config.ModeAllowlist); got != ActionPrompt {
 			t.Errorf("write %s = %s, want prompt", path, got)
 		}
 	}
@@ -451,7 +451,7 @@ func TestEvaluateMCP(t *testing.T) {
 		{"mcp__gh__create_issue", config.ModeFull, ActionAllow},
 	}
 	for _, c := range cases {
-		if got := b.Evaluate("/proj", c.tool, "", "", InProject, c.mode); got != c.want {
+		if got := b.Evaluate("/proj", "/proj", c.tool, "", "", InProject, c.mode); got != c.want {
 			t.Errorf("%s in %s = %s, want %s", c.tool, c.mode, got, c.want)
 		}
 	}
@@ -485,5 +485,40 @@ func TestResolveAlwaysOnMCPWritesTheServer(t *testing.T) {
 	}
 	if len(cfg.Allowlist("")) != 0 {
 		t.Fatal("an MCP rule landed in the shell allowlist")
+	}
+}
+
+// Where no project names an allowlist, bash asks in allowlist mode whatever
+// the list under an empty name holds, and a card that keeps no rule refuses
+// allow always without being taken.
+func TestNoProjectKeepsNoRule(t *testing.T) {
+	cfg := newStore(t)
+	b := New(cfg, nil)
+	if err := cfg.AddAllow("", "ls"); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.Evaluate("/scratch", "", "bash", "ls", "", InProject, config.ModeAllowlist); got != ActionPrompt {
+		t.Errorf("bash without a project = %s, want prompt", got)
+	}
+	req := Request{ID: NewRequestID(), SessionID: "loose_aaaaaaaaaaaaaaaa", Tool: "bash", Command: "ls", OnceOnly: true}
+	done := make(chan Decision, 1)
+	go func() {
+		d, _ := b.Ask(context.Background(), req)
+		done <- d
+	}()
+	for {
+		if _, ok := b.Lookup(req.ID); ok {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := b.Resolve(req.ID, Decision{Kind: DecideAlways, Prefix: "ls"}); !errors.Is(err, ErrOnceOnly) {
+		t.Fatalf("allow always = %v", err)
+	}
+	if err := b.Resolve(req.ID, Decision{Kind: DecideOnce}); err != nil {
+		t.Fatal(err)
+	}
+	if d := <-done; d.Kind != DecideOnce {
+		t.Errorf("decided %s", d.Kind)
 	}
 }

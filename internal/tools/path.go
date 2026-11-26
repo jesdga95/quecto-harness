@@ -64,6 +64,9 @@ func scratchPath(arg string) error {
 // folder. What it leads to has to stay under the folder: a link out of it, to
 // the project or anywhere else, and a link that leads nowhere are refused.
 func (r *Runner) resolveScratch(arg, p string) (string, error) {
+	if r.checkPinned() != nil {
+		return "", scratchPath(arg)
+	}
 	prefix, tail, err := existingPart(p)
 	if err != nil {
 		return "", scratchPath(arg)
@@ -77,6 +80,29 @@ func (r *Runner) resolveScratch(arg, p string) (string, error) {
 		return "", scratchPath(arg)
 	}
 	return resolved, nil
+}
+
+// PinScratch records which folder the scratch folder is, which has to exist.
+// From then on every tool refuses it once the name holds another one.
+func (r *Runner) PinScratch() error {
+	info, err := os.Lstat(r.Scratch)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("the scratch folder %s is not a folder", r.Scratch)
+	}
+	r.pinned = info
+	return nil
+}
+
+// checkPinned reports whether the scratch folder is still the one PinScratch
+// found. A runner nothing pinned has nothing to check.
+func (r *Runner) checkPinned() error {
+	if r.pinned == nil {
+		return nil
+	}
+	if now, err := os.Stat(r.Scratch); err != nil || !os.SameFile(now, r.pinned) {
+		return fmt.Errorf("the scratch folder %s is not the one this turn started in", r.Scratch)
+	}
+	return nil
 }
 
 // InScratch reports whether a tool path argument is written under the scratch
@@ -97,6 +123,10 @@ func (r *Runner) InScratch(p string) bool {
 // readable by the user alone. A name already there has to be a folder and not
 // a link to one.
 func (r *Runner) ensureScratch() error {
+	// A pinned folder was made before the turn, and is not made again.
+	if r.pinned != nil {
+		return r.checkPinned()
+	}
 	if r.Scratch == "" {
 		if r.ScratchErr != nil {
 			return fmt.Errorf("the scratch folder is not available: %s", r.ScratchErr)
@@ -237,9 +267,10 @@ func existingPart(p string) (prefix, tail string, err error) {
 }
 
 // rel is the path as the model asked for it, relative to the project root. A
-// path outside the project stays absolute.
+// path outside the project stays absolute, and so does one in the scratch
+// folder unless the scratch folder is the root.
 func (r *Runner) rel(abs string) string {
-	if !within(r.Root, abs) || (r.Scratch != "" && within(r.Scratch, abs)) {
+	if !within(r.Root, abs) || (r.Scratch != "" && r.Scratch != r.Root && within(r.Scratch, abs)) {
 		return abs
 	}
 	if p, err := filepath.Rel(r.Root, abs); err == nil {

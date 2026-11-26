@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -58,6 +59,14 @@ type Runner struct {
 	Scratch    string
 	ScratchErr error
 
+	// NoProject is set for a conversation without a folder, whose Root is its
+	// scratch folder. No MCP server that runs once per project runs for it.
+	NoProject bool
+
+	// pinned is the scratch folder as PinScratch found it. Each path under
+	// the folder is refused once the name holds another folder.
+	pinned os.FileInfo
+
 	// BackgroundAfter is how long a bash call is waited on before it moves
 	// to the background. Zero waits for its timeout.
 	BackgroundAfter time.Duration
@@ -103,6 +112,9 @@ type Result struct {
 // NewRunner resolves the root once, which is what makes the path guard work
 // under a symlinked directory such as /tmp on macOS.
 func NewRunner(root string, cfg config.Config) (*Runner, error) {
+	if root == "" {
+		return nil, errors.New("open project: no folder was named")
+	}
 	real, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, fmt.Errorf("open project %s: no such folder, or it cannot be read", root)

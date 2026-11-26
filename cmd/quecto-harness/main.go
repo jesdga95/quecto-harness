@@ -173,6 +173,8 @@ func serve(argv []string) error {
 	servers := mcp.NewManager(filepath.Join(p.Home, "mcp"), p.Log, version)
 	servers.Configure(cfg.MCP())
 	engine.SetMCP(servers)
+	// A delete a stop interrupted is finished before anything is served.
+	engine.FinishDeletes()
 	srv := server.New(cfg, sessions, blobs, pastes, engine, broker, pool, searches, hub, token, listen, version)
 
 	go srv.Detect(ctx)

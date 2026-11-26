@@ -40,6 +40,9 @@ type Session struct {
 
 	ID      string
 	Project string
+	// Loose is a conversation without a folder, which names no project and
+	// works in its scratch folder. A run it launches is loose as well.
+	Loose   bool
 	AgentID string
 	// Parent names the session that launched this one. A session with one is
 	// a subagent run: it stays on its own agent, is offered a different set of
@@ -183,7 +186,7 @@ func newSession(id, project, agentID, model string, set config.Toolset) *Session
 
 func fromDoc(d *store.Session) *Session {
 	return &Session{
-		ID: d.ID, Project: d.Project, AgentID: d.Agent, Parent: d.Parent, Model: d.Model,
+		ID: d.ID, Project: d.Project, Loose: d.Loose, AgentID: d.Agent, Parent: d.Parent, Model: d.Model,
 		Mode: d.Mode, Effort: d.Effort, Toolset: d.Toolset, Plan: d.Plan, Draft: d.Draft,
 		Created: d.Created, Updated: d.Updated, Title: d.Title, Named: d.Named,
 		Entries:     append([]store.Entry(nil), d.Entries...),
@@ -228,7 +231,7 @@ func (s *Session) doc() *store.Session {
 		entries[i] = e
 	}
 	return &store.Session{
-		ID: s.ID, Project: s.Project, Agent: s.AgentID, Parent: s.Parent,
+		ID: s.ID, Project: s.Project, Loose: s.Loose, Agent: s.AgentID, Parent: s.Parent,
 		Model: s.Model, Mode: s.Mode, Effort: s.Effort, Toolset: s.Toolset, Plan: copyPlan(s.Plan), Draft: copyPlan(s.Draft), Title: s.Title, Named: s.Named,
 		Created: s.Created, Updated: s.Updated,
 		NCtx: s.NCtx, NCtxSource: s.NCtxSource,
@@ -354,6 +357,12 @@ func (s *Session) Compactable() bool {
 type sender struct {
 	Name    string
 	Session string
+	// Client is the name the page that sent a message gave it, echoed with
+	// the message so that page knows the entry for the bubble it drew.
+	Client string
+	// Queued is a message coming off the queue, which every page drew as the
+	// queue and draws as a message once it is published.
+	Queued bool
 }
 
 // Steer is a message typed while a turn was running. There is one per
@@ -366,6 +375,9 @@ type Steer struct {
 	// different senders join with no sender, since the joined text names each
 	// of them already.
 	From sender
+	// Clients are the names the pages gave the messages joined here, kept
+	// with the entry they become so a page can tell its message was taken.
+	Clients []string
 }
 
 // Steer is the message waiting for the running turn, or nil.
@@ -375,8 +387,14 @@ func (s *Session) Steer() *Steer {
 	if s.steer == nil {
 		return nil
 	}
-	held := *s.steer
-	held.Attachments = append([]store.Attachment(nil), s.steer.Attachments...)
+	return s.steer.copy()
+}
+
+// copy is a Steer that shares nothing with this one.
+func (st *Steer) copy() *Steer {
+	held := *st
+	held.Attachments = append([]store.Attachment(nil), st.Attachments...)
+	held.Clients = append([]string(nil), st.Clients...)
 	return &held
 }
 
@@ -384,11 +402,12 @@ func (s *Session) Steer() *Steer {
 // attachments that would
 // take the joined message over the cap is refused whole, so the queue is
 // never left holding half of what was typed. The caller holds the lock.
-func (s *Session) queue(from sender, text string, attachments []store.Attachment) error {
-	next := &Steer{Text: text, Attachments: attachments, From: from}
+func (s *Session) queue(from sender, text string, attachments []store.Attachment, clients []string) error {
+	next := &Steer{Text: text, Attachments: attachments, From: from, Clients: clients}
 	if s.steer != nil {
 		next.Text = joinMessages(s.steer.Text, text)
 		next.Attachments = append(append([]store.Attachment(nil), s.steer.Attachments...), attachments...)
+		next.Clients = append(append([]string(nil), s.steer.Clients...), clients...)
 		if s.steer.From != from {
 			next.From = sender{}
 		}
@@ -421,6 +440,15 @@ func (s *Session) appendEntry(e store.Entry) store.Entry {
 	s.Entries = append(s.Entries, e)
 	s.Updated = e.At
 	return e
+}
+
+// dropEntry takes back the entry numbered seq, the last one appended, when
+// it could not be kept. The caller holds the lock.
+func (s *Session) dropEntry(seq int, updated time.Time) {
+	if n := len(s.Entries); n > 0 && s.Entries[n-1].Seq == seq {
+		s.Entries = s.Entries[:n-1]
+		s.Updated = updated
+	}
 }
 
 // firstTurn reports that one user message has been sent and no title was
@@ -629,7 +657,7 @@ func (s *Session) fileRefs() []store.Attachment {
 func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) llm.Message {
 	names := tools.Names(b.offer)
 	content := prompts.System(prompts.SystemVars{
-		Project: s.Project, OS: osName, Date: date,
+		Project: s.Project, Folder: b.folder, OS: osName, Date: date,
 		CanAsk: b.offer.Ask, CanMessage: b.offer.Message, CanSearch: b.offer.Search,
 		Agents: b.agents, Launcher: b.launcher,
 		Rules: b.rules, RulesName: b.rulesName,

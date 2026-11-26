@@ -39,6 +39,7 @@ const (
 var (
 	ErrNoSuchRequest   = errors.New("That decision is no longer pending: the turn moved on")
 	ErrSessionCanceled = errors.New("the session was stopped")
+	ErrOnceOnly        = errors.New("This conversation has no folder, so no rule is kept for it: choose allow once")
 )
 
 // Request is one pending question about one tool call.
@@ -60,9 +61,12 @@ type Request struct {
 	Description string `json:"description,omitempty"`
 	// Server and MCPTool name an MCP call's server and tool as configured,
 	// which the wire name in Tool cannot be read back into.
-	Server  string    `json:"server,omitempty"`
-	MCPTool string    `json:"mcp_tool,omitempty"`
-	Created time.Time `json:"created"`
+	Server  string `json:"server,omitempty"`
+	MCPTool string `json:"mcp_tool,omitempty"`
+	// OnceOnly is a call that no rule may be kept for, in a conversation
+	// without a folder. Its card offers allow once and deny.
+	OnceOnly bool      `json:"once_only,omitempty"`
+	Created  time.Time `json:"created"`
 }
 
 // route is where the card is drawn. A request that names none is drawn in the
@@ -127,8 +131,10 @@ const (
 // Evaluate applies the static policy. It never blocks and never asks. ModeFull
 // is answered before the tool name is read, so nothing about the call changes
 // the answer. Every other mode asks before a file tool reaches outside the
-// project, and lets the file tools work in the scratch folder.
-func (b *Broker) Evaluate(project, tool, command, path string, place Place, mode config.Mode) Action {
+// project, and lets the file tools work in the scratch folder. root is the
+// folder relative paths are read against, and project the one whose allowlist
+// applies, empty where there is none.
+func (b *Broker) Evaluate(root, project, tool, command, path string, place Place, mode config.Mode) Action {
 	if mode == config.ModeFull {
 		return ActionAllow
 	}
@@ -161,7 +167,7 @@ func (b *Broker) Evaluate(project, tool, command, path string, place Place, mode
 		// A file under .git can run code: a hook, or a config that names a
 		// program git starts. It is asked about in every mode but full, in
 		// the scratch folder too, where a repository can be made.
-		if underGit(project, path) {
+		if underGit(root, path) {
 			return ActionPrompt
 		}
 		if place == InScratch || (auto && place == InProject) {
@@ -180,7 +186,7 @@ func (b *Broker) Evaluate(project, tool, command, path string, place Place, mode
 		if !auto {
 			return ActionPrompt
 		}
-		if hasOperator(command) {
+		if hasOperator(command) || project == "" {
 			return ActionPrompt
 		}
 		if _, ok := b.cfg.AllowMatch(project, command); ok {
@@ -230,6 +236,11 @@ func (b *Broker) Resolve(id string, d Decision) error {
 	b.mu.Lock()
 	ch, ok := b.wait[id]
 	req := b.pending[id]
+	// Refused before the card is taken, so it can still be answered once.
+	if ok && d.Kind == DecideAlways && req.OnceOnly {
+		b.mu.Unlock()
+		return ErrOnceOnly
+	}
 	if ok {
 		delete(b.wait, id)
 		delete(b.pending, id)

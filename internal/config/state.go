@@ -38,7 +38,7 @@ func (s *Store) CheckProject(dir string) error {
 			return fmt.Errorf("Check %s against the harness state folder: %w", dir, err)
 		}
 		if in {
-			return overlapError{fmt.Sprintf("%s holds a name on the path to the harness state folder %s: choose a folder that does not", dir, home)}
+			return overlapError{fmt.Sprintf("%s contains %s, where the harness keeps its state, or a folder on the way to it, so it cannot be a project. Choose a folder that does not", dir, home)}
 		}
 	}
 	in, err := under(dir, home)
@@ -46,14 +46,14 @@ func (s *Store) CheckProject(dir string) error {
 		return fmt.Errorf("Check %s against the harness state folder: %w", dir, err)
 	}
 	if in {
-		return overlapError{fmt.Sprintf("%s is inside the harness state folder %s: choose a folder outside it", dir, home)}
+		return overlapError{fmt.Sprintf("%s is inside %s, where the harness keeps its state, so it cannot be a project. Choose a folder outside it", dir, home)}
 	}
 	holds, err := under(home, dir)
 	if err != nil {
 		return fmt.Errorf("Check %s against the harness state folder: %w", dir, err)
 	}
 	if holds {
-		return overlapError{fmt.Sprintf("%s holds the harness state folder %s: choose a folder that does not", dir, home)}
+		return overlapError{fmt.Sprintf("%s contains %s, where the harness keeps its state, so it cannot be a project. Choose a folder that does not contain it", dir, home)}
 	}
 	return nil
 }

@@ -22,7 +22,11 @@ func (r *Runner) CallMCP(ctx context.Context, name string, args json.RawMessage)
 	if !ok || r.MCP == nil {
 		return Result{}, fmt.Errorf("no tool named %s: no MCP server offers it this turn", name)
 	}
-	res, err := r.MCP.Call(ctx, r.Root, o.Server, o.Tool, args, r.Timeout)
+	project := r.Root
+	if r.NoProject {
+		project = ""
+	}
+	res, err := r.MCP.Call(ctx, project, o.Server, o.Tool, args, r.Timeout)
 	if err != nil {
 		return Result{}, err
 	}

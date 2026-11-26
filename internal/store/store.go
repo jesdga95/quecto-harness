@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jesdga95/quecto-harness/internal/config"
@@ -167,6 +169,9 @@ type Plan struct {
 type Session struct {
 	ID      string `json:"id"`
 	Project string `json:"project"`
+	// Loose marks a conversation without a folder. Its id starts with loose_
+	// and it names no project: its tools work in its own scratch folder.
+	Loose bool `json:"loose,omitempty"`
 	// Agent is the agent this session last ran under. It is the only record of
 	// that after a restart, which is what tells a reloaded session it moved.
 	Agent string `json:"agent"`
@@ -215,6 +220,7 @@ type ContextBase struct {
 type Summary struct {
 	ID       string    `json:"id"`
 	Project  string    `json:"project"`
+	Loose    bool      `json:"loose,omitempty"`
 	Agent    string    `json:"agent"`
 	Parent   string    `json:"parent,omitempty"`
 	Model    string    `json:"model"`
@@ -236,11 +242,48 @@ type Sessions struct {
 	mu    sync.RWMutex
 	index map[string]Summary
 	locks map[string]*sync.Mutex
+	// written is the version of each session last put on disk by SaveAt,
+	// under that session's lock, so an older snapshot never replaces it.
+	written  map[string]uint64
+	versions atomic.Uint64
+	// dying holds the conversations without a folder whose delete has begun,
+	// each with the subagent runs it launched. None of them is listed or
+	// loaded again, in this process or the next.
+	dying map[string][]string
 }
 
+// loosePrefix starts the id of a conversation without a folder. A harness
+// that knows only sess_ ids neither lists nor opens one.
+const loosePrefix = "loose_"
+
 var (
-	namePattern = regexp.MustCompile(`^sess_[a-z2-7]{16}\.json$`)
+	namePattern = regexp.MustCompile(`^(sess|loose)_[a-z2-7]{16}\.json$`)
+	markPattern = regexp.MustCompile(`^loose_[a-z2-7]{16}\.json\.deleting$`)
 )
+
+// markSuffix ends the name a conversation without a folder is renamed to
+// when its delete begins.
+const markSuffix = ".deleting"
+
+// IsLoose reports whether id names a conversation without a folder.
+func IsLoose(id string) bool { return strings.HasPrefix(id, loosePrefix) }
+
+// checkKind refuses a document whose id, loose mark and project disagree. A
+// conversation without a folder names no project, and every other one does.
+func checkKind(sess *Session) error {
+	loose := IsLoose(sess.ID)
+	switch {
+	case loose != sess.Loose:
+		return fmt.Errorf("session %s: the id and the loose mark disagree", sess.ID)
+	case loose && sess.Project != "":
+		return fmt.Errorf("session %s: a conversation without a folder names project %s", sess.ID, sess.Project)
+	case !loose && sess.Project == "":
+		return fmt.Errorf("session %s: names no project", sess.ID)
+	case loose && sess.Parent != "" && (!IsLoose(sess.Parent) || !ValidID(sess.Parent)):
+		return fmt.Errorf("session %s: a run without a folder names launcher %q", sess.ID, sess.Parent)
+	}
+	return nil
+}
 
 // Open builds the index once. A file that does not parse is named and
 // skipped, because one bad file must not stop the program.
@@ -248,10 +291,15 @@ func Open(dir string) (*Sessions, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("Create %s: check the permissions on its parent", dir)
 	}
-	s := &Sessions{dir: dir, index: map[string]Summary{}, locks: map[string]*sync.Mutex{}}
+	s := &Sessions{dir: dir, index: map[string]Summary{}, locks: map[string]*sync.Mutex{}, dying: map[string][]string{}, written: map[string]uint64{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("Read %s: check the permissions on the folder", dir)
+	}
+	for _, e := range entries {
+		if !e.IsDir() && markPattern.MatchString(e.Name()) {
+			s.readMark(e.Name())
+		}
 	}
 	for _, e := range entries {
 		if e.IsDir() || !namePattern.MatchString(e.Name()) {
@@ -275,23 +323,65 @@ func Open(dir string) (*Sessions, error) {
 			log.Printf("sessions/%s: the file names session %q: the file is skipped", e.Name(), sess.ID)
 			continue
 		}
+		if err := checkKind(&sess); err != nil {
+			log.Printf("sessions/%s: %v: the file is skipped", e.Name(), err)
+			continue
+		}
+		if s.dyingLocked(&sess) {
+			continue
+		}
 		s.index[sess.ID] = summarise(&sess, int64(len(raw)))
+	}
+	for id, v := range s.index {
+		if v.Loose && v.Parent != "" && !s.looseRootLocked(v.Parent) {
+			log.Printf("sessions/%s.json: its launcher %s is not a conversation without a folder: the file is skipped", id, v.Parent)
+			delete(s.index, id)
+		}
 	}
 	return s, nil
 }
 
+// looseRootLocked reports whether id is an indexed conversation without a
+// folder that no other launched. The caller holds the lock or owns s.
+func (s *Sessions) looseRootLocked(id string) bool {
+	v, ok := s.index[id]
+	return ok && v.Loose && v.Parent == ""
+}
+
+// readMark records a delete that began before the last stop. Only a mark
+// that names the conversation it is filed under, as one without a folder
+// that no other launched, is taken: the rest are named and left alone.
+func (s *Sessions) readMark(name string) {
+	id := strings.TrimSuffix(name, ".json"+markSuffix)
+	m, err := s.readMarkFile(id)
+	if err != nil {
+		// The name alone says a delete began, so the conversation stays out
+		// of sight; the delete is finished once its mark can be read.
+		log.Printf("sessions/%s: %v: the delete is not finished", name, err)
+		s.dying[id] = nil
+		return
+	}
+	s.dying[id] = m.Family
+}
+
 // List returns the sessions of one project, newest first, or every session
-// when project is empty. Subagent runs stay out of the listing; Children is
-// the only way to reach one.
+// when project is empty, those without a folder included. Subagent runs stay
+// out of the listing; Children is the only way to reach one.
 func (s *Sessions) List(project string) []Summary {
+	return s.roots(func(v Summary) bool { return project == "" || v.Project == project })
+}
+
+// ListLoose returns the conversations without a folder, newest first.
+func (s *Sessions) ListLoose() []Summary {
+	return s.roots(func(v Summary) bool { return v.Loose })
+}
+
+func (s *Sessions) roots(keep func(Summary) bool) []Summary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Summary, 0, len(s.index))
 	for _, v := range s.index {
-		if v.Parent != "" {
-			continue
-		}
-		if project == "" || v.Project == project {
+		if v.Parent == "" && keep(v) {
 			out = append(out, v)
 		}
 	}
@@ -334,12 +424,21 @@ func (s *Sessions) Load(id string) (*Session, error) {
 	if !namePattern.MatchString(id + ".json") {
 		return nil, ErrNotFound
 	}
+	// A conversation being deleted is gone; a run a delete names is gone
+	// when its file cannot be read to say whose it is.
+	s.mu.RLock()
+	_, dying := s.dying[id]
+	named := s.namedLocked(id)
+	s.mu.RUnlock()
+	if dying {
+		return nil, ErrNotFound
+	}
 	lock := s.lockFor(id)
 	lock.Lock()
 	defer lock.Unlock()
 	raw, err := os.ReadFile(s.path(id))
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || named {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("Read session %s: %w", id, err)
@@ -353,7 +452,51 @@ func (s *Sessions) Load(id string) (*Session, error) {
 	if sess.ID != id {
 		return nil, fmt.Errorf("Read session %s: the file names session %q", id, sess.ID)
 	}
+	if err := checkKind(&sess); err != nil {
+		return nil, fmt.Errorf("Read %w", err)
+	}
+	if s.isDying(&sess) {
+		return nil, ErrNotFound
+	}
+	if sess.Loose && sess.Parent != "" {
+		s.mu.RLock()
+		ok := s.looseRootLocked(sess.Parent)
+		s.mu.RUnlock()
+		if !ok {
+			return nil, fmt.Errorf("Read session %s: its launcher %s is not a conversation without a folder", id, sess.Parent)
+		}
+	}
 	return &sess, nil
+}
+
+// isDying reports whether a session belongs to a conversation whose delete
+// has begun.
+func (s *Sessions) isDying(sess *Session) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.dyingLocked(sess)
+}
+
+// dyingLocked is isDying for a caller holding the lock. A run is judged by the
+// launcher its file names, so a mark that lists a run of another
+// conversation hides nothing of it.
+func (s *Sessions) dyingLocked(sess *Session) bool {
+	if _, ok := s.dying[sess.ID]; ok {
+		return true
+	}
+	_, ok := s.dying[sess.Parent]
+	return ok && sess.Parent != ""
+}
+
+// namedLocked reports whether a delete names id as a run of the conversation
+// it is deleting. The caller holds the lock.
+func (s *Sessions) namedLocked(id string) bool {
+	for _, family := range s.dying {
+		if slices.Contains(family, id) {
+			return true
+		}
+	}
+	return false
 }
 
 // Save writes the file, flushes it to the disk and refreshes the index.
@@ -367,9 +510,33 @@ func (s *Sessions) SaveNoSync(sess *Session) error {
 	return s.save(sess, false)
 }
 
+// NextVersion numbers a snapshot about to be written. A snapshot of a
+// session numbered later is newer, so it is numbered under that session's
+// own lock as the snapshot is taken.
+func (s *Sessions) NextVersion() uint64 { return s.versions.Add(1) }
+
+// SaveAt is Save for a snapshot numbered version by its writer. A snapshot
+// older than the one already written is skipped, so writers that race leave
+// the newest on disk.
+func (s *Sessions) SaveAt(sess *Session, version uint64) error {
+	return s.saveAt(sess, true, version)
+}
+
+// SaveNoSyncAt is SaveAt without the flush to the disk.
+func (s *Sessions) SaveNoSyncAt(sess *Session, version uint64) error {
+	return s.saveAt(sess, false, version)
+}
+
 func (s *Sessions) save(sess *Session, sync bool) error {
-	if sess.ID == "" {
-		return errors.New("Save session: the session has no id")
+	return s.saveAt(sess, sync, 0)
+}
+
+func (s *Sessions) saveAt(sess *Session, sync bool, version uint64) error {
+	if !ValidID(sess.ID) {
+		return fmt.Errorf("Save session: %q is not a session id", sess.ID)
+	}
+	if err := checkKind(sess); err != nil {
+		return fmt.Errorf("Save %w", err)
 	}
 	data, err := json.Marshal(sess)
 	if err != nil {
@@ -382,15 +549,40 @@ func (s *Sessions) save(sess *Session, sync bool) error {
 	}
 	lock := s.lockFor(sess.ID)
 	lock.Lock()
-	err = write(s.path(sess.ID), data, 0o600)
-	lock.Unlock()
-	if err != nil {
-		return err
+	// A conversation whose delete has begun is never written again, or its
+	// file would come back beside the mark. A run without a folder is kept
+	// only under a launcher the index holds, as a restart would read it.
+	if s.isDying(sess) {
+		lock.Unlock()
+		return fmt.Errorf("Save session %s: the conversation is being deleted", sess.ID)
 	}
-	s.mu.Lock()
-	s.index[sess.ID] = summarise(sess, int64(len(data)))
-	s.mu.Unlock()
-	return nil
+	if sess.Loose && sess.Parent != "" {
+		s.mu.RLock()
+		ok := s.looseRootLocked(sess.Parent)
+		s.mu.RUnlock()
+		if !ok {
+			lock.Unlock()
+			return fmt.Errorf("Save session %s: its launcher %s is not a conversation without a folder", sess.ID, sess.Parent)
+		}
+	}
+	s.mu.RLock()
+	stale := version != 0 && version <= s.written[sess.ID]
+	s.mu.RUnlock()
+	if stale {
+		lock.Unlock()
+		return nil
+	}
+	err = write(s.path(sess.ID), data, 0o600)
+	if err == nil {
+		s.mu.Lock()
+		if version != 0 {
+			s.written[sess.ID] = version
+		}
+		s.index[sess.ID] = summarise(sess, int64(len(data)))
+		s.mu.Unlock()
+	}
+	lock.Unlock()
+	return err
 }
 
 // filesDir is the side folder holding one session's saved tool output.
@@ -439,6 +631,7 @@ func (s *Sessions) Delete(id string) error {
 	s.mu.Lock()
 	delete(s.index, id)
 	delete(s.locks, id)
+	delete(s.written, id)
 	s.mu.Unlock()
 	if err != nil {
 		return ErrNotFound
@@ -483,6 +676,7 @@ func summarise(sess *Session, size int64) Summary {
 	return Summary{
 		ID:       sess.ID,
 		Project:  sess.Project,
+		Loose:    sess.Loose,
 		Agent:    sess.Agent,
 		Parent:   sess.Parent,
 		Model:    sess.Model,
@@ -501,6 +695,11 @@ func NewID() string {
 	b := make([]byte, 10)
 	rand.Read(b)
 	return "sess_" + idEncoding.EncodeToString(b)[:16]
+}
+
+// NewLooseID is NewID for a conversation without a folder.
+func NewLooseID() string {
+	return loosePrefix + strings.TrimPrefix(NewID(), "sess_")
 }
 
 // Title is the first 60 runes of the first user entry, newlines collapsed.

@@ -40,6 +40,9 @@ func (r *Runner) Find(ctx context.Context, raw json.RawMessage) (Result, error) 
 	if args.Name == "" && args.Text == "" {
 		return Result{}, errors.New("grep needs name or text")
 	}
+	if err := r.checkPinned(); err != nil {
+		return Result{}, err
+	}
 
 	base := r.Root
 	if strings.TrimSpace(args.Path) != "" {

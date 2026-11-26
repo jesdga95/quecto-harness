@@ -365,3 +365,59 @@ func TestShellWithoutItsScratchFolder(t *testing.T) {
 		t.Error("bash started although its scratch folder could not be named")
 	}
 }
+
+// A pinned scratch folder whose name comes to hold another folder takes no
+// more writes.
+func TestAPinnedScratchRefusesAnotherFolder(t *testing.T) {
+	root := t.TempDir()
+	r, err := NewRunner(root, config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Scratch = r.Root
+	if err := r.PinScratch(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.resolve("a.txt"); err != nil {
+		t.Fatalf("a path in the pinned folder = %v", err)
+	}
+	moved := root + "-moved"
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(moved) })
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.resolve("a.txt"); err == nil {
+		t.Error("a path under a folder put in the pinned one's place resolved")
+	}
+}
+
+// grep and bash check the pinned folder before they start, so neither works
+// in a folder put in its place.
+func TestEveryToolChecksThePinnedFolder(t *testing.T) {
+	root := t.TempDir()
+	r, err := NewRunner(root, config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Scratch = r.Root
+	if err := r.PinScratch(); err != nil {
+		t.Fatal(err)
+	}
+	moved := root + "-moved"
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(moved) })
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Find(context.Background(), json.RawMessage(`{"name":"*"}`)); err == nil {
+		t.Error("grep walked a folder put in the pinned one's place")
+	}
+	if _, err := r.RunShell(context.Background(), json.RawMessage(`{"command":"true"}`)); err == nil {
+		t.Error("bash started in a folder put in the pinned one's place")
+	}
+}

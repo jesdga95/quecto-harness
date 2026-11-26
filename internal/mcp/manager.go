@@ -152,7 +152,9 @@ func (m *Manager) Tools(ctx context.Context, project string) ([]Offered, []strin
 	m.mu.Lock()
 	var usable []Server
 	for _, n := range m.order {
-		if s := m.servers[n]; s.Usable() {
+		// A conversation without a folder names no project to start a
+		// per-project server in.
+		if s := m.servers[n]; s.Usable() && (project != "" || !s.PerProject()) {
 			usable = append(usable, s)
 		}
 	}
@@ -324,6 +326,9 @@ func (m *Manager) Call(ctx context.Context, project, server, tool string, args j
 	s, ok := m.Server(server)
 	if !ok || !s.Usable() {
 		return Rendered{}, fmt.Errorf("MCP server %s is not configured or is turned off", server)
+	}
+	if s.PerProject() && project == "" {
+		return Rendered{}, fmt.Errorf("MCP server %s runs once per project, and this conversation has none", server)
 	}
 	in := m.instanceFor(s, project)
 	client, err := in.ensure(ctx, m)

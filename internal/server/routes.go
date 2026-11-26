@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -411,22 +412,53 @@ func (s *Server) deleteAllowlist(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// listSessions lists every conversation, those of one project with
+// ?project=, or those without a folder with ?scope=loose.
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
-	list := s.store.List(r.URL.Query().Get("project"))
+	q := r.URL.Query()
+	var list []store.Summary
+	switch scope := q.Get("scope"); {
+	case !q.Has("scope"):
+		list = s.store.List(q.Get("project"))
+	case scope != "loose":
+		writeError(w, http.StatusBadRequest, "Scope \""+scope+"\" is not loose")
+		return
+	case q.Get("project") != "":
+		writeError(w, http.StatusBadRequest, "A project and scope=loose name different conversations: pass one")
+		return
+	default:
+		list = s.store.ListLoose()
+	}
 	if list == nil {
 		list = []store.Summary{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": list})
 }
 
+// createSession starts a conversation in a project, or one without a folder
+// with {"loose": true}. Exactly one of the two is named.
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Project string `json:"project"`
+		Loose   bool   `json:"loose"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
-	sess, err := s.engine.Create(body.Project)
+	var sess *agent.Session
+	var err error
+	switch {
+	case body.Loose && body.Project != "":
+		writeError(w, http.StatusBadRequest, "A conversation is in a project or has no folder: pass project or loose, not both")
+		return
+	case body.Loose:
+		sess, err = s.engine.CreateLoose()
+	case body.Project == "":
+		writeError(w, http.StatusBadRequest, "Name a project, or pass loose for a conversation without a folder")
+		return
+	default:
+		sess, err = s.engine.Create(body.Project)
+	}
 	if errors.Is(err, config.ErrStateOverlap) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
@@ -437,7 +469,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	doc, state, _, _ := sess.Snapshot()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id": doc.ID, "project": doc.Project, "model": doc.Model, "title": doc.Title,
+		"id": doc.ID, "project": doc.Project, "loose": doc.Loose, "root": s.looseDir(doc.ID, doc.Parent, doc.Loose),
+		"model": doc.Model, "title": doc.Title,
 		"created": doc.Created, "updated": doc.Updated, "messages": 0, "bytes": 0,
 		"state": string(state),
 	})
@@ -501,7 +534,7 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		todos = []store.Todo{}
 	}
 	body := map[string]any{
-		"id": doc.ID, "project": doc.Project, "model": doc.Model, "parent": doc.Parent,
+		"id": doc.ID, "project": doc.Project, "loose": doc.Loose, "model": doc.Model, "parent": doc.Parent,
 		"updated": doc.Updated, "mode": string(doc.Mode), "effort": string(doc.Effort), "toolset": string(doc.Toolset), "plan": doc.Plan, "draft": doc.Draft,
 		// A subagent run is reachable only from the transcript that launched
 		// it, so a launcher carries the list of what it launched.
@@ -517,6 +550,11 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 	// stream opened from last_seq carries on from its end.
 	if view.Reply != nil {
 		body["reply"] = view.Reply
+	}
+	// A conversation without a folder names the one it works in, which is
+	// what the paths its tools wrote begin with.
+	if dir := s.looseDir(doc.ID, doc.Parent, doc.Loose); dir != "" {
+		body["root"] = dir
 	}
 	// A question is answered on the row its own call already drew, so what a
 	// reloaded page is missing is the id to answer, not the question.
@@ -581,6 +619,10 @@ func (s *Server) getProcessOutput(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"process": pr, "output": out, "truncated": trunc})
 }
 
+// clientName is the shape of the name a page gives a message: empty, or a
+// short token with nothing to escape.
+var clientName = regexp.MustCompile(`^[A-Za-z0-9_-]{0,64}$`)
+
 // viewLimit is the most text the file panel is sent, and rawLimit the largest
 // image it is served.
 const (
@@ -601,30 +643,121 @@ func (s *Server) getProjectFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if sess.Loose {
+		s.getLooseFile(w, r, sess)
+		return
+	}
 	if !s.projectOK(w, sess.Project) {
 		return
 	}
 	arg := r.URL.Query().Get("path")
 	v, err := tools.ViewFile(sess.Project, s.cfg.Paths().Home, arg, viewLimit)
+	if !viewOK(w, v, err) {
+		return
+	}
+	if r.URL.Query().Get("raw") != "1" {
+		writeView(w, r, v, nil)
+		return
+	}
+	f, err := os.Open(v.Abs)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "No such file: "+v.Path)
+		return
+	}
+	defer f.Close()
+	writeView(w, r, v, f)
+}
+
+// getLooseFile is getProjectFile for a conversation without a folder. The
+// file is read and served through the folder's open root, by one descriptor.
+func (s *Server) getLooseFile(w http.ResponseWriter, r *http.Request, sess *agent.Session) {
+	root, dir, ok := s.looseRoot(w, sess)
+	if !ok {
+		return
+	}
+	if root == nil {
+		writeError(w, http.StatusNotFound, "No such file: "+r.URL.Query().Get("path"))
+		return
+	}
+	defer root.Close()
+	v, f, err := tools.ViewIn(root, dir, r.URL.Query().Get("path"), viewLimit)
+	if !viewOK(w, v, err) {
+		return
+	}
+	defer f.Close()
+	if r.URL.Query().Get("raw") != "1" {
+		writeView(w, r, v, nil)
+		return
+	}
+	writeView(w, r, v, f)
+}
+
+// looseDir is the folder a conversation without a folder works in, empty for
+// one in a project.
+func (s *Server) looseDir(id, parent string, loose bool) string {
+	if !loose {
+		return ""
+	}
+	owner := id
+	if parent != "" {
+		owner = parent
+	}
+	dir, err := s.store.ScratchDir(owner)
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+// looseRoot opens the folder a conversation without a folder works in, and
+// the path it is at. A folder no turn has made yet is a nil root.
+func (s *Server) looseRoot(w http.ResponseWriter, sess *agent.Session) (*os.Root, string, bool) {
+	owner := sess.ID
+	if sess.Parent != "" {
+		owner = sess.Parent
+	}
+	dir, err := s.store.ScratchDir(owner)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return nil, "", false
+	}
+	root, err := s.store.OpenScratch(owner)
+	if errors.Is(err, store.ErrNoScratch) {
+		return nil, dir, true
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Open the conversation folder: "+err.Error())
+		return nil, "", false
+	}
+	return root, dir, true
+}
+
+// viewOK answers a file the panel cannot be shown, and reports whether it can.
+func viewOK(w http.ResponseWriter, v tools.View, err error) bool {
 	switch {
 	case errors.Is(err, tools.ErrHidden):
 		writeError(w, http.StatusForbidden, "That path is in the harness state folder")
-		return
+		return false
 	case errors.Is(err, tools.ErrOutside):
 		writeError(w, http.StatusForbidden, "That path is outside the project")
-		return
+		return false
 	case errors.Is(err, tools.ErrMissing):
 		writeError(w, http.StatusNotFound, "No such file: "+v.Path)
-		return
+		return false
 	case errors.Is(err, tools.ErrFolder):
 		writeError(w, http.StatusBadRequest, v.Path+" is a folder, not a file")
-		return
+		return false
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return false
 	}
+	return true
+}
 
-	if r.URL.Query().Get("raw") != "1" {
+// writeView sends a file the panel opens: as JSON with f nil, else the bytes
+// of an image or a video read from f.
+func writeView(w http.ResponseWriter, r *http.Request, v tools.View, f *os.File) {
+	if f == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"path": v.Path, "kind": v.Kind, "bytes": v.Bytes, "content": v.Content,
 		})
@@ -639,12 +772,6 @@ func (s *Server) getProjectFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusRequestEntityTooLarge, "The image is too large to show")
 		return
 	}
-	f, err := os.Open(v.Abs)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "No such file: "+v.Path)
-		return
-	}
-	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Read the file: "+err.Error())
@@ -665,10 +792,34 @@ func (s *Server) getProjectDir(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.projectOK(w, sess.Project) {
-		return
+	var (
+		rel     string
+		entries []tools.Entry
+		err     error
+		top     = sess.Project
+	)
+	if sess.Loose {
+		root, dir, ok := s.looseRoot(w, sess)
+		if !ok {
+			return
+		}
+		top = dir
+		switch p := r.URL.Query().Get("path"); {
+		case root != nil:
+			defer root.Close()
+			rel, entries, err = tools.ListIn(root, dir, p)
+		case p == "" || p == "." || filepath.Clean(p) == dir:
+			// Nothing has been written yet: the folder is there to fill.
+			entries = []tools.Entry{}
+		default:
+			rel, err = p, tools.ErrMissing
+		}
+	} else {
+		if !s.projectOK(w, sess.Project) {
+			return
+		}
+		rel, entries, err = tools.ListDir(sess.Project, s.cfg.Paths().Home, r.URL.Query().Get("path"))
 	}
-	rel, entries, err := tools.ListDir(sess.Project, s.cfg.Paths().Home, r.URL.Query().Get("path"))
 	switch {
 	case errors.Is(err, tools.ErrHidden):
 		writeError(w, http.StatusForbidden, "That folder is in the harness state folder")
@@ -681,7 +832,7 @@ func (s *Server) getProjectDir(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	default:
-		writeJSON(w, http.StatusOK, map[string]any{"root": sess.Project, "path": rel, "entries": entries})
+		writeJSON(w, http.StatusOK, map[string]any{"root": top, "path": rel, "entries": entries})
 	}
 }
 
@@ -701,6 +852,41 @@ func (s *Server) getProjectFiles(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "List the project files: "+err.Error())
 		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": files})
+}
+
+// getSessionFiles finds files by name in a session's folder, for the @
+// mentions of a conversation already made.
+func (s *Server) getSessionFiles(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.session(w, r)
+	if !ok {
+		return
+	}
+	q := r.URL.Query().Get("q")
+	var files []string
+	var err error
+	if sess.Loose {
+		root, _, ok := s.looseRoot(w, sess)
+		if !ok {
+			return
+		}
+		if root != nil {
+			defer root.Close()
+			files, err = tools.FindIn(root, q, 30)
+		}
+	} else {
+		if !s.projectOK(w, sess.Project) {
+			return
+		}
+		files, err = tools.FindFiles(sess.Project, s.cfg.Paths().Home, q, 30)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "List the files: "+err.Error())
+		return
+	}
+	if files == nil {
+		files = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"files": files})
 }
@@ -774,6 +960,9 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	err := s.engine.Delete(id)
 	switch {
 	case err == nil:
+	case errors.Is(err, agent.ErrDeletePending):
+		writeJSON(w, http.StatusAccepted, map[string]any{"pending": err.Error()})
+		return
 	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrStillRunning), errors.Is(err, agent.ErrNotFound):
 		writeEngineError(w, err)
 		return
@@ -797,12 +986,19 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		// Effort replaces the agent's thinking level for the session. Absent
 		// keeps what the session has; empty goes back to the agent's.
 		Effort *string `json:"effort"`
+		// Client names the message for the page that sent it, which the
+		// stream echoes when the message starts a turn.
+		Client string `json:"client"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
+	if !clientName.MatchString(body.Client) {
+		writeError(w, http.StatusBadRequest, "Client must be up to 64 letters, digits, dashes or underscores")
+		return
+	}
 	// Refused before anything about the session changes.
-	if !s.projectOK(w, sess.Project) {
+	if !sess.Loose && !s.projectOK(w, sess.Project) {
 		return
 	}
 	for _, p := range body.Attachments {
@@ -822,7 +1018,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	sent, err := s.engine.Send(sess.ID, body.Text, body.Attachments)
+	sent, err := s.engine.SendAs(sess.ID, body.Text, body.Attachments, body.Client)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -851,11 +1047,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 
 // steerJSON renders the message waiting for a running turn.
 func steerJSON(held *agent.Steer) map[string]any {
-	if held == nil {
-		return nil
-	}
-	return map[string]any{"text": held.Text, "from": held.From.Name,
-		"attachments": agent.AttachmentFields(held.Attachments)}
+	return agent.SteerFields(held)
 }
 
 // postResend runs the last message again, with the text rewritten when the
@@ -964,6 +1156,10 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "That decision is no longer pending: the turn moved on")
 		return
 	}
+	if kind == perms.DecideAlways && req.OnceOnly {
+		writeError(w, http.StatusBadRequest, perms.ErrOnceOnly.Error())
+		return
+	}
 	if kind == perms.DecideAlways && req.Server == "" {
 		if req.Tool != "bash" {
 			writeError(w, http.StatusBadRequest,
@@ -979,7 +1175,12 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 		}
 		body.Prefix = prefix
 	}
-	if err := s.perms.Resolve(id, perms.Decision{Kind: kind, Prefix: body.Prefix, Reason: body.Reason}); err != nil {
+	err := s.perms.Resolve(id, perms.Decision{Kind: kind, Prefix: body.Prefix, Reason: body.Reason})
+	switch {
+	case errors.Is(err, perms.ErrOnceOnly):
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	case err != nil:
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}

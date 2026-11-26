@@ -279,6 +279,10 @@ func (s *Server) postGitDraft(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if sess.Loose {
+		writeError(w, http.StatusConflict, "No folder: this conversation has no repository")
+		return
+	}
 	repo, ok := s.repo(w, r, sess.Project)
 	if !ok {
 		return

@@ -1600,3 +1600,10 @@ func TestReadAttachmentMedia(t *testing.T) {
 		t.Error("a zip was attached")
 	}
 }
+
+// A runner needs a folder: an empty root is not the process's own.
+func TestNewRunnerNeedsAFolder(t *testing.T) {
+	if _, err := NewRunner("", config.Config{}); err == nil {
+		t.Error("an empty root made a runner")
+	}
+}
