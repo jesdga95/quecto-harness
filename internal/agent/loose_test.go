@@ -124,7 +124,7 @@ func TestALooseTurnWorksInItsFolder(t *testing.T) {
 		t.Errorf("the write reached the project: %v", err)
 	}
 	system := systemOf(h.replay.Body(0))
-	if !strings.Contains(system, "in a folder of your own, "+dir+", which is deleted with this conversation") {
+	if !strings.Contains(system, "working without a project") || !strings.Contains(system, "This conversation's working folder is "+dir+". Its files are deleted with the conversation.") {
 		t.Errorf("the prompt does not name the folder: %q", system[:min(len(system), 300)])
 	}
 	if strings.Contains(system, "OBEY THE FILE") || strings.Contains(system, "QUECTO_SCRATCH") {

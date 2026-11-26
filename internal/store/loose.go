@@ -21,45 +21,46 @@ var ErrNoScratch = errors.New("the conversation has no folder yet")
 // readable by the user alone, and returns its path. A name already there has
 // to be a folder and not a link to one.
 func (s *Sessions) EnsureScratch(id string) (string, error) {
+	if err := os.MkdirAll(s.scratch, 0o700); err != nil {
+		return "", fmt.Errorf("create the scratch folder %s: %w", s.scratch, err)
+	}
 	dir, err := s.ScratchDir(id)
 	if err != nil {
 		return "", err
 	}
-	for _, d := range []string{filepath.Dir(dir), dir} {
-		if err := os.Mkdir(d, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-			return "", fmt.Errorf("create the conversation folder %s: %w", dir, err)
-		}
-		if info, err := os.Lstat(d); err != nil || !info.IsDir() {
-			return "", fmt.Errorf("the conversation folder %s is not a folder", dir)
-		}
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		return "", fmt.Errorf("create the conversation folder %s: %w", dir, err)
+	}
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() {
+		return "", fmt.Errorf("the conversation folder %s is not a folder", dir)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("the conversation folder %s can be read by other users: make it private with chmod 700", dir)
 	}
 	return dir, nil
 }
 
-// OpenScratch opens the scratch folder of a conversation as a root nothing
-// read through it can leave. Each folder on the way down is opened from the
-// one above and must be the folder that name holds, not a link.
+// OpenScratch opens the folder of a conversation as a root nothing read
+// through it can leave. It is opened from the scratch folder and must be the
+// folder its name holds, not a link.
 func (s *Sessions) OpenScratch(id string) (*os.Root, error) {
 	if !ValidID(id) {
 		return nil, fmt.Errorf("no scratch folder for %q: not a session id", id)
 	}
-	real, err := filepath.EvalSymlinks(s.dir)
+	real, err := filepath.EvalSymlinks(s.scratch)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, ErrNoScratch
+	}
 	if err != nil {
-		return nil, fmt.Errorf("resolve %s: %w", s.dir, err)
+		return nil, fmt.Errorf("resolve %s: %w", s.scratch, err)
 	}
 	root, err := os.OpenRoot(real)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", real, err)
 	}
-	for _, name := range []string{id + ".files", "scratch"} {
-		next, err := descend(root, name)
-		root.Close()
-		if err != nil {
-			return nil, err
-		}
-		root = next
-	}
-	return root, nil
+	defer root.Close()
+	return descend(root, id)
 }
 
 // descend opens the folder name under parent, refusing a link or anything
@@ -280,9 +281,16 @@ func (s *Sessions) Purge(id string, release func(*Session) error) error {
 	if err := release(&m.Session); err != nil {
 		return fmt.Errorf("Delete session %s: %w", id, err)
 	}
-	// The mark proves the conversation's own folder and any file a crash
-	// left beside it are this conversation's.
+	// The mark proves the conversation's own folders and any file a crash
+	// left beside them are this conversation's.
 	if err := os.RemoveAll(s.filesDir(id)); err != nil {
+		return fmt.Errorf("Delete session %s: %w", id, err)
+	}
+	dir, err := s.ScratchDir(id)
+	if err != nil {
+		return fmt.Errorf("Delete session %s: %w", id, err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("Delete session %s: %w", id, err)
 	}
 	if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
