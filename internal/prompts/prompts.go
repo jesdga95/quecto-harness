@@ -108,6 +108,10 @@ type SystemVars struct {
 	// MCPServers names the MCP servers whose tools this turn carries. Empty
 	// leaves the prompt as it is without MCP.
 	MCPServers []string
+	// Scratch is the conversation's folder for temporary files. It is the last
+	// line of the prompt, so conversations in one project share every token
+	// before it. Empty leaves the line out.
+	Scratch string
 }
 
 // System renders the shared head around the body. It is the same in every

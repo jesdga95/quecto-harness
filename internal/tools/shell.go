@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -182,6 +183,11 @@ func (r *Runner) start(ctx context.Context, args RunShellArgs, onLine func(strin
 	if strings.TrimSpace(args.Command) == "" {
 		return nil, errors.New("bash needs a command")
 	}
+	// The folder is made before anything else, so a failure leaves nothing
+	// running and nothing to close.
+	if err := r.ensureScratch(); err != nil {
+		return nil, err
+	}
 	timeout := r.shellTimeout(args)
 	p := &Proc{
 		buf:     newLimitBuffer(r.OutputLimit),
@@ -201,7 +207,13 @@ func (r *Runner) start(ctx context.Context, args RunShellArgs, onLine func(strin
 
 	cmd := exec.CommandContext(p.runCtx, r.Shell, "-c", args.Command)
 	cmd.Dir = r.Root
-	cmd.Env = append(os.Environ(), plainEnv...)
+	// QUECTO_SCRATCH comes from the runner alone, never from the harness's
+	// own environment.
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "QUECTO_SCRATCH=") })
+	cmd.Env = append(cmd.Env, plainEnv...)
+	if r.Scratch != "" {
+		cmd.Env = append(cmd.Env, "QUECTO_SCRATCH="+r.Scratch)
+	}
 	cmd.Stdin = nil
 	cmd.Stdout = writer
 	cmd.Stderr = writer

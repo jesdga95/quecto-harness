@@ -8,9 +8,12 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/jesdga95/quecto-harness/internal/config"
@@ -109,11 +112,23 @@ func New(cfg *config.Store, emit func(string, Request)) *Broker {
 	}
 }
 
+// Place is where a file tool's path lands, as the path guard reads it.
+type Place int
+
+const (
+	// InProject is the project, or a folder the path guard answers for.
+	InProject Place = iota
+	// Outside is anywhere else on the machine.
+	Outside
+	// InScratch is the conversation's own scratch folder.
+	InScratch
+)
+
 // Evaluate applies the static policy. It never blocks and never asks. ModeFull
 // is answered before the tool name is read, so nothing about the call changes
-// the answer. outside says the call's path lands outside the project, which
-// every other mode asks about for the file tools.
-func (b *Broker) Evaluate(project, tool, command, path string, outside bool, mode config.Mode) Action {
+// the answer. Every other mode asks before a file tool reaches outside the
+// project, and lets the file tools work in the scratch folder.
+func (b *Broker) Evaluate(project, tool, command, path string, place Place, mode config.Mode) Action {
 	if mode == config.ModeFull {
 		return ActionAllow
 	}
@@ -128,7 +143,7 @@ func (b *Broker) Evaluate(project, tool, command, path string, outside bool, mod
 	}
 	switch tool {
 	case "read", "read_image", "grep":
-		if outside {
+		if place == Outside {
 			return ActionPrompt
 		}
 		return ActionAllow
@@ -144,8 +159,12 @@ func (b *Broker) Evaluate(project, tool, command, path string, outside bool, mod
 		return ActionAllow
 	case "write", "edit":
 		// A file under .git can run code: a hook, or a config that names a
-		// program git starts. It is asked about in every mode but full.
-		if auto && !outside && !underGit(project, path) {
+		// program git starts. It is asked about in every mode but full, in
+		// the scratch folder too, where a repository can be made.
+		if underGit(project, path) {
+			return ActionPrompt
+		}
+		if place == InScratch || (auto && place == InProject) {
 			return ActionAllow
 		}
 		return ActionPrompt
@@ -325,7 +344,9 @@ func without(ids []string, id string) []string {
 }
 
 // underGit reports whether a path, before or after its links are followed,
-// passes through a folder named .git.
+// passes through a folder named .git, in any casing, since a volume that
+// ignores case reaches the same folder by another. A path whose existing part
+// cannot be read is taken to.
 func underGit(project, path string) bool {
 	if strings.TrimSpace(path) == "" {
 		return false
@@ -334,20 +355,46 @@ func underGit(project, path string) bool {
 		path = filepath.Join(project, path)
 	}
 	path = filepath.Clean(path)
-	candidates := []string{path}
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		candidates = append(candidates, real)
-	} else if dir, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
-		candidates = append(candidates, filepath.Join(dir, filepath.Base(path)))
+	real, err := landing(path)
+	if err != nil {
+		return true
 	}
+	candidates := []string{path, real}
 	for _, c := range candidates {
 		for _, part := range strings.Split(c, string(filepath.Separator)) {
-			if part == ".git" {
+			if strings.EqualFold(part, ".git") {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// landing is where a write to path lands: the part that exists with its links
+// followed, and the folders still to be made as written. A part that exists
+// and cannot be read is an error.
+func landing(path string) (string, error) {
+	prefix, tail := path, ""
+	for {
+		_, err := os.Lstat(prefix)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			return "", err
+		}
+		parent := filepath.Dir(prefix)
+		if parent == prefix {
+			break
+		}
+		tail = filepath.Join(filepath.Base(prefix), tail)
+		prefix = parent
+	}
+	real, err := filepath.EvalSymlinks(prefix)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(real, tail), nil
 }
 
 // operators are the shell metacharacters that let one approved command start

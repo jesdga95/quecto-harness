@@ -51,6 +51,13 @@ type Runner struct {
 	// it. read and grep reach it by absolute path; empty saves nothing.
 	Spill string
 
+	// Scratch is the conversation's own folder for temporary files, inside
+	// Hidden. The file tools reach it by a path written under it, and only
+	// while what that path leads to stays under it. Empty offers none, and
+	// ScratchErr then says why one was due and could not be named.
+	Scratch    string
+	ScratchErr error
+
 	// BackgroundAfter is how long a bash call is waited on before it moves
 	// to the background. Zero waits for its timeout.
 	BackgroundAfter time.Duration

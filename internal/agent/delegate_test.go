@@ -575,7 +575,7 @@ func TestChildCardIsDrawnInTheLauncher(t *testing.T) {
 func TestLaunchingAnAgentIsNotCarded(t *testing.T) {
 	h, _ := launcher(t)
 	for _, tool := range []string{"subagent", "send_message"} {
-		if got := h.broker.Evaluate(h.project, tool, "", "", false, config.ModeAsk); got != perms.ActionAllow {
+		if got := h.broker.Evaluate(h.project, tool, "", "", perms.InProject, config.ModeAsk); got != perms.ActionAllow {
 			t.Errorf("%s = %v in ask mode, want allow", tool, got)
 		}
 	}

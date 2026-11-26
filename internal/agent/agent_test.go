@@ -2694,9 +2694,11 @@ func TestContextBreakdownIsEstimatedFromThePrompt(t *testing.T) {
 		t.Errorf("server order = %v, want the title and the reply alone", order)
 	}
 
+	// The turn's own brief, which carries the scratch folder line.
+	b := h.engine.briefFor(context.Background(), s, h.cfg.Config())
 	s.mu.Lock()
-	baseChars := len(s.systemMessage(h.agent, h.engine.os, h.engine.today(), topBrief()).Content)
-	schemaChars := len(mustJSON(tools.Schemas(topBrief().offer)))
+	baseChars := len(s.systemMessage(h.agent, h.engine.os, h.engine.today(), b).Content)
+	schemaChars := len(mustJSON(tools.Schemas(b.offer)))
 	s.mu.Unlock()
 	parts := s.Breakdown()
 	if parts == nil {
@@ -2768,8 +2770,14 @@ func TestInstructionsReachTheRequest(t *testing.T) {
 	}
 	first, _ := msgs[0].(map[string]any)
 	system, _ := first["content"].(string)
-	if !strings.HasSuffix(system, "Answer in Latin.") {
-		t.Errorf("system message did not end with the agent's instructions: %q", system)
+	// The instructions come whole, followed by the scratch folder line alone.
+	head, tail, ok := strings.Cut(system, "Answer in Latin.\n")
+	if !ok || head == "" {
+		t.Fatalf("system message lost the agent's instructions: %q", system)
+	}
+	line, blank := strings.CutPrefix(tail, "\n")
+	if !blank || !strings.HasPrefix(line, "Use /") || strings.Contains(line, "\n") {
+		t.Errorf("after the instructions = %q, want the scratch folder line alone", tail)
 	}
 	if !strings.Contains(system, "read") {
 		t.Errorf("the built-in prompt was lost: %q", system)

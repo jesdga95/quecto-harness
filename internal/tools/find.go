@@ -253,7 +253,17 @@ func (f *finder) related() []string {
 	}
 	var out []string
 	for _, hit := range f.files {
-		dir := filepath.Dir(filepath.Join(f.runner.Root, hit))
+		// A hit outside the project is named by its absolute path.
+		path := hit
+		if !filepath.IsAbs(hit) {
+			path = filepath.Join(f.runner.Root, hit)
+		}
+		// Suggestions stay where the search could look: a folder in the
+		// project or under the one searched, and no link that leads out.
+		dir := filepath.Dir(path)
+		if !f.reaches(dir) {
+			continue
+		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue
@@ -262,6 +272,12 @@ func (f *finder) related() []string {
 		for _, e := range entries {
 			if e.IsDir() || stemOf(e.Name()) != stem {
 				continue
+			}
+			if e.Type()&fs.ModeSymlink != 0 {
+				abs, err := f.runner.resolve(filepath.Join(dir, e.Name()))
+				if err != nil || !f.reaches(abs) {
+					continue
+				}
 			}
 			rel := f.runner.rel(filepath.Join(dir, e.Name()))
 			if rel == hit || slices.Contains(f.files, rel) || slices.Contains(out, rel) {
@@ -273,6 +289,12 @@ func (f *finder) related() []string {
 		}
 	}
 	return out
+}
+
+// reaches reports whether a path is one the search could have walked to: in
+// the project or under the folder searched, and not in the state folder.
+func (f *finder) reaches(p string) bool {
+	return (within(f.runner.Root, p) || within(f.base, p)) && f.runner.reachable(p)
 }
 
 // stemOf is the name up to the first dot, so Chat.module.css stems to Chat.

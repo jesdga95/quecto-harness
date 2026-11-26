@@ -14,6 +14,7 @@ import (
 	"github.com/jesdga95/quecto-harness/internal/config"
 	"github.com/jesdga95/quecto-harness/internal/llm"
 	"github.com/jesdga95/quecto-harness/internal/mcp"
+	"github.com/jesdga95/quecto-harness/internal/perms"
 	"github.com/jesdga95/quecto-harness/internal/prompts"
 	"github.com/jesdga95/quecto-harness/internal/store"
 	"github.com/jesdga95/quecto-harness/internal/tools"
@@ -39,6 +40,10 @@ type brief struct {
 	// file's name as it stands on disk. Both empty is a project with none.
 	rules     string
 	rulesName string
+	// scratch is the conversation's scratch folder, empty for a turn that
+	// writes nothing. scratchErr says why one that should have it does not.
+	scratch    string
+	scratchErr error
 }
 
 // findRulesFile names the rules file in a project root, exact case first and
@@ -94,7 +99,7 @@ func readRules(project string) (content, name, note string) {
 // outside the lock, like the image bytes a message carries.
 func (e *Engine) briefFor(ctx context.Context, s *Session, cfg config.Config) brief {
 	s.mu.Lock()
-	parent, mine, mode, project, set := s.Parent, s.AgentID, s.Mode, s.Project, s.Toolset
+	id, parent, mine, mode, project, set := s.ID, s.Parent, s.AgentID, s.Mode, s.Project, s.Toolset
 	s.mu.Unlock()
 	rules, rulesName, note := readRules(project)
 	e.showRulesNote(s, note)
@@ -105,10 +110,12 @@ func (e *Engine) briefFor(ctx context.Context, s *Session, cfg config.Config) br
 		b.offer = tools.Offer{Set: set, Mode: mode, Message: true, Search: cfg.Search.Enabled()}
 		b.offer.MCP = e.mcpTools(ctx, s, project, set)
 		b.launcher = parent
+		b.scratch, b.scratchErr = e.scratchFor(parent, b.offer)
 		return b
 	}
 	b.offer = tools.Offer{Set: set, Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}
 	b.offer.MCP = e.mcpTools(ctx, s, project, set)
+	b.scratch, b.scratchErr = e.scratchFor(id, b.offer)
 	me, _ := cfg.AgentByID(mine)
 	// What is named is what the caller may hand work to, so a list that names
 	// nothing offers the tool at all, the way a roster with no enabled agents
@@ -131,6 +138,27 @@ func (e *Engine) briefFor(ctx context.Context, s *Session, cfg config.Config) br
 	}
 	b.offer.Agents = len(b.agents) > 0
 	return b
+}
+
+// scratchFor is the scratch folder of the conversation owner names, which a
+// subagent run shares with its launcher. A turn sent no tool that writes gets
+// none; one whose folder cannot be named gets the reason instead.
+func (e *Engine) scratchFor(owner string, offer tools.Offer) (string, error) {
+	if !offer.Sends("write") && !offer.Sends("edit") && !offer.Sends("bash") {
+		return "", nil
+	}
+	return e.store.ScratchDir(owner)
+}
+
+// placeOf is where a file tool's path lands, for the permission policy.
+func placeOf(runner *tools.Runner, path string) perms.Place {
+	switch {
+	case runner.InScratch(path):
+		return perms.InScratch
+	case runner.Outside(path):
+		return perms.Outside
+	}
+	return perms.InProject
 }
 
 // mcpTools reads what the MCP servers offer a turn in project. A server left

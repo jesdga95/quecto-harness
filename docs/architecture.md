@@ -143,7 +143,10 @@ carries one line, and the approved plan is written into the message that approve
 compaction carries plan mode's rules while in it, or the approved plan once that message is
 summarised. A call to a tool the mode does not run is answered and not run. It then appends the agent's instructions as a **value, never parsed**:
 a stray `{{` survives, the agent's text wins where it disagrees with the built-in
-guidance, and an empty value renders byte-for-byte unchanged.
+guidance, and an empty value renders byte-for-byte unchanged. Last comes one line naming
+the conversation's scratch folder, when the turn sends `write`, `edit` or `bash`: it is the
+only part that differs between conversations in one project, so they share every token
+before it, and an empty value renders byte-for-byte unchanged.
 
 ## 6. internal/tools
 
@@ -206,6 +209,22 @@ directory). Output is truncated to a head and a tail with a marker; `looksBinary
 on a NUL byte or invalid UTF-8 above 1 % of an 8 KiB sniff, and UTF-16 reads as binary,
 accepted.
 
+**Scratch folder.** Each conversation has one at `sessions/<id>.files/scratch`, shared by
+its subagent runs, made `0700` by the first write or `bash` call that needs it and removed
+with the conversation. It is inside the state directory and is the one part of it the file
+tools reach. A path counts as scratch by its words alone: written under the folder, after
+`..` is folded. What it leads to then has to stay under the folder, or it is refused in every
+mode: a link to the project, to the state directory or anywhere else, a link that leads
+nowhere, and a link put in place of the session folder or the folder itself, whose location
+is worked out from the resolved sessions folder and nothing under it. A path written
+elsewhere that leads into the folder is not scratch, and the state directory refuses it.
+A name under the folder that exists and cannot be read is refused too. `grep` from the
+folder leaves out links that leave it, and the related files it suggests stay where the
+search could look. `bash` gets the path in `QUECTO_SCRATCH`, never the one the harness
+inherited, and keeps the `TMPDIR` it inherits; a folder that cannot be made, or one that
+was due and could not be named, keeps the command from starting. The check-then-open race
+is accepted as for the project.
+
 ## 7. internal/perms
 
 The broker **decides and blocks**. `Evaluate` applies the static policy without blocking;
@@ -217,7 +236,12 @@ unanswered requests after a browser reconnect.
 - **Policy by mode.** `read`, `grep`, `todo_write`, `ask_user_question`, `subagent` and
   `send_message` are always allowed: the first two are confined by the path guard, and the
   rest touch the session rather than the machine. `full` allows everything before the tool
-  is even named. In `allowlist` mode, `write`, `edit` and `web_search` run
+  is even named. `Evaluate` is told where a file tool's path lands: the project, outside it,
+  or the scratch folder. `write` and `edit` in the scratch folder run free in `ask` and
+  `allowlist` mode, except under a `.git` folder made there. Whether a write passes through
+  `.git`, in any casing, is judged on the path as written and on where it lands: the existing part with its
+  links followed and the folders still to be made; a part that cannot be read asks. In
+  `allowlist` mode, `write`, `edit` and `web_search` run
   free, except a write whose path passes through a `.git` folder, before or after its
   links are followed, which asks, and `bash` runs when it prefix-matches the project allowlist **and** contains
   no shell operator. `web_search` prompts in `ask` mode: the query leaves the machine and
@@ -301,7 +325,10 @@ too late to be picked up starts a turn of its own.
   kept as an assistant entry marked `interrupted`, without its unfinished tool calls.
 - **Reads together.** Consecutive `read`, `grep` and `web_search` calls that the policy
   allows without a card run at the same time, and their results are appended in the order
-  the model made them.
+  the model made them. The policy is read again as the run starts, and the run takes the
+  calls in order only while each still runs without a card, so it never waits on a person;
+  the call it stops at takes the one-at-a-time path, and the reads after it may form a run
+  again.
 - **MCP in a turn.** `briefFor` reads the offered MCP tools once per turn start from the
   manager, which may wait up to 60 s for a server to start. A server left out is said once in
   a status line. Plan mode runs an MCP tool only when its server is marked `read_only`, and
@@ -372,6 +399,7 @@ drives what the UI keeps. The permission record preserves the decision, so a rel
 shows the card in its answered state.
 
 - A session is **one file at `0600`**, beside a sidecar folder holding the baseline copies,
+  the saved output of cut-off commands and, for a conversation, its scratch folder,
   with one mutex per id so sessions never serialise against each other. The header carries
   project, agent, parent, model, title, whether the title was typed, times, `n_ctx` and its
   source, compactions, the estimated context base, the todo list and the baselines. Each

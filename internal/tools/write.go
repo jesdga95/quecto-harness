@@ -62,7 +62,15 @@ func (r *Runner) WriteFile(ctx context.Context, raw json.RawMessage) (Result, er
 	// Read before writing, since after the write the old content is gone.
 	before := r.snapshot(path)
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// Folders made in the scratch folder are private like the folder itself.
+	dirPerm := os.FileMode(0o755)
+	if r.InScratch(args.Path) {
+		if err := r.ensureScratch(); err != nil {
+			return Result{}, err
+		}
+		dirPerm = 0o700
+	}
+	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
 		return Result{}, fmt.Errorf("create the folder for %s: check the permissions on the project", args.Path)
 	}
 	data := []byte(args.Content)

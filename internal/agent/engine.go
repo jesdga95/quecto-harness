@@ -1447,6 +1447,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	runner.Hide(e.cfg.Paths().Home)
 	runner.Seen = s.seen
 	runner.SpillTo(e.store.SpillDir(s.ID))
+	runner.Scratch, runner.ScratchErr = b.scratch, b.scratchErr
 	if e.mcp != nil {
 		runner.MCP = e.mcp
 	}
@@ -1635,14 +1636,15 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			// Calls that only read and need no card, made one after another,
 			// run at the same time.
 			if run := e.readRun(s, cfg, b.offer, runner, res.ToolCalls, i); run > 1 {
-				calls += run
-				e.runReads(ctx, s, cfg, a, runner, res.ToolCalls[i:i+run], i, &seen, b.offer, &clock)
-				i += run - 1
-				if ctx.Err() != nil {
-					e.markStopped(s, clock, nil)
-					return
+				if ran := e.runReads(ctx, s, cfg, runner, res.ToolCalls[i:i+run], i, &seen, b.offer, &clock); ran > 0 {
+					calls += ran
+					i += ran - 1
+					if ctx.Err() != nil {
+						e.markStopped(s, clock, nil)
+						return
+					}
+					continue
 				}
-				continue
 			}
 			calls++
 			// A tool the mode does not run or the toolset does not offer is
@@ -2043,24 +2045,11 @@ func (e *Engine) publishUsage(s *Session) {
 // The third result reports that the session was stopped while waiting.
 func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a config.Agent, runner *tools.Runner, call llm.ToolCall) (perms.Decision, *store.PermissionRecord, bool) {
 	tool := call.Function.Name
-	command, path := argSummary(call)
-	// An MCP call has no command or path of its own: what it is about is its
-	// arguments, which the card shows and the record keeps.
-	if _, ok := runner.MCPTools[tool]; ok {
-		command, path = string(call.Function.Arguments), ""
-	}
-	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
-
-	policy := cfg.Mode
-	if e.perms.Evaluate(s.Project, tool, command, path, runner.Outside(path), policy) == perms.ActionAllow {
-		// A call skips the card two ways, and the record keeps them apart.
-		// "auto" is a policy that allowed this call, "full" is no policy.
-		record.Decision = "auto"
-		if policy == config.ModeFull {
-			record.Decision = "full"
-		}
+	record, ok := e.allowed(s, cfg, runner, call)
+	if ok {
 		return perms.Decision{Kind: perms.DecideOnce}, record, false
 	}
+	command, path := record.Command, record.Path
 	// The id is minted here rather than inside Ask, so the record kept with the
 	// tool entry carries the same id the card was asked with, whether the card
 	// was answered or the turn was stopped under it.
@@ -2184,7 +2173,7 @@ func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, runne
 			break
 		}
 		command, path := argSummary(call)
-		if e.perms.Evaluate(s.Project, name, command, path, runner.Outside(path), cfg.Mode) != perms.ActionAllow {
+		if e.perms.Evaluate(s.Project, name, command, path, placeOf(runner, path), cfg.Mode) != perms.ActionAllow {
 			break
 		}
 		n++
@@ -2193,15 +2182,26 @@ func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, runne
 }
 
 // runReads runs calls that only read at the same time, and appends their
-// results in the order the model made them.
-func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a config.Agent,
-	runner *tools.Runner, calls []llm.ToolCall, first int, seen *repeats, offer tools.Offer, clock *turnClock) {
+// results in the order the model made them. It takes them in order while the
+// policy still lets each run without a card, so a run never waits on a person,
+// and returns how many it ran; the rest go one at a time.
+func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config,
+	runner *tools.Runner, calls []llm.ToolCall, first int, seen *repeats, offer tools.Offer, clock *turnClock) int {
+	var records []*store.PermissionRecord
+	for _, call := range calls {
+		record, ok := e.allowed(s, cfg, runner, call)
+		if !ok {
+			break
+		}
+		records = append(records, record)
+	}
+	calls = calls[:len(records)]
+	if len(calls) == 0 {
+		return 0
+	}
 	notes := make([]string, len(calls))
-	records := make([]*store.PermissionRecord, len(calls))
 	for k, call := range calls {
 		notes[k] = seen.see(call)
-		// The policy allows each of these, so deciding asks nobody.
-		_, records[k], _ = e.decide(ctx, s, cfg, a, runner, call)
 		e.publishStarted(s, runner, call, first+k)
 	}
 	e.setState(s, StateExecuting)
@@ -2232,6 +2232,30 @@ func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a 
 			"meta": entry.Meta,
 		}))
 	}
+	return len(calls)
+}
+
+// allowed reports whether the policy lets a call run without a card, with the
+// record its entry keeps either way.
+func (e *Engine) allowed(s *Session, cfg config.Config, runner *tools.Runner, call llm.ToolCall) (*store.PermissionRecord, bool) {
+	tool := call.Function.Name
+	command, path := argSummary(call)
+	// An MCP call has no command or path of its own: what it is about is its
+	// arguments, which the card shows and the record keeps.
+	if _, ok := runner.MCPTools[tool]; ok {
+		command, path = string(call.Function.Arguments), ""
+	}
+	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
+	if e.perms.Evaluate(s.Project, tool, command, path, placeOf(runner, path), cfg.Mode) != perms.ActionAllow {
+		return record, false
+	}
+	// A call skips the card two ways, and the record keeps them apart.
+	// "auto" is a policy that allowed this call, "full" is no policy.
+	record.Decision = "auto"
+	if cfg.Mode == config.ModeFull {
+		record.Decision = "full"
+	}
+	return record, true
 }
 
 // runTool runs one call, or writes its denial.

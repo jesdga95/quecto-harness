@@ -404,6 +404,22 @@ func (s *Sessions) SpillDir(id string) string {
 	return filepath.Join(s.filesDir(id), "spill")
 }
 
+// ScratchDir is the folder a conversation's tools may write freely, inside
+// its own folder, so it goes when the conversation does. The sessions folder
+// is resolved and nothing under it is, so a link put in place of the session
+// folder or the scratch folder leads outside the path this returns. An id the
+// harness did not make names no folder.
+func (s *Sessions) ScratchDir(id string) (string, error) {
+	if !namePattern.MatchString(id + ".json") {
+		return "", fmt.Errorf("no scratch folder for %q: not a session id", id)
+	}
+	real, err := filepath.EvalSymlinks(s.dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", s.dir, err)
+	}
+	return filepath.Join(real, id+".files", "scratch"), nil
+}
+
 func (s *Sessions) Delete(id string) error {
 	lock := s.lockFor(id)
 	lock.Lock()

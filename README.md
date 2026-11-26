@@ -63,6 +63,10 @@ Nothing is written into a project folder.
   denial carrying an optional reason back to the model. An always on a shell
   command writes its prefix to the project's allowlist, and a command with a
   shell operator is asked even when its prefix is listed.
+- **Scratch folder.** Each conversation has a private folder for temporary
+  files and throwaway scripts, outside the project. The file tools work there
+  without asking, `bash` finds it in `QUECTO_SCRATCH`, subagent runs share it,
+  and it goes when the conversation is deleted.
 - **Delegation.** `subagent` starts a subagent run on a named agent, hands it
   the task and carries on while it works; `send_message` reaches it. Runs go
   one level deep, ask the person nothing, and report to their launcher. An

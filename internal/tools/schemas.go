@@ -192,7 +192,7 @@ func buildSchemas() []llm.Tool {
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"path":   map[string]any{"type": "string", "description": "Path relative to the project root."},
+					"path":   map[string]any{"type": "string", "description": "Path relative to the project root, or absolute."},
 					"offset": map[string]any{"type": "integer", "description": "First line to return, 1-based.", "minimum": 1},
 					"limit":  map[string]any{"type": "integer", "description": "Number of lines to return. Default 400.", "minimum": 1},
 				},
@@ -206,7 +206,7 @@ func buildSchemas() []llm.Tool {
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"path": map[string]any{"type": "string", "description": "Path relative to the project root."},
+					"path": map[string]any{"type": "string", "description": "Path relative to the project root, or absolute."},
 				},
 				"required":             []string{"path"},
 				"additionalProperties": false,
@@ -220,7 +220,7 @@ func buildSchemas() []llm.Tool {
 				"properties": map[string]any{
 					"text": map[string]any{"type": "string", "description": "Text or regular expression to look for inside files."},
 					"name": map[string]any{"type": "string", "description": "File name pattern, such as *.go. Matched against the name, not the folders above it."},
-					"path": map[string]any{"type": "string", "description": "Folder or file to search, relative to the project root. Default the whole project."},
+					"path": map[string]any{"type": "string", "description": "Folder or file to search, relative to the project root, or absolute. Default the whole project."},
 				},
 				"additionalProperties": false,
 			}),
@@ -246,7 +246,7 @@ func buildSchemas() []llm.Tool {
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": ordered{
-					{"path", map[string]any{"type": "string", "description": "Path relative to the project root."}},
+					{"path", map[string]any{"type": "string", "description": "Path relative to the project root, or absolute."}},
 					{"content", map[string]any{"type": "string", "description": "The full file contents."}},
 				},
 				"required":             []string{"path", "content"},
@@ -259,7 +259,7 @@ func buildSchemas() []llm.Tool {
 			Parameters: mustSchema(map[string]any{
 				"type": "object",
 				"properties": ordered{
-					{"path", map[string]any{"type": "string", "description": "Path relative to the project root."}},
+					{"path", map[string]any{"type": "string", "description": "Path relative to the project root, or absolute."}},
 					{"edits", map[string]any{
 						"type":        "array",
 						"description": "The replacements, applied in order.",

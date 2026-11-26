@@ -29,4 +29,6 @@ Rules for this project, from {{.RulesName}} at its root:
 {{.Rules}}
 {{end}}{{if .Instructions}}
 {{.Instructions}}
+{{end}}{{if .Scratch}}
+Use {{.Scratch}} for temporary files, notes and scripts, not the project: the file tools write there without asking. Give them absolute paths there, and use "$QUECTO_SCRATCH" in bash.
 {{end}}

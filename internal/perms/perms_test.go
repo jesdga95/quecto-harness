@@ -67,7 +67,7 @@ func TestEvaluateMatrix(t *testing.T) {
 		{"unknown_tool", "", config.ModeFull, ActionAllow},
 	}
 	for _, tc := range cases {
-		if got := b.Evaluate("/proj", tc.tool, tc.command, "", false, tc.mode); got != tc.want {
+		if got := b.Evaluate("/proj", tc.tool, tc.command, "", InProject, tc.mode); got != tc.want {
 			t.Errorf("Evaluate(%s, %q, mode=%s) = %s, want %s", tc.tool, tc.command, tc.mode, got, tc.want)
 		}
 	}
@@ -79,11 +79,11 @@ func TestEvaluateOperatorsAlwaysPrompt(t *testing.T) {
 	b := New(cfg, nil)
 	for _, op := range []string{";", "&", "&&", "|", "||", ">", "<", "`", "$(", "\n", "\r"} {
 		cmd := "go test " + op + " rm -rf /"
-		if got := b.Evaluate("/proj", "bash", cmd, "", false, config.ModeAllowlist); got != ActionPrompt {
+		if got := b.Evaluate("/proj", "bash", cmd, "", InProject, config.ModeAllowlist); got != ActionPrompt {
 			t.Errorf("operator %q was allowed", op)
 		}
 	}
-	if got := b.Evaluate("/proj", "bash", "go test ${HOME}", "", false, config.ModeAllowlist); got != ActionAllow {
+	if got := b.Evaluate("/proj", "bash", "go test ${HOME}", "", InProject, config.ModeAllowlist); got != ActionAllow {
 		t.Errorf("parameter expansion prompted, it cannot start a second command")
 	}
 }
@@ -96,14 +96,14 @@ func TestEvaluateAsksAboutGit(t *testing.T) {
 	os.Symlink(filepath.Join(project, ".git"), filepath.Join(project, "meta"))
 	b := New(newStore(t), nil)
 	for _, path := range []string{".git/config", ".git/hooks/pre-commit", "sub/../.git/config", "meta/config"} {
-		if got := b.Evaluate(project, "write", "", path, false, config.ModeAllowlist); got != ActionPrompt {
+		if got := b.Evaluate(project, "write", "", path, InProject, config.ModeAllowlist); got != ActionPrompt {
 			t.Errorf("write to %s = %s, want prompt", path, got)
 		}
 	}
-	if got := b.Evaluate(project, "edit", "", "src/.gitignore", false, config.ModeAllowlist); got != ActionAllow {
+	if got := b.Evaluate(project, "edit", "", "src/.gitignore", InProject, config.ModeAllowlist); got != ActionAllow {
 		t.Errorf("an ordinary file = %s, want allow", got)
 	}
-	if got := b.Evaluate(project, "write", "", ".git/config", false, config.ModeFull); got != ActionAllow {
+	if got := b.Evaluate(project, "write", "", ".git/config", InProject, config.ModeFull); got != ActionAllow {
 		t.Errorf("full mode = %s, want allow", got)
 	}
 }
@@ -366,12 +366,69 @@ func TestEvaluateAsksOutsideProject(t *testing.T) {
 	b := New(newStore(t), nil)
 	for _, tool := range []string{"read", "read_image", "grep", "write", "edit"} {
 		for _, mode := range []config.Mode{config.ModeAsk, config.ModeAllowlist} {
-			if got := b.Evaluate("/proj", tool, "", "/tmp/x", true, mode); got != ActionPrompt {
+			if got := b.Evaluate("/proj", tool, "", "/tmp/x", Outside, mode); got != ActionPrompt {
 				t.Errorf("%s outside in %s = %s, want prompt", tool, mode, got)
 			}
 		}
-		if got := b.Evaluate("/proj", tool, "", "/tmp/x", true, config.ModeFull); got != ActionAllow {
+		if got := b.Evaluate("/proj", tool, "", "/tmp/x", Outside, config.ModeFull); got != ActionAllow {
 			t.Errorf("%s outside in full = %s, want allow", tool, got)
+		}
+	}
+}
+
+// The file tools work in the scratch folder without asking, in ask mode too,
+// except under a .git folder made there; bash keeps its own policy.
+func TestEvaluateLetsTheFileToolsWorkInScratch(t *testing.T) {
+	b := New(newStore(t), nil)
+	scratch := "/state/sessions/sess_aaaaaaaaaaaaaaaa.files/scratch"
+	for _, mode := range []config.Mode{config.ModeAsk, config.ModeAllowlist, config.ModeFull} {
+		for _, tool := range []string{"read", "read_image", "grep", "write", "edit"} {
+			if got := b.Evaluate("/proj", tool, "", scratch+"/a.txt", InScratch, mode); got != ActionAllow {
+				t.Errorf("%s in scratch in %s = %s, want allow", tool, mode, got)
+			}
+		}
+	}
+	for _, mode := range []config.Mode{config.ModeAsk, config.ModeAllowlist} {
+		for _, tool := range []string{"write", "edit"} {
+			if got := b.Evaluate("/proj", tool, "", scratch+"/repo/.git/hooks/pre-commit", InScratch, mode); got != ActionPrompt {
+				t.Errorf("%s under .git in scratch in %s = %s, want prompt", tool, mode, got)
+			}
+		}
+	}
+	if got := b.Evaluate("/proj", "bash", "ls", "", InScratch, config.ModeAsk); got != ActionPrompt {
+		t.Errorf("bash in ask = %s, want prompt", got)
+	}
+	if got := b.Evaluate("/proj", "write", "", "a.txt", InProject, config.ModeAsk); got != ActionPrompt {
+		t.Errorf("write in the project in ask = %s, want prompt as before", got)
+	}
+}
+
+// A write whose folders are yet to be made, under a link that leads into a .git
+// folder, asks: where it lands is judged, not only the words of the path.
+func TestEvaluateFollowsAWriteIntoGitThroughNewFolders(t *testing.T) {
+	b := New(newStore(t), nil)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "x", ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "x", ".git"), filepath.Join(dir, "repo")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "repo", "hooks", "new", "pre-commit")
+	for _, mode := range []config.Mode{config.ModeAsk, config.ModeAllowlist} {
+		if got := b.Evaluate("/proj", "write", "", path, InScratch, mode); got != ActionPrompt {
+			t.Errorf("write through a link into .git in %s = %s, want prompt", mode, got)
+		}
+	}
+}
+
+// A .git folder written in another casing asks as well, since a volume that
+// ignores case reaches the same folder.
+func TestEvaluateTakesGitInAnyCasing(t *testing.T) {
+	b := New(newStore(t), nil)
+	for _, path := range []string{".GIT/hooks/pre-commit", "sub/.Git/config"} {
+		if got := b.Evaluate("/proj", "write", "", path, InProject, config.ModeAllowlist); got != ActionPrompt {
+			t.Errorf("write %s = %s, want prompt", path, got)
 		}
 	}
 }
@@ -394,7 +451,7 @@ func TestEvaluateMCP(t *testing.T) {
 		{"mcp__gh__create_issue", config.ModeFull, ActionAllow},
 	}
 	for _, c := range cases {
-		if got := b.Evaluate("/proj", c.tool, "", "", false, c.mode); got != c.want {
+		if got := b.Evaluate("/proj", c.tool, "", "", InProject, c.mode); got != c.want {
 			t.Errorf("%s in %s = %s, want %s", c.tool, c.mode, got, c.want)
 		}
 	}

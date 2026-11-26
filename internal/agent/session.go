@@ -637,6 +637,7 @@ func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) ll
 		Tools:        names,
 		NotAllTools:  len(names) < tools.AllCount(),
 		MCPServers:   b.offer.MCPServers(),
+		Scratch:      b.scratch,
 	})
 	return llm.Message{Role: "system", Content: content}
 }
