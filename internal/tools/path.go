@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
 // hiddenError is the refusal for the harness's own state directory, whichever
@@ -48,10 +50,39 @@ func (r *Runner) resolve(p string) (string, error) {
 		real = prefix
 	}
 	resolved := filepath.Join(real, tail)
-	if r.Hidden != "" && within(r.Hidden, resolved) {
+	if r.inState(resolved) {
 		return "", hiddenPath(arg)
 	}
 	return resolved, nil
+}
+
+// inState reports whether a resolved path is in the state folder, by name or
+// by the identity of its nearest existing folder, so another spelling of the
+// same folder on a volume that ignores case is caught as well.
+func (r *Runner) inState(p string) bool {
+	return r.Hidden != "" && (within(r.Hidden, p) || sameAs(p, r.Hidden))
+}
+
+// inOthers reports whether a resolved path is in another conversation's own
+// folder: in Others, and not in this conversation's Scratch.
+func (r *Runner) inOthers(p string) bool {
+	if r.Others == "" || (r.Scratch != "" && within(r.Scratch, p)) {
+		return false
+	}
+	return within(r.Others, p) || sameAs(p, r.Others)
+}
+
+// sameAs reports whether the nearest existing folder of p lies in dir by
+// identity. It guards what is kept out, so a path whose existing part cannot
+// be read is taken to lie in dir.
+func sameAs(p, dir string) bool {
+	prefix, _ := splitExisting(p)
+	in, err := config.Under(prefix, dir)
+	if err != nil {
+		_, statErr := os.Stat(dir)
+		return statErr == nil
+	}
+	return in
 }
 
 // scratchPath is the refusal for a path under the scratch folder that leads
@@ -77,6 +108,24 @@ func (r *Runner) resolveScratch(arg, p string) (string, error) {
 		return "", scratchPath(arg)
 	}
 	return resolved, nil
+}
+
+// ownsScratch reports whether a write goes into this conversation's scratch
+// folder, by the argument as written or by the path it resolved to.
+func (r *Runner) ownsScratch(arg, resolved string) bool {
+	return r.Scratch != "" && (r.InScratch(arg) || within(r.Scratch, resolved) || sameAs(resolved, r.Scratch))
+}
+
+// inside reports whether p is dir or lies in it, by name or by identity. It
+// grants what a search may take, so an identity that cannot be read grants
+// nothing.
+func inside(p, dir string) bool {
+	if within(dir, p) {
+		return true
+	}
+	prefix, _ := splitExisting(p)
+	in, err := config.Under(prefix, dir)
+	return err == nil && in
 }
 
 // InScratch reports whether a tool path argument is written under the scratch
@@ -107,8 +156,12 @@ func (r *Runner) ensureScratch() error {
 		if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 			return fmt.Errorf("create the scratch folder %s: %s", r.Scratch, err)
 		}
-		if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() {
 			return fmt.Errorf("the scratch folder %s is not a folder", r.Scratch)
+		}
+		if dir == r.Scratch && info.Mode().Perm()&0o077 != 0 {
+			return fmt.Errorf("the scratch folder %s can be read by other users: make it private with chmod 700", r.Scratch)
 		}
 	}
 	return nil
@@ -121,7 +174,7 @@ func (r *Runner) resolveInside(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !within(r.Root, abs) {
+	if !within(r.Root, abs) || r.inOthers(abs) {
 		return "", fmt.Errorf("path is outside the project: %s", p)
 	}
 	return abs, nil
@@ -143,6 +196,8 @@ func (r *Runner) Outside(p string) bool {
 	}
 	real := realPath(filepath.Clean(p))
 	switch {
+	case r.inOthers(real):
+		return true
 	case within(r.Root, real):
 		return false
 	case r.Spill != "" && within(r.Spill, real):
@@ -164,16 +219,36 @@ func (r *Runner) resolveRead(p string) (string, error) {
 	return r.resolve(p)
 }
 
-// reachable reports whether a path the walk came to may be read: outside the
-// state directory, or inside the saved output.
-func (r *Runner) reachable(p string) bool {
+// reachable reports whether a path a walk from base came to may be read:
+// the saved output and this conversation's own folder are, the state folder
+// is not, and another conversation's folder is only when the walk was asked
+// to start inside it. Folders are told by identity as well as by name.
+func (r *Runner) reachable(p, base string) bool {
 	if r.Spill != "" && within(r.Spill, p) {
 		return true
 	}
 	if r.Scratch != "" && within(r.Scratch, p) {
 		return true
 	}
-	return r.Hidden == "" || !within(r.Hidden, p)
+	if r.Hidden != "" && (within(r.Hidden, p) || r.isFolder(p, r.Hidden)) {
+		return false
+	}
+	if r.Others != "" && (within(r.Others, p) || r.isFolder(p, r.Others)) {
+		return base != "" && inside(p, base) && r.inOthers(base)
+	}
+	return true
+}
+
+// isFolder reports whether p is the folder dir by identity, which a walk
+// checks at every folder it enters, so it stops at a kept folder whatever the
+// name it is reached by.
+func (r *Runner) isFolder(p, dir string) bool {
+	a, err := os.Stat(p)
+	if err != nil || !a.IsDir() {
+		return false
+	}
+	b, err := os.Stat(dir)
+	return err == nil && os.SameFile(a, b)
 }
 
 // realPath follows the links in the part of p that exists.

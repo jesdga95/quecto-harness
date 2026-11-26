@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -363,5 +364,149 @@ func TestShellWithoutItsScratchFolder(t *testing.T) {
 	l.r.ScratchErr = errors.New("not a session id")
 	if _, err := l.r.RunShell(context.Background(), json.RawMessage(`{"command":"true"}`)); err == nil {
 		t.Error("bash started although its scratch folder could not be named")
+	}
+}
+
+// Another conversation's folder is outside a project that holds it, and a
+// walk from the project passes it by.
+func TestAnotherConversationsFolderIsOutside(t *testing.T) {
+	project := t.TempDir()
+	others := filepath.Join(project, "Library", "scratch")
+	mine, theirs := filepath.Join(others, "sess_mine"), filepath.Join(others, "sess_theirs")
+	for _, d := range []string{mine, theirs} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(theirs, "secret.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRunner(project, config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.KeepOthers(others)
+	r.Scratch = realPath(mine)
+	if !r.Outside(filepath.Join(theirs, "secret.txt")) {
+		t.Error("another conversation's file is inside the project")
+	}
+	if r.Outside(filepath.Join(mine, "notes.txt")) {
+		t.Error("this conversation's own folder is outside")
+	}
+	if r.reachable(realPath(filepath.Join(theirs, "secret.txt")), realPath(project)) {
+		t.Error("a walk from the project reaches another conversation's file")
+	}
+	// A search asked to start in that folder, once allowed, finds what is there.
+	res, err := r.Find(context.Background(), json.RawMessage(`{"name":"secret.txt","path":`+strconv.Quote(theirs)+`}`))
+	if err != nil || !strings.Contains(res.Output, "secret.txt") {
+		t.Errorf("a search in another conversation's folder = %q, %v", res.Output, err)
+	}
+	res, err = r.Find(context.Background(), json.RawMessage(`{"name":"secret.txt"}`))
+	if err == nil && strings.Contains(res.Output, "sess_theirs") {
+		t.Errorf("a search from the project found another conversation's file: %q", res.Output)
+	}
+	if _, err := ViewFile(project, Keep{Scratch: others}, filepath.Join(theirs, "secret.txt"), 1<<20); err == nil {
+		t.Error("the panel shows another conversation's file")
+	}
+}
+
+// A scratch folder that was already there and others can read takes no
+// writes.
+func TestASharedProjectScratchIsRefused(t *testing.T) {
+	root := t.TempDir()
+	scratch := filepath.Join(t.TempDir(), "scratch", "sess_x")
+	if err := os.MkdirAll(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(scratch, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRunner(root, config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Scratch = realPath(scratch)
+	// The folder is named both ways a temporary path can be spelled.
+	for _, dir := range []string{scratch, r.Scratch} {
+		if _, err := r.WriteFile(context.Background(), json.RawMessage(`{"path":`+strconv.Quote(filepath.Join(dir, "a.txt"))+`,"content":"x"}`)); err == nil {
+			t.Errorf("wrote into a scratch folder others can read, named %s", dir)
+		}
+	}
+	// An edit of a file already there is refused as well.
+	if err := os.WriteFile(filepath.Join(scratch, "b.txt"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.Seen = nil
+	edit := `{"path":` + strconv.Quote(filepath.Join(scratch, "b.txt")) + `,"old_string":"old","new_string":"new"}`
+	if _, err := r.ReplaceInFile(context.Background(), json.RawMessage(edit)); err == nil {
+		t.Error("edited a file in a scratch folder others can read")
+	}
+}
+
+// A search asked to start in another conversation's folder takes a link
+// inside it to a file there whichever spelling of the folder the link uses.
+func TestASearchTakesALinkBySpelling(t *testing.T) {
+	project := t.TempDir()
+	others := filepath.Join(project, "scratch")
+	theirs := filepath.Join(others, "sess_theirs")
+	if err := os.MkdirAll(theirs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(theirs, "data.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	upper := filepath.Join(others, "SESS_THEIRS", "data.txt")
+	if _, err := os.Stat(upper); err != nil {
+		t.Skip("this volume tells names apart by case")
+	}
+	if err := os.Symlink(upper, filepath.Join(theirs, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRunner(project, config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.KeepOthers(others)
+	res, err := r.Find(context.Background(), json.RawMessage(`{"name":"link.txt","path":`+strconv.Quote(theirs)+`}`))
+	if err != nil || !strings.Contains(res.Output, "link.txt") || strings.Contains(res.Output, "no file named") {
+		t.Errorf("the search in the folder = %q, %v", res.Output, err)
+	}
+}
+
+// The files a search suggests beside a hit in another conversation's folder
+// include a link to the same file whichever spelling of the folder it uses.
+func TestASuggestionTakesALinkBySpelling(t *testing.T) {
+	project := t.TempDir()
+	others := filepath.Join(project, "scratch")
+	theirs := filepath.Join(others, "sess_theirs")
+	if err := os.MkdirAll(theirs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(theirs, "note.md"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	upper := filepath.Join(others, "SESS_THEIRS", "note.md")
+	if _, err := os.Stat(upper); err != nil {
+		t.Skip("this volume tells names apart by case")
+	}
+	if err := os.Symlink(filepath.Join(theirs, "note.md"), filepath.Join(theirs, "note.one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(upper, filepath.Join(theirs, "note.two")); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRunner(project, config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.KeepOthers(others)
+	res, err := r.Find(context.Background(), json.RawMessage(`{"text":"x","name":"note.md","path":`+strconv.Quote(theirs)+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"note.one", "note.two"} {
+		if !strings.Contains(res.Output, name) {
+			t.Errorf("the search does not suggest %s: %q", name, res.Output)
+		}
 	}
 }

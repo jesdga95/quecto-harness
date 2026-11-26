@@ -33,17 +33,17 @@ func TestThePanelReachesNothingInTheState(t *testing.T) {
 	}
 
 	for _, p := range []string{"leak_token", "leak_state/token"} {
-		if _, err := ViewFile(project, home, p, 1<<20); !errors.Is(err, ErrHidden) {
+		if _, err := ViewFile(project, Keep{State: home}, p, 1<<20); !errors.Is(err, ErrHidden) {
 			t.Errorf("ViewFile(%s) = %v, want it hidden", p, err)
 		}
 	}
-	if v, err := ViewFile(project, home, "leak_notes.txt", 1<<20); err != nil || v.Content != "ordinary\n" {
+	if v, err := ViewFile(project, Keep{State: home}, "leak_notes.txt", 1<<20); err != nil || v.Content != "ordinary\n" {
 		t.Errorf("ViewFile(ordinary) = %q, %v", v.Content, err)
 	}
-	if _, _, err := ListDir(project, home, "leak_state"); !errors.Is(err, ErrHidden) {
+	if _, _, err := ListDir(project, Keep{State: home}, "leak_state"); !errors.Is(err, ErrHidden) {
 		t.Errorf("ListDir(leak_state) = %v, want it hidden", err)
 	}
-	_, entries, err := ListDir(project, home, "")
+	_, entries, err := ListDir(project, Keep{State: home}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestThePanelReachesNothingInTheState(t *testing.T) {
 	if !slices.Equal(names, []string{"leak_notes.txt"}) {
 		t.Errorf("listing = %v, want the ordinary file alone", names)
 	}
-	found, err := FindFiles(project, home, "leak", 30)
+	found, err := FindFiles(project, Keep{State: home}, "leak", 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,14 +81,14 @@ func TestThePanelJudgesLinksByFolder(t *testing.T) {
 	if err := os.Symlink(upper, filepath.Join(project, "other_case")); err != nil {
 		t.Fatal(err)
 	}
-	_, entries, err := ListDir(project, home, "")
+	_, entries, err := ListDir(project, Keep{State: home}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 0 {
 		t.Errorf("listing = %+v, want the link left out", entries)
 	}
-	if found, _ := FindFiles(project, home, "other", 30); len(found) != 0 {
+	if found, _ := FindFiles(project, Keep{State: home}, "other", 30); len(found) != 0 {
 		t.Errorf("FindFiles = %v, want the link left out", found)
 	}
 }

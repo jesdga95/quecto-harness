@@ -1463,6 +1463,7 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		return
 	}
 	runner.Hide(e.cfg.Paths().Home)
+	runner.KeepOthers(e.store.ScratchRoot())
 	runner.Seen = s.seen
 	runner.SpillTo(e.store.SpillDir(s.ID))
 	runner.Scratch, runner.ScratchErr = b.scratch, b.scratchErr

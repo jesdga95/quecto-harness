@@ -236,6 +236,9 @@ type Sessions struct {
 	mu    sync.RWMutex
 	index map[string]Summary
 	locks map[string]*sync.Mutex
+	// scratch holds each conversation's own working folder, apart from the
+	// state.
+	scratch string
 }
 
 var (
@@ -248,7 +251,8 @@ func Open(dir string) (*Sessions, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("Create %s: check the permissions on its parent", dir)
 	}
-	s := &Sessions{dir: dir, index: map[string]Summary{}, locks: map[string]*sync.Mutex{}}
+	s := &Sessions{dir: dir, index: map[string]Summary{}, locks: map[string]*sync.Mutex{},
+		scratch: filepath.Clean(filepath.Dir(dir)) + ".scratch"}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("Read %s: check the permissions on the folder", dir)
@@ -404,20 +408,52 @@ func (s *Sessions) SpillDir(id string) string {
 	return filepath.Join(s.filesDir(id), "spill")
 }
 
-// ScratchDir is the folder a conversation's tools may write freely, inside
-// its own folder, so it goes when the conversation does. The sessions folder
-// is resolved and nothing under it is, so a link put in place of the session
-// folder or the scratch folder leads outside the path this returns. An id the
+// ScratchRoot is the folder the conversations' own folders are made in.
+func (s *Sessions) ScratchRoot() string {
+	return s.scratch
+}
+
+// SetScratch sets the folder the conversations' own folders are made in.
+// Open sets one beside the state folder; a harness sets the one it settled.
+func (s *Sessions) SetScratch(root string) {
+	s.scratch = filepath.Clean(root)
+}
+
+// ScratchDir is a conversation's own working folder, in the scratch folder
+// and named by its id, so it goes when the conversation does. The scratch
+// folder is resolved and nothing under it is, so a link put in place of the
+// conversation's folder leads outside the path this returns. An id the
 // harness did not make names no folder.
 func (s *Sessions) ScratchDir(id string) (string, error) {
 	if !namePattern.MatchString(id + ".json") {
 		return "", fmt.Errorf("no scratch folder for %q: not a session id", id)
 	}
-	real, err := filepath.EvalSymlinks(s.dir)
+	real, err := resolveExisting(s.scratch)
 	if err != nil {
-		return "", fmt.Errorf("resolve %s: %w", s.dir, err)
+		return "", fmt.Errorf("resolve %s: %w", s.scratch, err)
 	}
-	return filepath.Join(real, id+".files", "scratch"), nil
+	return filepath.Join(real, id), nil
+}
+
+// resolveExisting follows the links in the part of a clean absolute path
+// that exists, so a folder names the same path before it is made and after.
+func resolveExisting(p string) (string, error) {
+	tail := ""
+	for {
+		real, err := filepath.EvalSymlinks(p)
+		if err == nil {
+			return filepath.Join(real, tail), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Join(p, tail), nil
+		}
+		tail = filepath.Join(filepath.Base(p), tail)
+		p = parent
+	}
 }
 
 func (s *Sessions) Delete(id string) error {
@@ -430,11 +466,21 @@ func (s *Sessions) Delete(id string) error {
 		lock.Unlock()
 		return fmt.Errorf("Delete session %s: %w", id, err)
 	}
-	// The session's side folder holds its saved tool output, and goes with it.
+	// The session's side folder holds its saved tool output, and its own
+	// working folder what its tools wrote; both go with it.
 	rmErr := os.RemoveAll(s.filesDir(id))
+	scratch, scratchErr := s.ScratchDir(id)
+	if scratchErr == nil {
+		scratchErr = os.RemoveAll(scratch)
+	} else {
+		scratch = filepath.Join(s.scratch, id)
+	}
 	lock.Unlock()
 	if rmErr != nil {
 		log.Printf("sessions/%s.files: %v: the folder is left behind", id, rmErr)
+	}
+	if scratchErr != nil {
+		log.Printf("%s: %v: the folder is left behind", scratch, scratchErr)
 	}
 	s.mu.Lock()
 	delete(s.index, id)

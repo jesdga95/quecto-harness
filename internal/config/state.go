@@ -20,9 +20,9 @@ type overlapError struct{ msg string }
 func (e overlapError) Error() string        { return e.msg }
 func (e overlapError) Is(target error) bool { return target == ErrStateOverlap }
 
-// CheckProject refuses a project inside the state folder. A project that
-// holds it, such as the home folder, is allowed: the file tools never reach
-// the state, and Git is checked apart by CheckRepo. A
+// CheckProject refuses a project inside the state folder or the scratch
+// folder. A project that holds them, such as the home folder, is allowed: the
+// file tools never reach the state, and Git is checked apart by CheckRepo. A
 // folder that cannot be resolved is an error of its own, since it proves
 // nothing either way.
 func (s *Store) CheckProject(dir string) error {
@@ -34,30 +34,78 @@ func (s *Store) CheckProject(dir string) error {
 	if in {
 		return overlapError{fmt.Sprintf("%s is inside %s, where the harness keeps its state, so it cannot be a project. Choose a folder outside it", dir, home)}
 	}
-	return nil
+	return s.checkScratch(dir, false)
 }
 
-// CheckRepo refuses a repository folder that overlaps the state folder
-// either way. A stash, a discard or a branch switch reaches the whole tree,
-// and the harness reaches its state by the path it was given, so a tree
-// holding any name that path goes through, a link or a folder, could cut it
-// off.
+// CheckRepo refuses a repository folder that overlaps the state folder or
+// the scratch folder either way. A stash, a discard or a branch switch reaches
+// the whole tree, and the harness reaches its state by the path it was given,
+// so a tree holding any name that path goes through, a link or a folder,
+// could cut it off.
 func (s *Store) CheckRepo(dir string) error {
-	home := s.paths.Home
-	dirs, err := usedDirs(home)
-	if err != nil {
-		return fmt.Errorf("Check %s against the harness state folder: %w", dir, err)
-	}
-	for _, d := range dirs {
-		in, err := under(d, dir)
+	for _, kept := range []struct{ path, what string }{
+		{s.paths.Home, "where the harness keeps its state"},
+		{s.paths.Scratch, "where the conversations keep their own folders"},
+	} {
+		if kept.path == "" {
+			continue
+		}
+		if _, err := os.Lstat(kept.path); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		dirs, err := usedDirs(kept.path)
 		if err != nil {
-			return fmt.Errorf("Check %s against the harness state folder: %w", dir, err)
+			return fmt.Errorf("Check %s against %s: %w", dir, kept.path, err)
+		}
+		for _, d := range dirs {
+			in, err := under(d, dir)
+			if err != nil {
+				return fmt.Errorf("Check %s against %s: %w", dir, kept.path, err)
+			}
+			if in {
+				return overlapError{fmt.Sprintf("The repository at %s contains %s, %s, or a folder on the way to it, so Git is not run on it here", dir, kept.path, kept.what)}
+			}
+		}
+	}
+	if err := s.CheckProject(dir); err != nil {
+		return err
+	}
+	return s.checkScratch(dir, true)
+}
+
+// checkScratch refuses a folder inside the scratch folder, where the
+// conversations' own folders are, and with holding one that holds it. A
+// scratch folder not made yet overlaps nothing.
+func (s *Store) checkScratch(dir string, holding bool) error {
+	scratch := s.paths.Scratch
+	if scratch == "" {
+		return nil
+	}
+	if _, err := os.Stat(scratch); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	checks := []struct {
+		path, in string
+		msg      string
+	}{
+		{dir, scratch, "%s is inside %s, where the conversations keep their own folders, so it cannot be a project. Choose a folder outside it"},
+	}
+	if holding {
+		checks = append(checks, struct {
+			path, in string
+			msg      string
+		}{scratch, dir, "The repository at %s contains %s, where the conversations keep their own folders, so Git is not run on it here"})
+	}
+	for _, c := range checks {
+		in, err := under(c.path, c.in)
+		if err != nil {
+			return fmt.Errorf("Check %s against the scratch folder: %w", dir, err)
 		}
 		if in {
-			return overlapError{fmt.Sprintf("The repository at %s contains %s, where the harness keeps its state, or a folder on the way to it, so Git is not run on it here", dir, home)}
+			return overlapError{fmt.Sprintf(c.msg, dir, scratch)}
 		}
 	}
-	return s.CheckProject(dir)
+	return nil
 }
 
 // InState reports whether a path, its links followed, lands in the state

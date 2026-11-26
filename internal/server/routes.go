@@ -605,7 +605,7 @@ func (s *Server) getProjectFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	arg := r.URL.Query().Get("path")
-	v, err := tools.ViewFile(sess.Project, s.cfg.Paths().Home, arg, viewLimit)
+	v, err := tools.ViewFile(sess.Project, s.keep(), arg, viewLimit)
 	switch {
 	case errors.Is(err, tools.ErrHidden):
 		writeError(w, http.StatusForbidden, "That path is in the harness state folder")
@@ -658,6 +658,12 @@ func (s *Server) getProjectFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 
+// keep is what the panel and @ mentions of a project never reach: the state
+// folder, and the conversations' own folders.
+func (s *Server) keep() tools.Keep {
+	return tools.Keep{State: s.cfg.Paths().Home, Scratch: s.store.ScratchRoot()}
+}
+
 // getProjectDir lists one folder in the session's project for the panel's
 // file browser.
 func (s *Server) getProjectDir(w http.ResponseWriter, r *http.Request) {
@@ -668,7 +674,7 @@ func (s *Server) getProjectDir(w http.ResponseWriter, r *http.Request) {
 	if !s.projectOK(w, sess.Project) {
 		return
 	}
-	rel, entries, err := tools.ListDir(sess.Project, s.cfg.Paths().Home, r.URL.Query().Get("path"))
+	rel, entries, err := tools.ListDir(sess.Project, s.keep(), r.URL.Query().Get("path"))
 	switch {
 	case errors.Is(err, tools.ErrHidden):
 		writeError(w, http.StatusForbidden, "That folder is in the harness state folder")
@@ -697,7 +703,7 @@ func (s *Server) getProjectFiles(w http.ResponseWriter, r *http.Request) {
 	if !s.projectOK(w, project) {
 		return
 	}
-	files, err := tools.FindFiles(project, s.cfg.Paths().Home, r.URL.Query().Get("q"), 30)
+	files, err := tools.FindFiles(project, s.keep(), r.URL.Query().Get("q"), 30)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "List the project files: "+err.Error())
 		return
@@ -1147,9 +1153,9 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) (*agent.Session
 	return sess, true
 }
 
-// projectOK refuses, with 409, a project inside the harness state folder,
-// and with 500 one that cannot be checked. It reports whether the request may
-// go on.
+// projectOK refuses, with 409, a project inside the harness state folder or
+// the scratch folder, and with 500 one that cannot be checked. It reports
+// whether the request may go on.
 func (s *Server) projectOK(w http.ResponseWriter, project string) bool {
 	return s.checked(w, s.cfg.CheckProject(project))
 }

@@ -109,7 +109,9 @@ func UnitText(s Spec) (string, string, error) {
 }
 
 func args(s Spec) []string {
-	out := []string{s.Binary, "--no-open"}
+	// The home is named, so the service opens the state, and the scratch
+	// folder recorded there, that it was installed with.
+	out := []string{s.Binary, "--no-open", "--home", s.Home}
 	if s.Listen != "" {
 		out = append(out, "--listen", s.Listen)
 	}

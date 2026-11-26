@@ -43,8 +43,9 @@ func (s *Server) repo(w http.ResponseWriter, r *http.Request, project string) (*
 }
 
 // repoOK refuses a repository whose working tree or git folders overlap the
-// harness state folder, even when the project is a part of it that does not:
-// a stash, a commit of everything or a branch switch reaches the whole tree.
+// harness state folder or the scratch folder, even when the project is a part
+// of it that does not: a stash, a commit of everything or a branch switch
+// reaches the whole tree.
 func (s *Server) repoOK(w http.ResponseWriter, r *http.Request, repo *git.Repo) bool {
 	dirs, err := repo.Dirs(r.Context())
 	if err != nil {
