@@ -62,6 +62,30 @@ func toolOutput(t *testing.T, s *Session, name string) string {
 	return ""
 }
 
+// waitForEntriesFrom waits until a session holds n messages from one sender
+// and returns what they say, in order.
+func waitForEntriesFrom(t *testing.T, s *Session, from string, n int) []string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var said []string
+	for time.Now().Before(deadline) {
+		said = said[:0]
+		s.mu.Lock()
+		for _, e := range s.Entries {
+			if e.From == from {
+				said = append(said, e.Content)
+			}
+		}
+		s.mu.Unlock()
+		if len(said) >= n {
+			return said
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("%d messages from %s arrived, want %d: %q", len(said), from, n, said)
+	return nil
+}
+
 func waitForEntryFrom(t *testing.T, s *Session, from string) store.Entry {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -240,10 +264,12 @@ func TestASubagentThatSpokeStillReportsItsAnswer(t *testing.T) {
 	h.engine.Send(s.ID, "delegate it", nil)
 	child := childOf(t, h, s)
 
-	waitForEntryFrom(t, s, "Reviewer")
+	// The subagent is idle before its answer reaches the launcher, so the
+	// test waits for both messages rather than for the states.
+	waitForEntriesFrom(t, s, "Reviewer", 2)
 	waitIdle(t, child)
 	waitIdle(t, s)
-
+	// Read again once everything has settled, so a third message would show.
 	var said []string
 	s.mu.Lock()
 	for _, e := range s.Entries {
