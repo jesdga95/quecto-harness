@@ -94,7 +94,9 @@ func (s *Store) Notes() []string {
 }
 
 // Update applies fn to a copy, validates it, and persists. The lock is held
-// across the write so two concurrent updates cannot interleave.
+// across the write so two concurrent updates cannot interleave, and the copy
+// replaces the configuration only once it is on disk, so a failed write
+// leaves both as they were.
 func (s *Store) Update(fn func(*Config)) (Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,17 +106,22 @@ func (s *Store) Update(fn func(*Config)) (Config, error) {
 	next.Search.Accounts = cloneSearchAccounts(s.cfg.Search.Accounts)
 	fn(&next)
 	resolved, notes := next.File().Resolve(Defaults())
-	s.cfg = resolved
-	s.notes = notes
-	if err := s.persistConfig(); err != nil {
+	if err := s.writeConfig(resolved); err != nil {
 		return s.cfg, err
 	}
+	s.cfg = resolved
+	s.notes = notes
 	return s.cfg, nil
 }
 
 // persistConfig writes config.json. The caller holds the lock.
 func (s *Store) persistConfig() error {
-	data, err := json.MarshalIndent(s.cfg.File(), "", "  ")
+	return s.writeConfig(s.cfg)
+}
+
+// writeConfig writes c to config.json. The caller holds the lock.
+func (s *Store) writeConfig(c Config) error {
+	data, err := json.MarshalIndent(c.File(), "", "  ")
 	if err != nil {
 		return err
 	}

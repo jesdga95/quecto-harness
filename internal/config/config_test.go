@@ -896,3 +896,65 @@ func TestSearchPausedKeepsTheProvider(t *testing.T) {
 		t.Error("unpaused search with a key is not on")
 	}
 }
+
+// An update that cannot be written leaves the configuration as it was, in
+// memory and on disk, and the same update succeeds once it can be.
+func TestAFailedSaveLeavesTheConfigurationAsItWas(t *testing.T) {
+	home := t.TempDir()
+	p := DiscoverPathsIn(home)
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, helper, err := s.AddAgent(Agent{Name: "Helper", URL: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = s.AddAgent(Agent{Name: "Local", URL: "http://127.0.0.1:1", Calls: []string{helper.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := len(s.Config().Agents) - 1
+	if got := s.Config().Agents[local].Calls; len(got) != 1 {
+		t.Fatalf("calls = %v, want the helper", got)
+	}
+	before := s.Config().Listen
+	// A folder in the file's place fails the write whatever the process may do.
+	saved := p.Config + ".saved"
+	if err := os.Rename(p.Config, saved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(p.Config, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.Update(func(c *Config) {
+		c.Listen = "127.0.0.1:9999"
+		c.Agents[local].Calls[0] = "agt_other"
+	})
+	if err == nil {
+		t.Fatal("an update that could not be written reported success")
+	}
+	if got := s.Config().Listen; got != before {
+		t.Errorf("listen in memory = %q after a failed save, want %q", got, before)
+	}
+	if got := s.Config().Agents[local].Calls[0]; got != helper.ID {
+		t.Errorf("calls in memory = %q after a failed save, want %q", got, helper.ID)
+	}
+
+	if err := os.RemoveAll(p.Config); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(saved, p.Config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(func(c *Config) { c.Listen = "127.0.0.1:9999" }); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Config().Listen; got != "127.0.0.1:9999" {
+		t.Errorf("listen = %q, want the update applied", got)
+	}
+}
