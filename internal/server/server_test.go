@@ -634,6 +634,153 @@ func TestProjectRoutes(t *testing.T) {
 	}
 }
 
+// Deleting a session the store cannot read is a server failure, an unknown
+// one is not found, and neither removes anything.
+func TestDeletingASessionAnswersByCause(t *testing.T) {
+	f := newFixture(t)
+	if w := f.do(t, "DELETE", "/api/sessions/sess_aaaaaaaaaaaaaaaa", nil); w.Code != http.StatusNotFound {
+		t.Errorf("unknown session = %d, want 404", w.Code)
+	}
+	id := "sess_bbbbbbbbbbbbbbbb"
+	path := filepath.Join(f.cfg.Paths().Sessions, id+".json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", "/api/sessions/"+id, nil); w.Code != http.StatusInternalServerError {
+		t.Errorf("unreadable session = %d %s, want 500", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the unreadable file went: %v", err)
+	}
+}
+
+// A project whose folder moved and whose old path now leads to another
+// project is removed by its own registered path, and the other keeps its
+// place and its conversations.
+func TestRemovingAMovedProjectLeavesTheOneItLeadsTo(t *testing.T) {
+	f := newFixture(t)
+	base := t.TempDir()
+	a, b := filepath.Join(base, "a"), filepath.Join(base, "b")
+	for _, dir := range []string{a, b} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if w := f.do(t, "POST", "/api/projects", map[string]string{"path": dir}); w.Code != http.StatusOK {
+			t.Fatalf("add project = %d %s", w.Code, w.Body.String())
+		}
+	}
+	realA, _ := filepath.EvalSymlinks(a)
+	realB, _ := filepath.EvalSymlinks(b)
+	inA, err := f.engine.Create(realA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inB, err := f.engine.Create(realB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(realA, realA+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realB, realA); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": realA}); w.Code != http.StatusOK {
+		t.Fatalf("remove = %d %s", w.Code, w.Body.String())
+	}
+	if _, err := f.engine.Get(inB.ID); err != nil {
+		t.Errorf("the other project's session went: %v", err)
+	}
+	if _, err := f.engine.Get(inA.ID); err == nil {
+		t.Error("the removed project's session survived")
+	}
+	projects := f.cfg.Config().Projects
+	if !slices.Contains(projects, realB) || slices.Contains(projects, realA) {
+		t.Errorf("projects = %v, want %s kept and %s gone", projects, realB, realA)
+	}
+
+	// The same removal sent again names nothing in the list now.
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": realA}); w.Code != http.StatusNotFound {
+		t.Errorf("the repeated remove = %d, want 404", w.Code)
+	}
+	if _, err := f.engine.Get(inB.ID); err != nil {
+		t.Errorf("the repeated remove took the other project's session: %v", err)
+	}
+	if !slices.Contains(f.cfg.Config().Projects, realB) {
+		t.Error("the repeated remove took the other project off the list")
+	}
+}
+
+// A project whose removal cannot be saved stays in the list, and the same
+// removal succeeds once the configuration can be written.
+func TestAFailedProjectRemovalCanBeRetried(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	if w := f.do(t, "POST", "/api/projects", map[string]string{"path": dir}); w.Code != http.StatusOK {
+		t.Fatalf("add project = %d %s", w.Code, w.Body.String())
+	}
+	real, _ := filepath.EvalSymlinks(dir)
+	// A folder in the file's place fails the write whatever the process may do.
+	conf := f.cfg.Paths().Config
+	if err := os.Rename(conf, conf+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(conf, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": real}); w.Code != http.StatusInternalServerError {
+		t.Errorf("remove with the configuration unwritable = %d, want 500", w.Code)
+	}
+	if !slices.Contains(f.cfg.Config().Projects, real) {
+		t.Fatal("the project left the list although the removal was not saved")
+	}
+	if err := os.RemoveAll(conf); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(conf+".saved", conf); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": real}); w.Code != http.StatusOK {
+		t.Errorf("the retry = %d %s, want 200", w.Code, w.Body.String())
+	}
+}
+
+// Removing a project by a path the list does not hold deletes nothing: an
+// empty path would otherwise name every project's sessions.
+func TestRemovingAnUnknownProjectDeletesNothing(t *testing.T) {
+	f := newFixture(t)
+	other := t.TempDir()
+	if w := f.do(t, "POST", "/api/projects", map[string]string{"path": other}); w.Code != http.StatusOK {
+		t.Fatalf("add project = %d %s", w.Code, w.Body.String())
+	}
+	realOther, _ := filepath.EvalSymlinks(other)
+	var ids []string
+	for _, p := range []string{f.project, realOther} {
+		s, err := f.engine.Create(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, s.ID)
+	}
+
+	for _, path := range []string{"", "/no/such/project"} {
+		w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": path})
+		if w.Code != http.StatusNotFound {
+			t.Errorf("remove %q = %d, want 404", path, w.Code)
+		}
+	}
+	for _, id := range ids {
+		if _, err := f.engine.Get(id); err != nil {
+			t.Errorf("session %s did not survive: %v", id, err)
+		}
+	}
+	if got := len(f.cfg.Config().Projects); got != 2 {
+		t.Errorf("projects = %d, want both kept", got)
+	}
+}
+
 // TestProjectReorderRoute asserts that a whole new order is stored and that an
 // order the project list does not hold is refused.
 func TestProjectReorderRoute(t *testing.T) {

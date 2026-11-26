@@ -333,6 +333,20 @@ too late to be picked up starts a turn of its own.
 - **Concurrent turns** are not serialised. llama.cpp queues a request when every slot is
   busy, so a second session sits in `streaming` with no deltas until a slot frees. That is
   documented behaviour, not a defect to work around.
+- **Deleting** reserves the session and every subagent run under it, live or only on disk,
+  in one step under the engine's lock: if any of them is working, holds a queued message or
+  is already reserved, none is, and the delete is refused as busy. A run on disk that cannot
+  be read fails the delete rather than being left without its launcher. Every way of
+  starting work (a message, a queued message, a resend, a compaction) takes the engine's lock
+  and then the session's, and refuses a reserved session or an instance that is no longer
+  the live one; a queued message comes off the queue under that same lock. `Get` does not keep
+  a session it read from disk while its id is reserved or once a delete removed it. The
+  reserved sessions' background commands are stopped silently and waited on, outside every
+  lock, for up to 10 s; one still running after that fails the delete with nothing removed.
+  Runs are removed before their launcher. Each removal waits for accepted writes, then removes
+  the file; a file that cannot be removed leaves the session, its folder and its launcher in
+  place, writes back what changed meanwhile, and the delete can be tried again. The wait
+  covers the commands this process started.
 - **Subagents.** `subagent` creates a session on the named agent and waits for its first
   turn to end; the result is the call's own result, and no message follows it. Waiting calls
   made together in one reply are started together. With `wait` false it returns the handle,
@@ -364,7 +378,9 @@ shows the card in its answered state.
   entry carries its own call record, and the entry that ended a turn carries that turn's
   totals. The system prompt is **regenerated, not stored**.
 - `Open` builds an index from a one-time scan, so `List` never touches the filesystem; a
-  corrupt file is skipped and named, not fatal. `Save` atomic-replaces with indented JSON.
+  corrupt file, or one that names a session other than its own, is skipped and named, not
+  fatal; `Load` refuses such a file, since paths and deletes go by the id. `Save`
+  atomic-replaces with indented JSON.
 - **Size.** Tool output is capped at `output_limit_bytes`, but `write` content lives in
   the assistant's arguments, because a truncated argument makes the history unusable for a
   resend. A session that writes many large files grows large; the mitigation is a new
@@ -535,7 +551,11 @@ The fourteen review questions, each settled and already folded into the sections
 | 14 | `role == "router"` means router mode; an absent role means single. `model_alias` is not a discriminator. |
 
 Also settled: allowlist entries for a removed project stay on disk and are reachable via the
-two allowlist routes; deleting a session is 204, 409 when busy, 404 when unknown, and removes
-the file, the live entry, the hub channel and the subagent runs under it behind a
-confirmation (there is no undo); and reasoning is stored, shown and replayed to the model,
+two allowlist routes; deleting a session is 204, 409 when busy or reserved by another delete,
+404 when unknown, 500 when the store cannot read or remove it, and removes the file, the live entry, the hub channel and the subagent runs
+under it behind a confirmation (there is no undo); removing a project needs a path in the
+project list (404 otherwise, since an empty path would name every project's sessions),
+deletes its sessions, keeps the busy ones, keeps the project when a session cannot be
+deleted for any other reason, and removes from the list the path it deleted sessions for; a message that is refused leaves no stored copy of its attachments; and reasoning is
+stored, shown and replayed to the model,
 which `preserve_reasoning` asks the template to keep.

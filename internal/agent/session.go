@@ -162,13 +162,6 @@ func (s *Session) forgetModel() {
 	s.prepared = false
 }
 
-// forget marks the session deleted, so nothing still running writes it back.
-func (s *Session) forget() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.gone = true
-}
-
 // reopen marks the model unread, so that the next turn reads it again. A turn
 // under way is left alone: it has the model it is talking to.
 func (s *Session) reopen() {

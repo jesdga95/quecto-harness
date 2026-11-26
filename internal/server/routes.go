@@ -331,19 +331,35 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
+	// The path is the one the list holds, taken as it is: resolving it could
+	// lead to another project, and an empty one would name every project's
+	// sessions.
+	project := body.Path
+	if strings.TrimSpace(project) == "" || !s.cfg.HasProject(project) {
+		writeError(w, http.StatusNotFound, "No project at that path: it may have been removed already")
+		return
+	}
 	// A project that is gone has no conversations, so its sessions go with it.
 	// A running one is left alone and reported rather than killed underfoot.
+	// A session that could not be deleted for any other reason keeps the
+	// project, so the removal can be tried again.
 	removed, busy := 0, 0
-	for _, sum := range s.store.List(body.Path) {
-		if err := s.engine.Delete(sum.ID); err != nil {
+	for _, sum := range s.store.List(project) {
+		err := s.engine.Delete(sum.ID)
+		switch {
+		case err == nil:
+			removed++
+		case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrStillRunning):
 			busy++
-			continue
+		case errors.Is(err, agent.ErrNotFound):
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
-		removed++
 	}
-	cfg, err := s.cfg.RemoveProject(body.Path)
+	cfg, err := s.cfg.DropProject(project)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out := map[string]any{"projects": orEmpty(cfg.Projects), "sessions_deleted": removed}
@@ -732,16 +748,21 @@ func (s *Server) putEffort(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": sess.ID, "effort": body.Effort})
 }
 
+// deleteSession goes to the engine with the id as it was asked for, so a
+// session another delete has reserved answers busy rather than not found.
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(w, r)
-	if !ok {
-		return
-	}
-	if err := s.engine.Delete(sess.ID); err != nil {
+	id := r.PathValue("id")
+	err := s.engine.Delete(id)
+	switch {
+	case err == nil:
+	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrStillRunning), errors.Is(err, agent.ErrNotFound):
 		writeEngineError(w, err)
 		return
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	s.hub.Drop(sess.ID)
+	s.hub.Drop(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1101,7 +1122,8 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) (*agent.Session
 func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrNotLast),
-		errors.Is(err, agent.ErrCompacting), errors.Is(err, agent.ErrTooShort), errors.Is(err, agent.ErrNoShell):
+		errors.Is(err, agent.ErrCompacting), errors.Is(err, agent.ErrTooShort), errors.Is(err, agent.ErrNoShell),
+		errors.Is(err, agent.ErrStillRunning):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, agent.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -275,6 +276,14 @@ func (s *Store) AddProject(path string) (Config, error) {
 	}
 	s.mu.Unlock()
 	return s.Update(func(c *Config) { c.Projects = append([]string{real}, c.Projects...) })
+}
+
+// DropProject removes the project the list holds under exactly this path,
+// without resolving it again.
+func (s *Store) DropProject(path string) (Config, error) {
+	return s.Update(func(c *Config) {
+		c.Projects = slices.DeleteFunc(c.Projects, func(p string) bool { return p == path })
+	})
 }
 
 func (s *Store) RemoveProject(path string) (Config, error) {

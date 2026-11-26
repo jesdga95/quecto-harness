@@ -271,6 +271,10 @@ func Open(dir string) (*Sessions, error) {
 		if sess.ID == "" {
 			continue
 		}
+		if sess.ID+".json" != e.Name() {
+			log.Printf("sessions/%s: the file names session %q: the file is skipped", e.Name(), sess.ID)
+			continue
+		}
 		s.index[sess.ID] = summarise(&sess, int64(len(raw)))
 	}
 	return s, nil
@@ -344,6 +348,11 @@ func (s *Sessions) Load(id string) (*Session, error) {
 	if err := json.Unmarshal(raw, &sess); err != nil {
 		return nil, fmt.Errorf("Read session %s: %w: the file is not valid JSON", id, err)
 	}
+	// What is done to a session is done by its id, so a file that names
+	// another one is not taken at its word.
+	if sess.ID != id {
+		return nil, fmt.Errorf("Read session %s: the file names session %q", id, sess.ID)
+	}
 	return &sess, nil
 }
 
@@ -399,14 +408,17 @@ func (s *Sessions) Delete(id string) error {
 	lock := s.lockFor(id)
 	lock.Lock()
 	err := os.Remove(s.path(id))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		// The session is still there, so its side folder stays with it and
+		// the delete can be tried again.
+		lock.Unlock()
+		return fmt.Errorf("Delete session %s: %w", id, err)
+	}
 	// The session's side folder holds its saved tool output, and goes with it.
 	rmErr := os.RemoveAll(s.filesDir(id))
 	lock.Unlock()
 	if rmErr != nil {
 		log.Printf("sessions/%s.files: %v: the folder is left behind", id, rmErr)
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("Delete session %s: %w", id, err)
 	}
 	s.mu.Lock()
 	delete(s.index, id)
