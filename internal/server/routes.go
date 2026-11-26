@@ -762,7 +762,6 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.hub.Drop(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 

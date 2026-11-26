@@ -1802,18 +1802,23 @@ func TestStateWithNoAgents(t *testing.T) {
 
 func TestSSEReplayAndResync(t *testing.T) {
 	f := newFixture(t)
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID
 	// Every event here is one the hub passes straight through, so the ring
 	// holds one frame per publish.
 	for i := 0; i < 3; i++ {
-		f.hub.Publish("s1", agent.Event{Type: "status_entry", Fields: map[string]any{"content": fmt.Sprint(i)}})
+		f.hub.Publish(id, agent.Event{Type: "status_entry", Fields: map[string]any{"content": fmt.Sprint(i)}})
 	}
 
-	got := f.readStream(t, "/api/events?session=s1&from=1", 2)
+	got := f.readStream(t, "/api/events?session="+id+"&from=1", 2)
 	if len(got) != 2 || got[0]["seq"] != 2.0 || got[1]["content"] != "2" {
 		t.Errorf("replay from ?from= = %v", got)
 	}
 
-	req := newRequest("GET", "/api/events?session=s1", nil)
+	req := newRequest("GET", "/api/events?session="+id, nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Last-Event-ID", "2")
 	got = f.readStreamReq(t, req, 1)
@@ -1823,9 +1828,9 @@ func TestSSEReplayAndResync(t *testing.T) {
 
 	// Roll the ring past the requested sequence.
 	for i := 0; i < ringSize+10; i++ {
-		f.hub.Publish("s1", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
+		f.hub.Publish(id, agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
 	}
-	got = f.readStream(t, "/api/events?session=s1&from=1", 1)
+	got = f.readStream(t, "/api/events?session="+id+"&from=1", 1)
 	if len(got) != 1 || got[0]["type"] != "resync" {
 		t.Errorf("rolled ring = %v, want a resync", got)
 	}
@@ -1875,10 +1880,15 @@ func TestSlowSubscriberGetsResyncAndStaysAttached(t *testing.T) {
 
 func TestStreamedTextGoesOutAsOneFrame(t *testing.T) {
 	f := newFixture(t)
-	for _, word := range []string{"one ", "two ", "three"} {
-		f.hub.Publish("s4", agent.Event{Type: "delta", Fields: map[string]any{"text": word}})
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
 	}
-	got := f.readStream(t, "/api/events?session=s4&from=0", 1)
+	id := sess.ID
+	for _, word := range []string{"one ", "two ", "three"} {
+		f.hub.Publish(id, agent.Event{Type: "delta", Fields: map[string]any{"text": word}})
+	}
+	got := f.readStream(t, "/api/events?session="+id+"&from=0", 1)
 	if len(got) != 1 || got[0]["text"] != "one two three" {
 		t.Errorf("joined text = %v", got)
 	}
@@ -1886,9 +1896,14 @@ func TestStreamedTextGoesOutAsOneFrame(t *testing.T) {
 
 func TestAnEventSendsTheTextWaitingBeforeIt(t *testing.T) {
 	f := newFixture(t)
-	f.hub.Publish("s5", agent.Event{Type: "delta", Fields: map[string]any{"text": "hi"}})
-	f.hub.Publish("s5", agent.Event{Type: "done", Fields: map[string]any{}})
-	got := f.readStream(t, "/api/events?session=s5&from=0", 2)
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID
+	f.hub.Publish(id, agent.Event{Type: "delta", Fields: map[string]any{"text": "hi"}})
+	f.hub.Publish(id, agent.Event{Type: "done", Fields: map[string]any{}})
+	got := f.readStream(t, "/api/events?session="+id+"&from=0", 2)
 	if len(got) != 2 || got[0]["text"] != "hi" || got[1]["type"] != "done" {
 		t.Errorf("order = %v, want the text then done", got)
 	}
@@ -1896,9 +1911,14 @@ func TestAnEventSendsTheTextWaitingBeforeIt(t *testing.T) {
 
 func TestThinkingAndTheReplyAreSeparateFrames(t *testing.T) {
 	f := newFixture(t)
-	f.hub.Publish("s6", agent.Event{Type: "reasoning", Fields: map[string]any{"text": "why"}})
-	f.hub.Publish("s6", agent.Event{Type: "delta", Fields: map[string]any{"text": "because"}})
-	got := f.readStream(t, "/api/events?session=s6&from=0", 2)
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID
+	f.hub.Publish(id, agent.Event{Type: "reasoning", Fields: map[string]any{"text": "why"}})
+	f.hub.Publish(id, agent.Event{Type: "delta", Fields: map[string]any{"text": "because"}})
+	got := f.readStream(t, "/api/events?session="+id+"&from=0", 2)
 	if len(got) != 2 || got[0]["type"] != "reasoning" || got[0]["text"] != "why" {
 		t.Fatalf("first frame = %v, want the thinking on its own", got)
 	}
@@ -1912,8 +1932,13 @@ func TestThinkingAndTheReplyAreSeparateFrames(t *testing.T) {
 // reconnect from.
 func TestAFrameNamesItsIDInLowercase(t *testing.T) {
 	f := newFixture(t)
-	f.hub.Publish("s7", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
-	req := newRequest("GET", "/api/events?session=s7&from=0", nil)
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID
+	f.hub.Publish(id, agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
+	req := newRequest("GET", "/api/events?session="+id+"&from=0", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	lines := f.readStreamLines(t, req, 1)
 	if len(lines) == 0 || lines[0] != "id: 1" {
@@ -1926,10 +1951,15 @@ func TestAFrameNamesItsIDInLowercase(t *testing.T) {
 // turn twice.
 func TestAReconnectResumesFromTheHeaderNotTheStaleURL(t *testing.T) {
 	f := newFixture(t)
-	for i := 0; i < 4; i++ {
-		f.hub.Publish("s8", agent.Event{Type: "status_entry", Fields: map[string]any{"content": fmt.Sprint(i)}})
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
 	}
-	req := newRequest("GET", "/api/events?session=s8&from=1", nil)
+	id := sess.ID
+	for i := 0; i < 4; i++ {
+		f.hub.Publish(id, agent.Event{Type: "status_entry", Fields: map[string]any{"content": fmt.Sprint(i)}})
+	}
+	req := newRequest("GET", "/api/events?session="+id+"&from=1", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Last-Event-ID", "3")
 	got := f.readStreamReq(t, req, 1)
@@ -2087,11 +2117,16 @@ func TestSSENeedsASession(t *testing.T) {
 
 func TestToolEventsCarryTheIndex(t *testing.T) {
 	f := newFixture(t)
-	f.hub.Publish("s3", agent.Event{Type: "tool_call", Fields: map[string]any{
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sess.ID
+	f.hub.Publish(id, agent.Event{Type: "tool_call", Fields: map[string]any{
 		"index": 0, "id": "call_0", "name": "bash", "arguments": "{"}})
-	f.hub.Publish("s3", agent.Event{Type: "tool_output", Fields: map[string]any{
+	f.hub.Publish(id, agent.Event{Type: "tool_output", Fields: map[string]any{
 		"index": 0, "id": "call_0", "name": "bash", "output": "x", "exit_code": 0, "truncated": false}})
-	got := f.readStream(t, "/api/events?session=s3&from=0", 2)
+	got := f.readStream(t, "/api/events?session="+id+"&from=0", 2)
 	for _, e := range got {
 		if _, ok := e["index"]; !ok {
 			t.Errorf("%v has no index", e)
@@ -2837,5 +2872,117 @@ func TestProbeSearch(t *testing.T) {
 	}
 	if w := f.do(t, "POST", "/api/search/probe", map[string]any{"provider": "exa", "url": "ftp://x", "key": "k"}); w.Code != http.StatusBadRequest {
 		t.Errorf("bad address: status = %d, want 400", w.Code)
+	}
+}
+
+// A dropped session's channel is gone for good: a late event does not make it
+// again, a subscriber gets nothing, and the event stream answers 204 so a tab
+// stops reconnecting. Another session keeps its channel.
+func TestADroppedChannelStaysGone(t *testing.T) {
+	h := NewHub()
+	h.Publish("sess_aaaaaaaaaaaaaaaa", agent.Event{Type: "status", Fields: map[string]any{"state": "idle"}})
+	h.Publish("sess_bbbbbbbbbbbbbbbb", agent.Event{Type: "status", Fields: map[string]any{"state": "idle"}})
+	ch, cancel, _ := h.Subscribe("sess_aaaaaaaaaaaaaaaa", 0)
+	defer cancel()
+
+	h.Drop("sess_aaaaaaaaaaaaaaaa")
+	if _, open := <-ch; open {
+		t.Error("a subscriber of the dropped session is still open")
+	}
+	h.Publish("sess_aaaaaaaaaaaaaaaa", agent.Event{Type: "done"})
+	if again, _, _ := h.Subscribe("sess_aaaaaaaaaaaaaaaa", 0); again != nil {
+		t.Error("a dropped session took a subscriber")
+	}
+	h.mu.Lock()
+	_, back := h.sessions["sess_aaaaaaaaaaaaaaaa"]
+	_, other := h.sessions["sess_bbbbbbbbbbbbbbbb"]
+	h.mu.Unlock()
+	if back || !other {
+		t.Errorf("dropped channel back = %v, other channel kept = %v", back, other)
+	}
+
+	f := newFixture(t)
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", "/api/sessions/"+sess.ID, nil); w.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d", w.Code)
+	}
+	if w := f.do(t, "GET", "/api/events?session="+sess.ID, nil); w.Code != http.StatusNoContent {
+		t.Errorf("events of a deleted session = %d, want 204", w.Code)
+	}
+
+	// After a restart the hub knows nothing of the delete; the store does.
+	kept, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.hub = NewHub()
+	f.srv.hub = f.hub
+	if w := f.do(t, "GET", "/api/events?session="+sess.ID, nil); w.Code != http.StatusNoContent {
+		t.Errorf("events of a deleted session after a restart = %d, want 204", w.Code)
+	}
+	f.hub.Publish(kept.ID, agent.Event{Type: "status", Fields: map[string]any{"state": "idle"}})
+	if got := f.readStream(t, "/api/events?session="+kept.ID+"&from=0", 1); len(got) != 1 {
+		t.Errorf("events of a kept session after a restart = %v, want its event", got)
+	}
+}
+
+// Only a session has a stream: an id of another shape is refused and leaves
+// no channel behind, and a live session whose file is not on disk, as after a
+// failed first save, still streams.
+func TestTheEventStreamIsForSessionsAlone(t *testing.T) {
+	f := newFixture(t)
+	if w := f.do(t, "GET", "/api/events?session=not-a-session", nil); w.Code != http.StatusNotFound {
+		t.Errorf("events of a malformed id = %d, want 404", w.Code)
+	}
+	f.hub.mu.Lock()
+	_, made := f.hub.sessions["not-a-session"]
+	f.hub.mu.Unlock()
+	if made {
+		t.Error("a malformed id made a channel")
+	}
+
+	// Live and not on the index, as after a failed first save.
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.srv.store.Delete(sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if f.srv.store.Has(sess.ID) || !f.engine.IsLive(sess.ID) {
+		t.Fatal("the session is not live and off the index")
+	}
+	f.hub.Publish(sess.ID, agent.Event{Type: "status", Fields: map[string]any{"state": "idle"}})
+	if got := f.readStream(t, "/api/events?session="+sess.ID+"&from=0", 1); len(got) != 1 {
+		t.Errorf("events of a live session off the index = %v, want its event", got)
+	}
+
+	// On disk and not live, as after a restart: a new engine and store over
+	// the same folder still stream it.
+	kept, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := store.Open(f.cfg.Paths().Sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	hub := NewHub()
+	fresh := agent.NewEngine(ctx, f.cfg, sessions, f.files, agent.Clients{Pool: llm.NewPool()}, search.NewProviders(), f.perms, hub)
+	f.srv.engine, f.srv.store, f.srv.hub, f.hub = fresh, sessions, hub, hub
+	if fresh.IsLive(kept.ID) {
+		t.Fatal("the new engine holds the session already")
+	}
+	hub.Publish(kept.ID, agent.Event{Type: "status", Fields: map[string]any{"state": "idle"}})
+	if got := f.readStream(t, "/api/events?session="+kept.ID+"&from=0", 1); len(got) != 1 {
+		t.Errorf("events of a session on disk after a restart = %v, want its event", got)
+	}
+	if w := f.do(t, "GET", "/api/events?session="+sess.ID, nil); w.Code != http.StatusNoContent {
+		t.Errorf("events of a session neither live nor on disk = %d, want 204", w.Code)
 	}
 }

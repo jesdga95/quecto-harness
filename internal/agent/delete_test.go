@@ -638,3 +638,82 @@ func TestSendRacingADelete(t *testing.T) {
 		}
 	}
 }
+
+// Each session a delete removes lets go of its stream, and only those: a
+// delete refused before it starts drops nothing, and one that fails part way
+// drops the runs it did remove and keeps the launcher and the run that stays.
+func TestADeleteDropsTheStreamsOfWhatItRemoved(t *testing.T) {
+	h := newHarness(t)
+	parent := h.session(t)
+	h.engine.save(parent)
+	subagentOf(t, h, parent)
+	subagentOf(t, h, parent)
+	// The runs are removed in the order the store lists them, so the first
+	// one goes and the second is the one that cannot.
+	order := h.store.Children(parent.ID)
+	if len(order) != 2 {
+		t.Fatalf("children = %d", len(order))
+	}
+	gone, err := h.engine.Get(order[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stays, err := h.engine.Get(order[1].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stays.mu.Lock()
+	stays.state = StatePreflight
+	stays.mu.Unlock()
+	if err := h.engine.Delete(parent.ID); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Delete = %v, want busy", err)
+	}
+	if d := h.rec.droppedIDs(); len(d) != 0 {
+		t.Errorf("a refused delete dropped %v", d)
+	}
+	stays.mu.Lock()
+	stays.state = StateIdle
+	stays.mu.Unlock()
+
+	path := filepath.Join(h.paths.Sessions, stays.ID+".json")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.Delete(parent.ID); err == nil {
+		t.Fatal("the delete went through a run it could not remove")
+	}
+	// The runs go in an order of their own; what is dropped is exactly what
+	// went, whichever it was.
+	dropped := map[string]bool{}
+	for _, id := range h.rec.droppedIDs() {
+		dropped[id] = true
+	}
+	for _, id := range []string{parent.ID, gone.ID, stays.ID} {
+		if dropped[id] == onDisk(h, id) {
+			t.Errorf("%s: dropped %v, on disk %v", id, dropped[id], onDisk(h, id))
+		}
+	}
+	if !dropped[gone.ID] || dropped[parent.ID] || dropped[stays.ID] {
+		t.Errorf("dropped = %v, want the first run alone", h.rec.droppedIDs())
+	}
+
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.Delete(parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, id := range h.rec.droppedIDs() {
+		got[id] = true
+	}
+	for _, id := range []string{parent.ID, gone.ID, stays.ID} {
+		if !got[id] {
+			t.Errorf("%s was not dropped", id)
+		}
+	}
+}

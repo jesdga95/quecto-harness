@@ -442,6 +442,15 @@ func (e *Engine) LiveFill(id string) (fill int, ok bool) {
 	return s.computeFill(), true
 }
 
+// IsLive reports whether a session is held in memory, without reading anything
+// from disk or keeping anything for an id that is not.
+func (e *Engine) IsLive(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, ok := e.live[id]
+	return ok
+}
+
 // LiveState is what a session is doing, without reading one back from disk to
 // answer. Nothing runs a session that is not in memory, so an id nothing holds
 // is idle.
@@ -1134,6 +1143,9 @@ func (e *Engine) remove(s *Session) error {
 	delete(e.live, s.ID)
 	e.removed[s.ID] = true
 	e.mu.Unlock()
+	if d, ok := e.hub.(Dropper); ok {
+		d.Drop(s.ID)
+	}
 	return nil
 }
 

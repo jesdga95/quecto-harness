@@ -585,8 +585,13 @@ The fourteen review questions, each settled and already folded into the sections
 
 Also settled: allowlist entries for a removed project stay on disk and are reachable via the
 two allowlist routes; deleting a session is 204, 409 when busy or reserved by another delete,
-404 when unknown, 500 when the store cannot read or remove it, and removes the file, the live entry, the hub channel and the subagent runs
-under it behind a confirmation (there is no undo); removing a project needs a path in the
+404 when unknown, 500 when the store cannot read or remove it, and removes the file, the live entry and the subagent runs
+under it behind a confirmation; each session a delete removes, a run or a project's
+session included, has its hub channel dropped for good, so a late event or a reconnecting
+tab cannot make it again and its event stream answers 204; a session neither live
+nor on the store's index answers the same, asked without loading it, which covers one
+deleted before a restart; an id that is not a session's is refused
+with 404 and gets no channel (there is no undo); removing a project needs a path in the
 project list (404 otherwise, since an empty path would name every project's sessions),
 deletes its sessions, keeps the busy ones, keeps the project when a session cannot be
 deleted for any other reason, and removes from the list the path it deleted sessions for; a message that is refused leaves no stored copy of its attachments; and reasoning is

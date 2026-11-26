@@ -25,8 +25,21 @@ import (
 // recorder collects published events so a test can assert what a browser
 // would have seen.
 type recorder struct {
-	mu     sync.Mutex
-	events []Event
+	mu      sync.Mutex
+	events  []Event
+	dropped []string
+}
+
+func (r *recorder) Drop(sessionID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dropped = append(r.dropped, sessionID)
+}
+
+func (r *recorder) droppedIDs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.dropped...)
 }
 
 func (r *recorder) Publish(_ string, e Event) {
