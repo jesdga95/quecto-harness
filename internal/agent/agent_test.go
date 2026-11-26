@@ -3122,3 +3122,43 @@ func TestAnEmptyToolResultIsNotSentEmpty(t *testing.T) {
 		t.Errorf("content = %q", m.Content)
 	}
 }
+
+// What a call's card shows and its policy weighs is the value its tool then
+// uses, decoded into the tool's own arguments, and nothing else the arguments
+// carry: for a file tool the path, for bash the command, for a search the
+// query. Arguments the tool refuses give nothing to show.
+func TestTheCardShowsWhatTheToolUses(t *testing.T) {
+	cases := []struct {
+		tool, raw     string
+		command, path string
+		ok            bool
+	}{
+		{"read", `{"path":"/etc/hosts","command":"ls"}`, "", "/etc/hosts", true},
+		{"read", `{"path":"/etc/hosts","command":5}`, "", "/etc/hosts", true},
+		{"read", `{"PATH":"/etc/hosts"}`, "", "/etc/hosts", true},
+		{"read", `{"path":"file.txt","path":"/etc/hosts"}`, "", "/etc/hosts", true},
+		{"read", `{"Path":"file.txt","path":"/etc/hosts"}`, "", "/etc/hosts", true},
+		{"read", `{"path":"/etc/hosts","path":null}`, "", "/etc/hosts", true},
+		{"read", `{"path":"/etc/hosts","offset":"x"}`, "", "", false},
+		{"read", `{"path":5}`, "", "", false},
+		{"read_image", `{"path":"/tmp/a.png","command":"ls"}`, "", "/tmp/a.png", true},
+		{"grep", `{"text":"x","path":"/etc","query":"q"}`, "", "/etc", true},
+		{"write", `{"path":"/tmp/a","content":"x","command":"ls"}`, "", "/tmp/a", true},
+		{"edit", `{"path":"/tmp/a","old_string":"a","new_string":"b","command":"ls"}`, "", "/tmp/a", true},
+		{"bash", `{"command":"ls","path":"/etc/hosts"}`, "ls", "", true},
+		{"bash", `{"command":"ls","background":"yes"}`, "", "", false},
+		{"web_search", `{"query":"go","command":"rm","path":"/x"}`, "go", "", true},
+		{"todo_write", `{"command":"ls","path":"/etc"}`, "", "", true},
+	}
+	for _, c := range cases {
+		command, path, ok := argSummary(llm.ToolCall{Function: llm.FunctionCall{Name: c.tool, Arguments: c.raw}})
+		if command != c.command || path != c.path || ok != c.ok {
+			t.Errorf("%s %s = (%q, %q, %v), want (%q, %q, %v)", c.tool, c.raw, command, path, ok, c.command, c.path, c.ok)
+		}
+	}
+	// The cases above follow the tool's own decoding.
+	var read tools.ReadFileArgs
+	if err := tools.DecodeArgs("read", json.RawMessage(`{"path":"/etc/hosts","path":null}`), &read); err != nil || read.Path != "/etc/hosts" {
+		t.Errorf("the read tool decodes %q, %v", read.Path, err)
+	}
+}

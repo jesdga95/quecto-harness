@@ -346,6 +346,11 @@ too late to be picked up starts a turn of its own.
   steps left is sent back to the next one by a message the transcript does not show, and a
   status line that it does. It stops after 20 rounds, after two in a row complete nothing,
   and when the reply was cut off at the token limit.
+- **What a card is about.** A call's arguments are decoded into its tool's own arguments,
+  and the card shows, and the policy weighs, the one value that tool uses: the path for a
+  file tool, the command for `bash`, the query for `web_search`. Nothing else the arguments
+  carry reaches the card. Arguments the tool cannot decode draw no card: the tool refuses
+  them before it touches anything, and that refusal is the call's answer.
 - **Interrupted calls.** Before a call that can change something runs (`bash`, `write`,
   `edit`, `subagent`, `send_message`), the assistant entry records it as started and is
   saved. A session read back from disk with calls unanswered has them closed: a started one

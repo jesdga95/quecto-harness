@@ -2172,8 +2172,7 @@ func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, runne
 		if !readsOnly(offer, name) || !offer.InMode(name) || !offer.InSet(name) {
 			break
 		}
-		command, path := argSummary(call)
-		if e.perms.Evaluate(s.Project, name, command, path, placeOf(runner, path), cfg.Mode) != perms.ActionAllow {
+		if _, ok := e.allowed(s, cfg, runner, call); !ok {
 			break
 		}
 		n++
@@ -2239,14 +2238,17 @@ func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config,
 // record its entry keeps either way.
 func (e *Engine) allowed(s *Session, cfg config.Config, runner *tools.Runner, call llm.ToolCall) (*store.PermissionRecord, bool) {
 	tool := call.Function.Name
-	command, path := argSummary(call)
+	command, path, decoded := argSummary(call)
 	// An MCP call has no command or path of its own: what it is about is its
 	// arguments, which the card shows and the record keeps.
 	if _, ok := runner.MCPTools[tool]; ok {
-		command, path = string(call.Function.Arguments), ""
+		command, path, decoded = string(call.Function.Arguments), "", true
 	}
 	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
-	if e.perms.Evaluate(s.Project, tool, command, path, placeOf(runner, path), cfg.Mode) != perms.ActionAllow {
+	// Arguments the tool cannot decode are refused by the tool itself before
+	// it does anything, so they run, to be answered with why, and draw no
+	// card about a call nobody could judge.
+	if decoded && e.perms.Evaluate(s.Project, tool, command, path, placeOf(runner, path), cfg.Mode) != perms.ActionAllow {
 		return record, false
 	}
 	// A call skips the card two ways, and the record keeps them apart.
@@ -2543,23 +2545,41 @@ func (e *Engine) refuseImages(s *Session, err error) bool {
 	return true
 }
 
-// argSummary pulls the command and the path out of the raw arguments for the
-// permission card, tolerating arguments the model malformed. The card shows
-// what the call is about, and for a search that is the query, which the card
-// reads as the command.
-func argSummary(call llm.ToolCall) (command, path string) {
-	var args struct {
-		Command string `json:"command"`
-		Path    string `json:"path"`
-		Query   string `json:"query"`
+// argSummary is what a call's card shows and its policy weighs: the path for a
+// file tool, the command for bash, the query for a search, and nothing for the
+// rest. Each is decoded into the tool's own arguments, so it is the value the
+// tool then uses. ok is false when the tool would refuse the arguments, which
+// it does before it touches anything.
+func argSummary(call llm.ToolCall) (command, path string, ok bool) {
+	name, raw := call.Function.Name, json.RawMessage(call.Function.Arguments)
+	switch name {
+	case "bash":
+		return summary(name, raw, func(a tools.RunShellArgs) (string, string) { return a.Command, "" })
+	case "web_search":
+		return summary(name, raw, func(a tools.WebSearchArgs) (string, string) { return a.Query, "" })
+	case "read":
+		return summary(name, raw, func(a tools.ReadFileArgs) (string, string) { return "", a.Path })
+	case "read_image":
+		return summary(name, raw, func(a tools.ReadImageArgs) (string, string) { return "", a.Path })
+	case "grep":
+		return summary(name, raw, func(a tools.FindArgs) (string, string) { return "", a.Path })
+	case "write":
+		return summary(name, raw, func(a tools.WriteFileArgs) (string, string) { return "", a.Path })
+	case "edit":
+		return summary(name, raw, func(a tools.ReplaceInFileArgs) (string, string) { return "", a.Path })
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-		return "", ""
+	return "", "", true
+}
+
+// summary decodes a call's arguments the way its tool does and picks out what
+// the card shows.
+func summary[T any](name string, raw json.RawMessage, pick func(T) (string, string)) (string, string, bool) {
+	var args T
+	if err := tools.DecodeArgs(name, raw, &args); err != nil {
+		return "", "", false
 	}
-	if args.Command == "" {
-		return args.Query, args.Path
-	}
-	return args.Command, args.Path
+	command, path := pick(args)
+	return command, path, true
 }
 
 // compact replaces the in-context set with one summary of everything but the
