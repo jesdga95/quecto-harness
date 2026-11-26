@@ -49,6 +49,9 @@ type Hub struct {
 	// shows which are working.
 	watchers    map[int64]chan []byte
 	nextWatcher int64
+	// gone holds the sessions dropped for good. Their channel is never made
+	// again, so a late event or a reconnecting tab cannot bring one back.
+	gone map[string]bool
 }
 
 type channel struct {
@@ -74,7 +77,7 @@ type subscriber struct {
 }
 
 func NewHub() *Hub {
-	return &Hub{sessions: map[string]*channel{}, watchers: map[int64]chan []byte{}}
+	return &Hub{sessions: map[string]*channel{}, watchers: map[int64]chan []byte{}, gone: map[string]bool{}}
 }
 
 // Publish sends one event. Streamed text is joined into a run and goes out a
@@ -84,6 +87,9 @@ func (h *Hub) Publish(sessionID string, ev agent.Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c := h.channelLocked(sessionID)
+	if c == nil {
+		return
+	}
 	if ev.Type == deltaEvType || ev.Type == reasoningEvType {
 		h.holdLocked(sessionID, c, ev)
 		return
@@ -208,10 +214,14 @@ func (h *Hub) emitLocked(c *channel, kind string, fields map[string]any) {
 // Subscribe returns the replay for (from, seq], a live channel, and the
 // function that detaches it. A from the ring no longer covers yields one
 // resync frame instead.
+// A session dropped for good answers with a nil channel and nothing else.
 func (h *Hub) Subscribe(sessionID string, from int64) (<-chan frame, func(), []frame) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c := h.channelLocked(sessionID)
+	if c == nil {
+		return nil, func() {}, nil
+	}
 	s := &subscriber{ch: make(chan frame, subscriberQ)}
 	id := c.nextID
 	c.nextID++
@@ -270,10 +280,12 @@ func (h *Hub) Mark(sessionID string) int64 {
 	return c.seq
 }
 
-// Drop discards a session's channel, which ends every attached event source.
+// Drop discards a session's channel for good, which ends every attached
+// event source; nothing makes it again.
 func (h *Hub) Drop(sessionID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.gone[sessionID] = true
 	c, ok := h.sessions[sessionID]
 	if !ok {
 		return
@@ -291,6 +303,9 @@ func (h *Hub) Drop(sessionID string) {
 }
 
 func (h *Hub) channelLocked(sessionID string) *channel {
+	if h.gone[sessionID] {
+		return nil
+	}
 	c, ok := h.sessions[sessionID]
 	if !ok {
 		c = &channel{subs: map[int64]*subscriber{}, base: 1}

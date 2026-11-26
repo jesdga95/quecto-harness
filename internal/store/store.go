@@ -430,6 +430,9 @@ func (s *Sessions) Delete(id string) error {
 	return nil
 }
 
+// ValidID reports whether id has the shape NewID gives a session.
+func ValidID(id string) bool { return namePattern.MatchString(id + ".json") }
+
 func (s *Sessions) Has(id string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

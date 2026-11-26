@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/jesdga95/quecto-harness/internal/store"
 )
 
 // pingInterval keeps intermediaries and idle timeouts from closing a stream
@@ -39,8 +41,26 @@ func (s *Server) getEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Only a session has a stream, or a channel would be made that nothing
+	// lets go of.
+	if !store.ValidID(session) {
+		writeError(w, http.StatusNotFound, "No session with that id")
+		return
+	}
+	// A deleted session has nothing more to say. 204 is the answer that stops
+	// an event source from reconnecting. A session counts when it is live or
+	// on the index, asked without loading it, so a stale tab keeps nothing
+	// alive for an id that is gone; the hub answers for a delete under way.
+	if !s.engine.IsLive(session) && !s.store.Has(session) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	ch, cancel, replay := s.hub.Subscribe(session, from)
 	defer cancel()
+	if ch == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
