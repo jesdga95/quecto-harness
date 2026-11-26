@@ -39,7 +39,7 @@
       {#if session?.parent}
         <span class="shrink-0 text-[12.5px] text-muted">Working for another agent</span>
       {:else}
-        <span class="session-path truncate text-[12.5px] text-muted">{shortPath(app.projectPath)}</span>
+        <span class="session-path truncate text-[12.5px] text-muted">{app.loose ? "No folder" : shortPath(app.projectPath)}</span>
       {/if}
     </div>
     <div class="ml-auto flex shrink-0 items-center">

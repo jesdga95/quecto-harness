@@ -32,6 +32,7 @@
     loadFile,
     openFile,
     showArtifact,
+    workRoot,
   } from "../state/app.svelte";
 
   // A page over this size is shown as its source. Nothing that large is a page
@@ -172,14 +173,16 @@
   // The path row: the project root, then the folders down to the file, each
   // folder opening in the browser. A deep path drops its middle segments so
   // the file at the end is still readable.
-  const root = $derived((app.browseDir?.root || app.projectPath).replace(/\/$/, ""));
-  const rootName = $derived(root.replace(/^\/Users\/[^/]+/, "~"));
+  const root = $derived((app.browseDir?.root || workRoot()).replace(/\/$/, ""));
+  // A conversation without a folder works in one inside the harness's own
+  // state, so the row names it rather than spelling out where it is.
+  const rootName = $derived(app.loose ? "This conversation" : root.replace(/^\/Users\/[^/]+/, "~"));
   const pathRow = $derived.by(() => {
     const rel = browsing ? (app.browseDir?.path ?? "") : (shown?.path ?? "");
     const parts = rel ? rel.split("/") : [];
     const kept = parts.map((_, i) => i);
     const width = (base: number) => base + kept.reduce((n, i) => n + parts[i].length + 1, 0);
-    const base = width(rootName.length) > BUDGET ? root.split("/").pop() ?? root : rootName;
+    const base = app.loose || width(rootName.length) <= BUDGET ? rootName : (root.split("/").pop() ?? root);
     while (kept.length > 2 && width(base.length) > BUDGET) kept.splice(1, 1);
     return {
       label: base,
@@ -273,7 +276,7 @@
       </div>
     {/if}
 
-    {#if app.section === "git"}
+    {#if app.section === "git" && !app.loose}
       <GitView />
     {:else if app.section === "agents"}
       <RunsView />

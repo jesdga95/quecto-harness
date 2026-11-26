@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { COMPOSE_EVENT } from "../keys";
   import AddMenu from "./AddMenu.svelte";
   import ArrowUp from "phosphor-svelte/lib/ArrowUpIcon";
@@ -25,6 +26,14 @@
     pickedUrl,
     setWorkMode,
     send,
+    placeKey,
+    takeUnsent,
+    composeKey,
+    draftKeyNow,
+    holdPlaces,
+    freePlaces,
+    madeFrom,
+    snippet,
     stop,
     answerNow,
     toolset,
@@ -201,8 +210,9 @@
   // A compaction holds the session but is not offered a stop: it draws nothing
   // to take back. The send button stays, and what it takes joins the queue.
   const running = $derived(app.status !== "idle" && app.status !== "compacting");
-  // Sending with no session creates one, so the field only needs a project.
-  const disabled = $derived(blocked || (!app.sessionId && !app.projectPath));
+  // Sending with no session creates one, so the field only needs a place for
+  // it: a project, or no folder.
+  const disabled = $derived(blocked || (!app.sessionId && !app.projectPath && !app.loose));
   // The reply is thinking and the server can end that early. The text it
   // answers with, or a call, ends the offer.
   const thinking = $derived(running && app.answerNow && app.items.at(-1)?.kind === "reasoning");
@@ -210,13 +220,29 @@
   // The dialog takes several files at once, and the harness caps a message at
   // five, so what comes back past the cap is dropped rather than sent.
   async function attach() {
+    const key = composeKey();
     const picked = await pickAttachments();
-    const next = [...files];
-    for (const path of picked) {
+    // The files join what is kept for their conversation, which the field on
+    // display shows when it is that conversation's, in the places no paste
+    // is still filling.
+    const target = draftKeyNow(key);
+    const there = app.drafts[target]?.files ?? (target === composeKey() ? files : []);
+    const fresh = [...new Set(picked)].filter((path) => !there.includes(path));
+    const room = holdPlaces(key, fresh.length, maxFiles, files.length);
+    freePlaces(key, room);
+    addToDraft(target, fresh.slice(0, room));
+  }
+
+  // Files are added to what is kept for a conversation, so one that arrives
+  // after the field moved on, or after another composer took its place,
+  // lands with its conversation.
+  function addToDraft(key: string, paths: string[]) {
+    const kept = app.drafts[key] ?? { text: "", files: [] };
+    const next = [...kept.files];
+    for (const path of paths) {
       if (!next.includes(path) && next.length < maxFiles) next.push(path);
     }
-    setFiles(next);
-    for (const path of picked) void readText(path);
+    app.drafts[key] = { text: kept.text, files: next };
   }
 
   // A paste the field cannot hold: an image, which has no path of its own,
@@ -229,31 +255,45 @@
     const images = [...data.items].filter(
       (item) => item.kind === "file" && imageNames[item.type] !== undefined,
     );
+    // One paste belongs to the conversation it was made in, however long
+    // its files take to store.
+    const key = composeKey();
     if (images.length > 0) {
       event.preventDefault();
-      for (const item of images) {
-        const file = item.getAsFile();
-        if (file) await addPasted(imageNames[item.type], file);
-      }
+      const blobs = images.map((item) => [imageNames[item.type], item.getAsFile()] as const);
+      await addPasted(key, blobs.filter((b): b is readonly [string, File] => b[1] !== null));
       return;
     }
 
     const pasted = data.getData("text/plain");
     if (pasted.length <= maxPastedText) return;
     event.preventDefault();
-    await addPasted("Pasted text.txt", new Blob([pasted], { type: "text/plain" }));
+    await addPasted(key, [["Pasted text.txt", new Blob([pasted], { type: "text/plain" })]]);
   }
 
-  async function addPasted(name: string, blob: Blob) {
-    if (files.length >= maxFiles) return;
-    const path = await pasteFile(name, blob);
-    if (!path || files.includes(path)) return;
-    if (blob.type.startsWith("image/")) {
-      pastedImages = { ...pastedImages, [path]: URL.createObjectURL(blob) };
-    } else {
-      texts = { ...texts, [path]: sheetText(await blob.text()) };
+  // Stores each pasted file and reads what its tile shows, then adds them all
+  // at once: to the field when their conversation is still on screen, else to
+  // what is kept for it.
+  async function addPasted(key: string, blobs: (readonly [string, Blob])[]) {
+    // Nothing is stored that the field has no room for, counting the places
+    // other pastes are still filling.
+    const room = holdPlaces(key, blobs.length, maxFiles, files.length);
+    const stored: { path: string; blob: Blob; text: string }[] = [];
+    try {
+      for (const [name, blob] of blobs.slice(0, room)) {
+        const path = await pasteFile(name, blob);
+        if (!path) continue;
+        stored.push({ path, blob, text: blob.type.startsWith("image/") ? "" : sheetText(await blob.text()) });
+      }
+    } finally {
+      freePlaces(key, room);
     }
-    files = [...files, path];
+    if (stored.length === 0) return;
+    for (const f of stored) {
+      if (f.blob.type.startsWith("image/")) pastedImages = { ...pastedImages, [f.path]: URL.createObjectURL(f.blob) };
+      else texts = { ...texts, [f.path]: f.text };
+    }
+    addToDraft(draftKeyNow(key), stored.map((f) => f.path));
   }
 
   // An @ before the caret, and the word after it, is a file being named. The
@@ -313,6 +353,86 @@
     void send(value, attached);
   }
 
+  // Suggestions belong to the place and session they were asked from.
+  $effect(() => {
+    void placeKey();
+    void app.sessionId;
+    mention = null;
+    hits = [];
+  });
+
+  // What is typed belongs to the conversation or empty screen on display. It
+  // is kept under that key as it is written, and the field shows what is kept
+  // for whichever key comes into view. A conversation made from the empty
+  // screen on display keeps what was being typed there.
+  let shown = "";
+  function keepDraft(key: string, draft: { text: string; files: string[] }) {
+    if (!key) return;
+    if (draft.text === "" && draft.files.length === 0) {
+      delete app.drafts[key];
+      return;
+    }
+    // A message handed back keeps its name while nothing in it changes.
+    const was = app.drafts[key];
+    const same = was && was.text === draft.text && was.files.length === draft.files.length && was.files.every((f, i) => f === draft.files[i]);
+    app.drafts[key] = same && was.client ? { ...draft, client: was.client } : draft;
+  }
+  $effect(() => {
+    const key = composeKey();
+    const now = { text, files: [...files] };
+    untrack(() => {
+      if (key !== shown) {
+        const carried = shown !== "" && madeFrom(key) === shown;
+        if (!carried) {
+          keepDraft(shown, now);
+          shown = key;
+          const kept = app.drafts[key];
+          text = kept?.text ?? "";
+          setFiles(kept?.files ?? []);
+          return;
+        }
+        delete app.drafts[shown];
+        shown = key;
+      }
+      keepDraft(key, now);
+    });
+  });
+
+  // What is kept for the conversation on display can change without this
+  // field, as when a file it was waiting for arrives: the field shows it.
+  $effect(() => {
+    const kept = app.drafts[composeKey()];
+    untrack(() => {
+      if (!kept || composeKey() !== shown) return;
+      const same = kept.text === text && kept.files.length === files.length && kept.files.every((f, i) => f === files[i]);
+      if (same) return;
+      text = kept.text;
+      setFiles(kept.files);
+      for (const path of kept.files) if (!texts[path]) void readText(path);
+    });
+  });
+
+  // A message that did not go out comes back by itself to the field of the
+  // conversation or empty screen it was for, when nothing is written there.
+  // Any other is offered below, to write again here or to drop.
+  $effect(() => {
+    const key = composeKey();
+    void app.unsent.length;
+    untrack(() => {
+      if (text !== "" || files.length > 0) return;
+      const mine = app.unsent.find((u) => u.key === key);
+      if (mine) writeAgain(mine.id);
+    });
+  });
+  function writeAgain(id: number) {
+    if (text !== "" || files.length > 0) return;
+    const back = takeUnsent(id);
+    if (!back) return;
+    app.drafts[composeKey()] = { text: back.text, files: back.files, client: back.client };
+    text = back.text;
+    setFiles(back.files);
+  }
+
   // Enter sends, Shift and Enter makes a line. While the file list is open,
   // the arrows move through it and Enter or Tab takes the one marked.
   function onkeydown(event: KeyboardEvent) {
@@ -370,6 +490,20 @@
       {/each}
     </div>
   {/if}
+  {#each app.unsent as u (u.id)}
+    <div class="mb-2 flex items-center gap-2 text-[12.5px] text-muted">
+      <span class="min-w-0 flex-1 truncate">Not sent: "{snippet(u.text)}"</span>
+      <button
+        class="chip chip-plain"
+        disabled={text !== "" || files.length > 0}
+        title={text !== "" || files.length > 0 ? "Clear the field to write it again here" : undefined}
+        onclick={() => writeAgain(u.id)}
+      >
+        Write again
+      </button>
+      <button class="chip chip-plain" onclick={() => takeUnsent(u.id)}>Discard</button>
+    </div>
+  {/each}
   <div
     class="composer composer-main"
     class:is-plan={app.workMode === "plan"}

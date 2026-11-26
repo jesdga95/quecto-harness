@@ -190,6 +190,7 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
         description: event.description ?? "",
         outcome: null,
         agent: event.agent,
+        onceOnly: event.onceOnly,
       });
       break;
     }

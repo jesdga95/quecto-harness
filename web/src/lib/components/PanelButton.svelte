@@ -115,7 +115,9 @@
   </button>
   <span class="entry-divider" class:is-hidden={!app.panel} class:hidden={app.dockCrowded}></span>
   {@render button("files", writing)}
-  {@render button("git", !!repo)}
+  {#if !app.loose}
+    {@render button("git", !!repo)}
+  {/if}
   {@render button("agents", app.runs.length > 0)}
   {@render button("processes", app.procs.length > 0)}
   {#if use.measured || attached > 0}

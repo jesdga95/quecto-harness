@@ -87,7 +87,25 @@ export const app = $state({
   models: [] as Model[],
   sessions: {} as Record<string, Session[]>,
   projectPath: "",
+  // The conversations without a folder are chosen in place of a project: a
+  // new session goes there, and projectPath is empty.
+  loose: false,
+  // The folder the open conversation without a folder works in, which is
+  // what the paths its tools wrote begin with. Empty in a project.
+  root: "",
   sessionId: "",
+  // The session being opened, drawn as the selected row until its history
+  // arrives and it becomes sessionId.
+  opening: "",
+  // Messages that did not go out, each with the conversation or empty
+  // screen it was written for.
+  unsent: [] as Unsent[],
+  // Counts the empty screens shown, so a message written on one is told
+  // from one written on the next.
+  blank: 0,
+  // What is typed and not sent, by conversation or empty screen, so each
+  // keeps its own while the composer moves between them.
+  drafts: {} as Record<string, Draft>,
   // The session last fetched, which is the only record of a subagent run: the
   // sidebar lists conversations somebody started and nothing else.
   opened: null as Session | null,
@@ -196,7 +214,7 @@ export const app = $state({
 // The artifacts are read from the transcript, so they follow it without being
 // kept in step by hand. Files in the project follow them: the drawings, pages
 // and images a turn wrote, and whatever the reader opened.
-const written = $derived(writtenPreviews(app.items, app.projectPath));
+const written = $derived(writtenPreviews(app.items, workRoot()));
 const projectPaths = $derived.by(() => {
   const paths = [...written.keys()];
   for (const path of app.openFiles) if (!paths.includes(path)) paths.push(path);
@@ -236,15 +254,34 @@ async function guard<T>(work: () => Promise<T>): Promise<T | null> {
   }
 }
 
+/** guard for work started under one choice of place or session. A failure is
+    reported only while that choice stands, so it never lands on a later one,
+    and it says nothing about the turn on screen. */
+async function guardFor<T>(mine: number, work: () => Promise<T>): Promise<T | null> {
+  try {
+    const value = await work();
+    if (mine === picked) app.error = "";
+    return value;
+  } catch (err) {
+    if (mine === picked) report(err);
+    return null;
+  }
+}
+
 function fail(err: unknown): void {
+  if (report(err)) app.status = "idle";
+}
+
+/** Says what failed. False for a refused token, which is not the turn's. */
+function report(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   app.error = message;
   if (err instanceof ApiError && err.status === 401) {
     toast(message, "warn", true);
-    return;
+    return false;
   }
   toast(message);
-  app.status = "idle";
+  return true;
 }
 
 /** Reads the harness and copies what it said over the local copy. Three things
@@ -277,6 +314,7 @@ export async function init(): Promise<void> {
   // recent conversation is opened if it has one.
   const first = app.projects[0];
   if (first) await selectProject(first.path);
+  else await selectLoose();
 }
 
 function onFeed(feed: Record<string, SessionFeed>, whole: boolean): void {
@@ -329,22 +367,51 @@ export function hasBackground(id: string): boolean {
   return (app.running[id] ?? 0) > 0;
 }
 
+// Listings overlap when the sidebar is refreshed twice in a row, so only the
+// newest is kept, each list under the path it was asked for.
+let listing = 0;
+
 async function loadSessions(): Promise<void> {
-  const lists = await guard(() =>
-    Promise.all(app.projects.map((p) => api.listSessions(p.path))),
-  );
-  if (!lists) return;
-  const next: Record<string, Session[]> = {};
-  app.projects.forEach((p, i) => (next[p.path] = lists[i] ?? []));
+  const mine = ++listing;
+  const paths = app.projects.map((p) => p.path);
+  let lists: Session[][];
+  try {
+    lists = await Promise.all([api.listLooseSessions(), ...paths.map((path) => api.listSessions(path))]);
+  } catch (err) {
+    if (mine === listing) report(err);
+    return;
+  }
+  if (mine !== listing) return;
+  const [loose, ...projects] = lists;
+  const next: Record<string, Session[]> = { [LOOSE]: loose ?? [] };
+  paths.forEach((path, i) => (next[path] = projects[i] ?? []));
   app.sessions = next;
 }
+
+/** The key the conversations without a folder are listed under beside the
+    projects. No project path starts with a colon. */
+export const LOOSE = ":loose";
+
+/** The list a new session joins: the chosen project's, or LOOSE. */
+export function placeKey(): string {
+  return app.loose ? LOOSE : app.projectPath;
+}
+
+/** The folder the open conversation's relative paths are read against. */
+export function workRoot(): string {
+  return app.loose ? app.root : app.projectPath;
+}
+
+// Each choice of a place or a session counts up, and an answer that arrives
+// after a later choice is dropped rather than drawn over it.
+let picked = 0;
 
 export function sessionsOf(path: string): Session[] {
   return app.sessions[path] ?? [];
 }
 
 export function activeSession(): Session | undefined {
-  const listed = sessionsOf(app.projectPath).find((s) => s.id === app.sessionId);
+  const listed = sessionsOf(placeKey()).find((s) => s.id === app.sessionId);
   if (listed) return listed;
   // A subagent run is not in the list, so what was fetched when it was opened
   // is the only record of it on the page.
@@ -353,21 +420,44 @@ export function activeSession(): Session | undefined {
 
 /** Chooses the project a new session and a file path go to. With openFirst,
     the project's first conversation is opened; otherwise the screen is
-    cleared and left empty, as the new session page wants it. */
+    cleared and left empty, as the new session page wants it. Nothing on
+    screen changes until the choice is ready to draw. */
 export async function selectProject(path: string, openFirst = true): Promise<void> {
-  app.projectPath = path;
-  app.allowlist = (await guard(() => api.listAllowlist(path))) ?? [];
   const first = sessionsOf(path)[0];
-  if (openFirst && first) await selectSession(first.id);
-  else clearSession();
+  if (openFirst && first) return selectSession(first.id);
+  const mine = ++picked;
+  const allowed = (await guardFor(mine, () => api.listAllowlist(path))) ?? [];
+  if (mine !== picked) return;
+  app.loose = false;
+  app.projectPath = path;
+  app.allowlist = allowed;
+  clearSession();
+}
+
+/** Chooses the conversations without a folder as where a new session goes,
+    the way selectProject chooses a project. */
+export async function selectLoose(openFirst = true): Promise<void> {
+  const first = sessionsOf(LOOSE)[0];
+  if (openFirst && first) return selectSession(first.id);
+  app.loose = true;
+  app.projectPath = "";
+  app.allowlist = [];
+  clearSession();
 }
 
 /** Empties the screen, leaving the project. Nothing is open, so what the last
     session was showing goes with it. */
 function clearSession(): void {
+  // A session still being opened is not opened over the empty screen, and
+  // this empty screen is a new one.
+  ++picked;
+  app.blank++;
+  steers++;
+  app.opening = "";
   unsubscribe?.();
   unsubscribe = null;
   app.sessionId = "";
+  app.root = "";
   app.opened = null;
   app.items = [];
   app.todos = [];
@@ -400,21 +490,39 @@ function clearSession(): void {
 }
 
 export async function selectSession(id: string): Promise<void> {
+  const mine = ++picked;
+  app.opening = id;
+  const t = await guardFor(mine, () => api.getSession(id));
+  if (mine !== picked) return;
+  if (!t) {
+    app.opening = "";
+    return;
+  }
+  // A session opened from another project's list makes that project the one
+  // a new session, a file path and an @ search go to, and one without a
+  // folder makes it the conversations without one.
+  const loose = t.session.loose;
+  const project = loose ? "" : t.session.project || app.projectPath;
+  let allowed = loose ? [] : app.allowlist;
+  if (!loose && (project !== app.projectPath || app.loose)) {
+    allowed = (await guardFor(mine, () => api.listAllowlist(project))) ?? [];
+    if (mine !== picked) return;
+  }
+  // The place, the id and the history are published together, so the
+  // composer never sends to a session other than the one on screen.
   unsubscribe?.();
   unsubscribe = null;
+  app.opening = "";
+  // The queue read now is newer than any answer still on its way.
+  steers++;
+  app.loose = loose;
+  app.projectPath = project;
+  app.allowlist = allowed;
   app.sessionId = id;
-  const t = await guard(() => api.getSession(id));
-  if (!t) return;
-  // A session opened from another project's list makes that project the one
-  // a new session, a file path and an @ search go to.
-  const project = t.session.project;
-  if (project && project !== app.projectPath) {
-    app.projectPath = project;
-    app.allowlist = (await guard(() => api.listAllowlist(project))) ?? [];
-    if (app.sessionId !== id) return;
-  }
+  app.root = t.session.root;
   app.opened = t.session;
   app.items = t.items;
+  settleFrom(app.items, t.steer);
   app.usage = t.usage;
   app.todos = t.todos;
   app.steer = t.steer;
@@ -437,7 +545,7 @@ export async function selectSession(id: string): Promise<void> {
   // since their state only reaches the launcher's stream when it changes.
   // The git section stays open across sessions; the others were this one's.
   closeRuns();
-  const keepGit = app.panel && app.section === "git";
+  const keepGit = app.panel && app.section === "git" && !app.loose;
   app.runs = t.session.children;
   resetArtifacts();
   if (keepGit) showSection("git");
@@ -460,16 +568,158 @@ export function newSession(): void {
   void tick().then(() => window.dispatchEvent(new Event(COMPOSE_EVENT)));
 }
 
-/** Creates the session the empty screen has been standing in for. It is not
-    opened, since nothing is drawn from a session this screen already holds.
-    False when the harness refused it, which leaves the screen empty. */
-async function createSession(): Promise<boolean> {
-  if (!app.projectPath || !app.config) return false;
-  const session = await guard(() => api.createSession(app.projectPath));
-  if (!session) return false;
-  app.sessionId = session.id;
-  unsubscribe = api.events(session.id, onEvent);
-  return true;
+type Created = { id: string } | { error: string };
+
+// The conversation each empty screen made, by the screen's number, and the
+// creation still under way for one. A creation that failed is forgotten, so
+// the next message from that screen tries again.
+const madeFor = new Map<number, string>();
+// Each creation under way, with the sessions already known when it began: a
+// session the listing shows later may be the one it is making.
+const making = new Map<number, { work: Promise<Created>; known: Set<string>; loose: boolean; project: string }>();
+
+/** Every session id the page knows of now. */
+function knownSessions(): Set<string> {
+  const ids = new Set<string>();
+  for (const list of Object.values(app.sessions)) for (const s of list) ids.add(s.id);
+  if (app.sessionId) ids.add(app.sessionId);
+  return ids;
+}
+
+/** The conversation for the empty screen blank, made once and shared by every
+    message sent from it. The screen takes it only while it is still that
+    empty screen. */
+async function conversationFor(blank: number, loose: boolean, project: string): Promise<Created> {
+  const made = madeFor.get(blank);
+  if (made) return { id: made };
+  let work = making.get(blank)?.work;
+  if (!work) {
+    work = (async (): Promise<Created> => {
+      if ((!loose && !project) || !app.config) return { error: "Choose a project or No folder first" };
+      try {
+        const session = await (loose ? api.createLooseSession() : api.createSession(project));
+        madeFor.set(blank, session.id);
+        // What was typed on that screen meanwhile goes with the conversation,
+        // wherever the screen is now.
+        // Text already written there stays, and the screen's is offered.
+        const typed = app.drafts[blankKey(blank)];
+        if (typed) {
+          delete app.drafts[blankKey(blank)];
+          if (!app.drafts[session.id]) app.drafts[session.id] = typed;
+          else app.unsent.push({ id: ++unsentIds, key: session.id, text: typed.text, files: typed.files });
+        }
+        // Messages sent to it once it is on screen wait for those sent before.
+        const tail = lanes.get(blankKey(blank));
+        if (tail && !lanes.has(session.id)) lanes.set(session.id, tail);
+        if (blank === app.blank && !app.sessionId) {
+          app.sessionId = session.id;
+          app.root = session.root;
+          unsubscribe = api.events(session.id, onEvent);
+        }
+        return { id: session.id };
+      } catch (err) {
+        return { error: reason(err) };
+      }
+    })();
+    const mine = work;
+    making.set(blank, { work: mine, known: knownSessions(), loose, project });
+    void work.then(() => {
+      if (making.get(blank)?.work === mine) making.delete(blank);
+    });
+  }
+  return work;
+}
+
+function blankKey(blank: number): string {
+  return `blank:${blank}`;
+}
+
+/** The key what is typed now is kept under: the open conversation, or the
+    empty screen on display. */
+export function composeKey(): string {
+  return app.sessionId || blankKey(app.blank);
+}
+
+/** Where what was kept under key is kept now: an empty screen that became a
+    conversation is that conversation. */
+export function draftKeyNow(key: string): string {
+  if (!key.startsWith("blank:")) return key;
+  return madeFor.get(Number(key.slice("blank:".length))) ?? key;
+}
+
+// Places the attachments being stored are holding, by the key the field had
+// when each began, so two pastes at once do not both take the last one.
+const holding = new Map<string, number>();
+
+/** Holds up to want places for files about to be stored in what is kept
+    under key, beside those it holds and those being stored for it. Answers
+    how many it got. */
+export function holdPlaces(key: string, want: number, max: number, inField: number): number {
+  const target = draftKeyNow(key);
+  let held = 0;
+  for (const [k, n] of holding) if (draftKeyNow(k) === target) held += n;
+  // The field's own count stands in only for the key it is showing.
+  const kept = app.drafts[target]?.files.length ?? (target === composeKey() ? inField : 0);
+  const got = Math.max(0, Math.min(want, max - kept - held));
+  if (got > 0) holding.set(key, (holding.get(key) ?? 0) + got);
+  return got;
+}
+
+/** Lets go of places holdPlaces gave. */
+export function freePlaces(key: string, n: number): void {
+  const left = (holding.get(key) ?? 0) - n;
+  if (left > 0) holding.set(key, left);
+  else holding.delete(key);
+}
+
+/** The key of the empty screen a conversation was made from, empty when it
+    was not made from one. */
+export function madeFrom(id: string): string {
+  for (const [blank, made] of madeFor) if (made === id) return blankKey(blank);
+  return "";
+}
+
+/** The first words of a message, to say which one a failure is about. */
+export function snippet(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > 40 ? `${flat.slice(0, 40)}...` : flat;
+}
+
+/** What is typed in a composer and not sent. client names the message it
+    was given back from, while nothing in it has changed. */
+export interface Draft {
+  text: string;
+  files: string[];
+  client?: string;
+}
+
+/** A message that did not go out, with the key of the conversation it was
+    for, or of the empty screen it was written on when none came of it. */
+export interface Unsent extends Draft {
+  id: number;
+  key: string;
+  /** The name the message was sent under, so an echo that arrives after
+      the failure withdraws it. */
+  client?: string;
+}
+
+let unsentIds = 0;
+
+function holdUnsent(key: string, text: string, files: string[], why: string, client?: string): void {
+  app.unsent.push({ id: ++unsentIds, key, text, files, client });
+  toast(`Not sent: "${snippet(text)}": ${why}`);
+}
+
+/** Takes a held message out of the list, to be written again or dropped. */
+export function takeUnsent(id: number): Unsent | null {
+  const at = app.unsent.findIndex((u) => u.id === id);
+  if (at === -1) return null;
+  const [u] = app.unsent.splice(at, 1);
+  return u ?? null;
+}
+
+function reason(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /** Asks the host for a folder and adds it. Does nothing if the dialog is dismissed. */
@@ -494,11 +744,11 @@ export async function removeProject(path: string): Promise<void> {
   const projects = await guard(() => api.removeProject(path));
   if (!projects) return;
   app.projects = projects;
-  if (app.projectPath === path) {
+  if (!app.loose && app.projectPath === path) {
     clearSession();
     const next = projects[0];
     if (next) await selectProject(next.path);
-    else app.projectPath = "";
+    else await selectLoose(false);
   }
   await loadSessions();
 }
@@ -520,12 +770,14 @@ export async function renameSession(id: string, title: string): Promise<void> {
 }
 
 export async function deleteSession(id: string): Promise<void> {
-  if ((await guard(() => api.deleteSession(id))) === null) return;
+  const pending = await guard(() => api.deleteSession(id));
+  if (pending === null) return;
+  if (pending) toast(pending, "warn");
   const wasActive = app.sessionId === id;
   if (wasActive) clearSession();
   await loadSessions();
   if (wasActive) {
-    const next = sessionsOf(app.projectPath)[0];
+    const next = sessionsOf(placeKey())[0];
     if (next) await selectSession(next.id);
   }
 }
@@ -544,9 +796,16 @@ export async function pickAttachments(): Promise<string[]> {
 /** Files in the open project matching what follows an @ in the composer. It
     fails quietly: a list that does not come is a list with nothing in it. */
 export async function findFiles(q: string): Promise<string[]> {
-  if (!app.projectPath) return [];
+  const mine = picked;
+  const { loose, projectPath, sessionId } = app;
   try {
-    return await api.findFiles(app.projectPath, q);
+    // A conversation without a folder has one only once it is made.
+    if (loose && !sessionId) return [];
+    if (!loose && !projectPath) return [];
+    const found = loose ? await api.findSessionFiles(sessionId, q) : await api.findFiles(projectPath, q);
+    // An answer for a place or session no longer on screen is no answer.
+    const same = app.loose === loose && app.projectPath === projectPath && app.sessionId === sessionId;
+    return mine === picked && same ? found : [];
   } catch {
     return [];
   }
@@ -563,12 +822,99 @@ export async function pasteFile(name: string, blob: Blob): Promise<string> {
   return (await guard(() => api.pasteFile(name, btoa(binary)))) ?? "";
 }
 
-export async function send(text: string, files: string[] = []): Promise<void> {
+// The messages of one conversation or empty screen are admitted one at a
+// time in the order they were sent. Only admission waits: the turn the first
+// one starts runs on, and other conversations do not wait at all.
+const lanes = new Map<string, Promise<unknown>>();
+
+function enqueue(key: string, work: () => Promise<boolean>): Promise<boolean> {
+  const run = (lanes.get(key) ?? Promise.resolve()).then(work);
+  const tail = run.catch(() => undefined);
+  lanes.set(key, tail);
+  void tail.then(() => {
+    if (lanes.get(key) === tail) lanes.delete(key);
+  });
+  return run;
+}
+
+type Origin = {
+  session: string;
+  blank: number;
+  loose: boolean;
+  project: string;
+  mode: WorkMode;
+  effort: Effort | "";
+};
+
+/** Sends a message to the session on screen, or makes one for it. False when
+    it was not sent; it is then held in app.unsent. */
+export function send(text: string, files: string[] = []): Promise<boolean> {
   const message = text.trim();
-  if (!message && files.length === 0) return;
-  // The empty screen holds a project and no session, so the first message is
-  // what creates one.
-  if (!app.sessionId && !(await createSession())) return;
+  if (!message && files.length === 0) return Promise.resolve(true);
+  const from: Origin = {
+    session: app.sessionId,
+    blank: app.blank,
+    loose: app.loose,
+    project: app.projectPath,
+    mode: app.workMode,
+    effort: app.sessionEffort,
+  };
+  if (!from.session) return enqueue(blankKey(from.blank), () => deliver(message, files, from));
+  // A session that appeared while an empty screen was being made into one may
+  // be that one: its messages wait until the creation says, and then behind
+  // those sent from that screen.
+  const id = from.session;
+  const unsure = [...making.values()]
+    .filter((m) => !m.known.has(id) && m.loose === from.loose && m.project === from.project)
+    .map((m) => m.work);
+  return enqueue(id, async () => {
+    if (unsure.length > 0) {
+      await Promise.all(unsure);
+      const before = madeFrom(id);
+      if (before) await lanes.get(before);
+    }
+    return deliver(message, files, from);
+  });
+}
+
+async function deliver(message: string, files: string[], from: Origin): Promise<boolean> {
+  // Named before anything else, so a message sent to a conversation not on
+  // screen is echoed by its name as well.
+  const client = newClient();
+  awaiting.add(client);
+  let target = from.session;
+  if (!target) {
+    const created = await conversationFor(from.blank, from.loose, from.project);
+    if ("error" in created) {
+      awaiting.delete(client);
+      holdUnsent(blankKey(from.blank), message, files, created.error);
+      return false;
+    }
+    target = created.id;
+  }
+  // A conversation no longer on screen is sent to without being drawn on.
+  if (app.sessionId !== target) {
+    try {
+      await api.sendMessage(target, message, files, from.mode, from.effort, client);
+    } catch (err) {
+      // An echo already seen, or the entry or queue holding its name, says
+      // the harness took it.
+      if (taken(client)) {
+        awaiting.delete(client);
+        void loadSessions();
+        return true;
+      }
+      awaiting.delete(client);
+      holdUnsent(target, message, files, reason(err), client);
+      void loadSessions();
+      return false;
+    }
+    // Nothing on screen waits for its echo.
+    awaiting.delete(client);
+    void loadSessions();
+    return true;
+  }
+  const id = target;
   const attached: Attached[] = files.map((path) => ({
     path,
     kind: looksLikeImage(path) ? "image" : "text",
@@ -576,51 +922,80 @@ export async function send(text: string, files: string[] = []): Promise<void> {
   }));
   // A message typed while the turn runs waits for it, and shows as the queue
   // rather than as a message the model has already been given.
-  if (app.status !== "idle") {
-    const queued = await guard(() => api.sendMessage(app.sessionId, message, files));
-    if (queued) app.steer = queued.steer;
-    return;
+  // A message typed while the turn runs waits for it, and is drawn as the
+  // queue. One that starts a turn is drawn now and named, and the stream
+  // echoes the name with the stored entry ahead of everything the turn
+  // streams, so a page that drew it finds its bubble and any other page, or
+  // this one after a reopening, draws it in its place.
+  const expectQueue = app.status !== "idle";
+  const divider = expectQueue ? null : modeChange(from.mode);
+  if (divider) {
+    app.items.push(divider);
+    dividers.set(client, divider.id);
   }
-  const divider = modeChange();
-  if (divider) app.items.push(divider);
-  pushUser(app.items, message, attached);
-  // The first status event is a round trip away, and the wait starts now.
-  startWait();
-  // The harness reads the attachments, so a file it refuses refuses the whole
-  // message. The bubble comes back off the transcript when that happens.
-  const item = app.items[app.items.length - 1];
-  const sent = await guard(() => api.sendMessage(app.sessionId, message, files, app.workMode, app.sessionEffort));
-  if (sent === null) {
-    app.items = app.items.filter((i) => i.id !== item?.id && i.id !== divider?.id);
+  if (!expectQueue) {
+    pushUser(app.items, message, attached);
+    const drawn = app.items[app.items.length - 1];
+    if (drawn?.kind === "user") drawn.client = client;
+    // The first status event is a round trip away, and the wait starts now.
+    startWait();
+  }
+  const steersBefore = steers;
+  const mine = (i: TranscriptItem) => i.kind === "user" && i.client === client;
+  let sent: Awaited<ReturnType<typeof api.sendMessage>>;
+  try {
+    sent = await api.sendMessage(id, message, files, from.mode, from.effort, client);
+  } catch (err) {
+    // The stream already said the harness took it, so what failed was the
+    // answer, not the message: sending it again would run it twice.
+    if (taken(client)) {
+      awaiting.delete(client);
+      dividers.delete(client);
+      void loadSessions();
+      return true;
+    }
+    awaiting.delete(client);
+    dividers.delete(client);
+    if (app.sessionId === id && !expectQueue) {
+      app.items = app.items.filter((i) => !mine(i) && i.id !== divider?.id);
+      app.status = "idle";
+    }
+    holdUnsent(id, message, files, reason(err), client);
     // A refused first message leaves the session it created behind, and the
     // list is where it shows.
-    await loadSessions();
-    return;
+    void loadSessions();
+    return false;
   }
-  // A turn that started between the check and the call takes the message as a
-  // queued one, so the bubble it was drawn as comes back off the transcript.
+  // What follows is drawn only on the session it was sent to. A turn that
+  // started between the check and the call takes the message as a queued one,
+  // so the bubble it was drawn as comes back off the transcript.
+  const here = app.sessionId === id;
   if (sent.queued) {
-    app.items = app.items.filter((i) => i.id !== item?.id && i.id !== divider?.id);
-    app.steer = sent.steer;
-    return;
+    // A queued message is not echoed by its name.
+    awaiting.delete(client);
+    dividers.delete(client);
+    if (here) {
+      app.items = app.items.filter((i) => !mine(i) && i.id !== divider?.id);
+      if (steers === steersBefore) app.steer = sent.steer;
+    }
+    return true;
   }
-  // The harness stored the files and gave each one an id, which is what the
-  // bubble needs to show a picture rather than the name of one. Its sequence
-  // number is what an edit of this message names it by.
-  if (item?.kind === "user") {
-    item.seq = sent.seq;
-    if (sent.files.length > 0) item.files = sent.files;
-  }
-  await loadSessions();
+  // The bubble takes its number and files from the echo alone, which carries
+  // the whole entry: one that joined a message waiting before it is more
+  // than this page sent.
+  void loadSessions();
+  return true;
 }
 
 /** The divider a message sent now needs, when the mode moved since the last
     one. A session that has only ever executed draws none. */
-function modeChange(): TranscriptItem | null {
+function modeChange(mode: WorkMode): TranscriptItem | null {
+  // A divider drawn for a message not yet echoed has no place yet.
+  const provisional = new Set(dividers.values());
   let last: WorkMode = "execute";
-  for (const item of app.items) if (item.kind === "mode") last = item.mode;
-  if (app.workMode === last) return null;
-  return { kind: "mode", id: nextId("m"), mode: app.workMode, kickoff: false, title: "" };
+  for (const item of app.items) if (item.kind === "mode" && !provisional.has(item.id)) last = item.mode;
+  if (mode === last) return null;
+  return { kind: "mode", id: nextId("m"), mode, kickoff: false, title: "" };
 }
 
 /** Sets the mode of the next turn. A turn already running keeps its own.
@@ -721,7 +1096,7 @@ export async function decide(
     item.outcome = null;
     return;
   }
-  if (decision.decision === "always") {
+  if (decision.decision === "always" && !app.loose) {
     app.allowlist = (await guard(() => api.listAllowlist(app.projectPath))) ?? app.allowlist;
   }
 }
@@ -736,6 +1111,7 @@ export async function answer(item: TranscriptItem, chosen: Answer): Promise<void
 }
 
 export async function removeAllowed(prefix: string): Promise<void> {
+  if (app.loose) return;
   const list = await guard(() => api.removeAllowed(app.projectPath, prefix));
   if (list) app.allowlist = list;
 }
@@ -982,7 +1358,7 @@ let gitRead = 0;
     work the transcript already reported, so a stale list is better than a
     toast on every write. */
 export async function loadGit(): Promise<void> {
-  const project = app.projectPath;
+  const project = app.loose ? "" : app.projectPath;
   const seq = ++gitRead;
   if (!project) {
     app.git = null;
@@ -990,7 +1366,7 @@ export async function loadGit(): Promise<void> {
   }
   try {
     const git = await api.getGit(project);
-    if (seq === gitRead && app.projectPath === project) app.git = git;
+    if (seq === gitRead && !app.loose && app.projectPath === project) app.git = git;
   } catch {
     // Keep what was there.
   }
@@ -999,6 +1375,7 @@ export async function loadGit(): Promise<void> {
 /** Runs one git write and rereads the repository, whatever the turn is doing.
     A failure is a toast with what git said, and answers null. */
 export async function gitAction(op: GitOp, body: GitActionBody = {}): Promise<GitActionResult | null> {
+  if (app.loose) return null;
   try {
     const result = await api.gitAction(app.projectPath, op, body);
     if (result.push_error) toast(result.push_error, "warn");
@@ -1181,7 +1558,7 @@ export function toggleArtifactsWide(): void {
 export async function loadFile(raw: string, loud = false): Promise<ProjectFile | null> {
   const id = app.sessionId;
   if (!id) return null;
-  const path = inProject(raw, app.projectPath);
+  const path = inProject(raw, workRoot());
   try {
     const file = await api.readFile(id, path);
     if (app.sessionId !== id) return null;
@@ -1322,7 +1699,73 @@ function waiting(t: Transcript): boolean {
   return WAITING.has(t.status) || (ASKED.has(t.status) && !t.replying);
 }
 
+// How many times the stream has said what the queue holds, so a late answer
+// about the queue does not undo a newer one, and the names given to the
+// messages this page sent.
+let steers = 0;
+
+// The names of the messages this page sent whose echo has not come, and the
+// mode divider drawn with each, which moves with it to where the echo puts
+// it. A name leaves once its echo comes or it will not come.
+const awaiting = new Set<string>();
+const dividers = new Map<string, string>();
+
+/** Whether the harness has shown it took the message named client: its echo
+    came, or the transcript or the queue on screen holds the name. */
+function taken(client: string): boolean {
+  if (!awaiting.has(client)) return true;
+  if (app.steer?.clients?.includes(client)) return true;
+  return app.items.some((i) => i.kind === "user" && (i.clients?.includes(client) ?? false));
+}
+
+/** Forgets the names a transcript read from the harness already holds,
+    whose echo this page may never see. */
+function settleFrom(items: TranscriptItem[], queue: Steer | null): void {
+  const names: string[] = [...(queue?.clients ?? [])];
+  for (const i of items) if (i.kind === "user") names.push(...(i.clients ?? []));
+  admitted(names);
+}
+
+/** The harness took the messages named: none waits for an echo, a bubble
+    drawn for one that is not where the harness put it goes, and what was
+    handed back for one is taken back. keep names a bubble the caller moves
+    itself. */
+function admitted(names: string[], keep?: string): void {
+  if (names.length === 0) return;
+  const gone = new Set<string>();
+  for (const c of names) {
+    awaiting.delete(c);
+    const divider = dividers.get(c);
+    if (divider) gone.add(divider);
+    dividers.delete(c);
+  }
+  app.items = app.items.filter(
+    (i) =>
+      !gone.has(i.id) &&
+      !(i.kind === "user" && i.seq === 0 && i.client !== undefined && i.client !== keep && names.includes(i.client)),
+  );
+  withdrawUnsent(names);
+}
+
+/** Takes back what was handed back for messages the harness turns out to
+    have taken: the held copy, and a composer's copy while nobody has
+    changed it. */
+function withdrawUnsent(names: string[]): void {
+  app.unsent = app.unsent.filter((u) => !u.client || !names.includes(u.client));
+  for (const [key, d] of Object.entries(app.drafts)) {
+    if (d.client && names.includes(d.client)) app.drafts[key] = { text: "", files: [] };
+  }
+}
+
+/** A name for a message no other page or reload will give one. Random bytes
+    are there on any origin, unlike randomUUID. */
+function newClient(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return `c${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
 function onEvent(event: HarnessEvent): void {
+  if (event.type === "queued" || event.type === "message" || event.type === "resync") steers++;
   if (event.type === "resync") {
     app.items = event.transcript.items;
     app.usage = event.transcript.usage;
@@ -1334,20 +1777,53 @@ function onEvent(event: HarnessEvent): void {
     app.waitSince = event.transcript.waitingSince ?? Date.now();
     app.awaitingModel = waiting(event.transcript);
     app.answerNow = event.transcript.answerNow ?? false;
+    settleFrom(app.items, app.steer);
     markAnnounced();
     return;
   }
 
   if (event.type === "queued") {
     app.steer = event.steer;
+    admitted(event.steer.clients ?? []);
     return;
   }
 
   // The turn picked the queued message up, so it becomes an ordinary bubble.
   if (event.type === "message") {
-    app.steer = null;
-    if (!app.items.some((i) => i.kind === "user" && i.seq === event.seq)) {
+    if (event.dequeued) app.steer = event.queue ?? null;
+    // A message held as not sent that the harness took after all is sent.
+    const names = [...new Set([...(event.clients ?? []), ...(event.client ? [event.client] : [])])];
+    // Every other message joined into this entry was drawn as the queue, or
+    // as a bubble that never became one, and goes.
+    const own = event.client !== undefined && awaiting.has(event.client);
+    admitted(names.filter((c) => c !== event.client || !own), own ? event.client : undefined);
+    // The first echo of a message this page sent moves its bubble; any other
+    // echo of an entry already drawn, a repeat included, changes nothing.
+    if (event.client) awaiting.delete(event.client);
+    withdrawUnsent(names);
+    if (!own && app.items.some((i) => i.kind === "user" && i.seq === event.seq && i.seq > 0)) return;
+    // The stream's order is the message's place: a bubble this page drew for
+    // it, and the mode divider drawn with it, move to where the echo is, and
+    // a message drawn nowhere yet is drawn there.
+    const at = own ? app.items.findIndex((i) => i.kind === "user" && i.client === event.client) : -1;
+    const drawn = at >= 0 ? app.items[at] : undefined;
+    const divider = event.client ? dividers.get(event.client) : undefined;
+    if (event.client) dividers.delete(event.client);
+    app.items = app.items.filter((i) => i !== drawn && i.id !== divider);
+    const mode = event.mode ? modeChange(event.mode) : null;
+    if (mode) app.items.push(mode);
+    if (drawn?.kind === "user") {
+      drawn.seq = event.seq;
+      if (event.files.length > 0) drawn.files = event.files;
+      app.items.push(drawn);
+      drawn.clients = names;
+    } else {
       pushUser(app.items, event.text, event.files, event.seq, false, event.from);
+      const pushed = app.items[app.items.length - 1];
+      if (pushed?.kind === "user") {
+        if (event.client) pushed.client = event.client;
+        pushed.clients = names;
+      }
     }
     return;
   }
@@ -1463,7 +1939,7 @@ function onEvent(event: HarnessEvent): void {
     if (touched) void loadGit();
     // A file the panel holds is read again once a write to it lands.
     if (card?.kind === "tool" && (card.name === "write" || card.name === "edit")) {
-      const path = typeof card.args.path === "string" ? inProject(card.args.path, app.projectPath) : "";
+      const path = typeof card.args.path === "string" ? inProject(card.args.path, workRoot()) : "";
       if (path && (app.files[path] || written.has(path))) void loadFile(path);
       announceArtifacts();
     }

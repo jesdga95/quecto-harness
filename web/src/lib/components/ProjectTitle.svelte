@@ -3,7 +3,7 @@
   import Check from "phosphor-svelte/lib/CheckIcon";
   import FolderPlus from "phosphor-svelte/lib/FolderPlusIcon";
   import Popover from "./Popover.svelte";
-  import { app, pickAndAddProject, selectProject } from "../state/app.svelte";
+  import { app, pickAndAddProject, selectLoose, selectProject } from "../state/app.svelte";
 
   let open = $state(false);
   const current = $derived(app.projects.find((p) => p.path === app.projectPath));
@@ -14,12 +14,17 @@
     // project's first conversation would leave the empty screen.
     void selectProject(path, false);
   }
+
+  function pickLoose() {
+    open = false;
+    void selectLoose(false);
+  }
 </script>
 
 <!-- The empty screen's title is the project, and it is the picker for one. -->
 <div class="relative inline-block">
   <button class="hero-title" aria-haspopup="menu" aria-expanded={open} onclick={() => (open = !open)}>
-    <span class="hero-name">{current?.name ?? "Choose a project"}</span>
+    <span class="hero-name">{app.loose ? "No folder" : (current?.name ?? "Choose a project")}</span>
     <span class="hero-caret"><CaretDown /></span>
   </button>
 
@@ -31,11 +36,20 @@
             <span class="block truncate">{project.name}</span>
             <span class="block truncate text-[12px] text-muted">{project.path}</span>
           </span>
-          {#if project.path === app.projectPath}
+          {#if !app.loose && project.path === app.projectPath}
             <Check size={14} class="text-accent" />
           {/if}
         </button>
       {/each}
+      <button class="popover-item" onclick={pickLoose}>
+        <span class="min-w-0 flex-1">
+          <span class="block truncate">No folder</span>
+          <span class="block truncate text-[12px] text-muted">A folder of its own, deleted with the conversation</span>
+        </span>
+        {#if app.loose}
+          <Check size={14} class="text-accent" />
+        {/if}
+      </button>
       <button
         class="popover-item text-ink-2"
         onclick={() => {

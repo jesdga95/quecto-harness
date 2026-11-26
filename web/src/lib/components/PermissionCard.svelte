@@ -42,6 +42,10 @@
     }
   });
 
+  // Only a conversation without a folder keeps no rule, so such a card is
+  // about leaving that folder rather than a project.
+  const place = $derived(item.onceOnly ? "its folder" : "the project");
+
   function cardTitle(tool: string, agent: string): string {
     const parts = mcpOf(tool);
     if (parts) {
@@ -54,9 +58,9 @@
         : tool === "write" || tool === "edit"
           ? "change a file"
           : tool === "read" || tool === "read_image"
-            ? "read a file outside the project"
+            ? `read a file outside ${place}`
             : tool === "grep"
-              ? "search outside the project"
+              ? `search outside ${place}`
               : "run a command";
     return agent ? `${agent} wants to ${action}` : `Wants to ${action}`;
   }
@@ -83,7 +87,9 @@
     <button class="chip chip-brand chip-tall" disabled={sent} onclick={() => send({ decision: "once" })}>
       Allow once
     </button>
-    {#if item.tool === "bash"}
+    {#if item.onceOnly}
+      <!-- No rule is kept for a conversation without a folder. -->
+    {:else if item.tool === "bash"}
       <button
         class="chip chip-tall"
         disabled={sent}
@@ -124,9 +130,11 @@
     </div>
   {/if}
 
-  {#if item.tool === "bash" || mcp || keys}
+  {#if (!item.onceOnly && (item.tool === "bash" || mcp)) || keys}
     <p class="flex flex-wrap gap-x-3 px-4 pb-3 text-[11.5px] text-muted">
-      {#if item.tool === "bash"}
+      {#if item.onceOnly}
+        <!-- Nothing is kept. -->
+      {:else if item.tool === "bash"}
         <span>Always adds the prefix to the allowlist for this project</span>
       {:else if mcp}
         <span>Always lets this tool run without asking in allowlist mode, in every project</span>

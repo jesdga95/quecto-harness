@@ -39,6 +39,12 @@ export interface Project {
 export interface Session {
   id: string;
   project: string;
+  /** A conversation without a folder, which names no project and works in a
+      folder of its own that goes when it does. */
+  loose: boolean;
+  /** The folder a conversation without a folder works in. Empty for one in a
+      project, and where the harness did not say. */
+  root: string;
   model: string;
   title: string;
   /** When the session last changed, which is what the sidebar orders by. */
@@ -335,6 +341,8 @@ export type HarnessEvent =
       prefix: string;
       description: string;
       agent: string;
+      /** No rule is kept for this call, so the card offers no allow always. */
+      onceOnly: boolean;
     }
   /** The card was answered, or a stop answered it, and every tab closes it. */
   | { type: "permission_done"; id: string; outcome: string }
@@ -372,7 +380,23 @@ export type HarnessEvent =
   | { type: "queued"; steer: Steer }
   /** The harness appended a user message, which is a queued one being picked
       up by the turn it was typed against. */
-  | { type: "message"; seq: number; text: string; files: Attached[]; from: string }
+  /** client is the name the page that sent the message gave it, when it
+      gave one. */
+  | {
+      type: "message";
+      seq: number;
+      text: string;
+      files: Attached[];
+      from: string;
+      client?: string;
+      /** The mode the message was sent in, where the harness said. */
+      mode?: WorkMode;
+      /** The message came off the queue, and queue is what waits now. */
+      dequeued?: boolean;
+      queue?: Steer | null;
+      /** The names the pages gave the messages this entry holds. */
+      clients?: string[];
+    }
   /** The files this session is answerable for moved for a reason its own
       stream does not carry, such as a subagent writing one. */
   | { type: "changed" }
@@ -420,6 +444,11 @@ export type TranscriptItem =
       from: string;
       /** When it was sent, in epoch milliseconds. */
       at?: number;
+      /** The name this page gave a message it sent, which the stream echoes
+          with the stored entry. */
+      client?: string;
+      /** The names the pages gave the messages this entry holds, as stored. */
+      clients?: string[];
     }
   /** at is when the block was stored, which for the one that ends a turn is
       when the turn ended. */
@@ -474,6 +503,8 @@ export type TranscriptItem =
       /** The subagent that asked. Empty is this conversation's own turn, and
           only that one blocks the composer. */
       agent: string;
+      /** No rule is kept for this call, so the card offers no allow always. */
+      onceOnly: boolean;
     }
   | { kind: "compaction"; id: string; before: number; after: number; summary: string }
   /** Where the conversation moved to another mode. kickoff is an approved
@@ -497,6 +528,8 @@ export interface Steer {
   files: Attached[];
   /** The agent that sent it. Empty is the person. */
   from: string;
+  /** The names the pages gave the messages joined here. */
+  clients?: string[];
 }
 
 /** One file attached to a message, as the transcript shows it. An image is
@@ -825,7 +858,11 @@ export interface HarnessApi {
       once, since the harness stores the list it is given. */
   reorderProjects(paths: string[]): Promise<Project[]>;
   listSessions(project: string): Promise<Session[]>;
+  /** The conversations without a folder, newest first. */
+  listLooseSessions(): Promise<Session[]>;
   createSession(project: string): Promise<Session>;
+  /** Starts a conversation without a folder. */
+  createLooseSession(): Promise<Session>;
   /** Points an idle session at another model, keeping its history. */
   getSession(id: string): Promise<Transcript>;
   /** The project's repository and working tree. */
@@ -853,6 +890,8 @@ export interface HarnessApi {
   readFile(id: string, path: string): Promise<ProjectFile>;
   /** Files in a project whose path holds every word of q, best first. */
   findFiles(project: string, q: string): Promise<string[]>;
+  /** Files in a session's own folder, for a conversation already made. */
+  findSessionFiles(id: string, q: string): Promise<string[]>;
   /** One folder in the session's project, folders first. */
   listDir(id: string, path: string): Promise<ProjectDir>;
   /** Where an image in the session's project is served from. */
@@ -861,12 +900,20 @@ export interface HarnessApi {
   pickedUrl(path: string): string;
   /** Where a file the harness stored for a message is served from. */
   attachmentUrl(file: string): string;
-  deleteSession(id: string): Promise<void>;
+  /** Deletes a session. A delete that left files for the next start says so. */
+  deleteSession(id: string): Promise<string>;
   renameSession(id: string, title: string): Promise<void>;
   /** Files are read by the harness and inlined into the message. What comes
       back is the attachments as it stored them, ids included, and the
       sequence number the message was stored under. */
-  sendMessage(id: string, text: string, files?: string[], mode?: WorkMode, effort?: Effort | ""): Promise<Sent>;
+  sendMessage(
+    id: string,
+    text: string,
+    files?: string[],
+    mode?: WorkMode,
+    effort?: Effort | "",
+    client?: string,
+  ): Promise<Sent>;
   setMode(id: string, mode: WorkMode): Promise<void>;
   /** Sets the thinking level the session uses in place of its agent's. Empty
       goes back to the agent's own. */

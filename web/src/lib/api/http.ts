@@ -171,6 +171,8 @@ interface WireState {
 interface WireSummary {
   id?: string;
   project?: string;
+  loose?: boolean;
+  root?: string;
   model?: string;
   title?: string;
   updated?: string;
@@ -185,6 +187,7 @@ interface WireToolCall {
 
 interface WirePermission {
   id?: string;
+  once_only?: boolean;
   tool?: string;
   command?: string;
   path?: string;
@@ -229,6 +232,14 @@ interface WireSteer {
   text?: string;
   from?: string;
   attachments?: WireAttachment[];
+  clients?: unknown[];
+}
+
+/** The names in a wire list, keeping only strings. */
+function toClients(list: unknown): string[] | undefined {
+  if (!Array.isArray(list)) return undefined;
+  const names = list.filter((c): c is string => typeof c === "string" && c !== "");
+  return names.length > 0 ? names : undefined;
 }
 
 // A message either became an entry or joined the queue, and the two answers
@@ -240,6 +251,8 @@ type WireSent =
 interface WireSnapshot {
   id?: string;
   project?: string;
+  loose?: boolean;
+  root?: string;
   model?: string;
   title?: string;
   updated?: string;
@@ -272,6 +285,12 @@ interface WireSnapshot {
 interface WireEvent {
   type?: string;
   seq?: number;
+  /** The stored number of the entry a message event is about; seq is the
+      stream's cursor. */
+  entry?: number;
+  dequeued?: boolean;
+  queue?: WireSteer | null;
+  clients?: unknown[];
   state?: string;
   text?: string;
   available?: boolean;
@@ -283,6 +302,8 @@ interface WireEvent {
   command?: string;
   path?: string;
   prefix?: string;
+  once_only?: boolean;
+  client?: string;
   description?: string;
   args?: string;
   output?: string;
@@ -487,6 +508,8 @@ function toSession(s: WireSummary): Session {
   return {
     id: s.id ?? "",
     project: s.project ?? "",
+    loose: s.loose === true,
+    root: s.root ?? "",
     model: s.model ?? "",
     title: s.title || "New session",
     updated: s.updated ?? new Date().toISOString(),
@@ -570,6 +593,7 @@ function toPermission(p: WirePermission, outcome: string | null, fallback = ""):
     description: p.description ?? "",
     outcome,
     agent: p.agent ?? "",
+    onceOnly: p.once_only === true,
   };
 }
 
@@ -655,6 +679,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
         edited: e.edited === true,
         from: e.from ?? "",
         at: toTime(e.at),
+        clients: toClients(e.meta?.clients),
       });
     }
     return;
@@ -964,7 +989,10 @@ function attachedKind(kind: string | undefined): AttachedKind {
 
 function toSteer(wire: WireSteer | null | undefined): Steer | null {
   if (!wire) return null;
-  return { text: wire.text ?? "", from: wire.from ?? "", files: toAttached(wire.attachments) };
+  const files = toAttached(wire.attachments);
+  // An empty queue is sent as one with nothing in it.
+  if (!wire.text && files.length === 0) return null;
+  return { text: wire.text ?? "", from: wire.from ?? "", files, clients: toClients(wire.clients) };
 }
 
 function toWorkMode(value: unknown): WorkMode {
@@ -1050,6 +1078,8 @@ function toTranscript(snap: WireSnapshot): Transcript {
   const session: Session = {
     id,
     project: snap.project ?? known?.project ?? "",
+    loose: snap.loose ?? known?.loose ?? false,
+    root: snap.root ?? known?.root ?? "",
     model: snap.model ?? known?.model ?? "",
     title: snap.title || known?.title || titleOf(entries),
     updated: snap.updated ?? known?.updated ?? new Date().toISOString(),
@@ -1319,6 +1349,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           prefix: ev.prefix ?? "",
           description: ev.description ?? "",
           agent: ev.agent ?? "",
+          onceOnly: ev.once_only === true,
         },
       ];
 
@@ -1415,7 +1446,12 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       return [
         {
           type: "queued",
-          steer: { text: ev.text ?? "", from: ev.from ?? "", files: toAttached(ev.attachments) },
+          steer: {
+            text: ev.text ?? "",
+            from: ev.from ?? "",
+            files: toAttached(ev.attachments),
+            clients: toClients(ev.clients),
+          },
         },
       ];
 
@@ -1423,10 +1459,15 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       return [
         {
           type: "message",
-          seq: ev.seq ?? 0,
+          seq: ev.entry ?? 0,
+          mode: ev.mode === "plan" || ev.mode === "execute" ? ev.mode : undefined,
+          dequeued: ev.dequeued === true,
+          queue: ev.dequeued === true ? toSteer(ev.queue) : undefined,
+          clients: toClients(ev.clients),
           text: ev.text ?? "",
           from: ev.from ?? "",
           files: toAttached(ev.attachments),
+          client: ev.client || undefined,
         },
       ];
 
@@ -1517,8 +1558,22 @@ class HttpApi implements HarnessApi {
     return list;
   }
 
+  async listLooseSessions(): Promise<Session[]> {
+    const wire = await call<{ sessions?: WireSummary[] }>("/sessions?scope=loose");
+    const list = (wire.sessions ?? []).map(toSession);
+    for (const s of list) summaries.set(s.id, s);
+    return list;
+  }
+
   async createSession(project: string): Promise<Session> {
     const wire = await call<WireSummary>("/sessions", "POST", { project });
+    const session = toSession(wire);
+    summaries.set(session.id, session);
+    return session;
+  }
+
+  async createLooseSession(): Promise<Session> {
+    const wire = await call<WireSummary>("/sessions", "POST", { loose: true });
     const session = toSession(wire);
     summaries.set(session.id, session);
     return session;
@@ -1645,6 +1700,13 @@ class HttpApi implements HarnessApi {
     return (wire.files ?? []).filter((f): f is string => typeof f === "string" && f !== "");
   }
 
+  async findSessionFiles(id: string, q: string): Promise<string[]> {
+    const wire = await call<{ files?: unknown[] | null }>(
+      `/sessions/${encodeURIComponent(id)}/files?q=${encodeURIComponent(q)}`,
+    );
+    return (wire.files ?? []).filter((f): f is string => typeof f === "string" && f !== "");
+  }
+
   async listDir(id: string, path: string): Promise<ProjectDir> {
     const wire = await call<{
       root?: string;
@@ -1682,9 +1744,10 @@ class HttpApi implements HarnessApi {
     await call<unknown>(`/sessions/${encodeURIComponent(id)}/mode`, "PUT", { mode });
   }
 
-  async deleteSession(id: string): Promise<void> {
-    await call<unknown>(`/sessions/${encodeURIComponent(id)}`, "DELETE");
+  async deleteSession(id: string): Promise<string> {
+    const wire = await call<{ pending?: string }>(`/sessions/${encodeURIComponent(id)}`, "DELETE");
     summaries.delete(id);
+    return wire.pending ?? "";
   }
 
   async setEffort(id: string, effort: Effort | ""): Promise<void> {
@@ -1697,11 +1760,12 @@ class HttpApi implements HarnessApi {
     files: string[] = [],
     mode?: WorkMode,
     effort?: Effort | "",
+    client?: string,
   ): Promise<Sent> {
     const wire = await call<WireSent>(
       `/sessions/${encodeURIComponent(id)}/message`,
       "POST",
-      { text, attachments: files, mode, effort },
+      { text, attachments: files, mode, effort, client },
     );
     if (wire.queued) {
       return { queued: true, seq: 0, files: [], steer: toSteer(wire.steer) };

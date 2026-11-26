@@ -742,6 +742,8 @@ export class MockApi implements HarnessApi {
   // wall clock rather than a made-up number.
   private turnStart = 0;
   // What the scripted turns wrote, which is all the project readFile knows.
+  // The files of each conversation without a folder, by its id.
+  private looseFiles = new Map<string, Map<string, string>>();
   private files = new Map<string, string>([
     ["AGENTS.md", "# Working in this repo\n\nAnswer in as few words as the question needs.\n"],
     ["cmd/quecto-harness/main.go", 'package main\n\nfunc main() {\n\tprintln("quecto")\n}\n'],
@@ -926,8 +928,13 @@ export class MockApi implements HarnessApi {
     await this.tick();
     // A subagent run is reachable from the row that launched it, not the list.
     return this.sessions
-      .filter((s) => s.project === project && s.parent === "")
+      .filter((s) => (project === "" || s.project === project) && s.parent === "")
       .map((s) => ({ ...s }));
+  }
+
+  async listLooseSessions(): Promise<Session[]> {
+    await this.tick();
+    return this.sessions.filter((s) => s.loose && s.parent === "").map((s) => ({ ...s }));
   }
 
   /** A copy, the way a fetched transcript would be, so the tab owns its items. */
@@ -941,7 +948,9 @@ export class MockApi implements HarnessApi {
       items: t.items.map((i) => ({ ...i })),
       usage: { ...t.usage },
       todos: t.todos.map((todo) => ({ ...todo })),
-      steer: t.steer ? { text: t.steer.text, from: t.steer.from, files: [...t.steer.files] } : null,
+      steer: t.steer
+        ? { text: t.steer.text, from: t.steer.from, files: [...t.steer.files], clients: t.steer.clients ? [...t.steer.clients] : undefined }
+        : null,
       // A session the mock is not running keeps the status it was seeded with,
       // so a subagent left part way through still reads as working.
       status: run ? (run.compacting ? "compacting" : "streaming") : t.status,
@@ -1163,19 +1172,38 @@ export class MockApi implements HarnessApi {
     return { output: state.lines.join("\n"), truncated: false };
   }
 
+  /** The files a session's tools see: its own for one without a folder, the
+      project's for the rest. */
+  private filesOf(id: string): Map<string, string> {
+    const owner = this.sessions.find((s) => s.id === id);
+    if (!owner) throw new Error("No session with that id: it may have been deleted");
+    const root = owner.parent || id;
+    return this.looseFiles.get(root) ?? this.files;
+  }
+
   async readFile(id: string, path: string): Promise<ProjectFile> {
     await this.tick();
     if (!this.transcripts.has(id)) throw new Error(`session ${id} not found`);
-    const clean = path.replace(/^\.\//, "").replace(/^\/Users\/jay\/Projects\/Personal\/quecto-harness\//, "");
-    const content = this.files.get(clean);
+    const root = this.sessions.find((s) => s.id === id)?.root ?? "";
+    let clean = path.replace(/^\.\//, "").replace(/^\/Users\/jay\/Projects\/Personal\/quecto-harness\//, "");
+    if (root && clean.startsWith(`${root}/`)) clean = clean.slice(root.length + 1);
+    const content = this.filesOf(id).get(clean);
     if (content === undefined) throw new Error(`No such file: ${clean}`);
     return { path: clean, kind: "text", bytes: content.length, content };
   }
 
+  async findSessionFiles(id: string, q: string): Promise<string[]> {
+    return this.matching(this.filesOf(id), q);
+  }
+
   async findFiles(_project: string, q: string): Promise<string[]> {
+    return this.matching(this.files, q);
+  }
+
+  private async matching(files: Map<string, string>, q: string): Promise<string[]> {
     await this.tick(60);
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return [...this.files.keys()]
+    return [...files.keys()]
       .filter((path) => words.every((w) => path.toLowerCase().includes(w)))
       .sort((a, b) => a.length - b.length)
       .slice(0, 30);
@@ -1186,7 +1214,7 @@ export class MockApi implements HarnessApi {
     if (!this.transcripts.has(id)) throw new Error(`session ${id} not found`);
     const prefix = path ? `${path}/` : "";
     const seen = new Map<string, { name: string; dir: boolean; bytes: number }>();
-    for (const [file, content] of this.files) {
+    for (const [file, content] of this.filesOf(id)) {
       if (!file.startsWith(prefix)) continue;
       const [name, ...rest] = file.slice(prefix.length).split("/");
       if (!name) continue;
@@ -1196,7 +1224,8 @@ export class MockApi implements HarnessApi {
     const entries = [...seen.values()].sort((a, b) =>
       a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
     );
-    return { root: this.config.projects[0] ?? "", path, entries };
+    const session = this.sessions.find((s) => s.id === id);
+    return { root: session?.loose ? session.root : (this.config.projects[0] ?? ""), path, entries };
   }
 
   attachmentUrl(file: string): string {
@@ -1217,10 +1246,12 @@ export class MockApi implements HarnessApi {
     if (session) session.title = title;
   }
 
-  async deleteSession(id: string): Promise<void> {
+  async deleteSession(id: string): Promise<string> {
     await this.tick();
     this.sessions = this.sessions.filter((s) => s.id !== id);
     this.transcripts.delete(id);
+    this.looseFiles.delete(id);
+    return "";
   }
 
   // writes
@@ -1251,12 +1282,25 @@ export class MockApi implements HarnessApi {
     return this.config.projects.map((p) => ({ path: p, name: baseName(p) }));
   }
 
+  async createLooseSession(): Promise<Session> {
+    return this.makeSession("", true);
+  }
+
   async createSession(project: string): Promise<Session> {
+    return this.makeSession(project, false);
+  }
+
+  /** A conversation in a project, or one without a folder that keeps its own
+      files apart from the project's. */
+  private async makeSession(project: string, loose: boolean): Promise<Session> {
     await this.tick();
     const model = this.active()?.model ?? "";
+    const id = nextId("s");
     const session: Session = {
-      id: nextId("s"),
+      id,
       project,
+      loose,
+      root: loose ? `/Users/jay/.quecto-harness/sessions/${id}.files/scratch` : "",
       model,
       title: "New session",
       updated: new Date().toISOString(),
@@ -1265,6 +1309,7 @@ export class MockApi implements HarnessApi {
     };
     // Newest first: a new conversation leads its project's list.
     this.sessions.unshift(session);
+    if (loose) this.looseFiles.set(id, new Map());
     this.transcripts.set(session.id, {
       session,
       items: [],
@@ -1474,6 +1519,10 @@ export class MockApi implements HarnessApi {
     text: string,
     files: string[] = [],
     mode?: WorkMode,
+    _effort?: Effort | "",
+    client?: string,
+    dequeued = false,
+    joined?: string[],
   ): Promise<Sent> {
     const t = this.transcripts.get(session);
     if (!t) return { queued: false, seq: 0, files: [], steer: null };
@@ -1491,14 +1540,35 @@ export class MockApi implements HarnessApi {
         text: held && held.text ? `${held.text}\n${text}` : text,
         files: [...(held?.files ?? []), ...attached],
         from: "",
+        clients: [...(held?.clients ?? []), ...(client ? [client] : [])],
       };
-      const queued = { text: t.steer.text, from: "", files: [...t.steer.files] };
+      const queued = { text: t.steer.text, from: "", files: [...t.steer.files], clients: [...(t.steer.clients ?? [])] };
       this.emit(session, { type: "queued", steer: queued });
       return { queued: true, seq: 0, files: [], steer: queued };
     }
     const seq = this.mintSeq(session);
     pushUser(t.items, text, attached, seq);
+    // The entry keeps the names it was sent under, as the harness's does.
+    const names = joined ?? (client ? [client] : undefined);
+    const stored = t.items[t.items.length - 1];
+    if (stored?.kind === "user" && names) stored.clients = names;
     if (t.session.title === "New session") t.session.title = title(text);
+    // The harness echoes a named message, and one off the queue, ahead of
+    // its turn, with the mode it was sent in.
+    if (client || dequeued) {
+      this.emit(session, {
+        type: "message",
+        seq,
+        text,
+        from: "",
+        files: attached,
+        client,
+        clients: names,
+        mode: t.mode,
+        dequeued,
+        queue: dequeued ? t.steer : undefined,
+      });
+    }
     void this.runTurn(session, t);
     return { queued: false, seq, files: attached, steer: null };
   }
@@ -1647,6 +1717,7 @@ export class MockApi implements HarnessApi {
           command: script.command,
           description: "",
           prefix: prefixOf(script.command),
+          onceOnly: t.session.loose,
         });
         const decision = await this.ask(permId, session, turn);
         if (decision.decision === "always") {
@@ -1687,11 +1758,12 @@ export class MockApi implements HarnessApi {
       if (allowed) {
         for (const write of script.writes ?? []) {
           const id = nextId("t");
-          const fresh = !this.files.has(write.path);
+          const files = this.filesOf(session);
+          const fresh = !files.has(write.path);
           this.send(session, t, { type: "tool_call", id, name: "write", args: write });
           await this.sleep(200, turn);
           this.send(session, t, { type: "tool_start", id, name: "write", timeout_s: null });
-          this.files.set(write.path, write.content);
+          files.set(write.path, write.content);
           const lines = write.content.replace(/\n$/, "").split("\n").length;
           this.send(session, t, {
             type: "tool_output",
@@ -1741,7 +1813,7 @@ export class MockApi implements HarnessApi {
     const held = t.steer;
     if (!held) return;
     t.steer = null;
-    void this.sendMessage(session, held.text, held.files.map((f) => f.path));
+    void this.sendMessage(session, held.text, held.files.map((f) => f.path), undefined, undefined, undefined, true, held.clients);
   }
 
   /** Picks up a message typed against this turn, so it carries on with it. */
@@ -1751,7 +1823,19 @@ export class MockApi implements HarnessApi {
     t.steer = null;
     const seq = this.mintSeq(session);
     pushUser(t.items, held.text, held.files, seq, false, held.from);
-    this.emit(session, { type: "message", seq, text: held.text, from: held.from, files: held.files });
+    const stored = t.items[t.items.length - 1];
+    if (stored?.kind === "user" && held.clients) stored.clients = [...held.clients];
+    this.emit(session, {
+      type: "message",
+      seq,
+      text: held.text,
+      from: held.from,
+      files: held.files,
+      clients: held.clients,
+      mode: t.mode,
+      dequeued: true,
+      queue: t.steer,
+    });
     if (this.running?.session === session) this.running = null;
     void this.runTurn(session, t);
     return true;
@@ -1981,6 +2065,8 @@ export class MockApi implements HarnessApi {
     const first: Session = {
       id: nextId("s"),
       project,
+      loose: false,
+      root: "",
       model: "Gemma4-12B",
       title: "Wire the SSE hub",
       updated: new Date(Date.now() - 3_600_000).toISOString(),
@@ -1990,6 +2076,8 @@ export class MockApi implements HarnessApi {
     const second: Session = {
       id: nextId("s"),
       project,
+      loose: false,
+      root: "",
       model: "Gemma4-12B",
       title: "New session",
       updated: new Date(Date.now() - 600_000).toISOString(),
@@ -1999,6 +2087,8 @@ export class MockApi implements HarnessApi {
     const third: Session = {
       id: nextId("s"),
       project: this.config.projects[1]!,
+      loose: false,
+      root: "",
       model: "Qwen3.8-27B Q5",
       title: "Dashboard palette",
       updated: new Date(Date.now() - 86_400_000).toISOString(),
@@ -2010,6 +2100,8 @@ export class MockApi implements HarnessApi {
     const worker: Session = {
       id: nextId("s"),
       project,
+      loose: false,
+      root: "",
       model: "Qwen3.8-27B Q5",
       title: "Audit hub.go for races",
       updated: new Date(Date.now() - 1_800_000).toISOString(),
@@ -2021,6 +2113,8 @@ export class MockApi implements HarnessApi {
     const auditor: Session = {
       id: nextId("s"),
       project,
+      loose: false,
+      root: "",
       model: "Kimi K2 Thinking",
       title: "Check handlers for a missing context",
       updated: new Date(Date.now() - 300_000).toISOString(),
