@@ -28,6 +28,7 @@ const (
 // apart, which a model reading a tool result is not told.
 var (
 	ErrOutside   = errors.New("outside the project")
+	ErrHidden    = errors.New("in the harness state folder")
 	ErrMissing   = errors.New("no such file")
 	ErrFolder    = errors.New("a folder")
 	ErrNotFolder = errors.New("not a folder")
@@ -49,16 +50,60 @@ type View struct {
 	Content string
 }
 
-// ViewFile reads a file under root the way a tool argument is resolved, and
-// nothing outside root. Text past limit is reported as large.
-func ViewFile(root, p string, limit int64) (View, error) {
+// viewer is a runner for a reader outside a turn, which reaches nothing in
+// the harness state folder hidden, a link that leads there included.
+func viewer(root, hidden string) (*Runner, error) {
 	r, err := NewRunner(root, config.Config{})
+	if err != nil {
+		return nil, err
+	}
+	if hidden != "" {
+		r.Hide(hidden)
+	}
+	return r, nil
+}
+
+// refusal names why resolveInside refused a path.
+func refusal(err error) error {
+	var he hiddenError
+	if errors.As(err, &he) {
+		return ErrHidden
+	}
+	return ErrOutside
+}
+
+// shown reports whether a name a reader would be shown leads somewhere it may
+// look: not into the state folder, whichever way.
+func (r *Runner) shown(abs string) bool {
+	if r.Hidden == "" {
+		return true
+	}
+	if within(r.Hidden, abs) {
+		return false
+	}
+	// The names a walk or a listing comes to sit under a resolved folder, so
+	// only a link among them can lead elsewhere.
+	info, err := os.Lstat(abs)
+	if err != nil || info.Mode()&fs.ModeSymlink == 0 {
+		return true
+	}
+	// A link is judged by the folder it reaches, not by its name, so another
+	// casing on a volume that ignores case does not slip by.
+	in, err := config.Under(abs, r.Hidden)
+	return err == nil && !in
+}
+
+// ViewFile reads a file under root the way a tool argument is resolved, and
+// nothing outside root or in the state folder hidden. Text past limit is
+// reported as large.
+func ViewFile(root, hidden, p string, limit int64) (View, error) {
+	r, err := viewer(root, hidden)
 	if err != nil {
 		return View{}, err
 	}
 	abs, err := r.resolveInside(p)
 	if err != nil {
-		return View{}, ErrOutside
+		return View{}, refusal(err)
 	}
 	v := View{Abs: abs, Path: r.rel(abs)}
 	info, err := os.Stat(abs)
@@ -108,10 +153,10 @@ type Entry struct {
 }
 
 // ListDir lists one folder under root, folders first and then files, each by
-// name without regard to case. rel is the folder relative to root, empty for
-// root itself.
-func ListDir(root, p string) (rel string, entries []Entry, err error) {
-	r, err := NewRunner(root, config.Config{})
+// name without regard to case, leaving out what leads into the state folder
+// hidden. rel is the folder relative to root, empty for root itself.
+func ListDir(root, hidden, p string) (rel string, entries []Entry, err error) {
+	r, err := viewer(root, hidden)
 	if err != nil {
 		return "", nil, err
 	}
@@ -120,7 +165,7 @@ func ListDir(root, p string) (rel string, entries []Entry, err error) {
 	}
 	abs, err := r.resolveInside(p)
 	if err != nil {
-		return "", nil, ErrOutside
+		return "", nil, refusal(err)
 	}
 	rel = r.rel(abs)
 	if rel == "." {
@@ -142,6 +187,9 @@ func ListDir(root, p string) (rel string, entries []Entry, err error) {
 	}
 	entries = make([]Entry, 0, len(list))
 	for _, d := range list {
+		if !r.shown(filepath.Join(abs, d.Name())) {
+			continue
+		}
 		e := Entry{Name: d.Name(), Dir: d.IsDir()}
 		// A link is listed as what it points to, so a linked folder opens.
 		if d.Type()&fs.ModeSymlink != 0 {
@@ -168,9 +216,10 @@ func ListDir(root, p string) (rel string, entries []Entry, err error) {
 // FindFiles lists files under root whose path holds every word of q, ignoring
 // case, for a reader picking a file by name. A match in the file name ranks
 // above one in its folders, and a shorter path above a longer one. The walk
-// passes over the folders grep skips and stops after scanLimit files.
-func FindFiles(root, q string, limit int) ([]string, error) {
-	r, err := NewRunner(root, config.Config{})
+// passes over the folders grep skips and stops after scanLimit files, and
+// over anything that leads into the state folder hidden.
+func FindFiles(root, hidden, q string, limit int) ([]string, error) {
+	r, err := viewer(root, hidden)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +243,12 @@ func FindFiles(root, q string, limit int) ([]string, error) {
 			if p != r.Root && slices.Contains(skipDirs, d.Name()) {
 				return fs.SkipDir
 			}
+			if !r.shown(p) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !r.shown(p) {
 			return nil
 		}
 		scanned++

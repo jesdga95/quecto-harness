@@ -9,11 +9,15 @@ import (
 	"strings"
 )
 
-// hiddenPath is the refusal for the harness's own state directory, whichever
+// hiddenError is the refusal for the harness's own state directory, whichever
 // way the path reached it.
-func hiddenPath(arg string) error {
-	return fmt.Errorf("path is in the harness state folder, which no tool reaches: %s", arg)
+type hiddenError struct{ arg string }
+
+func (e hiddenError) Error() string {
+	return "path is in the harness state folder, which no tool reaches: " + e.arg
 }
+
+func hiddenPath(arg string) error { return hiddenError{arg} }
 
 // resolve turns a tool path argument into an absolute path, relative ones
 // taken from Root, or returns the message the model is shown. A path outside

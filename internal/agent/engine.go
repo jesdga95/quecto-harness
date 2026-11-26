@@ -329,6 +329,9 @@ func (e *Engine) Create(project string) (*Session, error) {
 	if !e.cfg.HasProject(project) {
 		return nil, ErrNoProject
 	}
+	if err := e.cfg.CheckProject(project); err != nil {
+		return nil, err
+	}
 	a, err := e.active()
 	if err != nil {
 		return nil, err
@@ -473,6 +476,10 @@ func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 	if err != nil {
 		return Sent{}, err
 	}
+	// The project is checked before anything is read or copied.
+	if err := e.cfg.CheckProject(s.Project); err != nil {
+		return Sent{}, err
+	}
 	attachments, err := e.readAttachments(s, files)
 	if err != nil {
 		return Sent{}, err
@@ -491,6 +498,11 @@ func (e *Engine) deliver(s *Session, text string, attachments []store.Attachment
 // written; the sender is put in front of it where the prompt is built, since
 // that is the only place it means anything.
 func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments []store.Attachment) (Sent, error) {
+	// Nothing works on a project that overlaps the state folder: a turn
+	// would read its rules and run tools there.
+	if err := e.cfg.CheckProject(s.Project); err != nil {
+		return Sent{}, err
+	}
 	s.mu.Lock()
 	if s.state != StateIdle {
 		if err := s.queue(from, text, attachments); err != nil {
@@ -609,6 +621,9 @@ func AttachmentFields(attachments []store.Attachment) []map[string]any {
 func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 	s, err := e.Get(id)
 	if err != nil {
+		return 0, err
+	}
+	if err := e.cfg.CheckProject(s.Project); err != nil {
 		return 0, err
 	}
 	s.mu.Lock()
@@ -763,6 +778,9 @@ func (e *Engine) Stop(id string) (State, error) {
 func (e *Engine) Compact(id string) error {
 	s, err := e.Get(id)
 	if err != nil {
+		return err
+	}
+	if err := e.cfg.CheckProject(s.Project); err != nil {
 		return err
 	}
 	// The agent is resolved before the session is marked busy, so a harness

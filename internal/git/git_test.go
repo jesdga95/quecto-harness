@@ -415,3 +415,37 @@ func TestTrimKeepsCounts(t *testing.T) {
 		t.Errorf("carried %d, omitted %d, added %d", carried, got.Omitted, got.Added)
 	}
 }
+
+// An untracked link is shown as a link, and what it points to is never read,
+// in the status or in the patch a draft is made from.
+func TestAnUntrackedLinkIsNotFollowed(t *testing.T) {
+	dir := newRepo(t)
+	secret := filepath.Join(t.TempDir(), "id_secret")
+	if err := os.WriteFile(secret, []byte("PRIVATE KEY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(dir, "key")); err != nil {
+		t.Fatal(err)
+	}
+	put(t, dir, "plain.txt", "ordinary\n")
+	r := open(t, dir)
+
+	st := status(t, r)
+	link, ok := find(st.Unstaged, "key")
+	if !ok || !link.Link || len(link.Hunks) != 0 {
+		t.Errorf("the link = %+v, want it marked and unread", link)
+	}
+	if plain, ok := find(st.Unstaged, "plain.txt"); !ok || plain.Added != 1 {
+		t.Errorf("the ordinary file = %+v", plain)
+	}
+	patch, err := r.Patch(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(patch, "PRIVATE KEY") || strings.Contains(patch, "b/key") {
+		t.Errorf("the patch carries the link: %q", patch)
+	}
+	if !strings.Contains(patch, "ordinary") {
+		t.Errorf("the patch lost the ordinary file: %q", patch)
+	}
+}

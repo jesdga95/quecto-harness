@@ -548,6 +548,8 @@ export interface GitFile {
   path: string;
   state: GitState;
   binary: boolean;
+  /** An untracked link, shown without what it points to. */
+  link?: boolean;
   added: number;
   removed: number;
   /** Diff lines past the server's limit that were counted but not sent. */
