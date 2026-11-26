@@ -22,8 +22,8 @@ func stateStore(t *testing.T) (*Store, string) {
 	return s, base
 }
 
-// A project that holds the state folder, lies inside it, is it, or reaches it
-// through a link is refused; one beside it is taken.
+// A project that lies inside the state folder, is it, or reaches it through a
+// link is refused; one beside it is taken, and so is one that holds it.
 func TestAProjectMayNotOverlapTheStateFolder(t *testing.T) {
 	s, base := stateStore(t)
 	home := s.Paths().Home
@@ -35,10 +35,18 @@ func TestAProjectMayNotOverlapTheStateFolder(t *testing.T) {
 	if err := os.Symlink(home, link); err != nil {
 		t.Fatal(err)
 	}
-	for _, dir := range []string{base, home, s.Paths().Sessions, link} {
+	for _, dir := range []string{home, s.Paths().Sessions, link} {
 		if _, err := s.AddProject(dir); !errors.Is(err, ErrStateOverlap) {
 			t.Errorf("AddProject(%s) = %v, want the overlap refused", dir, err)
 		}
+	}
+	// A folder holding the state, such as the home folder, is a project, and
+	// Git is not run on it.
+	if _, err := s.AddProject(base); err != nil {
+		t.Errorf("AddProject(the folder holding the state) = %v", err)
+	}
+	if err := s.CheckRepo(base); !errors.Is(err, ErrStateOverlap) {
+		t.Errorf("CheckRepo(the folder holding the state) = %v, want the overlap refused", err)
 	}
 	if _, err := s.AddProject(beside); err != nil {
 		t.Errorf("AddProject(beside) = %v", err)
@@ -105,8 +113,8 @@ func TestAProjectHoldingThePathToTheStateIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CheckProject(project); !errors.Is(err, ErrStateOverlap) {
-		t.Errorf("CheckProject = %v, want the overlap refused", err)
+	if err := s.CheckRepo(project); !errors.Is(err, ErrStateOverlap) {
+		t.Errorf("CheckRepo = %v, want the overlap refused", err)
 	}
 }
 
@@ -135,11 +143,11 @@ func TestAProjectHoldingAnAliasedPathToTheStateIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CheckProject(project); !errors.Is(err, ErrStateOverlap) {
-		t.Errorf("CheckProject = %v, want the overlap refused", err)
+	if err := s.CheckRepo(project); !errors.Is(err, ErrStateOverlap) {
+		t.Errorf("CheckRepo = %v, want the overlap refused", err)
 	}
-	if err := s.CheckProject(elsewhere); !errors.Is(err, ErrStateOverlap) {
-		t.Errorf("CheckProject(elsewhere) = %v, want it refused as the state's own folder", err)
+	if err := s.CheckRepo(elsewhere); !errors.Is(err, ErrStateOverlap) {
+		t.Errorf("CheckRepo(elsewhere) = %v, want it refused as the state's own folder", err)
 	}
 }
 
@@ -168,11 +176,11 @@ func TestALinkCrossedBeforeADotDotStillCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CheckProject(project); !errors.Is(err, ErrStateOverlap) {
-		t.Errorf("CheckProject = %v, want the overlap refused", err)
+	if err := s.CheckRepo(project); !errors.Is(err, ErrStateOverlap) {
+		t.Errorf("CheckRepo = %v, want the overlap refused", err)
 	}
-	if err := s.CheckProject(filepath.Join(base, "elsewhere", "sub")); err != nil {
-		t.Errorf("CheckProject(a folder the path only passes) = %v", err)
+	if err := s.CheckRepo(filepath.Join(base, "elsewhere", "sub")); err != nil {
+		t.Errorf("CheckRepo(a folder the path only passes) = %v", err)
 	}
 }
 
@@ -197,7 +205,7 @@ func TestAFolderThePathPassesThroughCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CheckProject(project); !errors.Is(err, ErrStateOverlap) {
-		t.Errorf("CheckProject = %v, want the overlap refused", err)
+	if err := s.CheckRepo(project); !errors.Is(err, ErrStateOverlap) {
+		t.Errorf("CheckRepo = %v, want the overlap refused", err)
 	}
 }

@@ -65,9 +65,10 @@ func run(argv []string) error {
 }
 
 type flags struct {
-	listen string
-	noOpen bool
-	home   string
+	listen  string
+	noOpen  bool
+	home    string
+	scratch string
 }
 
 func parseFlags(name string, argv []string) (flags, error) {
@@ -76,6 +77,7 @@ func parseFlags(name string, argv []string) (flags, error) {
 	fs.StringVar(&f.listen, "listen", "", "Host:port to bind, overriding config.json for this process")
 	fs.BoolVar(&f.noOpen, "no-open", false, "Do not open a browser after binding")
 	fs.StringVar(&f.home, "home", os.Getenv("QUECTO_HARNESS_HOME"), "State directory, default ~/.quecto-harness")
+	fs.StringVar(&f.scratch, "scratch", "", "Folder for the conversations' own folders, fixed at first use (also $QUECTO_HARNESS_SCRATCH)")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), usage)
 		fs.PrintDefaults()
@@ -121,6 +123,9 @@ func serve(argv []string) error {
 	if err := p.EnsureDirs(); err != nil {
 		return err
 	}
+	if err := p.SettleScratch(f.scratch); err != nil {
+		return err
+	}
 	cfg, err := config.Open(p)
 	if err != nil {
 		return err
@@ -133,6 +138,7 @@ func serve(argv []string) error {
 	if err != nil {
 		return err
 	}
+	sessions.SetScratch(p.Scratch)
 	blobs, err := store.OpenFiles(p.Files)
 	if err != nil {
 		return err
@@ -308,6 +314,11 @@ func serviceCmd(argv []string) error {
 	switch sub {
 	case "install":
 		if err := p.EnsureDirs(); err != nil {
+			return err
+		}
+		// The service starts with this home and no override, so the scratch
+		// folder is settled now and recorded for it.
+		if err := p.SettleScratch(f.scratch); err != nil {
 			return err
 		}
 		spec, err := service.NewSpec(p.Home, f.listen)

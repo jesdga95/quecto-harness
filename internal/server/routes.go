@@ -651,7 +651,7 @@ func (s *Server) getProjectFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	arg := r.URL.Query().Get("path")
-	v, err := tools.ViewFile(sess.Project, s.cfg.Paths().Home, arg, viewLimit)
+	v, err := tools.ViewFile(sess.Project, s.keep(), arg, viewLimit)
 	if !viewOK(w, v, err) {
 		return
 	}
@@ -690,6 +690,12 @@ func (s *Server) getLooseFile(w http.ResponseWriter, r *http.Request, sess *agen
 		return
 	}
 	writeView(w, r, v, f)
+}
+
+// keep is what the panel and @ mentions of a project never reach: the state
+// folder, and the conversations' own folders.
+func (s *Server) keep() tools.Keep {
+	return tools.Keep{State: s.cfg.Paths().Home, Scratch: s.store.ScratchRoot()}
 }
 
 // looseDir is the folder a conversation without a folder works in, empty for
@@ -818,7 +824,7 @@ func (s *Server) getProjectDir(w http.ResponseWriter, r *http.Request) {
 		if !s.projectOK(w, sess.Project) {
 			return
 		}
-		rel, entries, err = tools.ListDir(sess.Project, s.cfg.Paths().Home, r.URL.Query().Get("path"))
+		rel, entries, err = tools.ListDir(sess.Project, s.keep(), r.URL.Query().Get("path"))
 	}
 	switch {
 	case errors.Is(err, tools.ErrHidden):
@@ -848,7 +854,7 @@ func (s *Server) getProjectFiles(w http.ResponseWriter, r *http.Request) {
 	if !s.projectOK(w, project) {
 		return
 	}
-	files, err := tools.FindFiles(project, s.cfg.Paths().Home, r.URL.Query().Get("q"), 30)
+	files, err := tools.FindFiles(project, s.keep(), r.URL.Query().Get("q"), 30)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "List the project files: "+err.Error())
 		return
@@ -879,7 +885,7 @@ func (s *Server) getSessionFiles(w http.ResponseWriter, r *http.Request) {
 		if !s.projectOK(w, sess.Project) {
 			return
 		}
-		files, err = tools.FindFiles(sess.Project, s.cfg.Paths().Home, q, 30)
+		files, err = tools.FindFiles(sess.Project, s.keep(), q, 30)
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "List the files: "+err.Error())
@@ -1347,11 +1353,16 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) (*agent.Session
 	return sess, true
 }
 
-// projectOK refuses, with 409, a project that overlaps the harness state
-// folder, and with 500 one that cannot be checked. It reports whether the
-// request may go on.
+// projectOK refuses, with 409, a project inside the harness state folder or
+// the scratch folder, and with 500 one that cannot be checked. It reports
+// whether the request may go on.
 func (s *Server) projectOK(w http.ResponseWriter, project string) bool {
-	err := s.cfg.CheckProject(project)
+	return s.checked(w, s.cfg.CheckProject(project))
+}
+
+// checked answers a refused overlap with 409 and a check that could not be
+// made with 500, and reports whether the request may go on.
+func (s *Server) checked(w http.ResponseWriter, err error) bool {
 	switch {
 	case err == nil:
 		return true

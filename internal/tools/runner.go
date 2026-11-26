@@ -52,9 +52,9 @@ type Runner struct {
 	// it. read and grep reach it by absolute path; empty saves nothing.
 	Spill string
 
-	// Scratch is the conversation's own folder for temporary files, inside
-	// Hidden. The file tools reach it by a path written under it, and only
-	// while what that path leads to stays under it. Empty offers none, and
+	// Scratch is the conversation's own folder for temporary files, apart
+	// from the project. The file tools reach it by a path written under it,
+	// and only while what that path leads to stays under it. Empty offers none, and
 	// ScratchErr then says why one was due and could not be named.
 	Scratch    string
 	ScratchErr error
@@ -62,6 +62,11 @@ type Runner struct {
 	// NoProject is set for a conversation without a folder, whose Root is its
 	// scratch folder. No MCP server that runs once per project runs for it.
 	NoProject bool
+
+	// Others is the folder every conversation's own folder is in. A path in
+	// it other than Scratch is another conversation's, and is outside the
+	// project even when the project holds it.
+	Others string
 
 	// pinned is the scratch folder as PinScratch found it. Each path under
 	// the folder is refused once the name holds another folder.
@@ -82,6 +87,14 @@ type Runner struct {
 func (r *Runner) Hide(dir string) {
 	if abs, err := filepath.Abs(dir); err == nil {
 		r.Hidden = realPath(abs)
+	}
+}
+
+// KeepOthers sets the folder the conversations' own folders are in,
+// resolved the way Root is.
+func (r *Runner) KeepOthers(dir string) {
+	if abs, err := filepath.Abs(dir); err == nil {
+		r.Others = realPath(abs)
 	}
 }
 

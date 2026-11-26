@@ -64,7 +64,7 @@ func (r *Runner) WriteFile(ctx context.Context, raw json.RawMessage) (Result, er
 
 	// Folders made in the scratch folder are private like the folder itself.
 	dirPerm := os.FileMode(0o755)
-	if r.InScratch(args.Path) {
+	if r.ownsScratch(args.Path, path) {
 		if err := r.ensureScratch(); err != nil {
 			return Result{}, err
 		}

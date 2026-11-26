@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -109,16 +110,20 @@ func TestOpenScratchTakesOnlyRealFolders(t *testing.T) {
 		t.Errorf("the root does not hold a.txt: %v", err)
 	}
 	root.Close()
-	if info, err := os.Stat(filepath.Dir(path)); err != nil || info.Mode().Perm() != 0o700 {
-		t.Errorf("the session folder is %v, %v", info.Mode(), err)
+	for _, d := range []string{path, filepath.Dir(path)} {
+		if info, err := os.Stat(d); err != nil || info.Mode().Perm() != 0o700 {
+			t.Errorf("%s is %v, %v", d, info.Mode(), err)
+		}
+	}
+	if filepath.Dir(path) == dir || !strings.HasSuffix(filepath.Dir(path), ".scratch") {
+		t.Errorf("the conversation's folder %s is not in the scratch folder beside the state", path)
 	}
 
 	other := NewLooseID()
 	elsewhere := t.TempDir()
-	must(t, os.Mkdir(filepath.Join(elsewhere, "scratch"), 0o700))
-	must(t, os.Symlink(elsewhere, filepath.Join(dir, other+".files")))
+	must(t, os.Symlink(elsewhere, filepath.Join(filepath.Dir(path), other)))
 	if _, err := st.OpenScratch(other); err == nil || errors.Is(err, ErrNoScratch) {
-		t.Errorf("a link in place of the session folder = %v, want refused", err)
+		t.Errorf("a link in place of the conversation's folder = %v, want refused", err)
 	}
 	if _, err := st.EnsureScratch(other); err == nil {
 		t.Error("made a folder through a link")
@@ -300,5 +305,32 @@ func TestARunFolderWithoutAFileKeepsTheMark(t *testing.T) {
 	must(t, os.RemoveAll(filepath.Join(dir, kid.ID+".files")))
 	if err := st.Purge(a.ID, func(*Session) error { return nil }); err != nil {
 		t.Fatalf("with the folder gone the delete = %v", err)
+	}
+}
+
+// A purge that cannot reach the conversation's folder keeps the mark.
+func TestAPurgeThatCannotReachTheFolderWaits(t *testing.T) {
+	dir := t.TempDir()
+	st, _ := Open(dir)
+	scratch := filepath.Join(t.TempDir(), "scratch")
+	st.SetScratch(scratch)
+	a := looseSample(NewLooseID())
+	must(t, st.Save(a))
+	folder, err := st.EnsureScratch(a.ID)
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(folder, "work.txt"), []byte("x"), 0o600))
+	must(t, st.MarkDeleting(a, nil))
+	must(t, os.Chmod(scratch, 0))
+	t.Cleanup(func() { os.Chmod(scratch, 0o700) })
+	if err := st.Purge(a.ID, func(*Session) error { return nil }); err == nil {
+		t.Fatal("a purge that could not reach the folder finished")
+	}
+	if len(st.Marked()) != 1 {
+		t.Errorf("marks = %v, want the delete kept", st.Marked())
+	}
+	must(t, os.Chmod(scratch, 0o700))
+	must(t, st.Purge(a.ID, func(*Session) error { return nil }))
+	if _, err := os.Stat(folder); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the folder outlived the delete: %v", err)
 	}
 }
