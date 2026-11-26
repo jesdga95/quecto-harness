@@ -267,6 +267,9 @@ func (s *Store) AddProject(path string) (Config, error) {
 	if err != nil {
 		return s.Config(), err
 	}
+	if err := s.CheckProject(real); err != nil {
+		return s.Config(), err
+	}
 	s.mu.Lock()
 	for _, p := range s.cfg.Projects {
 		if p == real {

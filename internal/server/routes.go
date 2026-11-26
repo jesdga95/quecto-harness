@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -426,6 +427,10 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, err := s.engine.Create(body.Project)
+	if errors.Is(err, config.ErrStateOverlap) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -596,9 +601,15 @@ func (s *Server) getProjectFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.projectOK(w, sess.Project) {
+		return
+	}
 	arg := r.URL.Query().Get("path")
-	v, err := tools.ViewFile(sess.Project, arg, viewLimit)
+	v, err := tools.ViewFile(sess.Project, s.cfg.Paths().Home, arg, viewLimit)
 	switch {
+	case errors.Is(err, tools.ErrHidden):
+		writeError(w, http.StatusForbidden, "That path is in the harness state folder")
+		return
 	case errors.Is(err, tools.ErrOutside):
 		writeError(w, http.StatusForbidden, "That path is outside the project")
 		return
@@ -654,8 +665,13 @@ func (s *Server) getProjectDir(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rel, entries, err := tools.ListDir(sess.Project, r.URL.Query().Get("path"))
+	if !s.projectOK(w, sess.Project) {
+		return
+	}
+	rel, entries, err := tools.ListDir(sess.Project, s.cfg.Paths().Home, r.URL.Query().Get("path"))
 	switch {
+	case errors.Is(err, tools.ErrHidden):
+		writeError(w, http.StatusForbidden, "That folder is in the harness state folder")
 	case errors.Is(err, tools.ErrOutside):
 		writeError(w, http.StatusForbidden, "That path is outside the project")
 	case errors.Is(err, tools.ErrMissing):
@@ -678,7 +694,10 @@ func (s *Server) getProjectFiles(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "No project at that path: add it first")
 		return
 	}
-	files, err := tools.FindFiles(project, r.URL.Query().Get("q"), 30)
+	if !s.projectOK(w, project) {
+		return
+	}
+	files, err := tools.FindFiles(project, s.cfg.Paths().Home, r.URL.Query().Get("q"), 30)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "List the project files: "+err.Error())
 		return
@@ -782,6 +801,15 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if !readJSON(w, r, &body) {
 		return
+	}
+	// Refused before anything about the session changes.
+	if !s.projectOK(w, sess.Project) {
+		return
+	}
+	for _, p := range body.Attachments {
+		if !s.outsideState(w, p) {
+			return
+		}
 	}
 	if body.Effort != nil {
 		if err := s.engine.SetEffort(sess.ID, config.Effort(*body.Effort)); err != nil {
@@ -1119,11 +1147,57 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) (*agent.Session
 	return sess, true
 }
 
+// projectOK refuses, with 409, a project inside the harness state folder,
+// and with 500 one that cannot be checked. It reports whether the request may
+// go on.
+func (s *Server) projectOK(w http.ResponseWriter, project string) bool {
+	return s.checked(w, s.cfg.CheckProject(project))
+}
+
+// checked answers a refused overlap with 409 and a check that could not be
+// made with 500, and reports whether the request may go on.
+func (s *Server) checked(w http.ResponseWriter, err error) bool {
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, config.ErrStateOverlap):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
+	return false
+}
+
+// outsideState refuses, with 403, a file a person attached or picked that is
+// in the harness state folder, unless it is a file a paste stored there. The
+// path has to be absolute and in its plain form, so the file weighed here is
+// the one later opened by the same string; one it cannot resolve is refused,
+// since that proves nothing.
+func (s *Server) outsideState(w http.ResponseWriter, path string) bool {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		writeError(w, http.StatusBadRequest, "Attach "+path+": the path has to be absolute and in its plain form")
+		return false
+	}
+	if s.uploads != nil && s.uploads.Owns(path) {
+		return true
+	}
+	in, err := s.cfg.InState(path)
+	switch {
+	case err != nil:
+		writeError(w, http.StatusBadRequest, "Attach "+path+": no such file, or it cannot be read")
+		return false
+	case in:
+		writeError(w, http.StatusForbidden, "That file is in the harness state folder")
+		return false
+	}
+	return true
+}
+
 func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrNotLast),
 		errors.Is(err, agent.ErrCompacting), errors.Is(err, agent.ErrTooShort), errors.Is(err, agent.ErrNoShell),
-		errors.Is(err, agent.ErrStillRunning):
+		errors.Is(err, agent.ErrStillRunning), errors.Is(err, config.ErrStateOverlap):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, agent.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())

@@ -107,6 +107,7 @@
 
   function note(f: GitFile): string {
     if (f.state === "conflict") return "Conflict";
+    if (f.link) return "Link";
     if (f.binary) return "Binary";
     if (!drawable(f) && f.state === "deleted") return "Deleted";
     return "";

@@ -493,6 +493,10 @@ func (r *Repo) Patch(ctx context.Context, stagedOnly bool) (string, error) {
 			continue
 		}
 		f := r.untracked(local)
+		// A link is left out rather than told as a file it is not.
+		if f.Link {
+			continue
+		}
 		if f.Binary {
 			fmt.Fprintf(&b, "diff --git a/%s b/%s\nnew file mode 100644\nBinary files /dev/null and b/%s differ\n", local, local, local)
 			continue
