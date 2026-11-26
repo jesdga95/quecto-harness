@@ -43,8 +43,9 @@ func (s *Server) repo(w http.ResponseWriter, r *http.Request, project string) (*
 }
 
 // repoOK refuses a repository whose working tree or git folders overlap the
-// harness state folder, even when the project is a part of it that does not:
-// a stash, a commit of everything or a branch switch reaches the whole tree.
+// harness state folder or the scratch folder, even when the project is a part
+// of it that does not: a stash, a commit of everything or a branch switch
+// reaches the whole tree.
 func (s *Server) repoOK(w http.ResponseWriter, r *http.Request, repo *git.Repo) bool {
 	dirs, err := repo.Dirs(r.Context())
 	if err != nil {
@@ -52,7 +53,7 @@ func (s *Server) repoOK(w http.ResponseWriter, r *http.Request, repo *git.Repo) 
 		return false
 	}
 	for _, d := range dirs {
-		if !s.projectOK(w, d) {
+		if !s.checked(w, s.cfg.CheckRepo(d)) {
 			return false
 		}
 	}
@@ -160,7 +161,8 @@ func (s *Server) postGitInit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "No project at that path: add it first")
 		return
 	}
-	if !s.projectOK(w, body.Project) {
+	// A repository is made at the project, so the project is checked as one.
+	if !s.checked(w, s.cfg.CheckRepo(body.Project)) {
 		return
 	}
 	// A project already inside a repository is checked against all of it.

@@ -125,7 +125,7 @@ func (f *finder) walk(ctx context.Context, base string) error {
 			return nil
 		}
 		if d.IsDir() {
-			if !f.runner.reachable(p) {
+			if !f.runner.reachable(p, base) {
 				return fs.SkipDir
 			}
 			if p != base && f.skipping && slices.Contains(skipDirs, d.Name()) {
@@ -141,7 +141,7 @@ func (f *finder) walk(ctx context.Context, base string) error {
 		// folder searched, which is what the call was allowed to read.
 		if d.Type()&fs.ModeSymlink != 0 {
 			abs, err := f.runner.resolve(p)
-			if err != nil || !(within(f.runner.Root, abs) || within(f.base, abs)) {
+			if err != nil || !(within(f.runner.Root, abs) || f.inBase(abs)) || !f.allowed(abs) {
 				return nil
 			}
 		}
@@ -297,7 +297,23 @@ func (f *finder) related() []string {
 // reaches reports whether a path is one the search could have walked to: in
 // the project or under the folder searched, and not in the state folder.
 func (f *finder) reaches(p string) bool {
-	return (within(f.runner.Root, p) || within(f.base, p)) && f.runner.reachable(p)
+	return (within(f.runner.Root, p) || f.inBase(p)) && f.runner.reachable(p, f.base) && f.allowed(p)
+}
+
+// allowed reports whether a file the search came to may be shown: one in
+// another conversation's folder, told by identity, only when the search was
+// asked to start inside that folder.
+func (f *finder) allowed(p string) bool {
+	if !f.runner.inOthers(p) {
+		return true
+	}
+	return f.inBase(p) && f.runner.inOthers(f.base)
+}
+
+// inBase reports whether p is in the folder the search was asked to start
+// in, by name or by identity.
+func (f *finder) inBase(p string) bool {
+	return inside(p, f.base)
 }
 
 // stemOf is the name up to the first dot, so Chat.module.css stems to Chat.

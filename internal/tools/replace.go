@@ -116,6 +116,11 @@ func (r *Runner) ReplaceInFile(ctx context.Context, raw json.RawMessage) (Result
 	if crlf {
 		updated = strings.ReplaceAll(updated, "\n", "\r\n")
 	}
+	if r.ownsScratch(args.Path, path) {
+		if err := r.ensureScratch(); err != nil {
+			return Result{}, err
+		}
+	}
 	if err := config.WriteAtomicNoSync(path, []byte(updated), info.Mode().Perm()); err != nil {
 		return Result{}, fmt.Errorf("write %s: %s", args.Path, err)
 	}

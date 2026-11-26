@@ -50,15 +50,26 @@ type View struct {
 	Content string
 }
 
-// viewer is a runner for a reader outside a turn, which reaches nothing in
-// the harness state folder hidden, a link that leads there included.
-func viewer(root, hidden string) (*Runner, error) {
+// Keep names what a reader outside a turn never reaches through a project:
+// the harness state folder, and the folder the conversations' own folders
+// are in.
+type Keep struct {
+	State   string
+	Scratch string
+}
+
+// viewer is a runner for a reader outside a turn, which reaches nothing kept,
+// a link that leads there included.
+func viewer(root string, keep Keep) (*Runner, error) {
 	r, err := NewRunner(root, config.Config{})
 	if err != nil {
 		return nil, err
 	}
-	if hidden != "" {
-		r.Hide(hidden)
+	if keep.State != "" {
+		r.Hide(keep.State)
+	}
+	if keep.Scratch != "" {
+		r.KeepOthers(keep.Scratch)
 	}
 	return r, nil
 }
@@ -75,6 +86,12 @@ func refusal(err error) error {
 // shown reports whether a name a reader would be shown leads somewhere it may
 // look: not into the state folder, whichever way.
 func (r *Runner) shown(abs string) bool {
+	if r.Others != "" && (within(r.Others, abs) || r.isFolder(abs, r.Others)) {
+		return false
+	}
+	if r.Hidden != "" && r.isFolder(abs, r.Hidden) {
+		return false
+	}
 	if r.Hidden == "" {
 		return true
 	}
@@ -90,14 +107,21 @@ func (r *Runner) shown(abs string) bool {
 	// A link is judged by the folder it reaches, not by its name, so another
 	// casing on a volume that ignores case does not slip by.
 	in, err := config.Under(abs, r.Hidden)
-	return err == nil && !in
+	if err != nil || in {
+		return false
+	}
+	if r.Others != "" {
+		other, err := config.Under(abs, r.Others)
+		return err == nil && !other
+	}
+	return true
 }
 
 // ViewFile reads a file under root the way a tool argument is resolved, and
 // nothing outside root or in the state folder hidden. Text past limit is
 // reported as large.
-func ViewFile(root, hidden, p string, limit int64) (View, error) {
-	r, err := viewer(root, hidden)
+func ViewFile(root string, keep Keep, p string, limit int64) (View, error) {
+	r, err := viewer(root, keep)
 	if err != nil {
 		return View{}, err
 	}
@@ -155,8 +179,8 @@ type Entry struct {
 // ListDir lists one folder under root, folders first and then files, each by
 // name without regard to case, leaving out what leads into the state folder
 // hidden. rel is the folder relative to root, empty for root itself.
-func ListDir(root, hidden, p string) (rel string, entries []Entry, err error) {
-	r, err := viewer(root, hidden)
+func ListDir(root string, keep Keep, p string) (rel string, entries []Entry, err error) {
+	r, err := viewer(root, keep)
 	if err != nil {
 		return "", nil, err
 	}
@@ -218,8 +242,8 @@ func ListDir(root, hidden, p string) (rel string, entries []Entry, err error) {
 // above one in its folders, and a shorter path above a longer one. The walk
 // passes over the folders grep skips and stops after scanLimit files, and
 // over anything that leads into the state folder hidden.
-func FindFiles(root, hidden, q string, limit int) ([]string, error) {
-	r, err := viewer(root, hidden)
+func FindFiles(root string, keep Keep, q string, limit int) ([]string, error) {
+	r, err := viewer(root, keep)
 	if err != nil {
 		return nil, err
 	}
