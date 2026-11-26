@@ -73,6 +73,9 @@ func TestBackgroundProcessRunsAndPingsBack(t *testing.T) {
 	}
 
 	notice := waitForEntryFrom(t, s, "Background process")
+	// The notice starts a turn of its own, which writes the session until it
+	// ends, so the test waits for it before the folder goes.
+	waitIdle(t, s)
 	if !strings.Contains(notice.Content, "exited with code 0") {
 		t.Errorf("the notice = %q", notice.Content)
 	}
