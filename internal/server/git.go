@@ -52,7 +52,7 @@ func (s *Server) repoOK(w http.ResponseWriter, r *http.Request, repo *git.Repo) 
 		return false
 	}
 	for _, d := range dirs {
-		if !s.projectOK(w, d) {
+		if !s.checked(w, s.cfg.CheckRepo(d)) {
 			return false
 		}
 	}
@@ -160,7 +160,8 @@ func (s *Server) postGitInit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "No project at that path: add it first")
 		return
 	}
-	if !s.projectOK(w, body.Project) {
+	// A repository is made at the project, so the project is checked as one.
+	if !s.checked(w, s.cfg.CheckRepo(body.Project)) {
 		return
 	}
 	// A project already inside a repository is checked against all of it.

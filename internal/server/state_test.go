@@ -41,8 +41,14 @@ func overlapping(t *testing.T, f *fixture) (home, id string) {
 func TestAProjectOverlappingTheStateIsRefused(t *testing.T) {
 	f := newFixture(t)
 	home, id := overlapping(t, f)
-	if w := f.do(t, "POST", "/api/projects", map[string]string{"path": filepath.Dir(home)}); w.Code != http.StatusBadRequest {
-		t.Errorf("add the folder holding the state = %d, want 400", w.Code)
+	// The folder holding the state, such as the home folder, is a project,
+	// and no repository is made there.
+	if w := f.do(t, "POST", "/api/projects", map[string]string{"path": filepath.Dir(home)}); w.Code != http.StatusOK {
+		t.Errorf("add the folder holding the state = %d, want 200", w.Code)
+	}
+	holding, _ := filepath.EvalSymlinks(filepath.Dir(home))
+	if w := f.do(t, "POST", "/api/git/init", map[string]string{"project": holding}); w.Code != http.StatusConflict {
+		t.Errorf("git init in the folder holding the state = %d %s, want 409", w.Code, w.Body.String())
 	}
 	q := url.QueryEscape(home)
 	for _, c := range []struct{ method, path string }{

@@ -1126,11 +1126,16 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) (*agent.Session
 	return sess, true
 }
 
-// projectOK refuses, with 409, a project that overlaps the harness state
-// folder, and with 500 one that cannot be checked. It reports whether the
-// request may go on.
+// projectOK refuses, with 409, a project inside the harness state folder,
+// and with 500 one that cannot be checked. It reports whether the request may
+// go on.
 func (s *Server) projectOK(w http.ResponseWriter, project string) bool {
-	err := s.cfg.CheckProject(project)
+	return s.checked(w, s.cfg.CheckProject(project))
+}
+
+// checked answers a refused overlap with 409 and a check that could not be
+// made with 500, and reports whether the request may go on.
+func (s *Server) checked(w http.ResponseWriter, err error) bool {
 	switch {
 	case err == nil:
 		return true
