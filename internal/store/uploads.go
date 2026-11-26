@@ -77,3 +77,25 @@ func (u *Uploads) Prune() {
 		os.RemoveAll(filepath.Join(u.dir, e.Name()))
 	}
 }
+
+// Owns reports whether path is one file Save wrote, as it wrote it: a regular
+// file, not a link, in a folder named by a file id directly under the uploads
+// folder, which is not a link either. It reads the path as given, so a name
+// that only leads there does not count.
+func (u *Uploads) Owns(path string) bool {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return false
+	}
+	dir := filepath.Dir(path)
+	if filepath.Dir(dir) != filepath.Clean(u.dir) || !filePattern.MatchString(filepath.Base(dir)) {
+		return false
+	}
+	for _, p := range []string{u.dir, dir} {
+		info, err := os.Lstat(p)
+		if err != nil || !info.IsDir() {
+			return false
+		}
+	}
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular()
+}

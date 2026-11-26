@@ -53,22 +53,49 @@ func Open(ctx context.Context, dir string) (*Repo, error) {
 	if !Available() {
 		return nil, ErrMissing
 	}
-	out, err := run(ctx, dir, readTimeout, nil, true, "rev-parse", "--show-toplevel", "--show-prefix")
+	top, err := revParse(ctx, dir, "--show-toplevel")
 	if err != nil {
 		if strings.Contains(err.Error(), "not a git repository") {
 			return nil, ErrNotRepo
 		}
 		return nil, err
 	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	if len(lines) == 0 || lines[0] == "" {
+	if top == "" {
 		return nil, ErrNotRepo
 	}
-	r := &Repo{Dir: dir, Top: lines[0]}
-	if len(lines) > 1 {
-		r.Prefix = lines[1]
+	prefix, err := revParse(ctx, dir, "--show-prefix")
+	if err != nil {
+		return nil, err
 	}
-	return r, nil
+	return &Repo{Dir: dir, Top: top, Prefix: prefix}, nil
+}
+
+// revParse asks rev-parse for one value, which may hold any character a
+// folder name can, so only the newline git ends it with is taken off.
+func revParse(ctx context.Context, dir, flag string) (string, error) {
+	out, err := run(ctx, dir, readTimeout, nil, true, "rev-parse", flag)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(string(out), "\n"), nil
+}
+
+// Dirs are the folders the repository is kept in: the top of its working
+// tree, its git directory and the common one, which a linked worktree keeps
+// apart from the tree.
+func (r *Repo) Dirs(ctx context.Context) ([]string, error) {
+	dirs := []string{r.Top}
+	for _, flag := range []string{"--absolute-git-dir", "--git-common-dir"} {
+		d, err := revParse(ctx, r.Top, flag)
+		if err != nil {
+			return nil, err
+		}
+		if !filepath.IsAbs(d) {
+			d = filepath.Join(r.Top, d)
+		}
+		dirs = append(dirs, d)
+	}
+	return dirs, nil
 }
 
 // Init creates a repository in dir.

@@ -92,6 +92,9 @@ func (s *Server) getPicked(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "That file was not chosen in the file dialog")
 		return
 	}
+	if !s.outsideState(w, p) {
+		return
+	}
 	a, err := tools.ReadAttachment(p)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "Read the file: "+err.Error())
