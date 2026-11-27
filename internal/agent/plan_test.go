@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -342,18 +343,16 @@ func TestASubagentKeepsItsLaunchersMode(t *testing.T) {
 	}
 }
 
-// A compaction carries what the messages it summarised held: plan mode's rules
-// while the session is in it, and the approved plan once the message that
-// approved it is summarised away.
+// A compaction carries the approved plan once the message that approved it is
+// summarised away. Plan mode's rules are not stored: the request renders them.
 func TestCompactionCarriesTheModeAndThePlan(t *testing.T) {
 	s := newSession("sess_carry", "/p", "a", "m", config.ToolsetFull)
-	b := brief{offer: tools.Offer{Mode: config.WorkPlan, Ask: true}}
 	s.appendEntry(store.Entry{Kind: "user", Content: "plan it", Meta: map[string]any{"mode": "plan"}})
 	if mode := s.modeAt(0, false); mode != config.WorkPlan {
 		t.Fatalf("mode = %s, want plan", mode)
 	}
-	if carry := s.carryFor(config.WorkPlan, b, 0, false); !strings.Contains(carry, "now in plan mode") {
-		t.Errorf("carry in plan mode = %q", carry)
+	if carry := s.carryFor(config.WorkPlan, 0, false); carry != "" {
+		t.Errorf("carry in plan mode = %q, want nothing stored", carry)
 	}
 
 	plan := store.Plan{Title: "Cache the list", Steps: []string{"Add it"}}
@@ -363,11 +362,88 @@ func TestCompactionCarriesTheModeAndThePlan(t *testing.T) {
 	if mode := s.modeAt(0, false); mode != config.WorkExecute {
 		t.Fatalf("mode after the approval = %s, want execute", mode)
 	}
-	if carry := s.carryFor(config.WorkExecute, b, 0, false); !strings.Contains(carry, "Plan: Cache the list") {
+	if carry := s.carryFor(config.WorkExecute, 0, false); !strings.Contains(carry, "Plan: Cache the list") {
 		t.Errorf("carry once the approval is summarised = %q", carry)
 	}
-	if carry := s.carryFor(config.WorkExecute, b, kickoff.Seq, true); carry != "" {
+	if carry := s.carryFor(config.WorkExecute, kickoff.Seq, true); carry != "" {
 		t.Errorf("carry with the approval kept = %q, want nothing", carry)
+	}
+}
+
+// compactedInPlan is a session whose history was summarised in plan mode, with
+// rules stored as an older record held them.
+func compactedInPlan(meta map[string]any) *Session {
+	s := newSession("sess_resume", "/p", "a", "m", config.ToolsetFull)
+	s.appendEntry(store.Entry{Kind: "user", Content: "plan it", Meta: map[string]any{"mode": "plan"}})
+	s.Entries[0].InContext = false
+	s.appendEntry(store.Entry{Kind: "compaction", Role: "user", Content: "Read the code.",
+		InContext: true, Meta: meta})
+	return s
+}
+
+// A summary made in plan mode is sent with the rules the request renders now,
+// so a tool switched off since is no longer named. One that names no mode
+// keeps the rules it stored.
+func TestCompactedPlanRulesFollowTheTurn(t *testing.T) {
+	stale := "STORED RULES"
+	with := brief{offer: tools.Offer{Mode: config.WorkPlan, Ask: true, Search: true}}
+	without := brief{offer: tools.Offer{Mode: config.WorkPlan, Ask: true}}
+
+	s := compactedInPlan(map[string]any{"mode": "plan", "carry": stale})
+	summaryOf := func(b brief) string {
+		return s.contextMessages(config.Agent{}, "darwin", "", b, nil)[1].Content
+	}
+	on, off := summaryOf(with), summaryOf(without)
+	if strings.Contains(on, stale) || strings.Contains(off, stale) {
+		t.Errorf("stored rules were sent:\n%s", on)
+	}
+	if !strings.Contains(on, "now in plan mode") || !strings.Contains(on, "web_search") {
+		t.Errorf("rules with search on lack web_search:\n%s", on)
+	}
+	if strings.Contains(off, "web_search") {
+		t.Errorf("rules with search off still name web_search:\n%s", off)
+	}
+	if again := summaryOf(with); again != on {
+		t.Error("the same turn rendered different rules, which moves the cached prefix")
+	}
+
+	old := compactedInPlan(map[string]any{"carry": stale})
+	if got := old.contextMessages(config.Agent{}, "darwin", "", with, nil)[1].Content; !strings.Contains(got, stale) {
+		t.Errorf("a record with no mode lost the rules it stored:\n%s", got)
+	}
+}
+
+// Approving a plan after a compaction in plan mode leaves every message before
+// the approval as it was sent, and the plan is in the request once.
+func TestApprovalAfterCompactionKeepsThePrefix(t *testing.T) {
+	b := brief{offer: tools.Offer{Mode: config.WorkPlan, Ask: true, Search: true}}
+	s := compactedInPlan(map[string]any{"mode": "plan"})
+	s.appendEntry(store.Entry{Kind: "user", Content: "and the tests", InContext: true,
+		Meta: map[string]any{"mode": "plan"}})
+	before := s.contextMessages(config.Agent{}, "darwin", "", b, nil)
+
+	plan := store.Plan{Title: "Cache the list", Steps: []string{"Add it"}}
+	s.Plan = &plan
+	s.Mode = config.WorkExecute
+	s.appendEntry(store.Entry{Kind: "user", Content: prompts.PlanApproved(plan.Title, renderPlan(plan)), InContext: true,
+		Meta: map[string]any{"mode": "execute", "kickoff": true}})
+	b.offer.Mode = config.WorkExecute
+	after := s.contextMessages(config.Agent{}, "darwin", "", b, nil)
+
+	if len(after) != len(before)+1 {
+		t.Fatalf("approval sent %d messages, want %d", len(after), len(before)+1)
+	}
+	for i := range before {
+		if !reflect.DeepEqual(before[i], after[i]) {
+			t.Errorf("message %d changed on approval:\nbefore %v\nafter  %v", i, before[i].Content, after[i].Content)
+		}
+	}
+	n := 0
+	for _, m := range after {
+		n += strings.Count(m.Content, renderPlan(plan))
+	}
+	if n != 1 {
+		t.Errorf("the plan is in the request %d times, want once", n)
 	}
 }
 
@@ -400,5 +476,53 @@ func TestSessionEffortReplacesTheAgents(t *testing.T) {
 	s.mu.Unlock()
 	if kept != config.EffortLow || gone != "" {
 		t.Errorf("effort after a model change = %q, after an agent change = %q", kept, gone)
+	}
+}
+
+// Through the engine: a compaction made in plan mode stores no rules, and the
+// next request in plan mode sends them with the summary, the same text each
+// time.
+func TestPlanCompactionSendsRulesRenderedOnTheRequest(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_summary.txt", "stream_plain.txt", "stream_plain.txt")
+	s := h.session(t)
+	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.Send(s.ID, earlierWork, nil)
+	waitIdle(t, s)
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+	doc, _, _, _ := s.Snapshot()
+	for _, e := range doc.Entries {
+		if e.Kind == "compaction" {
+			if e.Meta["mode"] != "plan" || e.Meta["carry"] != nil {
+				t.Errorf("compaction meta = %v, want mode plan and no stored rules", e.Meta)
+			}
+		}
+	}
+
+	summaryIn := func(req int) string {
+		t.Helper()
+		msgs, _ := h.replay.Body(req)["messages"].([]any)
+		for _, m := range msgs {
+			if c, _ := m.(map[string]any)["content"].(string); strings.Contains(c, "Summary of earlier work:") {
+				return c
+			}
+		}
+		t.Fatalf("request %d has no summary", req)
+		return ""
+	}
+	h.engine.Send(s.ID, "and the tests", nil)
+	waitIdle(t, s)
+	h.engine.Send(s.ID, "and the docs", nil)
+	waitIdle(t, s)
+	first, second := summaryIn(2), summaryIn(3)
+	if !strings.Contains(first, "now in plan mode") {
+		t.Errorf("the summary went without plan mode's rules:\n%s", first)
+	}
+	if first != second {
+		t.Error("the summary changed between two requests of the same turn setup")
 	}
 }
