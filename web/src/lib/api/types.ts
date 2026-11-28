@@ -391,7 +391,7 @@ export type HarnessEvent =
   /** A command the harness started in the background. */
   | { type: "proc_start"; proc: Process }
   /** Lines a background command printed since the last frame. */
-  | { type: "proc_output"; id: string; lines: string[]; bytes: number }
+  | { type: "proc_output"; id: string; lines: string[]; bytes: number; truncated: boolean }
   /** A background command ended, on its own or because it was stopped. */
   | {
       type: "proc_end";

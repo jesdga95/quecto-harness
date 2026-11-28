@@ -1434,6 +1434,7 @@ function onEvent(event: HarnessEvent): void {
   if (event.type === "proc_output") {
     const proc = app.procs.find((p) => p.id === event.id);
     if (proc) {
+      proc.tailCut ||= event.truncated || proc.tail.length + event.lines.length > TAIL_LINES;
       proc.tail = [...proc.tail, ...event.lines].slice(-TAIL_LINES);
       proc.bytes = event.bytes;
     }

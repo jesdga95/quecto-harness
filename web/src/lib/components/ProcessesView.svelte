@@ -136,8 +136,8 @@
         <div class="term-scroll" bind:this={scroller} {onscroll} use:followEnd={() => atBottom}>
           {#if shown.tailCut && shown.spill && !whole}
             <div class="term-cut">
-              Earlier lines are in the log.
-              <button onclick={() => showWhole(shown.id)}>Show them</button>
+              More output is available in the log.
+              <button onclick={() => showWhole(shown.id)}>Show log</button>
             </div>
           {/if}
           <div class="term-line term-prompt">$ {shown.command}</div>

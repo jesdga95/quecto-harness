@@ -2277,12 +2277,9 @@ func (e *Engine) listProcesses(s *Session) (tools.Result, error) {
 			b.WriteString(fmt.Sprintf(", exit %d, %d bytes", *pr.ExitCode, pr.Bytes))
 		}
 		b.WriteString("\n")
-		tail := pr.Tail
-		if len(tail) > 20 {
-			tail = tail[len(tail)-20:]
-		}
-		for _, line := range tail {
-			b.WriteString("  " + line + "\n")
+		lines, _ := lastLines(pr.Tail)
+		for _, line := range lines {
+			b.WriteString(tailIndent + line + "\n")
 		}
 	}
 	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}, nil
