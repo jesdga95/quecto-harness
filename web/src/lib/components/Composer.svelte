@@ -34,6 +34,7 @@
   import { withQuotes } from "../quote";
   import { quoted, removeQuote, takeQuotes } from "../state/quotes.svelte";
   import { overlayOpen } from "../overlay";
+  import { asksForFolder } from "../steps";
 
   let {
     placeholder,
@@ -158,6 +159,8 @@
   function answerCard(key: string): void {
     const card = cards[0];
     if (!card) return;
+    // A folder is chosen on the card itself, so Enter does not answer it.
+    if (key === "Enter" && asksForFolder(card)) return;
     void decide(card, key === "Enter" ? { decision: "once" } : { decision: "deny", reason: "" });
   }
 

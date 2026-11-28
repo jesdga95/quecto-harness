@@ -2206,9 +2206,7 @@ func TestFolderPick(t *testing.T) {
 	}
 }
 
-// TestPickErrorsFitEitherDialog asserts that a dialog failure reads the same
-// from the folder and the file chooser and points to no typed path, since
-// the callers of this route have none.
+// Both choosers share these errors. Only the folder request card accepts a typed path.
 func TestPickErrorsFitEitherDialog(t *testing.T) {
 	f := newFixture(t)
 	folder, file := folderPicker, filePicker

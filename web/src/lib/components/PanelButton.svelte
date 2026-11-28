@@ -8,6 +8,7 @@
   import UsersThree from "phosphor-svelte/lib/UsersThreeIcon";
   import {
     app,
+    NO_FOLDER,
     artifacts,
     contextUse,
     sessionAttachments,
@@ -115,7 +116,10 @@
   </button>
   <span class="entry-divider" class:is-hidden={!app.panel} class:hidden={app.dockCrowded}></span>
   {@render button("files", writing)}
-  {@render button("git", !!repo)}
+  <!-- A conversation without a project has no repository of the user's. -->
+  {#if app.projectPath !== NO_FOLDER}
+    {@render button("git", !!repo)}
+  {/if}
   {@render button("agents", app.runs.length > 0)}
   {@render button("processes", app.procs.length > 0)}
   {#if use.measured || attached > 0}

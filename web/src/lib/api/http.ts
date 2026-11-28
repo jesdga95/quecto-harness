@@ -3,6 +3,8 @@ import type {
   AgentPatch,
   UnreadableSession,
   RecoveryItem,
+  DeletionPreview,
+  TrashFailure,
   Answer,
   Attached,
   AttachedKind,
@@ -68,11 +70,31 @@ const BASE = "/api";
 export class ApiError extends Error {
   status: number;
 
-  constructor(message: string, status: number) {
+  /** body is the whole error reply, for routes that report more than a message. */
+  constructor(message: string, status: number, readonly code?: string, readonly body?: Record<string, unknown>) {
     super(message);
     this.name = "ApiError";
     this.status = status;
   }
+}
+
+/** A project removal that stopped after it had deleted some of its sessions. */
+export class ProjectRemovalError extends ApiError {
+  constructor(from: ApiError, readonly deleted: number, readonly retained: TrashFailure[]) {
+    super(from.message, from.status, from.code, from.body);
+    this.name = "ProjectRemovalError";
+  }
+}
+
+function retainedFolders(raw: unknown): TrashFailure[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((f) => {
+    if (typeof f?.path !== "string" || !f.path || typeof f.reason !== "string") return [];
+    const out: TrashFailure = { path: f.path, reason: f.reason };
+    for (const key of ["kept", "waiting", "foreign", "file"] as const) if (f[key] === true) out[key] = true;
+    for (const key of ["record", "trash"] as const) if (typeof f[key] === "string" && f[key]) out[key] = f[key];
+    return [out];
+  });
 }
 
 // Server payloads. Every field is optional because a response is a guess
@@ -168,6 +190,7 @@ interface WireState {
   detect_kind?: string;
   models_kind?: string;
   models_error?: string;
+  removes_folders?: boolean;
 }
 
 interface WireSummary {
@@ -177,6 +200,8 @@ interface WireSummary {
   title?: string;
   updated?: string;
   parent?: string;
+  scratch?: boolean;
+  kept?: string;
 }
 
 interface WireToolCall {
@@ -193,6 +218,7 @@ interface WirePermission {
   prefix?: string;
   args?: string;
   description?: string;
+  occupied?: boolean;
   agent?: string;
   decision?: string;
   reason?: string;
@@ -242,6 +268,7 @@ type WireSent =
 interface WireSnapshot {
   id?: string;
   project?: string;
+  scratch?: boolean;
   model?: string;
   title?: string;
   updated?: string;
@@ -253,6 +280,7 @@ interface WireSnapshot {
   question?: { id?: string; call_id?: string; index?: number } | null;
   state?: string;
   parent?: string;
+  launcher_gone?: boolean;
   children?: { id?: string; title?: string; agent?: string; state?: string; fill?: number }[] | null;
   steer?: WireSteer | null;
   mode?: string;
@@ -273,6 +301,7 @@ interface WireSnapshot {
 
 interface WireEvent {
   type?: string;
+  project?: string;
   seq?: number;
   state?: string;
   text?: string;
@@ -286,6 +315,7 @@ interface WireEvent {
   path?: string;
   prefix?: string;
   description?: string;
+  occupied?: boolean;
   args?: string;
   output?: string;
   exit_code?: number | null;
@@ -348,7 +378,7 @@ async function call<T>(path: string, method = "GET", body?: unknown): Promise<T>
     throw new ApiError("The harness is not reachable", 0);
   }
 
-  if (!res.ok) throw new ApiError(await failure(res), res.status);
+  if (!res.ok) throw await failure(res);
   const text = await res.text();
   if (!text) return {} as T;
   try {
@@ -358,18 +388,18 @@ async function call<T>(path: string, method = "GET", body?: unknown): Promise<T>
   }
 }
 
-async function failure(res: Response): Promise<string> {
-  if (res.status === 401) return "Not authorized: run quecto-harness open";
+async function failure(res: Response): Promise<ApiError> {
+  if (res.status === 401) return new ApiError("Not authorized: run quecto-harness open", res.status);
   // A dev proxy in front of a harness that is not listening answers for it,
   // so a gateway status means the same thing as a refused connection.
-  if (res.status >= 502 && res.status <= 504) return "The harness is not reachable";
+  if (res.status >= 502 && res.status <= 504) return new ApiError("The harness is not reachable", res.status);
   try {
-    const body = (await res.json()) as { error?: string };
-    if (body.error) return body.error;
+    const body = (await res.json()) as { error?: string; code?: string };
+    if (typeof body.error === "string" && body.error) return new ApiError(body.error, res.status, body.code, body);
   } catch {
     // A body that is not JSON leaves only the status line to report.
   }
-  return `${res.status} ${res.statusText || "Request failed"}`;
+  return new ApiError(`${res.status} ${res.statusText || "Request failed"}`, res.status);
 }
 
 // mapping
@@ -494,6 +524,8 @@ function toSession(s: WireSummary): Session {
     updated: s.updated ?? new Date().toISOString(),
     parent: s.parent ?? "",
     children: [],
+    scratch: s.scratch === true,
+    kept: s.kept ?? "",
   };
 }
 
@@ -568,11 +600,46 @@ function toPermission(p: WirePermission, outcome: string | null, fallback = ""):
     id: p.id || fallback,
     tool: p.tool ?? "",
     command: p.command || p.path || p.args || "",
+    path: p.path ?? "",
     prefix: p.prefix ?? "",
     description: p.description ?? "",
+    occupied: p.occupied ?? false,
     outcome,
     agent: p.agent ?? "",
   };
+}
+
+/** The line a move leaves in the transcript: where to, and what the copy out
+    of the folder the harness made did. */
+function movedText(meta: Record<string, unknown>): string {
+  const to = typeof meta.to === "string" ? meta.to : "";
+  const from = typeof meta.from === "string" ? meta.from : "";
+  if (typeof meta.error === "string") return `Not moved to ${to}: ${meta.error}`;
+  const parts = [`Moved to ${to}`];
+  const n = (key: string) => (typeof meta[key] === "number" ? (meta[key] as number) : 0);
+  const interrupted = () => {
+    if (n("interrupted")) parts.push(`kept ${n("interrupted")} left by an interrupted copy`);
+  };
+  if (meta.gone === true) {
+    parts.push("nothing copied: the folder it came from was gone");
+    interrupted();
+  } else if (typeof meta.reason === "string" && meta.reason !== "") {
+    parts.push(`nothing copied: ${meta.reason}`);
+    interrupted();
+    if (from) parts.push(`the files stay in ${from}`);
+  } else if ("copied" in meta) {
+    parts.push(`copied ${n("copied")} ${n("copied") === 1 ? "file" : "files"}`);
+    if (n("there")) parts.push(`kept ${n("there")} the folder already had`);
+    if (n("failed")) parts.push(`${n("failed")} could not be copied`);
+    interrupted();
+    if (n("attrs")) parts.push(`${n("attrs")} copied without their extended attributes or access permissions`);
+    if (n("held")) parts.push(`left ${n("held")} links or repository folders`);
+    if (n("dependencies")) parts.push(`left ${n("dependencies")} dependency folders`);
+    if (meta.stopped === true) parts.push("stopped at the size limit");
+    const partial = n("there") || n("failed") || n("interrupted") || n("attrs") || n("held") || n("dependencies") || meta.stopped === true;
+    if (partial && from) parts.push(`the rest stays in ${from}`);
+  }
+  return parts.join(", ");
 }
 
 /** Four characters to a token, the same estimate the thinking block shows. */
@@ -744,6 +811,10 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
 
   if (e.kind === "status") {
     items.push({ kind: "status", id: `s${seq}`, text: e.content ?? "" });
+  }
+
+  if (e.kind === "moved") {
+    items.push({ kind: "status", id: `v${seq}`, text: movedText(e.meta ?? {}) });
   }
 }
 
@@ -1056,6 +1127,8 @@ function toTranscript(snap: WireSnapshot): Transcript {
     title: snap.title || known?.title || titleOf(entries),
     updated: snap.updated ?? known?.updated ?? new Date().toISOString(),
     parent: snap.parent ?? known?.parent ?? "",
+    launcherGone: snap.launcher_gone === true,
+    scratch: snap.scratch ?? known?.scratch ?? false,
     children: (snap.children ?? []).map((c) => ({
       id: c.id ?? "",
       title: c.title ?? "",
@@ -1133,6 +1206,7 @@ const EVENT_NAMES = [
   "usage",
   "status_entry",
   "title",
+  "moved",
   "todos",
   "compacted",
   "queued",
@@ -1318,8 +1392,10 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           id: ev.id ?? "",
           tool: ev.tool ?? "",
           command: ev.command || ev.path || ev.args || "",
+          path: ev.path ?? "",
           prefix: ev.prefix ?? "",
           description: ev.description ?? "",
+          occupied: ev.occupied ?? false,
           agent: ev.agent ?? "",
         },
       ];
@@ -1400,6 +1476,9 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
     case "title":
       return ev.title ? [{ type: "title", title: ev.title }] : [];
 
+    case "moved":
+      return typeof ev.project === "string" ? [{ type: "moved", project: ev.project }] : [];
+
     case "todos":
       return [{ type: "todos", todos: toTodos(ev.todos) }];
 
@@ -1457,6 +1536,21 @@ function toMode(mode: string | undefined): ServerMode {
   }
 }
 
+/** A list of sessions, each kept as the summary a later snapshot falls back on. */
+async function listed(path: string): Promise<Session[]> {
+  const wire = await call<{ sessions?: WireSummary[] }>(path);
+  const list = (wire.sessions ?? []).map(toSession);
+  for (const s of list) summaries.set(s.id, s);
+  return list;
+}
+
+/** A new session, kept as the summary a later snapshot falls back on. */
+async function created(body: Record<string, unknown>): Promise<Session> {
+  const session = toSession(await call<WireSummary>("/sessions", "POST", body));
+  summaries.set(session.id, session);
+  return session;
+}
+
 class HttpApi implements HarnessApi {
   async getState(): Promise<State> {
     const wire = await call<WireState>("/state");
@@ -1472,6 +1566,7 @@ class HttpApi implements HarnessApi {
       agents: (wire.agents ?? []).map(toAgent),
       projects: toProjects(projectPaths),
       models: (wire.models ?? []).map(toModel),
+      removesFolders: wire.removes_folders === true,
     };
   }
 
@@ -1506,24 +1601,34 @@ class HttpApi implements HarnessApi {
     return this.setProjects(await call("/projects", "PUT", { paths }));
   }
 
-  async removeProject(path: string): Promise<Project[]> {
-    return this.setProjects(await call("/projects", "DELETE", { path }));
+  async removeProject(path: string): Promise<{ projects: Project[]; retained: TrashFailure[] }> {
+    let result: { projects?: string[]; retained_folders?: unknown };
+    try {
+      result = await call("/projects", "DELETE", { path });
+    } catch (err) {
+      const deleted = err instanceof ApiError ? err.body?.sessions_deleted : undefined;
+      if (err instanceof ApiError && typeof deleted === "number" && deleted > 0) {
+        throw new ProjectRemovalError(err, deleted, retainedFolders(err.body?.retained_folders));
+      }
+      throw err;
+    }
+    return { projects: this.setProjects(result), retained: retainedFolders(result.retained_folders) };
   }
 
   async listSessions(project: string): Promise<Session[]> {
-    const wire = await call<{ sessions?: WireSummary[] }>(
-      `/sessions?project=${encodeURIComponent(project)}`,
-    );
-    const list = (wire.sessions ?? []).map(toSession);
-    for (const s of list) summaries.set(s.id, s);
-    return list;
+    return listed(`/sessions?project=${encodeURIComponent(project)}`);
   }
 
   async createSession(project: string): Promise<Session> {
-    const wire = await call<WireSummary>("/sessions", "POST", { project });
-    const session = toSession(wire);
-    summaries.set(session.id, session);
-    return session;
+    return created({ project });
+  }
+
+  async listScratchSessions(): Promise<Session[]> {
+    return listed("/sessions?scratch=1");
+  }
+
+  async createScratchSession(): Promise<Session> {
+    return created({ scratch: true });
   }
 
   async getSession(id: string): Promise<Transcript> {
@@ -1640,11 +1745,25 @@ class HttpApi implements HarnessApi {
     };
   }
 
-  async findFiles(project: string, q: string): Promise<string[]> {
+  async findFiles(project: string, q: string, session = ""): Promise<string[]> {
+    const own = session ? `&session=${encodeURIComponent(session)}` : "";
     const wire = await call<{ files?: unknown[] | null }>(
-      `/projects/files?project=${encodeURIComponent(project)}&q=${encodeURIComponent(q)}`,
+      `/projects/files?project=${encodeURIComponent(project)}&q=${encodeURIComponent(q)}${own}`,
     );
     return (wire.files ?? []).filter((f): f is string => typeof f === "string" && f !== "");
+  }
+
+  async previewDelete(id: string): Promise<DeletionPreview> {
+    const wire = await call<DeletionPreview>(`/sessions/${encodeURIComponent(id)}/kept`);
+    if (typeof wire.kept !== "string") throw new Error("The harness did not identify which folder stays on disk");
+    if (wire.deferred !== undefined && typeof wire.deferred !== "boolean") {
+      throw new Error("The harness did not identify whether removal is deferred");
+    }
+    const counted = wire.carry?.unreadable ? !!wire.carry.record : (wire.carry?.count ?? 0) > 0;
+    if (wire.carry && (!wire.carry_token || !wire.carry.destination || !counted)) {
+      throw new Error("The harness did not identify the interrupted copy");
+    }
+    return wire;
   }
 
   async listDir(id: string, path: string): Promise<ProjectDir> {
@@ -1702,9 +1821,11 @@ class HttpApi implements HarnessApi {
     return result.path;
   }
 
-  async deleteSession(id: string): Promise<void> {
-    await call<unknown>(`/sessions/${encodeURIComponent(id)}`, "DELETE");
+  async deleteSession(id: string, told?: DeletionPreview): Promise<TrashFailure | null> {
+    const body = told && { kept: told.kept, deferred: told.deferred === true, carry_token: told.carry_token };
+    const result = await call<Partial<TrashFailure>>(`/sessions/${encodeURIComponent(id)}`, "DELETE", body);
     summaries.delete(id);
+    return retainedFolders([result])[0] ?? null;
   }
 
   async setEffort(id: string, effort: Effort | ""): Promise<void> {

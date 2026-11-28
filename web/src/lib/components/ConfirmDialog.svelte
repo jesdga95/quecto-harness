@@ -24,7 +24,15 @@
     <div class="card w-full max-w-[400px] p-5" role="alertdialog" aria-modal="true">
       <h2 class="text-[15px] font-medium">{dialog.current.title}</h2>
       {#if dialog.current.body}
-        <p class="mt-1.5 text-[13px] text-ink-2">{dialog.current.body}</p>
+        <p class="mt-1.5 wrap-anywhere text-[13px] text-ink-2">{dialog.current.body}</p>
+      {/if}
+
+      {#if dialog.current.files?.length}
+        <ul class="mt-2 max-h-36 overflow-y-auto text-[13px]" aria-label="Files from the interrupted copy">
+          {#each dialog.current.files as file}
+            <li class="break-all">{file}</li>
+          {/each}
+        </ul>
       {/if}
 
       <div class="mt-5 flex justify-end gap-2">
