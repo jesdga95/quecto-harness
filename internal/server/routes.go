@@ -422,6 +422,45 @@ func (s *Server) deleteAllowlist(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) listUnreadableSessions(w http.ResponseWriter, r *http.Request) {
+	ids, err := s.store.UnreadableSessions()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Read the sessions folder: "+err.Error())
+		return
+	}
+	if r.URL.Query().Get("include") == "runs" {
+		type entry struct {
+			ID   string   `json:"id"`
+			Runs []string `json:"runs"`
+		}
+		entries := make([]entry, 0, len(ids))
+		for _, id := range ids {
+			entries = append(entries, entry{ID: id, Runs: append([]string{}, s.store.Family(id)...)})
+		}
+		writeJSON(w, http.StatusOK, entries)
+		return
+	}
+	writeJSON(w, http.StatusOK, ids)
+}
+
+func (s *Server) archiveUnreadableSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.engine.Holds(id) {
+		writeError(w, http.StatusConflict, "The session is open: restart the harness and check again")
+		return
+	}
+	path, err := s.store.ArchiveUnreadable(id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "The transcript is gone: refresh the list")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"path": path})
+}
+
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	list := s.store.List(r.URL.Query().Get("project"))
 	if list == nil {

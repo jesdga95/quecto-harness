@@ -375,7 +375,7 @@ drives what the UI keeps. The permission record preserves the decision, so a rel
 shows the card in its answered state.
 
 - A session is **one file at `0600`**, beside a sidecar folder holding the baseline copies,
-  with one mutex per id so sessions never serialise against each other. The header carries
+  with writes serialized by lock stripe. The header carries
   project, agent, parent, model, title, whether the title was typed, times, `n_ctx` and its
   source, compactions, the estimated context base, the todo list and the baselines. Each
   entry carries its own call record, and the entry that ended a turn carries that turn's
@@ -384,16 +384,24 @@ shows the card in its answered state.
   corrupt file, or one that names a session other than its own, is skipped and named, not
   fatal; `Load` refuses such a file, since paths and deletes go by the id. `Save`
   atomic-replaces with indented JSON.
-- `ledger.json` beside the sessions records each subagent run's launcher and project as
-  last read, written before the run's file, so a run whose file turns unreadable is still
-  known to its launcher. A file never read is known to nobody and blocks no delete. It
-  also holds the sessions whose side folder a delete could not remove, with their
-  launcher: such a delete fails, the session stays listed, its launcher stays until the
-  folder is gone, and a later delete or the next start removes the folder. A delete
-  records its cleanup before it removes anything, and removes nothing if it cannot. An
-  entry that names no session is dropped. A ledger that cannot be read stops the start;
-  one that does not parse is moved to the first free `ledger.json.unreadable-<n>` and
-  rebuilt. A cleanup written as a list of ids, as it first was, is still read.
+- `ledger.json` records each run's launcher and project before the transcript is written.
+  The record survives an unreadable transcript. Settings > Projects lists unreadable
+  transcripts and their recorded runs. A run can be deleted with its saved output even
+  if its transcript is missing. An unreadable run can first be archived, then deleted
+  from its launcher's list. Archiving keeps the renamed transcript and its saved output
+  in the sessions folder. A transcript with outstanding runs can be archived once those
+  runs are resolved.
+- A deletion records its cleanup before removing anything. If removing the output fails,
+  the session stays listed and the cleanup is retried at startup or on a later deletion.
+  A run's relation expires when both transcripts and its output are gone. Pending
+  cleanups retain their recorded owners until settled.
+- An unreadable ledger stops startup. An invalid ledger is moved to the first free
+  `ledger.json.unreadable-<n>`. The second copy, `ledger.json.backup`, supplies known
+  relations and cleanups. Startup repairs missing or differing copies. Without either
+  copy, readable transcripts supply the relationships and unclaimed output stays on disk.
+  Cleanup accepts a map of relations or a list of IDs resolved through the parent map.
+  On macOS and Linux the server takes exclusive ownership before opening its stores.
+  A store opened directly requires one writer per session directory.
 - **Size.** Tool output is capped at `output_limit_bytes`, but `write` content lives in
   the assistant's arguments, because a truncated argument makes the history unusable for a
   resend. A session that writes many large files grows large; the mitigation is a new

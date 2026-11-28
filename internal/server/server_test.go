@@ -3159,3 +3159,90 @@ func TestRemovingAProjectWithOutputLeftWaitsAcrossARestart(t *testing.T) {
 		t.Errorf("the output is still there: %v", err)
 	}
 }
+
+func TestUnreadableSessionRecovery(t *testing.T) {
+	f := newFixture(t)
+	id := store.NewID()
+	path := filepath.Join(f.cfg.Paths().Sessions, id+".json")
+	if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list := f.do(t, "GET", "/api/recovery/sessions", nil)
+	if list.Code != 200 || !strings.Contains(list.Body.String(), id) {
+		t.Fatalf("Recovery list: %d %s", list.Code, list.Body.String())
+	}
+	action := "/api/recovery/sessions/" + id + "/archive"
+	result := f.do(t, "POST", action, nil)
+	if result.Code != 200 {
+		t.Fatalf("Archive: %d %s", result.Code, result.Body.String())
+	}
+	if raw, err := os.ReadFile(path + ".unreadable-1"); err != nil || string(raw) != "{broken" {
+		t.Fatalf("Archived transcript: %q %v", raw, err)
+	}
+	if err := f.srv.store.Save(&store.Session{ID: id}); err != nil {
+		t.Fatal(err)
+	}
+	if result := f.do(t, "POST", action, nil); result.Code != 409 {
+		t.Fatalf("Restored transcript: %d", result.Code)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecoveryCanRemoveTheRunsOfAnUnreadableLauncher(t *testing.T) {
+	f := newFixture(t)
+	st := f.srv.store
+	parent, missing, readable := store.NewID(), store.NewID(), store.NewID()
+	dir := f.cfg.Paths().Sessions
+	for _, id := range []string{parent, missing, readable} {
+		doc := &store.Session{ID: id, Project: f.project}
+		if id != parent {
+			doc.Parent = parent
+		}
+		if err := st.Save(doc); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(st.SpillDir(id), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, missing+".json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, parent+".json"), []byte("{broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f.srv.store = after
+	f.srv.engine = agent.NewEngine(ctx, f.cfg, after, f.files, agent.Clients{Pool: llm.NewPool()}, search.NewProviders(), f.perms, f.hub)
+	list := f.do(t, "GET", "/api/recovery/sessions?include=runs", nil)
+	for _, id := range []string{parent, missing, readable} {
+		if !strings.Contains(list.Body.String(), id) {
+			t.Errorf("Recovery list omits %s", id)
+		}
+	}
+	archive := "/api/recovery/sessions/" + parent + "/archive"
+	if w := f.do(t, "POST", archive, nil); w.Code != 409 {
+		t.Fatalf("Archive before deletion = %d", w.Code)
+	}
+	for _, id := range []string{missing, readable} {
+		if w := f.do(t, "DELETE", "/api/sessions/"+id, nil); w.Code != 204 {
+			t.Errorf("Delete run = %d %s", w.Code, w.Body.String())
+		}
+		if _, err := os.Stat(st.SpillDir(id)); !os.IsNotExist(err) {
+			t.Errorf("Run output remains: %v", err)
+		}
+	}
+	if w := f.do(t, "POST", archive, nil); w.Code != 200 {
+		t.Errorf("Archive = %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(st.SpillDir(parent)); err != nil {
+		t.Error(err)
+	}
+}

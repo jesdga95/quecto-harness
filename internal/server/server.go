@@ -124,6 +124,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/git/{op}", s.postGitAction)
 	mux.HandleFunc("GET /api/allowlist", s.getAllowlist)
 	mux.HandleFunc("DELETE /api/allowlist", s.deleteAllowlist)
+	mux.HandleFunc("GET /api/recovery/sessions", s.listUnreadableSessions)
+	mux.HandleFunc("POST /api/recovery/sessions/{id}/archive", s.archiveUnreadableSession)
 	mux.HandleFunc("GET /api/sessions", s.listSessions)
 	mux.HandleFunc("POST /api/sessions", s.createSession)
 	mux.HandleFunc("GET /api/sessions/{id}", s.getSession)

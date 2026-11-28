@@ -69,7 +69,7 @@ func TestAReservedSessionTakesNoWork(t *testing.T) {
 	h := newHarness(t)
 	s := h.session(t)
 	h.engine.save(s)
-	group, err := h.engine.reserve(s)
+	group, _, err := h.engine.reserve(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestALoadThatEndsAfterADeleteIsNotKept(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	group, err := h.engine.reserve(s)
+	group, _, err := h.engine.reserve(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,7 +577,7 @@ func TestARefusedMessageLeavesNoStoredCopy(t *testing.T) {
 	}
 	before := storedFiles(t, h)
 
-	group, err := h.engine.reserve(s)
+	group, _, err := h.engine.reserve(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -864,7 +864,7 @@ func TestAReportDuringADeleteThatFailsArrivesOnce(t *testing.T) {
 		Content: "done", InContext: true, Visible: true})
 	child.mu.Unlock()
 
-	group, err := h.engine.reserve(parent)
+	group, _, err := h.engine.reserve(parent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -899,7 +899,7 @@ func TestAReportHeldForADeletedLauncherGoesWithIt(t *testing.T) {
 	h.engine.save(parent)
 	child := subagentOf(t, h, parent)
 
-	group, err := h.engine.reserve(parent)
+	group, _, err := h.engine.reserve(parent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1131,5 +1131,41 @@ func TestARestoredRunIsCheckedBeforeRetryingItsCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
 		t.Fatalf("Saved output after deletion: %v", err)
+	}
+}
+
+func TestRemovingAKnownUnreadableRunCleansItsOutput(t *testing.T) {
+	for _, reopen := range []bool{false, true} {
+		h := newHarness(t)
+		parent := h.session(t)
+		h.engine.save(parent)
+		child := subagentOf(t, h, parent)
+		out := h.store.SpillDir(child.ID)
+		if err := os.MkdirAll(out, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(h.paths.Sessions, child.ID+".json")
+		if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		restart(t, h)
+		if err := h.engine.Delete(parent.ID); !errors.Is(err, store.ErrUnreadable) {
+			t.Fatal(err)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if reopen {
+			restart(t, h)
+		}
+		if err := h.engine.Delete(parent.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Errorf("Output remains after removal (reopen %t): %v", reopen, err)
+		}
+		if got := h.store.Family(parent.ID); len(got) != 0 {
+			t.Errorf("Family after removal: %v", got)
+		}
 	}
 }

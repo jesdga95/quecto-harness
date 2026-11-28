@@ -49,10 +49,8 @@ type Hub struct {
 	// shows which are working.
 	watchers    map[int64]chan []byte
 	nextWatcher int64
-	// gone holds when each session was dropped, so its channel is not made
-	// again. exists, where set, answers whether a session is held in memory
-	// or its file is still there, and a channel is made only for one that is.
-	// It takes no lock a publisher may hold.
+	// gone records recent drops. exists checks memory and disk without
+	// acquiring any lock held by a publisher.
 	gone   map[string]time.Time
 	now    func() time.Time
 	exists func(sessionID string) bool
@@ -219,11 +217,8 @@ func (h *Hub) emitLocked(c *channel, kind string, fields map[string]any) {
 	}
 }
 
-// Subscribe returns the replay for (from, seq], a live channel, and the
-// function that detaches it. A from the ring no longer covers yields one
-// resync frame instead.
-// A session dropped, or no longer there, answers with a nil channel and
-// nothing else.
+// Subscribe returns the replay, a live channel and its detach function.
+// An expired replay returns a resync frame. A missing session has no channel.
 func (h *Hub) Subscribe(sessionID string, from int64) (<-chan frame, func(), []frame) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

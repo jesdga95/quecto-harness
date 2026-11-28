@@ -750,3 +750,177 @@ func TestALedgerLinkWithAMissingTargetStopsStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDamagedLedgerRecoversOnlyRecordedOutput(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, stray := NewID(), NewID()
+	if err := s.Save(sample(id, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	folder, release := lockedOutput(t, dir, id)
+	if err := s.Delete(id); !errors.Is(err, ErrLeftBehind) {
+		t.Fatal(err)
+	}
+	release()
+	if err := os.Mkdir(s.filesDir(stray), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ledgerFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(folder); !os.IsNotExist(err) {
+		t.Errorf("Recorded output remains: %v", err)
+	}
+	if _, err := os.Stat(s.filesDir(stray)); err != nil {
+		t.Errorf("Unrecorded output: %v", err)
+	}
+}
+
+func TestDeleteKeepsTheSameSessionLock(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	if err := s.Save(sample(id, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	lock := s.lockFor(id)
+	// A caller may already hold a reference to the stripe when deletion finishes.
+	checkWaits := func(op func() error) {
+		t.Helper()
+		lock.Lock()
+		started := make(chan struct{})
+		done := make(chan error, 1)
+		go func() { close(started); done <- op() }()
+		<-started
+		select {
+		case err := <-done:
+			lock.Unlock()
+			t.Fatalf("Operation completed while the lock was held: %v", err)
+		case <-time.After(40 * time.Millisecond):
+		}
+		lock.Unlock()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkWaits(func() error { return s.Delete(id) })
+	checkWaits(func() error { return s.Save(sample(id, time.Now())) })
+}
+
+func TestUnusableLedgerNamesTheRepair(t *testing.T) {
+	for _, kind := range []string{"directory", "link"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, ledgerFile)
+			if kind == "directory" {
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.Symlink(filepath.Join(dir, "missing"), path); err != nil {
+				t.Skip(err)
+			}
+			_, err := Open(dir)
+			if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "restore") || strings.Contains(err.Error(), "permissions") {
+				t.Fatalf("Open: %v", err)
+			}
+		})
+	}
+}
+
+func TestOpenRepairsOnlyTheLedgerCopyThatNeedsIt(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := sample(NewID(), time.Now())
+	child.Parent = NewID()
+	if err := st.Save(child); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, ledgerFile)
+	old := time.Unix(1600000000, 0)
+	for _, name := range []string{path, path + ".backup"} {
+		if err := os.Chtimes(name, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, corrupt := range []bool{false, true} {
+		if corrupt {
+			if err := os.WriteFile(path+".backup", []byte("{}"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := Open(dir); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{path, path + ".backup"} {
+			fi, err := os.Stat(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantUnchanged := name == path || !corrupt
+			if fi.ModTime().Equal(old) != wantUnchanged {
+				t.Errorf("Unexpected timestamp for %s (backup changed: %t)", name, corrupt)
+			}
+		}
+		a, _ := os.ReadFile(path)
+		b, _ := os.ReadFile(path + ".backup")
+		if string(a) != string(b) {
+			t.Error("Copies differ after open")
+		}
+	}
+	if err := os.Remove(st.path(child.ID)); err != nil {
+		t.Fatal(err)
+	}
+	st, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Family(child.Parent); len(got) != 0 {
+		t.Errorf("Removed family remains: %v", got)
+	}
+}
+
+func TestArchiveCancelsPendingOutputRemoval(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	if err := st.Save(sample(id, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(st.SpillDir(id), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.markPending(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(st.path(id), []byte("{broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ArchiveUnreadable(id); err != nil {
+		t.Fatal(err)
+	}
+	st, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Pending(id) {
+		t.Error("Archived transcript still has a cleanup order")
+	}
+	if _, err := os.Stat(st.SpillDir(id)); err != nil {
+		t.Fatal(err)
+	}
+}

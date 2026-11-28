@@ -1090,10 +1090,15 @@ func (e *Engine) Delete(id string) error {
 		return err
 	}
 	s, err := e.Get(id)
+	if errors.Is(err, ErrNotFound) {
+		if missingErr := e.store.RemoveMissingRun("", id); !errors.Is(missingErr, store.ErrNotFound) {
+			return missingErr
+		}
+	}
 	if err != nil {
 		return err
 	}
-	group, err := e.reserve(s)
+	group, missing, err := e.reserve(s)
 	if err != nil {
 		return err
 	}
@@ -1114,6 +1119,11 @@ func (e *Engine) Delete(id string) error {
 
 	// Subagent runs go before their launcher, so a failure part way leaves
 	// the launcher in place to be deleted again.
+	for _, id := range missing {
+		if err := e.store.RemoveMissingRun(s.ID, id); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+	}
 	for _, m := range group[1:] {
 		if err := e.remove(m); err != nil {
 			return err
@@ -1130,30 +1140,33 @@ const drainTimeout = 10 * time.Second
 // reserve marks a session and the subagent runs under it as being deleted, or
 // none of them when any is working, holds a queued message, or is reserved.
 // The launcher comes first in what it returns.
-func (e *Engine) reserve(s *Session) ([]*Session, error) {
+func (e *Engine) reserve(s *Session) ([]*Session, []string, error) {
 	// A run only on disk is loaded, so its one instance is what is reserved.
 	// One whose file cannot be read refuses the delete by name.
 	var kids []*Session
+	var missing []string
 	for _, id := range e.store.Family(s.ID) {
 		// A run with output left behind is finished first, or its launcher
 		// would go while the run still waits on a fix.
 		done, err := e.store.FinishCleanup(id)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if done {
 			continue
 		}
 		kid, err := e.Get(id)
 		if errors.Is(err, ErrNotFound) {
+			missing = append(missing, id)
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		kids = append(kids, kid)
 	}
-	return e.claim(s, kids)
+	group, err := e.claim(s, kids)
+	return group, missing, err
 }
 
 // claim is reserve for runs already loaded. Under the engine's lock it drops

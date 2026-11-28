@@ -3,11 +3,13 @@
 package store
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"log"
 	"maps"
 	"os"
@@ -47,11 +49,8 @@ func (e *fileError) Is(target error) bool { return target == e.kind }
 // never reads it as one.
 const ledgerFile = "ledger.json"
 
-// ledger is what the session files alone cannot record. Parents holds each
-// subagent run's launcher as last read from its file, so a run whose file
-// turns unreadable is still known. Cleanup holds the sessions whose side
-// folder a delete has still to remove, with their launcher, if any, so the
-// family knows them until it is gone.
+// Parents records each run's last known launcher. Cleanup records output
+// still to remove after a confirmed deletion.
 type ledger struct {
 	Parents map[string]relation `json:"parents,omitempty"`
 	Cleanup map[string]relation `json:"cleanup,omitempty"`
@@ -267,14 +266,14 @@ type Summary struct {
 	Fill int `json:"fill,omitempty"`
 }
 
-// Sessions is the on-disk session set. One mutex per session id, so two
-// sessions never serialise against each other.
+// Sessions indexes one directory for its exclusive writer. Session IDs share
+// a fixed set of locks for the lifetime of the store.
 type Sessions struct {
 	dir string
 
 	mu    sync.RWMutex
 	index map[string]Summary
-	locks map[string]*sync.Mutex
+	locks [256]sync.Mutex
 
 	// ledMu guards led and serialises writes of its file.
 	ledMu sync.Mutex
@@ -291,7 +290,7 @@ func Open(dir string) (*Sessions, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("Create %s: check the permissions on its parent", dir)
 	}
-	s := &Sessions{dir: dir, index: map[string]Summary{}, locks: map[string]*sync.Mutex{}}
+	s := &Sessions{dir: dir, index: map[string]Summary{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("Read %s: check the permissions on the folder", dir)
@@ -299,8 +298,13 @@ func Open(dir string) (*Sessions, error) {
 	if s.led, err = readLedger(filepath.Join(dir, ledgerFile)); err != nil {
 		return nil, err
 	}
-	parents := map[string]relation{}
+	parents := maps.Clone(s.led.Parents)
+	if parents == nil {
+		parents = map[string]relation{}
+	}
+	present := make(map[string]bool, len(entries))
 	for _, e := range entries {
+		present[e.Name()] = true
 		if !namePattern.MatchString(e.Name()) {
 			continue
 		}
@@ -312,15 +316,19 @@ func Open(dir string) (*Sessions, error) {
 			continue
 		}
 		s.index[id] = summarise(sess, size)
+		delete(parents, id)
 		if sess.Parent != "" {
 			parents[sess.ID] = relation{Parent: sess.Parent, Project: sess.Project}
 		}
 	}
-	// A relation is kept for a file read now or one that could not be, and
-	// dropped for a file that is gone.
-	if !maps.Equal(parents, s.led.Parents) {
-		s.led.Parents = parents
-		if err := s.writeLedgerLocked(); err != nil {
+	for id, r := range parents {
+		if !present[id+".json"] && !present[r.Parent+".json"] && !present[id+".files"] {
+			delete(parents, id)
+		}
+	}
+	s.led.Parents = parents
+	if len(parents) > 0 || len(s.led.Cleanup) > 0 || present[ledgerFile] || present[ledgerFile+".backup"] {
+		if err := s.writeLedgerLocked(true); err != nil {
 			log.Printf("sessions/%s: %v", ledgerFile, err)
 		}
 	}
@@ -384,7 +392,7 @@ func (s *Sessions) relate(sess *Session) error {
 		s.led.Parents = map[string]relation{}
 	}
 	s.led.Parents[sess.ID] = r
-	if err := s.writeLedgerLocked(); err != nil {
+	if err := s.writeLedgerLocked(false); err != nil {
 		if had {
 			s.led.Parents[sess.ID] = old
 		} else {
@@ -421,21 +429,34 @@ func readRecord(path string) ([]byte, error) {
 // that does not parse is moved aside rather than written over, and one that
 // cannot be read is an error. Entries naming no session are dropped.
 func readLedger(path string) (ledger, error) {
+	for _, candidate := range []string{path, path + ".backup"} {
+		l, err := readLedgerCopy(candidate)
+		if !errors.Is(err, os.ErrNotExist) {
+			return l, err
+		}
+	}
+	return ledger{}, nil
+}
+
+func readLedgerCopy(path string) (ledger, error) {
 	var l ledger
 	raw, err := readRecord(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return l, nil
+		return l, err
 	}
 	if err != nil {
-		return l, fmt.Errorf("Read %s: %v: check the permissions on the file", path, err)
+		if errors.Is(err, os.ErrPermission) {
+			return l, fmt.Errorf("Read %s: check the permissions on the file: %w", path, err)
+		}
+		return l, fmt.Errorf("Read %s: %v: restore a readable regular file at that path", path, err)
 	}
 	if err := decodeLedger(raw, &l); err != nil {
 		aside, rerr := moveAside(path)
 		if rerr != nil {
 			return l, fmt.Errorf("Read %s: it is not valid JSON and cannot be moved aside: move or remove it", path)
 		}
-		log.Printf("sessions/%s: %v: moved to %s and started again", ledgerFile, err, filepath.Base(aside))
-		return ledger{}, nil
+		log.Printf("sessions/%s: %v: moved to %s", filepath.Base(path), err, filepath.Base(aside))
+		return ledger{}, os.ErrNotExist
 	}
 	for _, m := range []map[string]relation{l.Parents, l.Cleanup} {
 		for id, r := range m {
@@ -448,9 +469,8 @@ func readLedger(path string) (ledger, error) {
 	return l, nil
 }
 
-// decodeLedger reads a ledger, including one whose cleanup is a plain list of
-// ids, as it was first written. Such an entry takes the launcher recorded for
-// it, if any.
+// Cleanup accepts relations keyed by session ID or an array of IDs.
+// Array entries take their relation from Parents.
 func decodeLedger(raw []byte, l *ledger) error {
 	var file struct {
 		Parents map[string]relation `json:"parents"`
@@ -493,13 +513,26 @@ func moveAside(path string) (string, error) {
 	}
 }
 
-// writeLedgerLocked saves the ledger. The caller holds ledMu.
-func (s *Sessions) writeLedgerLocked() error {
+// writeLedgerLocked updates both copies under ledMu. At startup only missing
+// or differing copies need an atomic write.
+func (s *Sessions) writeLedgerLocked(onlyChanged bool) error {
 	data, err := json.Marshal(s.led)
 	if err != nil {
 		return err
 	}
-	return config.WriteAtomic(filepath.Join(s.dir, ledgerFile), append(data, '\n'), 0o600)
+	path := filepath.Join(s.dir, ledgerFile)
+	data = append(data, '\n')
+	for _, copyPath := range []string{path + ".backup", path} {
+		if onlyChanged {
+			if old, err := readRecord(copyPath); err == nil && bytes.Equal(old, data) {
+				continue
+			}
+		}
+		if err := config.WriteAtomic(copyPath, data, 0600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Pending reports whether a delete of the session removed its file and still
@@ -545,7 +578,7 @@ func (s *Sessions) markPending(id string) error {
 		rel = relation{Parent: sum.Parent, Project: sum.Project}
 	}
 	s.led.Cleanup[id] = rel
-	if err := s.writeLedgerLocked(); err != nil {
+	if err := s.writeLedgerLocked(false); err != nil {
 		delete(s.led.Cleanup, id)
 		return err
 	}
@@ -553,23 +586,29 @@ func (s *Sessions) markPending(id string) error {
 }
 
 // settle drops the session's pending cleanup, and its launcher too once the
-// session is gone. It reports whether a cleanup was pending.
-func (s *Sessions) settle(id string, gone bool) bool {
+// session is gone. A failed write leaves the record available to retry.
+func (s *Sessions) settle(id string, gone bool) error {
 	s.ledMu.Lock()
 	defer s.ledMu.Unlock()
-	_, was := s.led.Cleanup[id]
-	_, related := s.led.Parents[id]
+	cleanup, was := s.led.Cleanup[id]
+	parent, related := s.led.Parents[id]
 	if !was && !(gone && related) {
-		return false
+		return nil
 	}
 	delete(s.led.Cleanup, id)
 	if gone {
 		delete(s.led.Parents, id)
 	}
-	if err := s.writeLedgerLocked(); err != nil {
-		log.Printf("sessions/%s: %v", ledgerFile, err)
+	if err := s.writeLedgerLocked(false); err != nil {
+		if was {
+			s.led.Cleanup[id] = cleanup
+		}
+		if related {
+			s.led.Parents[id] = parent
+		}
+		return fmt.Errorf("Update %s: %w", ledgerFile, err)
 	}
-	return was
+	return nil
 }
 
 // retryCleanup removes the side folders earlier deletes left, except the one
@@ -615,8 +654,31 @@ func (s *Sessions) finishCleanup(id string) (bool, error) {
 	s.mu.Lock()
 	s.index[id] = summarise(sess, size)
 	s.mu.Unlock()
-	s.settle(id, false)
-	return false, nil
+	return false, s.settle(id, false)
+}
+
+// RemoveMissingRun deletes the output of a recorded run whose transcript is
+// absent. A nonempty parent limits the removal to its family.
+func (s *Sessions) RemoveMissingRun(parent, id string) error {
+	lock := s.lockFor(id)
+	lock.Lock()
+	defer lock.Unlock()
+	s.ledMu.Lock()
+	r := s.led.Parents[id]
+	s.ledMu.Unlock()
+	if r.Parent == "" || (parent != "" && r.Parent != parent) {
+		return ErrNotFound
+	}
+	if _, err := os.Lstat(s.path(id)); !errors.Is(err, os.ErrNotExist) {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("Session %s is present again: retry the deletion", id)
+	}
+	if err := s.markPending(id); err != nil {
+		return err
+	}
+	return s.removeOutput(id)
 }
 
 // removeFolder removes a session's side folder. Only a folder that is then
@@ -720,15 +782,66 @@ func (s *Sessions) readSession(id string) (*Session, int64, error) {
 	return &sess, int64(len(raw)), nil
 }
 
+// UnreadableSessions lists transcript entries that need manual recovery.
+func (s *Sessions) UnreadableSessions() ([]string, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	ids := []string{}
+	for _, entry := range entries {
+		id, ok := strings.CutSuffix(entry.Name(), ".json")
+		if !ok || !ValidID(id) {
+			continue
+		}
+		if _, err := s.Load(id); errors.Is(err, ErrUnreadable) {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// ArchiveUnreadable moves an unreadable entry aside under a free name.
+// A transcript that became readable stays in place.
+func (s *Sessions) ArchiveUnreadable(id string) (string, error) {
+	if !ValidID(id) {
+		return "", ErrNotFound
+	}
+	lock := s.lockFor(id)
+	lock.Lock()
+	defer lock.Unlock()
+	_, _, err := s.readSession(id)
+	if err == nil {
+		return "", fmt.Errorf("Session %s is readable again: refresh the list", id)
+	}
+	if !errors.Is(err, ErrUnreadable) {
+		return "", err
+	}
+	if len(s.Family(id)) != 0 {
+		return "", fmt.Errorf("Session %s still has recorded runs: resolve them in Settings > Projects before archiving it", id)
+	}
+	if err := s.settle(id, false); err != nil {
+		return "", err
+	}
+	path, err := moveAside(s.path(id))
+	if err != nil {
+		return "", fmt.Errorf("Archive session %s: %w", id, err)
+	}
+	s.mu.Lock()
+	delete(s.index, id)
+	s.mu.Unlock()
+	return path, nil
+}
+
 // unreadable names a session file that cannot be used and what clears it.
 func (s *Sessions) unreadable(id, why string) error {
 	return &fileError{kind: ErrUnreadable, msg: fmt.Sprintf(
-		"Session %s cannot be read from %s (%s): fix the file's permissions or remove the file, then try again",
+		"Session %s cannot be read from %s (%s): repair the file or archive it in Settings > Projects, then try again",
 		id, s.path(id), why)}
 }
 
 // Save writes the file, flushes it to the disk and refreshes the index.
-// Writes for one session are serialised; two sessions do not block each other.
+// IDs sharing a lock stripe are written one at a time.
 func (s *Sessions) Save(sess *Session) error {
 	return s.save(sess, true)
 }
@@ -751,13 +864,13 @@ func (s *Sessions) save(sess *Session, sync bool) error {
 	if sync {
 		write = config.WriteAtomic
 	}
+	lock := s.lockFor(sess.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	if err := s.relate(sess); err != nil {
 		return err
 	}
-	lock := s.lockFor(sess.ID)
-	lock.Lock()
 	err = write(s.path(sess.ID), data, 0o600)
-	lock.Unlock()
 	if err != nil {
 		return err
 	}
@@ -778,10 +891,8 @@ func (s *Sessions) SpillDir(id string) string {
 	return filepath.Join(s.filesDir(id), "spill")
 }
 
-// Delete records the cleanup, then removes the session file and its side
-// folder of saved tool output. A folder that cannot be removed keeps the
-// session indexed and its cleanup recorded, for a later delete or the next
-// start.
+// Delete records the cleanup before removing the transcript. A failed
+// removal keeps the output indexed and its cleanup pending.
 func (s *Sessions) Delete(id string) error {
 	s.retryCleanup(id)
 	lock := s.lockFor(id)
@@ -794,7 +905,6 @@ func (s *Sessions) Delete(id string) error {
 	if statErr != nil && !s.Pending(id) {
 		s.mu.Lock()
 		delete(s.index, id)
-		delete(s.locks, id)
 		s.mu.Unlock()
 		return ErrNotFound
 	}
@@ -804,8 +914,7 @@ func (s *Sessions) Delete(id string) error {
 	if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		// The session is still there, so its side folder stays with it and
 		// the delete can be tried again.
-		s.settle(id, false)
-		return fmt.Errorf("Delete session %s: %w", id, err)
+		return errors.Join(fmt.Errorf("Delete session %s: %w", id, err), s.settle(id, false))
 	}
 	return s.removeOutput(id)
 }
@@ -817,10 +926,11 @@ func (s *Sessions) removeOutput(id string) error {
 			"Session %s is deleted, but its saved output in %s could not be removed: check the permissions on that folder, then delete the session again",
 			id, s.filesDir(id))}
 	}
-	s.settle(id, true)
+	if err := s.settle(id, true); err != nil {
+		return &fileError{kind: ErrLeftBehind, msg: fmt.Sprintf("Session %s and its saved output are gone, but its cleanup record remains: %v. Retry the deletion", id, err)}
+	}
 	s.mu.Lock()
 	delete(s.index, id)
-	delete(s.locks, id)
 	s.mu.Unlock()
 	return nil
 }
@@ -844,14 +954,7 @@ func (s *Sessions) Has(id string) bool {
 func (s *Sessions) path(id string) string { return filepath.Join(s.dir, id+".json") }
 
 func (s *Sessions) lockFor(id string) *sync.Mutex {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if l, ok := s.locks[id]; ok {
-		return l
-	}
-	l := &sync.Mutex{}
-	s.locks[id] = l
-	return l
+	return &s.locks[crc32.ChecksumIEEE([]byte(id))%uint32(len(s.locks))]
 }
 
 func summarise(sess *Session, size int64) Summary {
