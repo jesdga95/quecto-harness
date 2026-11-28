@@ -67,7 +67,7 @@
 
   // A snapshot, since a server read back from state is a proxy.
   function record(s: McpServer): McpServerRecord {
-    const { problem: _p, state: _s, error: _e, tools: _t, running: _r, ...rest } = $state.snapshot(s);
+    const { problem: _p, state: _s, error: _e, tools: _t, listed: _l, listed_project: _project, running: _r, ...rest } = $state.snapshot(s);
     return rest;
   }
 
@@ -261,7 +261,7 @@
     const allow = draft.allow.includes(tool)
       ? draft.allow.filter((t) => t !== tool)
       : [...draft.allow, tool].sort();
-    edit({ allow });
+    draft = { ...draft, allow };
   }
 
   /** The tools to draw: what the last test listed, else what the server
@@ -269,6 +269,18 @@
   const tools = $derived.by(() => {
     if (probe?.ok && probe.tools) return probe.tools;
     return (stored?.tools ?? []).map((t) => ({ name: t, description: "" }));
+  });
+
+  const listed = $derived.by(() => probe?.ok === true || stored?.listed === true);
+  const listedProject = $derived.by(() => probe?.ok ? probe.listed_project : stored?.listed_project);
+  const allowed = $derived.by(() => new Set(draft?.allow ?? []));
+  const choices = $derived.by(() => {
+    const names = new Set(tools.map((tool) => tool.name));
+    const savedOnly = [...allowed].filter((name) => !names.has(name));
+    return [
+      ...tools.map((tool) => ({ ...tool, unlisted: false })),
+      ...savedOnly.map((name) => ({ name, description: "", unlisted: listed })),
+    ];
   });
 
   /** The word on a server's row, for the states worth reading at a glance. */
@@ -556,30 +568,37 @@
           <div class="flex items-center justify-between gap-4">
             <h4 class="field-head">Tools</h4>
             <span class="text-[12px] text-muted">
-              {draft.allow.length} of {tools.length || draft.allow.length} run without asking
+              {allowed.size} {allowed.size === 1 ? "tool" : "tools"} allowed
             </span>
           </div>
-          {#if tools.length === 0 && draft.allow.length === 0}
-            <p class="text-[12px] text-muted">Press Test, or send a message, to list what this server offers.</p>
-          {:else}
+          {#if listedProject}
+            <p class="break-all text-[12px] text-muted">Last listed for {listedProject}</p>
+          {/if}
+          {#if tools.length === 0}
+            <p class="text-[12px] text-muted">
+              {listed ? "The server listed no tools." : "Press Test, or send a message, to list what this server offers."}
+            </p>
+          {/if}
+          {#if choices.length}
             <span class="text-[11.5px] text-muted">
               A highlighted tool runs without a card in allowlist mode. Ask mode still shows every call.
             </span>
             <div class="flex flex-wrap gap-2">
-              {#each tools.length ? tools : draft.allow.map((t) => ({ name: t, description: "" })) as t (t.name)}
+              {#each choices as t (t.name)}
                 <button
                   type="button"
                   class="mono cursor-pointer truncate rounded-full border px-3 py-1.5 text-left text-[11.5px] transition-colors"
-                  class:border-brand={draft.allow.includes(t.name)}
-                  class:bg-brand={draft.allow.includes(t.name)}
-                  class:text-white={draft.allow.includes(t.name)}
-                  class:border-line={!draft.allow.includes(t.name)}
-                  class:bg-surface={!draft.allow.includes(t.name)}
-                  class:text-ink-2={!draft.allow.includes(t.name)}
+                  aria-pressed={allowed.has(t.name)}
+                  class:border-brand={allowed.has(t.name)}
+                  class:bg-brand={allowed.has(t.name)}
+                  class:text-white={allowed.has(t.name)}
+                  class:border-line={!allowed.has(t.name)}
+                  class:bg-surface={!allowed.has(t.name)}
+                  class:text-ink-2={!allowed.has(t.name)}
                   title={t.description || t.name}
                   onclick={() => toggleAllow(t.name)}
                 >
-                  {t.name}
+                  {t.name}{#if t.unlisted} <span class="text-[11px]">(Not in latest list)</span>{/if}
                 </button>
               {/each}
             </div>

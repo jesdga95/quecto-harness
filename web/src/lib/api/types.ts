@@ -242,16 +242,19 @@ export interface McpServer {
   error: string;
   /** What the server listed last, by name. */
   tools: string[];
+  listed: boolean;
+  listed_project: string;
   running: number;
 }
 
 /** The fields of a server the dialog writes. */
-export type McpServerRecord = Omit<McpServer, "problem" | "state" | "error" | "tools" | "running">;
+export type McpServerRecord = Omit<McpServer, "problem" | "state" | "error" | "tools" | "listed" | "listed_project" | "running">;
 
 /** The answer to the Test button. A failure is reported here rather than
     thrown, so the form can draw it. */
 export interface McpProbe {
   ok: boolean;
+  listed_project?: string;
   error?: string;
   server?: { name: string; version: string; protocol: string };
   tools?: { name: string; description: string }[];

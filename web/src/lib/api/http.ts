@@ -1766,6 +1766,7 @@ class HttpApi implements HarnessApi {
       ok: wire.ok ?? false,
       error: wire.error ?? "",
       server: wire.server,
+      listed_project: wire.listed_project,
       tools: wire.tools ?? [],
       notes: wire.notes ?? [],
     };
@@ -2017,6 +2018,8 @@ function toMcp(w: Partial<McpServer>): McpServer {
     state: w.state ?? "idle",
     error: w.error ?? "",
     tools: w.tools ?? [],
+    listed: w.listed ?? Boolean(w.tools?.length),
+    listed_project: w.listed_project ?? "",
     running: w.running ?? 0,
   };
 }
