@@ -62,46 +62,39 @@ func toolOutput(t *testing.T, s *Session, name string) string {
 	return ""
 }
 
+// entriesFrom returns the messages a session holds from one sender, in order.
+func entriesFrom(s *Session, from string) []store.Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.Entry
+	for _, e := range s.Entries {
+		if e.From == from {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // waitForEntriesFrom waits until a session holds n messages from one sender
-// and returns what they say, in order.
-func waitForEntriesFrom(t *testing.T, s *Session, from string, n int) []string {
+// and returns them, in order.
+func waitForEntriesFrom(t *testing.T, s *Session, from string, n int) []store.Entry {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	var said []string
+	var got []store.Entry
 	for time.Now().Before(deadline) {
-		said = said[:0]
-		s.mu.Lock()
-		for _, e := range s.Entries {
-			if e.From == from {
-				said = append(said, e.Content)
-			}
-		}
-		s.mu.Unlock()
-		if len(said) >= n {
-			return said
+		if got = entriesFrom(s, from); len(got) >= n {
+			return got
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	t.Fatalf("%d messages from %s arrived, want %d: %q", len(said), from, n, said)
+	t.Fatalf("%d messages from %s arrived, want %d", len(got), from, n)
 	return nil
 }
 
+// waitForEntryFrom waits for the first message from one sender.
 func waitForEntryFrom(t *testing.T, s *Session, from string) store.Entry {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		s.mu.Lock()
-		for _, e := range s.Entries {
-			if e.From == from {
-				s.mu.Unlock()
-				return e
-			}
-		}
-		s.mu.Unlock()
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Fatalf("no message from %s arrived", from)
-	return store.Entry{}
+	return waitForEntriesFrom(t, s, from, 1)[0]
 }
 
 // The launcher's turn carries on the moment the subagent starts, and what the
@@ -270,22 +263,15 @@ func TestASubagentThatSpokeStillReportsItsAnswer(t *testing.T) {
 	waitIdle(t, child)
 	waitIdle(t, s)
 	// Read again once everything has settled, so a third message would show.
-	var said []string
-	s.mu.Lock()
-	for _, e := range s.Entries {
-		if e.From == "Reviewer" {
-			said = append(said, e.Content)
-		}
-	}
-	s.mu.Unlock()
+	said := entriesFrom(s, "Reviewer")
 	if len(said) != 2 {
-		t.Fatalf("the launcher was told %d times, want the message and the answer: %q", len(said), said)
+		t.Fatalf("the launcher was told %d times, want the message and the answer", len(said))
 	}
-	if !strings.Contains(said[0], "which package did you mean") {
-		t.Errorf("the first = %q, want what the subagent chose to send", said[0])
+	if !strings.Contains(said[0].Content, "which package did you mean") {
+		t.Errorf("the first = %q, want what the subagent chose to send", said[0].Content)
 	}
-	if !strings.Contains(said[1], "has cmd, internal and web") {
-		t.Errorf("the second = %q, want the answer the turn ended on", said[1])
+	if !strings.Contains(said[1].Content, "has cmd, internal and web") {
+		t.Errorf("the second = %q, want the answer the turn ended on", said[1].Content)
 	}
 }
 
