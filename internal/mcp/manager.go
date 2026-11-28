@@ -233,13 +233,18 @@ func (m *Manager) listFor(ctx context.Context, s Server, project string) ([]Tool
 	}
 	in := m.instanceFor(s, project)
 	client, err := in.ensure(ctx, m)
-	if err == nil && (dirty || !known) {
-		fresh, _, lerr := client.ListTools(ctx)
-		if lerr == nil {
+	if err == nil {
+		var fresh []Tool
+		fresh, _, err = client.ListTools(ctx)
+		if errors.Is(err, errSessionExpired) {
+			if client, err = in.renew(ctx, m, client); err == nil {
+				fresh, _, err = client.ListTools(ctx)
+			}
+		}
+		if err == nil {
 			m.keepTools(s.Name, fresh)
 			return fresh, nil
 		}
-		err = lerr
 	}
 	if known {
 		return tools, nil
@@ -341,6 +346,16 @@ func (m *Manager) Call(ctx context.Context, project, server, tool string, args j
 		defer cancel()
 	}
 	res, err := client.CallTool(cctx, tool, args)
+	if errors.Is(err, errSessionExpired) {
+		// The server no longer knows the session, so the call never ran there.
+		if client, err = in.renew(cctx, m, client); err != nil {
+			if cctx.Err() != nil {
+				return Rendered{}, cctx.Err()
+			}
+			return Rendered{}, fmt.Errorf("MCP server %s is %w: %s", server, ErrNotRunning, err)
+		}
+		res, err = client.CallTool(cctx, tool, args)
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrClosed):
@@ -397,6 +412,12 @@ func (in *instance) ensure(ctx context.Context, m *Manager) (*Client, error) {
 		in.mu.Lock()
 		in.starting = nil
 		close(done)
+		if err != nil && ctx.Err() != nil {
+			// The caller gave up, which says nothing about the server.
+			in.idle()
+			in.mu.Unlock()
+			return nil, ctx.Err()
+		}
 		if err != nil {
 			in.state, in.lastErr = StateFailed, err.Error()
 			in.retryAt = time.Now().Add(backoff[min(in.failures, len(backoff)-1)])
@@ -411,7 +432,7 @@ func (in *instance) ensure(ctx context.Context, m *Manager) (*Client, error) {
 		}
 		in.client, in.state, in.lastErr, in.failures = c, StateRunning, "", 0
 		in.mu.Unlock()
-		go in.watch(c)
+		go in.watch(m, c)
 		return c, nil
 	}
 }
@@ -444,15 +465,25 @@ func (in *instance) start(ctx context.Context, m *Manager) (*Client, error) {
 }
 
 // watch marks the instance failed when its connection ends without being
-// asked to, so the next call starts it again after the backoff.
-func (in *instance) watch(c *Client) {
+// asked to, so the next call starts it again after the backoff. A session the
+// server ended is no failure, and the next offer lists its tools again.
+func (in *instance) watch(m *Manager, c *Client) {
 	<-c.Done()
 	in.mu.Lock()
-	defer in.mu.Unlock()
 	if in.client != c || in.stopping {
+		in.mu.Unlock()
 		return
 	}
 	in.client = nil
+	if c.Expired() {
+		in.idle()
+		in.mu.Unlock()
+		m.mu.Lock()
+		m.dirty[in.key.server] = true
+		m.mu.Unlock()
+		return
+	}
+	defer in.mu.Unlock()
 	in.state = StateFailed
 	in.lastErr = "it stopped"
 	if err := c.Err(); err != nil {
@@ -460,6 +491,38 @@ func (in *instance) watch(c *Client) {
 	}
 	in.retryAt = time.Now().Add(backoff[min(in.failures, len(backoff)-1)])
 	in.failures++
+}
+
+// renew replaces a client whose session the server ended with a new one.
+// The caller sends its request again on the result once, and no more. The
+// new session may list other tools, so the next offer lists again.
+func (in *instance) renew(ctx context.Context, m *Manager, old *Client) (*Client, error) {
+	in.forget(old)
+	m.mu.Lock()
+	m.dirty[in.key.server] = true
+	m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return in.ensure(ctx, m)
+}
+
+// forget drops a client whose session the server ended, so the next call
+// starts a new session without a backoff. A client the instance no longer
+// holds is left alone, along with whatever state replaced it.
+func (in *instance) forget(c *Client) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.client == c {
+		in.client = nil
+		in.idle()
+	}
+}
+
+// idle leaves the instance ready to start, with no failure on record. The
+// caller holds in.mu.
+func (in *instance) idle() {
+	in.state, in.lastErr, in.retryAt = StateIdle, "", time.Time{}
 }
 
 // openLog opens the server's stderr log, moving a full one aside first so

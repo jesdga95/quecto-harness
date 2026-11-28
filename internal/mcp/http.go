@@ -41,6 +41,9 @@ type httpTransport struct {
 	session string
 	version string
 	closed  bool
+	// expired is set once the server answered that it no longer knows the
+	// session. Nothing more is sent, since a request would go out without an id.
+	expired bool
 }
 
 func newHTTP(spec HTTPSpec) (*httpTransport, error) {
@@ -68,6 +71,12 @@ func (h *httpTransport) setVersion(v string) {
 
 func (h *httpTransport) Send(ctx context.Context, frame []byte) error {
 	h.mu.Lock()
+	// An ended session is reported before a closed transport, so a caller
+	// whose request never went out renews rather than drops it.
+	if h.expired {
+		h.mu.Unlock()
+		return errSessionExpired
+	}
 	if h.closed {
 		h.mu.Unlock()
 		return ErrClosed
@@ -101,6 +110,15 @@ func (h *httpTransport) Send(ctx context.Context, frame []byte) error {
 		h.mu.Unlock()
 	}
 	if err := statusError(resp, session != ""); err != nil {
+		if errors.Is(err, errSessionExpired) {
+			// The server has no such session to end, so Close sends nothing
+			// for it.
+			h.mu.Lock()
+			if h.session == session {
+				h.session, h.expired = "", true
+			}
+			h.mu.Unlock()
+		}
 		resp.Body.Close()
 		release()
 		return err

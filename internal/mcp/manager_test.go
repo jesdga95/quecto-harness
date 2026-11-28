@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,12 @@ func fakeServer(name string) Server {
 		Command: os.Args[0], Args: []string{"-test.run=^TestHelperProcess$"},
 		Env: map[string]string{"MCP_FAKE": "ok"},
 	}
+}
+
+// httpServer is a server record named remote that reaches the HTTP fake.
+func httpServer(srv *httptest.Server) Server {
+	s := httpSpec(srv)
+	return Server{Name: "remote", Enabled: true, Transport: TransportHTTP, URL: s.URL, Headers: s.Headers}
 }
 
 func newTestManager(t *testing.T, servers ...Server) *Manager {
@@ -239,5 +247,182 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition never held")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A server that forgot the session, as after its own restart, gets a new one
+// and the call still runs, without the server being counted as failed.
+func TestManagerRenewsAnEndedSession(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	m := newTestManager(t, httpServer(srv))
+	ctx := context.Background()
+	if _, err := m.Call(ctx, "", "remote", "echo", json.RawMessage(`{"text":"a"}`), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	forgetSession(h)
+	r, err := m.Call(ctx, "", "remote", "echo", json.RawMessage(`{"text":"b"}`), time.Minute)
+	if err != nil || r.Text != `{"text":"b"}` {
+		t.Fatalf("after the server forgot the session: %+v, %v", r, err)
+	}
+	if st := stateOf(m, "remote"); st.State != StateRunning || st.Error != "" {
+		t.Errorf("state = %+v, want running with no error", st)
+	}
+}
+
+// A session that ended under a tools/list is renewed there too, and leaves
+// the server ready for the next call rather than failed.
+func TestManagerRenewsASessionEndedUnderAList(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	m := newTestManager(t, httpServer(srv))
+	ctx := context.Background()
+	if offered, _ := m.Tools(ctx, ""); len(offered) != 4 {
+		t.Fatalf("first list = %d tools", len(offered))
+	}
+	forgetSession(h)
+	m.mu.Lock()
+	m.dirty["remote"] = true
+	m.mu.Unlock()
+	if offered, _ := m.Tools(ctx, ""); len(offered) != 4 {
+		t.Fatalf("list after the session ended = %d tools", len(offered))
+	}
+	if _, err := m.Call(ctx, "", "remote", "echo", json.RawMessage(`{"text":"c"}`), time.Minute); err != nil {
+		t.Fatalf("the call after the list = %v", err)
+	}
+	if st := stateOf(m, "remote"); st.State != StateRunning || st.Error != "" {
+		t.Errorf("state = %+v", st)
+	}
+}
+
+// A renewed session may list other tools. The turn under way keeps its
+// offer and the next one lists again from the new session.
+func TestManagerListsAgainAfterARenewedSession(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	h.catalog = []string{"a", "b"}
+	m := newTestManager(t, httpServer(srv))
+	ctx := context.Background()
+	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__a" {
+		t.Fatalf("first offer = %s", wires(offered))
+	}
+	forgetSession(h)
+	if _, err := m.Call(ctx, "", "remote", "echo", nil, time.Minute); err != nil {
+		t.Fatalf("call across the renewal = %v", err)
+	}
+	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__b" {
+		t.Fatalf("offer after the renewal = %s", wires(offered))
+	}
+}
+
+// A 404 on notifications/initialized ends a session that was never used, so
+// the start runs initialize once more rather than counting a failure.
+func TestManagerStartsAgainWhenInitializedIsRefused(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	h.lost = 1
+	m := newTestManager(t, httpServer(srv))
+	ctx := context.Background()
+	if _, err := m.Call(ctx, "", "remote", "echo", json.RawMessage(`{"text":"a"}`), time.Minute); err != nil {
+		t.Fatalf("call = %v", err)
+	}
+	if st := stateOf(m, "remote"); st.State != StateRunning || st.Error != "" {
+		t.Errorf("state = %+v, want running", st)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inits != 2 {
+		t.Errorf("initializes = %d, want 2", h.inits)
+	}
+}
+
+// Probe gets the same one more initialize, and no more than one.
+func TestManagerProbeStartsAgainWhenInitializedIsRefused(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	s := httpServer(srv)
+	m := newTestManager(t, s)
+	ctx := context.Background()
+	h.lost = 1
+	if _, tools, _, err := m.Probe(ctx, s, ""); err != nil || len(tools) != 4 {
+		t.Fatalf("probe = %d tools, %v", len(tools), err)
+	}
+	h.mu.Lock()
+	h.lost, h.inits = 3, 0
+	h.mu.Unlock()
+	if _, _, _, err := m.Probe(ctx, s, ""); !errors.Is(err, errSessionExpired) {
+		t.Fatalf("probe with every session lost = %v", err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inits != 2 {
+		t.Errorf("initializes = %d, want 2", h.inits)
+	}
+}
+
+// A late 404 from a client already replaced leaves the instance as the new
+// client's start left it: a refused initialize keeps its retry wait.
+func TestManagerKeepsTheWaitAfterALateEndedSession(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	s := httpServer(srv)
+	m := newTestManager(t, s)
+	ctx := context.Background()
+	if _, err := m.Call(ctx, "", "remote", "echo", json.RawMessage(`{"text":"a"}`), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	in := m.instanceFor(s, "")
+	in.mu.Lock()
+	old := in.client
+	in.mu.Unlock()
+	forgetSession(h)
+	h.mu.Lock()
+	h.initStatus = http.StatusServiceUnavailable
+	h.mu.Unlock()
+	if _, err := m.Call(ctx, "", "remote", "echo", json.RawMessage(`{"text":"b"}`), time.Minute); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("call with initialize refused = %v", err)
+	}
+	if _, err := old.CallTool(ctx, "echo", nil); !errors.Is(err, errSessionExpired) {
+		t.Fatalf("second call on the old client = %v", err)
+	}
+	in.forget(old)
+	if st := stateOf(m, "remote"); st.State != StateFailed {
+		t.Fatalf("state after the late 404 = %+v, want failed", st)
+	}
+	h.mu.Lock()
+	before := h.inits
+	h.mu.Unlock()
+	if _, err := m.Call(ctx, "", "remote", "echo", nil, time.Minute); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("call inside the wait = %v", err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inits != before {
+		t.Errorf("an initialize went out inside the retry wait")
+	}
+}
+
+// A session that ends on a notification, with no call to renew it, still has
+// the next offer list the tools again.
+func TestManagerListsAgainAfterASessionEndsOnItsOwn(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	h.catalog = []string{"a", "b"}
+	m := newTestManager(t, httpServer(srv))
+	ctx := context.Background()
+	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__a" {
+		t.Fatalf("first offer = %s", wires(offered))
+	}
+	m.mu.Lock()
+	var c *Client
+	for k, in := range m.inst {
+		if k.server == "remote" {
+			in.mu.Lock()
+			c = in.client
+			in.mu.Unlock()
+		}
+	}
+	m.mu.Unlock()
+	if c == nil {
+		t.Fatal("no running client")
+	}
+	forgetSession(h)
+	_ = c.send(ctx, message{Method: "notifications/cancelled", Params: json.RawMessage(`{}`)})
+	waitFor(t, func() bool { return stateOf(m, "remote").State == StateIdle })
+	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__b" {
+		t.Fatalf("offer after the session ended = %s", wires(offered))
 	}
 }
