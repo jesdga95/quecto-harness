@@ -213,6 +213,7 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
         before: event.before,
         after: event.after,
         summary: event.summary,
+        seq: event.seq,
       });
       break;
     }
@@ -251,6 +252,7 @@ export function pushUser(
   seq = 0,
   edited = false,
   from = "",
+  steer = false,
 ): void {
-  items.push({ kind: "user", id: nextId("u"), seq, text, files, edited, from, at: Date.now() });
+  items.push({ kind: "user", id: nextId("u"), seq, text, files, edited, from, at: Date.now(), steer });
 }

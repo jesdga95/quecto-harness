@@ -1347,7 +1347,7 @@ function onEvent(event: HarnessEvent): void {
   if (event.type === "message") {
     app.steer = null;
     if (!app.items.some((i) => i.kind === "user" && i.seq === event.seq)) {
-      pushUser(app.items, event.text, event.files, event.seq, false, event.from);
+      pushUser(app.items, event.text, event.files, event.seq, false, event.from, event.steer);
     }
     return;
   }

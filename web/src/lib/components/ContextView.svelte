@@ -118,7 +118,7 @@
   );
   const spent = $derived(sums.first + sums.gen + sums.tool);
   const requests = $derived(turns.flatMap((c) => c.perRequest ?? []));
-  const rates = $derived(requests.filter((r) => r.genMs > 0 && r.tokens > 0).map((r) => r.tokens / (r.genMs / 1000)));
+  const rates = $derived(requests.flatMap((r) => (r.genMs > 0 && r.tokens ? [r.tokens / (r.genMs / 1000)] : [])));
   const firsts = $derived(requests.filter((r) => r.firstMs > 0).map((r) => r.firstMs));
 
   // A line through a series, scaled to a 100 by 28 box with a little room.
@@ -145,23 +145,44 @@
   const TOP = 10;
   const BASE = 124;
   const growth = $derived.by(() => {
-    const points: { turn: number; req: number; v: number }[] = [];
-    turns.forEach((c, i) => {
-      const each = (c.perRequest ?? []).flatMap((r) => (r.window !== undefined ? [r.window] : []));
-      const vs = each.length > 0 ? each : c.window !== undefined ? [c.window] : [];
-      vs.forEach((v, j) => points.push({ turn: i + 1, req: j + 1, v }));
+    // A compaction falls from the context before it to the context after it,
+    // at the x of the request before it. One a turn names among its requests
+    // is drawn there, and one in the turn still running waits for it.
+    const points: { turn: number; req: number; v: number; before?: number; slot: number }[] = [];
+    let turn = 0;
+    let slot = -1;
+    const fall = ({ before, after }: { before: number; after: number }) => {
+      if (slot < 0) return;
+      if (points.at(-1)!.v !== before) points.push({ turn, req: 0, v: before, slot });
+      points.push({ turn, req: 0, v: after, before, slot });
+    };
+    const named = new Set(requests.flatMap((r) => r.compacted?.seq ?? []));
+    // The running turn began at the last message that was not steered into it.
+    const start = app.items.map((i) => i.kind === "user" && !i.steer).lastIndexOf(true);
+    const open = running && start >= 0 ? start : app.items.length;
+    app.items.forEach((item, i) => {
+      if (item.kind === "compaction" && i < open && !named.has(item.seq ?? -1)) fall(item);
+      if (item.kind !== "assistant" || !item.cost) return;
+      const c = item.cost as TurnCost;
+      turn++;
+      let req = 0;
+      for (const r of c.perRequest ?? []) {
+        if (r.compacted) fall(r.compacted);
+        else if (r.window !== undefined) points.push({ turn, req: ++req, v: r.window, slot: ++slot });
+      }
+      if (req === 0 && c.window !== undefined) points.push({ turn, req: 1, v: c.window, slot: ++slot });
     });
     if (points.length < 2) return null;
     const right = W - 36;
     const max = use.limited ? app.usage.n_ctx : niceCeil(Math.max(...points.map((p) => p.v)));
-    const x = (i: number) => 4 + (i * (right - 4)) / (points.length - 1);
+    const x = (i: number) => 4 + (i * (right - 4)) / Math.max(slot, 1);
     const y = (v: number) => BASE - (Math.min(v, max) / max) * (BASE - TOP);
-    const at = points.map((p, i) => ({ ...p, x: x(i), y: y(p.v) }));
+    const at = points.map((p) => ({ ...p, x: x(p.slot), y: y(p.v) }));
     const line = at.map((p) => `${p.x},${p.y}`).join(" ");
 
-    // Where each turn starts and ends along the line.
+    // Where each turn's requests start and end along the line.
     const spans: { turn: number; from: number; to: number }[] = [];
-    for (const p of at) {
+    for (const p of at.filter((p) => p.req > 0)) {
       const span = spans.at(-1);
       if (span && span.turn === p.turn) span.to = p.x;
       else spans.push({ turn: p.turn, from: p.x, to: p.x });
@@ -193,16 +214,26 @@
     };
   });
 
+  // The nearest point along x, and among points that share an x the nearest
+  // along y, a compaction where two coincide. The top of a compaction's fall
+  // is a vertex, not a reading.
   let hover = $state<number | null>(null);
   function track(e: PointerEvent) {
     if (!growth) return;
     const box = (e.currentTarget as SVGRectElement).ownerSVGElement!.getBoundingClientRect();
     const sx = ((e.clientX - box.left) / box.width) * W;
-    let best = 0;
-    for (let i = 1; i < growth.at.length; i++) {
-      if (Math.abs(growth.at[i].x - sx) < Math.abs(growth.at[best].x - sx)) best = i;
-    }
-    hover = best;
+    const sy = ((e.clientY - box.top) / box.height) * H;
+    let best = -1;
+    let bx = Infinity;
+    let by = Infinity;
+    growth.at.forEach((p, i) => {
+      if (p.req === 0 && p.before === undefined) return;
+      const dx = Math.abs(p.x - sx);
+      const dy = Math.abs(p.y - sy);
+      const tie = dx === bx && dy === by && p.before !== undefined;
+      if (dx < bx || (dx === bx && dy < by) || tie) [best, bx, by] = [i, dx, dy];
+    });
+    hover = best < 0 ? null : best;
   }
   const point = $derived(growth && hover !== null ? growth.at[hover] : null);
 
@@ -414,7 +445,7 @@
             </svg>
             {#if point}
               <div class="ctxv-tip" style="left:{Math.min(Math.max(point.x, 60), W - 60)}px">
-                Turn {point.turn}, request {point.req} <b>{k(point.v)}</b>
+                {#if point.before !== undefined}Compacted {k(point.before)} to <b>{k(point.v)}</b>{:else}Turn {point.turn}, request {point.req} <b>{k(point.v)}</b>{/if}
               </div>
             {/if}
           </div>

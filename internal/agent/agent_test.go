@@ -2639,6 +2639,40 @@ func TestEndToEndTurn(t *testing.T) {
 	if !sawDivider {
 		t.Fatal("no compaction divider")
 	}
+	// The turn's requests name the compaction where it happened, with the
+	// context it went from and to and the entry it wrote.
+	var rows []any
+	seq := 0
+	for _, e := range doc.Entries {
+		if r, ok := e.Meta["per_request"].([]any); ok {
+			rows = r
+		}
+		if e.Kind == "compaction" {
+			seq = e.Seq
+		}
+	}
+	var shape []string
+	for _, r := range rows {
+		row, _ := r.(map[string]any)
+		_, measured := row["window_tokens"]
+		before, b := metaInt(row["before"])
+		after, a := metaInt(row["after"])
+		at, _ := metaInt(row["seq"])
+		switch {
+		case b && a && before > 0 && after > 0 && at == seq && !measured:
+			shape = append(shape, "compaction")
+		case measured && !b && !a:
+			shape = append(shape, "request")
+		case b || a:
+			shape = append(shape, mustJSON(row))
+		}
+	}
+	if got := strings.Join(shape, ","); got != "request,compaction,request" {
+		t.Errorf("per_request = %s, want the compaction before the last request", got)
+	}
+	if ev := h.rec.ofType("compacted"); len(ev) != 1 || ev[0].Fields["entry"] != seq {
+		t.Errorf("compacted events = %v, want one naming entry %d", ev, seq)
+	}
 	if !strings.Contains(mustJSON(h.replay.Body(2)), "denied by user: not that one") {
 		t.Error("the denial never reached the model")
 	}

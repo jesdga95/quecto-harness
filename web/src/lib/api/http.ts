@@ -315,6 +315,8 @@ interface WireEvent {
   compactable?: boolean;
   before?: number;
   after?: number;
+  entry?: number;
+  steer?: boolean;
   summary?: string;
   title?: string;
   todos?: { text?: string; status?: string }[] | null;
@@ -608,7 +610,7 @@ function toCost(src: object | null | undefined): TurnCost | undefined {
 }
 
 /** The requests of a turn. A row without its counts is dropped rather than
-    drawn as zero. */
+    drawn as zero, unless it is a summary, which keeps its place. */
 function toRequests(raw: unknown): RequestCost[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: RequestCost[] = [];
@@ -617,8 +619,11 @@ function toRequests(raw: unknown): RequestCost[] | undefined {
     const r = row as Record<string, unknown>;
     const n = (key: string) => (typeof r[key] === "number" ? (r[key] as number) : undefined);
     const tokens = n("tokens");
-    if (tokens === undefined) continue;
-    out.push({ window: n("window_tokens"), tokens, firstMs: n("first_ms") ?? 0, genMs: n("gen_ms") ?? 0 });
+    const before = n("before");
+    const after = n("after");
+    const compacted = before !== undefined && after !== undefined ? { before, after, seq: n("seq") } : undefined;
+    if (tokens === undefined && !compacted) continue;
+    out.push({ window: n("window_tokens"), tokens, firstMs: n("first_ms") ?? 0, genMs: n("gen_ms") ?? 0, compacted });
   }
   return out;
 }
@@ -655,6 +660,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
         edited: e.edited === true,
         from: e.from ?? "",
         at: toTime(e.at),
+        steer: e.meta?.steer === true,
       });
     }
     return;
@@ -736,6 +742,7 @@ function addEntry(items: TranscriptItem[], e: WireEntry): void {
       before: count(meta.before),
       after: count(meta.after),
       summary: e.content ?? "",
+      seq: e.seq,
     });
     return;
   }
@@ -1406,6 +1413,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           before: ev.before ?? 0,
           after: ev.after ?? 0,
           summary: ev.summary ?? "",
+          seq: ev.entry,
         },
       ];
 
@@ -1421,10 +1429,11 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
       return [
         {
           type: "message",
-          seq: ev.seq ?? 0,
+          seq: ev.entry ?? 0,
           text: ev.text ?? "",
           from: ev.from ?? "",
           files: toAttached(ev.attachments),
+          steer: ev.steer === true,
         },
       ];
 

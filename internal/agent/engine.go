@@ -549,10 +549,11 @@ func (e *Engine) absorbSteer(s *Session) bool {
 
 // publishMessage draws a message no browser has drawn for itself. A message
 // typed into a composer is on the page before the harness has it; one taken
-// off the queue is not.
+// off the queue is not. The stream numbers its events as seq, so the entry's
+// number is entry.
 func (e *Engine) publishMessage(s *Session, entry store.Entry) {
-	e.publish(s.ID, ev("message", map[string]any{"seq": entry.Seq, "text": entry.Content,
-		"from": entry.From, "attachments": AttachmentFields(entry.Attachments)}))
+	e.publish(s.ID, ev("message", map[string]any{"entry": entry.Seq, "text": entry.Content,
+		"from": entry.From, "attachments": AttachmentFields(entry.Attachments), "steer": entry.Meta["steer"] == true}))
 }
 
 // flushSteer sends a message the turn ended without picking up. A stop leaves
@@ -2437,14 +2438,15 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 			break
 		}
 	}
-	s.appendEntry(store.Entry{Kind: "compaction", Role: "user",
+	entry := s.appendEntry(store.Entry{Kind: "compaction", Role: "user",
 		Content: summary, InContext: true, Visible: true, Meta: meta, Usage: rec})
 	after := s.computeFill()
 	s.Entries[len(s.Entries)-1].Meta["after"] = after
 	s.mu.Unlock()
 
 	e.save(s)
-	e.publish(s.ID, ev("compacted", map[string]any{"before": before, "after": after, "summary": summary}))
+	// The stream numbers its events as seq, so the entry's number is entry.
+	e.publish(s.ID, ev("compacted", map[string]any{"before": before, "after": after, "summary": summary, "entry": entry.Seq}))
 	return nil
 }
 
