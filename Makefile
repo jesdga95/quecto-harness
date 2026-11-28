@@ -2,6 +2,8 @@ BINARY  := quecto-harness
 VERSION ?= 0.1.0
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE    := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+# -trimpath keeps the builder's folders out of the binary.
+BUILDFLAGS := -trimpath
 LDFLAGS := -s -w \
 	-X main.version=$(VERSION) \
 	-X main.commit=$(COMMIT) \
@@ -18,11 +20,11 @@ web:
 	touch internal/web/dist/.gitkeep
 
 build: web
-	CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/quecto-harness
+	CGO_ENABLED=0 go build $(BUILDFLAGS) -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/quecto-harness
 
 # Backend-only work needs no Node; the binary then serves the fallback page.
 backend:
-	CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/quecto-harness
+	CGO_ENABLED=0 go build $(BUILDFLAGS) -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/quecto-harness
 
 test:
 	go test -race ./...
