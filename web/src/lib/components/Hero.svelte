@@ -1,7 +1,7 @@
 <script lang="ts">
   import Composer from "./Composer.svelte";
   import ProjectTitle from "./ProjectTitle.svelte";
-  import { app } from "../state/app.svelte";
+  import { app, NO_FOLDER } from "../state/app.svelte";
   import { leave } from "../firstsend";
   import { shortPath } from "../format";
 
@@ -50,7 +50,7 @@
         <path d={height > 0 ? halves[1] : ""} pathLength="1" />
       </svg>
       <ProjectTitle />
-      {#if app.projectPath}
+      {#if app.projectPath && app.projectPath !== NO_FOLDER}
         <div class="hero-path num">{shortPath(app.projectPath)}</div>
       {/if}
     </div>

@@ -59,21 +59,25 @@ func (o Offer) Knows(name string) bool {
 }
 
 // modeTools is the fixed list each mode may run. Plan holds no tool that
-// writes a file, and write_plan and exit_plan_mode run in plan mode alone.
-// Every mode sends the same tools, so a mode switch leaves the head of the
-// prompt as it was; a call outside the mode's list is answered, not run.
+// writes a file, change_directory included since a move copies files, and
+// write_plan and exit_plan_mode run in plan mode alone. Every mode sends the
+// same tools, so a mode switch leaves the head of the prompt as it was; a
+// call outside the mode's list is answered, not run.
 var modeTools = map[config.WorkMode][]string{
 	config.WorkPlan: {"read", "read_image", "grep", "web_search", "ask_user_question",
-		"subagent", "send_message", "write_plan", "exit_plan_mode", "bash", "processes"},
+		"subagent", "send_message", "write_plan", "exit_plan_mode", "bash", "processes",
+		"request_directory"},
 	config.WorkExecute: {"read", "read_image", "grep", "web_search", "write", "edit",
-		"todo_write", "ask_user_question", "subagent", "send_message", "bash", "processes"},
+		"todo_write", "ask_user_question", "subagent", "send_message", "bash", "processes",
+		"change_directory", "request_directory"},
 }
 
 // setTools is the fixed list each harness toolset offers. A set outside it is
 // a call that is answered rather than run, whatever the mode.
 var setTools = map[config.Toolset][]string{
 	config.ToolsetFull: {"read", "read_image", "grep", "web_search", "write", "edit", "todo_write",
-		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash", "processes"},
+		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash", "processes",
+		"change_directory", "request_directory"},
 	config.ToolsetMinimal: {"read", "write", "edit", "bash", "processes"},
 }
 
@@ -172,7 +176,9 @@ func (o Offer) Sends(name string) bool {
 		return false
 	}
 	switch name {
-	case "ask_user_question", "write_plan", "exit_plan_mode":
+	case "ask_user_question", "write_plan", "exit_plan_mode", "change_directory":
+		// change_directory moves the conversation a person started, which a
+		// run they launched may not do.
 		return o.Ask
 	case "subagent":
 		return o.Agents
@@ -412,6 +418,29 @@ func buildSchemas() []llm.Tool {
 					"background":  map[string]any{"type": "boolean", "description": "Start the command and return at once, with no deadline. Default false."},
 				},
 				"required":             []string{"command"},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llm.FunctionSpec{
+			Name:        "change_directory",
+			Description: prompts.ToolChangeDirectory(),
+			Parameters: mustSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string"},
+				},
+				"required":             []string{"path"},
+				"additionalProperties": false,
+			}),
+		}},
+		{Type: "function", Function: llm.FunctionSpec{
+			Name:        "request_directory",
+			Description: prompts.ToolRequestDirectory(),
+			Parameters: mustSchema(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string"},
+				},
 				"additionalProperties": false,
 			}),
 		}},

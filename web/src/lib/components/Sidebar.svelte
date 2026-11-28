@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ChatCircle from "phosphor-svelte/lib/ChatCircleIcon";
   import Folder from "phosphor-svelte/lib/FolderIcon";
   import FolderOpen from "phosphor-svelte/lib/FolderOpenIcon";
   import PlusCircle from "phosphor-svelte/lib/PlusCircleIcon";
@@ -24,9 +25,11 @@
     selectSession,
     sessionsOf,
     removeProject,
-    deleteSession,
+    deleteSessionAsked,
     renameSession,
     reorderProjects,
+    NO_FOLDER,
+    NO_FOLDER_LABEL,
   } from "../state/app.svelte";
   import { keyLabels, SEARCH_EVENT } from "../keys";
   import { tick } from "svelte";
@@ -208,6 +211,71 @@
   }
 </script>
 
+{#snippet tree(path: string)}
+  <div class="side-tree">
+    {#each visible(path) as session (session.id)}
+      {#if renaming === session.id}
+        <input
+          class="input mb-[3px]"
+          bind:value={draft}
+          onkeydown={(e) => {
+            if (e.key === "Enter") {
+              renaming = "";
+              void renameSession(session.id, draft);
+            }
+            if (e.key === "Escape") renaming = "";
+          }}
+          onblur={() => (renaming = "")}
+          aria-label="Session name"
+        />
+      {:else}
+        {@const held = needsYou(session.id)}
+        {@const back = hasBackground(session.id)}
+        <div class="row-wrap">
+          <button
+            class="side-row session-row"
+            class:is-active={session.id === app.sessionId}
+            onclick={() => selectSession(session.id)}
+          >
+            {#if held}
+              <span class="needs-you" role="status" aria-label="Waiting on you"></span>
+            {:else if back}
+              <span class="background" role="status" aria-label="Running in the background"></span>
+            {:else if isWorking(session.id)}
+              <span class="working" role="status" aria-label="Working"></span>
+            {:else if turnFinished(session.id)}
+              <span class="finished" role="status" aria-label="Turn finished"></span>
+            {/if}
+            <span class="min-w-0 flex-1 truncate">{session.title}</span>
+            {#if held}
+              <span class="side-meta text-[11px] text-warn">Pending</span>
+            {:else if back}
+              <span class="side-meta text-[11px] text-tools">Background</span>
+            {/if}
+          </button>
+          <div class="row-act">
+            <RowMenu
+              onrename={() => {
+                draft = session.title;
+                renaming = session.id;
+              }}
+              ondelete={() => deleteSessionAsked(session.id, path === NO_FOLDER)}
+            />
+          </div>
+        </div>
+      {/if}
+    {/each}
+    {#if !query.trim() && (expanded.includes(path) ? sessions(path).length > SHOWN : sessions(path).length > visible(path).length)}
+      <button class="side-row session-row side-more" onclick={() => toggleExpanded(path)}>
+        <span class="side-more-mark" class:is-open={expanded.includes(path)}><CaretDown /></span>
+        {expanded.includes(path)
+          ? "Show less"
+          : `Show ${sessions(path).length - visible(path).length} more`}
+      </button>
+    {/if}
+  </div>
+{/snippet}
+
 <!-- Two edges line everything up: icons, the logo and labels start 20px in,
      and icons, counts and times end 20px from the right. Row backgrounds run
      from 12px in on each side. -->
@@ -317,75 +385,7 @@
           </div>
 
           {#if !isFolded(project.path) && sessions(project.path).length > 0}
-            <div class="side-tree">
-              {#each visible(project.path) as session (session.id)}
-                {#if renaming === session.id}
-                  <input
-                    class="input mb-[3px]"
-                    bind:value={draft}
-                    onkeydown={(e) => {
-                      if (e.key === "Enter") {
-                        renaming = "";
-                        void renameSession(session.id, draft);
-                      }
-                      if (e.key === "Escape") renaming = "";
-                    }}
-                    onblur={() => (renaming = "")}
-                    aria-label="Session name"
-                  />
-              {:else}
-                {@const held = needsYou(session.id)}
-                {@const back = hasBackground(session.id)}
-                <div class="row-wrap">
-                  <button
-                    class="side-row session-row"
-                    class:is-active={session.id === app.sessionId}
-                    onclick={() => selectSession(session.id)}
-                  >
-                    {#if held}
-                      <span class="needs-you" role="status" aria-label="Waiting on you"></span>
-                    {:else if back}
-                      <span class="background" role="status" aria-label="Running in the background"></span>
-                    {:else if isWorking(session.id)}
-                      <span class="working" role="status" aria-label="Working"></span>
-                    {:else if turnFinished(session.id)}
-                      <span class="finished" role="status" aria-label="Turn finished"></span>
-                    {/if}
-                    <span class="min-w-0 flex-1 truncate">{session.title}</span>
-                    {#if held}
-                      <span class="side-meta text-[11px] text-warn">Pending</span>
-                    {:else if back}
-                      <span class="side-meta text-[11px] text-tools">Background</span>
-                    {/if}
-                  </button>
-                  <div class="row-act">
-                    <RowMenu
-                      onrename={() => {
-                        draft = session.title;
-                        renaming = session.id;
-                      }}
-                      ondelete={async () => {
-                        const ok = await confirm({
-                          title: "Delete this session?",
-                          body: "Its transcript is removed from disk. This cannot be undone.",
-                          confirmLabel: "Delete",
-                        });
-                        if (ok) await deleteSession(session.id);
-                      }}
-                    />
-                  </div>
-                </div>
-              {/if}
-            {/each}
-              {#if !query.trim() && (expanded.includes(project.path) ? sessions(project.path).length > SHOWN : sessions(project.path).length > visible(project.path).length)}
-                <button class="side-row session-row side-more" onclick={() => toggleExpanded(project.path)}>
-                  <span class="side-more-mark" class:is-open={expanded.includes(project.path)}><CaretDown /></span>
-                  {expanded.includes(project.path)
-                    ? "Show less"
-                    : `Show ${sessions(project.path).length - visible(project.path).length} more`}
-                </button>
-              {/if}
-            </div>
+            {@render tree(project.path)}
           {:else}
             <div class="mb-2"></div>
           {/if}
@@ -394,6 +394,29 @@
           {/if}
         </div>
       {/each}
+
+      <!-- Conversations started without a project. They have no folder to
+           show, so the group is fixed at the end and takes no menu. -->
+      {#if !query.trim() || sessions(NO_FOLDER).length > 0}
+        <div class="project-group" role="group">
+          <div class="row-wrap">
+            <button
+              class="side-row project-row"
+              class:is-current={app.projectPath === NO_FOLDER}
+              onclick={() => pressProject(NO_FOLDER)}
+              aria-expanded={!isFolded(NO_FOLDER)}
+            >
+              <span class="folder-glyph" class:is-open={!isFolded(NO_FOLDER)}><ChatCircle /></span>
+              <span class="min-w-0 flex-1 truncate">{NO_FOLDER_LABEL}</span>
+            </button>
+          </div>
+          {#if !isFolded(NO_FOLDER) && sessions(NO_FOLDER).length > 0}
+            {@render tree(NO_FOLDER)}
+          {:else}
+            <div class="mb-2"></div>
+          {/if}
+        </div>
+      {/if}
     </nav>
 
     <!-- The list ends against a hairline, so its last row never runs into

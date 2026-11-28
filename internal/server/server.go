@@ -68,6 +68,9 @@ type probe struct {
 func New(cfg *config.Store, st *store.Sessions, files *store.Files, uploads *store.Uploads,
 	engine *agent.Engine, pb *perms.Broker, pool *llm.Pool, searches *search.Providers, hub *Hub,
 	token, listen, version string) *Server {
+	if hub != nil && st != nil && engine != nil {
+		hub.exists = func(id string) bool { return engine.Holds(id) || st.Exists(id) }
+	}
 	return &Server{
 		cfg: cfg, store: st, files: files, uploads: uploads, engine: engine, perms: pb,
 		pool: pool, searches: searches, hub: hub,
@@ -102,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/state", s.getState)
+	mux.HandleFunc("GET /api/storage", s.getStorage)
 	mux.HandleFunc("GET /api/models", s.getModels)
 	mux.HandleFunc("GET /api/models/props", s.getModelProps)
 	mux.HandleFunc("POST /api/fs/pick", s.postPick)
@@ -121,6 +125,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/git/{op}", s.postGitAction)
 	mux.HandleFunc("GET /api/allowlist", s.getAllowlist)
 	mux.HandleFunc("DELETE /api/allowlist", s.deleteAllowlist)
+	mux.HandleFunc("GET /api/recovery/items", s.listRecoveryItems)
+	mux.HandleFunc("DELETE /api/recovery/items/{name}", s.deleteRetained)
+	mux.HandleFunc("GET /api/recovery/sessions", s.listUnreadableSessions)
+	mux.HandleFunc("POST /api/recovery/sessions/{id}/archive", s.archiveUnreadableSession)
 	mux.HandleFunc("GET /api/sessions", s.listSessions)
 	mux.HandleFunc("POST /api/sessions", s.createSession)
 	mux.HandleFunc("GET /api/sessions/{id}", s.getSession)
@@ -131,6 +139,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/calls/{call}/{action}", s.postShellAction)
 	mux.HandleFunc("GET /api/sessions/{id}/file", s.getProjectFile)
 	mux.HandleFunc("GET /api/sessions/{id}/dir", s.getProjectDir)
+	mux.HandleFunc("GET /api/sessions/{id}/kept", s.getKept)
 	mux.HandleFunc("PUT /api/sessions/{id}", s.rebindSession)
 	mux.HandleFunc("PUT /api/sessions/{id}/mode", s.putMode)
 	mux.HandleFunc("PUT /api/sessions/{id}/effort", s.putEffort)

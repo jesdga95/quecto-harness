@@ -1,0 +1,1 @@
+Give this conversation access to a folder beside its working directory, without moving there. path is the folder's absolute path, which the user approves. Without path, the user picks or makes a folder in a dialog, and the result names it; pass that folder to change_directory to move there.

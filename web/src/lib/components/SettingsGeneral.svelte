@@ -1,4 +1,5 @@
 <script lang="ts">
+  import StorageStatus from "./StorageStatus.svelte";
   import { untrack } from "svelte";
   import type { Config } from "../api";
   import { app } from "../state/app.svelte";
@@ -202,3 +203,5 @@
     </label>
   </div>
 </div>
+
+<StorageStatus />

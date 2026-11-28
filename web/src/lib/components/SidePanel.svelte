@@ -25,6 +25,8 @@
   import { Streamed } from "../stream.svelte";
   import {
     app,
+    NO_FOLDER,
+    NO_FOLDER_LABEL,
     artifacts,
     browse,
     closeTab,
@@ -32,6 +34,7 @@
     loadFile,
     openFile,
     showArtifact,
+    workFolder,
   } from "../state/app.svelte";
 
   // A page over this size is shown as its source. Nothing that large is a page
@@ -172,14 +175,16 @@
   // The path row: the project root, then the folders down to the file, each
   // folder opening in the browser. A deep path drops its middle segments so
   // the file at the end is still readable.
-  const root = $derived((app.browseDir?.root || app.projectPath).replace(/\/$/, ""));
-  const rootName = $derived(root.replace(/^\/Users\/[^/]+/, "~"));
+  const root = $derived((app.browseDir?.root || workFolder()).replace(/\/$/, ""));
+  // A conversation without a project never shows where its folder is.
+  const rootName = $derived(app.projectPath === NO_FOLDER ? NO_FOLDER_LABEL : root.replace(/^\/Users\/[^/]+/, "~"));
   const pathRow = $derived.by(() => {
     const rel = browsing ? (app.browseDir?.path ?? "") : (shown?.path ?? "");
     const parts = rel ? rel.split("/") : [];
     const kept = parts.map((_, i) => i);
     const width = (base: number) => base + kept.reduce((n, i) => n + parts[i].length + 1, 0);
-    const base = width(rootName.length) > BUDGET ? root.split("/").pop() ?? root : rootName;
+    const base =
+      app.projectPath !== NO_FOLDER && width(rootName.length) > BUDGET ? (root.split("/").pop() ?? root) : rootName;
     while (kept.length > 2 && width(base.length) > BUDGET) kept.splice(1, 1);
     return {
       label: base,

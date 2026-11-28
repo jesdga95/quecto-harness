@@ -58,6 +58,12 @@ export function mcpParts(item: TranscriptItem): { server: string; tool: string }
   return mcpOf(item.name, item.meta);
 }
 
+/** A request_directory card without a folder, which asks the user to pick
+    one rather than to allow a path. */
+export function asksForFolder(item: TranscriptItem): boolean {
+  return item.kind === "permission" && item.tool === "request_directory" && item.path === "";
+}
+
 export function mcpOf(name: string, meta?: Record<string, unknown> | null): { server: string; tool: string } | null {
   if (!name.startsWith("mcp__")) return null;
   if (typeof meta?.server === "string" && typeof meta?.tool === "string") {
@@ -102,6 +108,10 @@ export function stepName(item: TranscriptItem): string {
       return "Agent";
     case "send_message":
       return "Message";
+    case "change_directory":
+      return "Move";
+    case "request_directory":
+      return "Folder";
     default:
       return "Shell";
   }
@@ -143,6 +153,8 @@ export function stepDesc(item: TranscriptItem, live: boolean, planTitle: string)
     }
     case "send_message":
       return stringArg(item, "text");
+    case "request_directory":
+      return stringArg(item, "path") || "Chosen by you";
     default:
       return stringArg(item, "path") || describeCommand(stringArg(item, "command"));
   }

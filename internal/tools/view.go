@@ -28,6 +28,7 @@ const (
 // apart, which a model reading a tool result is not told.
 var (
 	ErrOutside   = errors.New("outside the project")
+	ErrHidden    = errors.New("in the harness state folder")
 	ErrMissing   = errors.New("no such file")
 	ErrFolder    = errors.New("a folder")
 	ErrNotFolder = errors.New("not a folder")
@@ -49,16 +50,64 @@ type View struct {
 	Content string
 }
 
-// ViewFile reads a file under root the way a tool argument is resolved, and
-// nothing outside root. Text past limit is reported as large.
-func ViewFile(root, p string, limit int64) (View, error) {
+// viewer is a runner for a reader outside a turn, which reaches nothing in
+// the harness state folder hidden, a link that leads there included.
+func viewer(root, hidden string) (*Runner, error) {
 	r, err := NewRunner(root, config.Config{})
+	if err != nil {
+		return nil, err
+	}
+	if hidden != "" {
+		r.Hide(hidden)
+	}
+	return r, nil
+}
+
+// refusal names why resolveInside refused a path.
+func refusal(err error) error {
+	var he hiddenError
+	if errors.As(err, &he) {
+		return ErrHidden
+	}
+	return ErrOutside
+}
+
+// shown reports whether a name a reader would be shown leads somewhere it may
+// look: not into the state folder, whichever way. typ is the entry's type as
+// its folder listed it.
+func (r *Runner) shown(abs string, typ fs.FileMode) bool {
+	if r.Hidden == "" {
+		return true
+	}
+	if config.Within(r.Hidden, abs) {
+		return false
+	}
+	// The names a walk or a listing comes to sit under a resolved folder, so
+	// only the folder itself or a link among them can lead elsewhere.
+	if typ.IsDir() {
+		return !r.isHidden(abs)
+	}
+	if typ&fs.ModeSymlink == 0 {
+		return true
+	}
+	// A link is judged by the folder it reaches, not by its name, so another
+	// casing on a volume that ignores case does not slip by.
+	in, err := config.Under(abs, r.Hidden)
+	return err == nil && !in
+}
+
+// ViewFile reads a file under root the way a tool argument is resolved, and
+// nothing outside root, in the state folder hidden or behind the fence. Text
+// past limit is reported as large.
+func ViewFile(root, hidden, p string, limit int64, fence Fence) (View, error) {
+	r, err := viewer(root, hidden)
 	if err != nil {
 		return View{}, err
 	}
+	r.FenceOff(fence)
 	abs, err := r.resolveInside(p)
 	if err != nil {
-		return View{}, ErrOutside
+		return View{}, refusal(err)
 	}
 	v := View{Abs: abs, Path: r.rel(abs)}
 	info, err := os.Stat(abs)
@@ -108,19 +157,21 @@ type Entry struct {
 }
 
 // ListDir lists one folder under root, folders first and then files, each by
-// name without regard to case. rel is the folder relative to root, empty for
+// name without regard to case, leaving out what leads into the state folder
+// hidden or is behind the fence. rel is the folder relative to root, empty for
 // root itself.
-func ListDir(root, p string) (rel string, entries []Entry, err error) {
-	r, err := NewRunner(root, config.Config{})
+func ListDir(root, hidden, p string, fence Fence) (rel string, entries []Entry, err error) {
+	r, err := viewer(root, hidden)
 	if err != nil {
 		return "", nil, err
 	}
+	r.FenceOff(fence)
 	if strings.TrimSpace(p) == "" {
 		p = "."
 	}
 	abs, err := r.resolveInside(p)
 	if err != nil {
-		return "", nil, ErrOutside
+		return "", nil, refusal(err)
 	}
 	rel = r.rel(abs)
 	if rel == "." {
@@ -141,7 +192,11 @@ func ListDir(root, p string) (rel string, entries []Entry, err error) {
 		return rel, nil, fmt.Errorf("read %s: check the permissions on the folder", rel)
 	}
 	entries = make([]Entry, 0, len(list))
+	walk := fenceWalk{}
 	for _, d := range list {
+		if !r.shown(filepath.Join(abs, d.Name()), d.Type()) || r.fencedIn(filepath.Join(abs, d.Name()), walk) {
+			continue
+		}
 		e := Entry{Name: d.Name(), Dir: d.IsDir()}
 		// A link is listed as what it points to, so a linked folder opens.
 		if d.Type()&fs.ModeSymlink != 0 {
@@ -165,15 +220,15 @@ func ListDir(root, p string) (rel string, entries []Entry, err error) {
 	return rel, entries, nil
 }
 
-// FindFiles lists files under root whose path holds every word of q, ignoring
-// case, for a reader picking a file by name. A match in the file name ranks
-// above one in its folders, and a shorter path above a longer one. The walk
-// passes over the folders grep skips and stops after scanLimit files.
-func FindFiles(root, q string, limit int) ([]string, error) {
-	r, err := NewRunner(root, config.Config{})
+// FindFiles lists files under root whose path holds every word of q in any
+// case, a match in the name and a shorter path first. It skips what grep skips,
+// the state folder and what is behind the fence, and stops after scanLimit files.
+func FindFiles(root, hidden, q string, limit int, fence Fence) ([]string, error) {
+	r, err := viewer(root, hidden)
 	if err != nil {
 		return nil, err
 	}
+	r.FenceOff(fence)
 	const scanLimit = 50000
 	words := strings.Fields(strings.ToLower(q))
 	type hit struct {
@@ -183,9 +238,16 @@ func FindFiles(root, q string, limit int) ([]string, error) {
 	var hits []hit
 	scanned := 0
 	errStop := errors.New("stop")
+	walk := fenceWalk{}
 	walkErr := filepath.WalkDir(r.Root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if r.fencedIn(p, walk) {
+			if d.IsDir() {
 				return fs.SkipDir
 			}
 			return nil
@@ -194,6 +256,12 @@ func FindFiles(root, q string, limit int) ([]string, error) {
 			if p != r.Root && slices.Contains(skipDirs, d.Name()) {
 				return fs.SkipDir
 			}
+			if !r.shown(p, d.Type()) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !r.shown(p, d.Type()) {
 			return nil
 		}
 		scanned++

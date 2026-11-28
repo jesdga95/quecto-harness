@@ -3,6 +3,8 @@ package prompts
 import (
 	"strings"
 	"testing"
+
+	"github.com/jesdga95/quecto-harness/internal/store"
 )
 
 func TestEveryFileIsEmbeddedAndNonEmpty(t *testing.T) {
@@ -342,11 +344,11 @@ func TestPlanModeRulesAreAMessage(t *testing.T) {
 	if strings.Contains(sys, "plan mode") {
 		t.Errorf("the system prompt speaks of plan mode: %q", sys)
 	}
-	rules := ModePlan(true, false)
+	rules := ModePlan(true, false, false)
 	if !strings.Contains(rules, "plan mode") || !strings.Contains(rules, "exit_plan_mode") || !strings.Contains(rules, "write_plan") {
 		t.Errorf("the plan rules are missing: %q", rules)
 	}
-	child := ModePlan(false, false)
+	child := ModePlan(false, false, false)
 	if strings.Contains(child, "exit_plan_mode") || strings.Contains(child, "write_plan") {
 		t.Errorf("a subagent in plan mode is told to submit a plan: %q", child)
 	}
@@ -428,5 +430,75 @@ func TestThePromptNamesOnlyTheToolsItSends(t *testing.T) {
 	}
 	if strings.Contains(full, note) {
 		t.Errorf("the full list carries the warning for a short one: %q", full)
+	}
+}
+
+func TestSystemDescribesAMoveOutOfAScratchFolder(t *testing.T) {
+	got := System(SystemVars{Project: "/src/x", OS: "darwin", Moved: &Moved{
+		From:    "/scratch/a",
+		Carried: store.Carried{To: "/src/x", Copied: 3, Dependencies: 1, Attrs: 2},
+	}})
+	for _, want := range []string{"a folder the app made for it, /scratch/a, before it moved to /src/x.",
+		"The app copied 3 files from it to /src/x", "1 dependency folders", "The app keeps that folder",
+		"2 were copied without their extended attributes, resource fork or access permissions."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("system prompt lacks %q:\n%s", want, got)
+		}
+	}
+	full := System(SystemVars{Project: "/src/x", OS: "darwin", Moved: &Moved{
+		From: "/scratch/a", Carried: store.Carried{To: "/src/x", Copied: 3}}})
+	if strings.Contains(full, "keeps that folder") {
+		t.Errorf("a full copy is said to keep the folder:\n%s", full)
+	}
+}
+
+// A scratch conversation without change_directory is told who can move it:
+// the conversation that launched it, or, with no launcher, a new one.
+func TestScratchWithoutAMoveNamesWhoCanMove(t *testing.T) {
+	sub := System(SystemVars{Project: "/s", OS: "darwin", Scratch: true, Launcher: "lead"})
+	if !strings.Contains(sub, "move the conversation that launched you") {
+		t.Errorf("a subagent is not pointed at its launcher:\n%s", sub)
+	}
+	top := System(SystemVars{Project: "/s", OS: "darwin", Scratch: true})
+	if strings.Contains(top, "launched you") || !strings.Contains(top, "start a conversation in that project") {
+		t.Errorf("a conversation with no launcher is told of one:\n%s", top)
+	}
+}
+
+// The scratch block says nothing a run in its launcher's folder, or an older
+// folder that is kept, would make untrue.
+func TestScratchBlockHoldsForARunAndAKeptFolder(t *testing.T) {
+	for _, v := range []SystemVars{
+		{Project: "/s", OS: "darwin", Scratch: true},
+		{Project: "/s", OS: "darwin", Scratch: true, Launcher: "lead"},
+	} {
+		got := System(v)
+		if !strings.Contains(got, "Your working directory is /s, the workspace for this conversation and its runs.") {
+			t.Errorf("the block does not name the workspace:\n%s", got)
+		}
+		for _, untrue := range []string{"starts empty", "deleted with the conversation"} {
+			if strings.Contains(got, untrue) {
+				t.Errorf("the block says %q:\n%s", untrue, got)
+			}
+		}
+	}
+}
+
+// Plan mode in a no-folder conversation reads a project through
+// request_directory, since the move waits for the plan's approval.
+func TestPlanModeInScratchReadsThroughAccess(t *testing.T) {
+	if got := ModePlan(true, false, true); !strings.Contains(got, "call request_directory with its absolute path") {
+		t.Errorf("plan mode in a scratch folder does not name request_directory:\n%s", got)
+	}
+	if got := ModePlan(true, false, false); strings.Contains(got, "request_directory") {
+		t.Errorf("plan mode with a project names request_directory:\n%s", got)
+	}
+}
+
+// change_directory is for a project the conversation is not in yet, so a
+// conversation already in one is not invited to move.
+func TestChangeDirectoryIsForAProjectNotYetIn(t *testing.T) {
+	if got := ToolChangeDirectory(); !strings.Contains(got, "an existing project this conversation is not in yet") {
+		t.Errorf("change_directory does not limit itself to a project not yet in:\n%s", got)
 	}
 }

@@ -6,5 +6,5 @@ import { mockApi } from "./mock";
 // harness in, so the interface runs with no backend and no other file changes.
 export const api: HarnessApi = import.meta.env.VITE_MOCK === "1" ? mockApi : httpApi;
 
-export { ApiError } from "./http";
+export { ApiError, ProjectRemovalError } from "./http";
 export * from "./types";

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -290,6 +291,7 @@ func cloneAgents(in []Agent) []Agent {
 		a.RepeatPenalty = clonef(a.RepeatPenalty)
 		a.TopK, a.MaxTokens, a.Seed = clonei(a.TopK), clonei(a.MaxTokens), clonei(a.Seed)
 		a.MaxContext = clonei(a.MaxContext)
+		a.Calls = slices.Clone(a.Calls)
 		out[i] = a
 	}
 	return out

@@ -25,8 +25,21 @@ import (
 // recorder collects published events so a test can assert what a browser
 // would have seen.
 type recorder struct {
-	mu     sync.Mutex
-	events []Event
+	mu      sync.Mutex
+	events  []Event
+	dropped []string
+}
+
+func (r *recorder) Drop(sessionID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.dropped = append(r.dropped, sessionID)
+}
+
+func (r *recorder) droppedIDs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.dropped...)
 }
 
 func (r *recorder) Publish(_ string, e Event) {
@@ -53,6 +66,20 @@ func (r *recorder) states() []string {
 		out = append(out, e.Fields["state"].(string))
 	}
 	return out
+}
+
+// waitLastState waits, bounded, until the last status published is state,
+// and returns every status published by then.
+func (r *recorder) waitLastState(t *testing.T, state string) []string {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		states := r.states()
+		if len(states) > 0 && states[len(states)-1] == state || time.Now().After(deadline) {
+			return states
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 type harness struct {
@@ -270,7 +297,9 @@ func TestPlainReply(t *testing.T) {
 	if fill == 0 {
 		t.Error("fill was not computed")
 	}
-	states := h.rec.states()
+	// The session is idle before the idle status is published, so the test
+	// waits for that event rather than for the state.
+	states := h.rec.waitLastState(t, "idle")
 	// A session created by its first message has never read its model, so the
 	// turn reads it, which is the loading in the middle of the preflight.
 	want := []string{"preflight", "loading", "preflight", "streaming", "final", "idle"}

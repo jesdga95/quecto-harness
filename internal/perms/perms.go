@@ -57,9 +57,12 @@ type Request struct {
 	Description string `json:"description,omitempty"`
 	// Server and MCPTool name an MCP call's server and tool as configured,
 	// which the wire name in Tool cannot be read back into.
-	Server  string    `json:"server,omitempty"`
-	MCPTool string    `json:"mcp_tool,omitempty"`
-	Created time.Time `json:"created"`
+	Server  string `json:"server,omitempty"`
+	MCPTool string `json:"mcp_tool,omitempty"`
+	// Occupied is set on a move out of a scratch folder when the folder moved
+	// to already holds files, which the copy keeps as they are.
+	Occupied bool      `json:"occupied,omitempty"`
+	Created  time.Time `json:"created"`
 }
 
 // route is where the card is drawn. A request that names none is drawn in the
@@ -77,6 +80,12 @@ type Decision struct {
 	Kind   DecisionKind `json:"decision"`
 	Prefix string       `json:"prefix,omitempty"`
 	Reason string       `json:"reason,omitempty"`
+	// Path is the folder the user picked on a request_directory card, or the
+	// one a directory card showed.
+	Path string `json:"path,omitempty"`
+	// Refused is why the harness turned a call down before any card, which
+	// the tool answers with instead of running.
+	Refused string `json:"-"`
 	// Note carries a problem that did not change the outcome, such as an
 	// allowlist that could not be saved.
 	Note string `json:"-"`

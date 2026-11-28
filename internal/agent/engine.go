@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -40,19 +41,20 @@ const loadTimeout = 10 * time.Minute
 const maxAttachments = 5
 
 var (
-	ErrBusy       = errors.New("The session is busy: stop the current turn first")
-	ErrNotFound   = errors.New("No session with that id")
-	ErrEmptyText  = errors.New("The message is empty: type something or attach a file")
-	ErrNotLast    = errors.New("That is not the last message: only the last one can be sent again")
-	ErrNoProject  = errors.New("That folder is not in the project list: add it first")
-	ErrNoAgent    = errors.New("No agent is selected: create one in the agents dialog")
-	ErrAgentsOff  = errors.New("Every agent is disabled: enable one in the agents dialog")
-	ErrAgentOff   = errors.New("The agent is disabled: enable it in the agents dialog")
-	ErrNoAddress  = errors.New("The agent has no address: add it in the agents dialog")
-	ErrNoModel    = errors.New("The agent has no model: choose one in the agents dialog")
-	ErrCompacting = errors.New("The conversation is being compacted: that finishes on its own")
-	ErrTooShort   = errors.New("Not enough content to compact: keep working and try again later")
-	ErrNoShell    = errors.New("That command is not running in the foreground any more")
+	ErrBusy         = errors.New("The session is busy: stop the current turn first")
+	ErrNotFound     = errors.New("No session with that id")
+	ErrEmptyText    = errors.New("The message is empty: type something or attach a file")
+	ErrNotLast      = errors.New("That is not the last message: only the last one can be sent again")
+	ErrNoProject    = errors.New("That folder is not in the project list: add it first")
+	ErrNoAgent      = errors.New("No agent is selected: create one in the agents dialog")
+	ErrAgentsOff    = errors.New("Every agent is disabled: enable one in the agents dialog")
+	ErrAgentOff     = errors.New("The agent is disabled: enable it in the agents dialog")
+	ErrNoAddress    = errors.New("The agent has no address: add it in the agents dialog")
+	ErrNoModel      = errors.New("The agent has no model: choose one in the agents dialog")
+	ErrCompacting   = errors.New("The conversation is being compacted: that finishes on its own")
+	ErrTooShort     = errors.New("Not enough content to compact: keep working and try again later")
+	ErrNoShell      = errors.New("That command is not running in the foreground any more")
+	ErrStillRunning = errors.New("A background command of the session did not stop: try the delete again")
 )
 
 // Engine owns every live session and dispatches turns.
@@ -68,6 +70,11 @@ type Engine struct {
 	procs    *Registry
 	// mcp runs the configured MCP servers. Nil offers no MCP tools.
 	mcp *mcp.Manager
+	// scratch is the folder conversations started without a project get
+	// their own folders in. Empty offers no such conversation.
+	scratch    string
+	ledger     *store.ScratchLedger
+	ledgerOnce sync.Once
 
 	ctx context.Context
 	os  string
@@ -75,9 +82,24 @@ type Engine struct {
 	// reason that says nothing about the request itself.
 	retry []time.Duration
 
+	// mu guards live and deleting. A path that holds both takes mu first and
+	// a session's own lock second, and nothing that holds a session's lock
+	// reaches for mu.
 	mu   sync.Mutex
 	live map[string]*Session
-	wg   sync.WaitGroup
+	// deleting holds the ids a delete has reserved. removed holds the ids
+	// deleted while reads from disk were under way, until none is, so a read
+	// that began before a delete is not kept.
+	deleting map[string]bool
+	removed  map[string]bool
+	reads    int
+	// held holds the messages the harness sent to a reserved session, kept
+	// until its delete ends: delivered if it stays, dropped if it goes.
+	held map[string][]heldMessage
+	// liveIDs mirrors the keys of live outside mu, for a caller that may
+	// hold a session's lock.
+	liveIDs sync.Map
+	wg      sync.WaitGroup
 }
 
 func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files *store.Files,
@@ -86,6 +108,7 @@ func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files
 		cfg: cfg, store: st, files: files, backends: backends, searches: searches,
 		perms: pb, asks: newAsker(), hub: hub,
 		ctx: ctx, os: runtime.GOOS, live: map[string]*Session{},
+		deleting: map[string]bool{}, removed: map[string]bool{}, held: map[string][]heldMessage{},
 		retry: []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second},
 	}
 	e.procs = NewRegistry(
@@ -95,9 +118,7 @@ func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files
 			if err != nil {
 				return
 			}
-			if _, err := e.deliverFrom(s, sender{Name: "Background process"}, text, nil); err != nil {
-				e.publish(session, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
-			}
+			e.handOver(s, sender{Name: "Background process"}, text)
 		},
 	)
 	return e
@@ -329,13 +350,16 @@ func (e *Engine) Create(project string) (*Session, error) {
 	if !e.cfg.HasProject(project) {
 		return nil, ErrNoProject
 	}
+	if err := e.cfg.CheckProject(project); err != nil {
+		return nil, err
+	}
 	a, err := e.active()
 	if err != nil {
 		return nil, err
 	}
 	s := newSession(store.NewID(), project, a.ID, a.Model, e.cfg.Config().Toolset)
 	e.mu.Lock()
-	e.live[s.ID] = s
+	e.setLive(s)
 	e.mu.Unlock()
 	e.save(s)
 	return s, nil
@@ -365,10 +389,15 @@ func (e *Engine) Get(id string) (*Session, error) {
 		return s, nil
 	}
 	e.mu.Unlock()
+	e.beginRead()
+	defer e.endRead()
 
 	doc, err := e.store.Load(id)
-	if err != nil {
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
 	}
 	s := fromDoc(doc)
 	s.turnSeq = 0
@@ -381,16 +410,46 @@ func (e *Engine) Get(id string) (*Session, error) {
 	// cut off by a harness that stopped. They are closed before anything
 	// else can append.
 	repaired := s.closeInterrupted()
-	e.mu.Lock()
-	if existing, ok := e.live[id]; ok {
-		e.mu.Unlock()
-		return existing, nil
+	kept, err := e.keep(s)
+	if err != nil {
+		return nil, err
 	}
-	e.live[id] = s
-	e.mu.Unlock()
-	if repaired {
+	if repaired && kept == s {
 		e.save(s)
 	}
+	return kept, nil
+}
+
+// beginRead counts a read from disk under way.
+func (e *Engine) beginRead() {
+	e.mu.Lock()
+	e.reads++
+	e.mu.Unlock()
+}
+
+// endRead ends a read from disk. The last one lets go of the removed ids.
+func (e *Engine) endRead() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.reads--
+	if e.reads == 0 {
+		clear(e.removed)
+	}
+}
+
+// keep makes a session read from disk the live one for its id, or returns the
+// one already live. A read that began before a delete and ended after it is
+// not kept, or the next message would write the file back.
+func (e *Engine) keep(s *Session) (*Session, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if existing, ok := e.live[s.ID]; ok {
+		return existing, nil
+	}
+	if e.deleting[s.ID] || e.removed[s.ID] {
+		return nil, ErrNotFound
+	}
+	e.setLive(s)
 	return s, nil
 }
 
@@ -414,6 +473,28 @@ func (e *Engine) LiveFill(id string) (fill int, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.computeFill(), true
+}
+
+// setLive makes s the live session for its id. The caller holds mu.
+func (e *Engine) setLive(s *Session) {
+	e.live[s.ID] = s
+	e.liveIDs.Store(s.ID, true)
+}
+
+// Holds reports whether a session is held in memory, taking no engine lock,
+// so it is safe to ask while holding a session's.
+func (e *Engine) Holds(id string) bool {
+	_, ok := e.liveIDs.Load(id)
+	return ok
+}
+
+// IsLive reports whether a session is held in memory, without reading anything
+// from disk or keeping anything for an id that is not.
+func (e *Engine) IsLive(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, ok := e.live[id]
+	return ok
 }
 
 // LiveState is what a session is doing, without reading one back from disk to
@@ -473,11 +554,30 @@ func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 	if err != nil {
 		return Sent{}, err
 	}
+	// The project is checked before anything is read or copied.
+	if err := e.cfg.CheckProject(s.Project); err != nil {
+		return Sent{}, err
+	}
 	attachments, err := e.readAttachments(s, files)
 	if err != nil {
 		return Sent{}, err
 	}
-	return e.deliver(s, text, attachments)
+	sent, err := e.deliver(s, text, attachments)
+	if err != nil {
+		e.dropFiles(attachments)
+	}
+	return sent, err
+}
+
+// dropFiles removes the stored copies of attachments no entry will hold, so a
+// message that was refused leaves nothing in the store. The files a person
+// picked are not touched.
+func (e *Engine) dropFiles(attachments []store.Attachment) {
+	for _, a := range attachments {
+		if a.File != "" {
+			e.files.Remove(a.File)
+		}
+	}
 }
 
 // deliver starts a turn with the message, or queues it. Every path that
@@ -491,7 +591,20 @@ func (e *Engine) deliver(s *Session, text string, attachments []store.Attachment
 // written; the sender is put in front of it where the prompt is built, since
 // that is the only place it means anything.
 func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments []store.Attachment) (Sent, error) {
-	s.mu.Lock()
+	// Nothing works on a project that overlaps the state folder: a turn
+	// would read its rules and run tools there.
+	if err := e.cfg.CheckProject(s.Project); err != nil {
+		return Sent{}, err
+	}
+	if err := e.lockForWork(s); err != nil {
+		return Sent{}, err
+	}
+	return e.deliverLocked(s, from, text, attachments)
+}
+
+// deliverLocked is deliverFrom once the session is locked for work. It
+// releases the lock.
+func (e *Engine) deliverLocked(s *Session, from sender, text string, attachments []store.Attachment) (Sent, error) {
 	if s.state != StateIdle {
 		if err := s.queue(from, text, attachments); err != nil {
 			s.mu.Unlock()
@@ -526,6 +639,62 @@ func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments [
 	return Sent{Seq: entry.Seq}, nil
 }
 
+// heldMessage is a message the harness sent while a delete held the session.
+type heldMessage struct {
+	from sender
+	text string
+}
+
+// errHeld says a message was kept for a session a delete holds.
+var errHeld = errors.New("held until the delete ends")
+
+// lockForWork locks a session for a change that may start work, refusing one
+// a delete has reserved or an instance no longer live. The session's lock is
+// taken under the engine's, so a delete either reserves first or finds it busy.
+func (e *Engine) lockForWork(s *Session) error { return e.lockOrHold(s, nil) }
+
+// lockOrHold is lockForWork that keeps m for a reserved session instead of
+// refusing it, and answers errHeld.
+func (e *Engine) lockOrHold(s *Session, m *heldMessage) error {
+	e.mu.Lock()
+	if e.deleting[s.ID] {
+		if m != nil {
+			e.held[s.ID] = append(e.held[s.ID], *m)
+			e.mu.Unlock()
+			return errHeld
+		}
+		e.mu.Unlock()
+		return ErrBusy
+	}
+	if e.live[s.ID] != s {
+		e.mu.Unlock()
+		return ErrNotFound
+	}
+	s.mu.Lock()
+	e.mu.Unlock()
+	if s.gone {
+		s.mu.Unlock()
+		return ErrNotFound
+	}
+	return nil
+}
+
+// handOver delivers a message the harness sends: a run's report or a notice
+// that a command ended. A session being deleted gets it once the delete fails,
+// and one already gone does not.
+func (e *Engine) handOver(s *Session, from sender, text string) {
+	err := e.lockOrHold(s, &heldMessage{from: from, text: text})
+	if errors.Is(err, errHeld) || errors.Is(err, ErrNotFound) {
+		return
+	}
+	if err == nil {
+		_, err = e.deliverLocked(s, from, text, nil)
+	}
+	if err != nil {
+		e.publish(s.ID, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
+	}
+}
+
 // absorbSteer appends the queued message, so the turn carries on with it in
 // the history. It reports whether there was one.
 func (e *Engine) absorbSteer(s *Session) bool {
@@ -558,15 +727,20 @@ func (e *Engine) publishMessage(s *Session, entry store.Entry) {
 // flushSteer sends a message the turn ended without picking up. A stop leaves
 // one behind, and the message was typed to be delivered.
 func (e *Engine) flushSteer(s *Session) {
-	s.mu.Lock()
-	held := s.steer
-	s.steer = nil
-	s.mu.Unlock()
-	if held == nil {
+	// The message comes off the queue under the same lock that starts its
+	// turn, so a delete finds it either queued or under way.
+	if err := e.lockForWork(s); err != nil {
 		return
 	}
-	sent, err := e.deliverFrom(s, held.From, held.Text, held.Attachments)
+	held := s.steer
+	if held == nil {
+		s.mu.Unlock()
+		return
+	}
+	s.steer = nil
+	sent, err := e.deliverLocked(s, held.From, held.Text, held.Attachments)
 	if err != nil {
+		e.dropFiles(held.Attachments)
 		e.publish(s.ID, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
 		return
 	}
@@ -611,7 +785,12 @@ func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	s.mu.Lock()
+	if err := e.cfg.CheckProject(s.Project); err != nil {
+		return 0, err
+	}
+	if err := e.lockForWork(s); err != nil {
+		return 0, err
+	}
 	if s.state != StateIdle {
 		s.mu.Unlock()
 		return 0, ErrBusy
@@ -692,30 +871,42 @@ func (e *Engine) readAttachments(s *Session, paths []string) ([]store.Attachment
 	out := make([]store.Attachment, 0, len(paths))
 	var server *readable
 	for _, p := range paths {
-		read, err := tools.ReadAttachment(p)
+		a, err := e.readAttachment(s, p, &server)
 		if err != nil {
+			// The copies already taken belong to a message that is not sent.
+			e.dropFiles(out)
 			return nil, err
-		}
-		if read.Kind == "document" || read.Kind == "video" {
-			if server == nil {
-				server = e.readableBy(s)
-			}
-			if err := server.takes(p, read.Kind); err != nil {
-				return nil, err
-			}
-		}
-		a := store.Attachment{Path: p, Kind: read.Kind, Mime: read.Mime,
-			Bytes: read.Bytes, Content: read.Content}
-		if read.Kind != "text" {
-			id, size, err := e.files.Put(p)
-			if err != nil {
-				return nil, err
-			}
-			a.File, a.Bytes, a.Content = id, size, ""
 		}
 		out = append(out, a)
 	}
 	return out, nil
+}
+
+// readAttachment reads one attached file, storing a copy of anything that is
+// not text. server is what the model server reads, asked for once per message.
+func (e *Engine) readAttachment(s *Session, p string, server **readable) (store.Attachment, error) {
+	read, err := tools.ReadAttachment(p)
+	if err != nil {
+		return store.Attachment{}, err
+	}
+	if read.Kind == "document" || read.Kind == "video" {
+		if *server == nil {
+			*server = e.readableBy(s)
+		}
+		if err := (*server).takes(p, read.Kind); err != nil {
+			return store.Attachment{}, err
+		}
+	}
+	a := store.Attachment{Path: p, Kind: read.Kind, Mime: read.Mime,
+		Bytes: read.Bytes, Content: read.Content}
+	if read.Kind != "text" {
+		id, size, err := e.files.Put(p)
+		if err != nil {
+			return store.Attachment{}, err
+		}
+		a.File, a.Bytes, a.Content = id, size, ""
+	}
+	return a, nil
 }
 
 // Stop cancels the turn. It never appends: the loop reaches stopped and
@@ -765,13 +956,18 @@ func (e *Engine) Compact(id string) error {
 	if err != nil {
 		return err
 	}
+	if err := e.cfg.CheckProject(s.Project); err != nil {
+		return err
+	}
 	// The agent is resolved before the session is marked busy, so a harness
 	// with none to answer with refuses here rather than inside the goroutine.
 	a, err := e.point(s)
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
+	if err := e.lockForWork(s); err != nil {
+		return err
+	}
 	if s.state != StateIdle {
 		s.mu.Unlock()
 		return ErrBusy
@@ -904,44 +1100,292 @@ func (e *Engine) Rename(id, title string) error {
 	return nil
 }
 
+// ErrKeptChanged is a delete whose folder left on disk is no longer the one
+// the person was told of.
+var ErrKeptChanged = errors.New("The files this deletion leaves on disk have changed. Confirm the deletion again")
+
+// Delete removes the session, every run it launched and, when its owner
+// record allows, the scratch folder it worked in.
 func (e *Engine) Delete(id string) error {
+	_, err := e.DeleteWithResult(id, nil)
+	return err
+}
+
+// DeleteConfirmed deletes after the person has seen told, the PreviewDelete
+// of what stays on disk. Its Kept, Deferred and Token are checked, and any
+// change since is refused with ErrKeptChanged.
+func (e *Engine) DeleteConfirmed(id string, told DeletionPreview) error {
+	_, err := e.DeleteWithResult(id, &told)
+	return err
+}
+
+// DeleteWithResult reports a retained folder after the session deletion commits.
+func (e *Engine) DeleteWithResult(id string, told *DeletionPreview) (*store.TrashFailure, error) {
+	e.mu.Lock()
+	reserved := e.deleting[id]
+	e.mu.Unlock()
+	if reserved {
+		return nil, ErrBusy
+	}
+	// A session whose file went but whose saved output stayed has only the
+	// output left to remove.
+	if done, err := e.store.FinishCleanup(id); done || err != nil {
+		return nil, err
+	}
 	s, err := e.Get(id)
+	if errors.Is(err, ErrNotFound) {
+		if missingErr := e.store.RemoveMissingRun("", id); !errors.Is(missingErr, store.ErrNotFound) {
+			return nil, missingErr
+		}
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// A turn is stopped first. The session is marked gone as it goes, so one
-	// that starts between this check and the delete does not write the file
-	// back out.
-	if s.State() != StateIdle {
-		return ErrBusy
+	e.store.Reread()
+	group, missing, err := e.reserve(s)
+	if err != nil {
+		return nil, err
 	}
-	s.forget()
-	// A write already under way finishes before the file is removed, or it
-	// would put the file back.
+	defer e.unreserve(group)
+
+	// A command still running could write into the session's folder once it
+	// is gone, so nothing is removed until every one of them has ended.
+	ids := make([]string, len(group))
+	for i, m := range group {
+		ids[i] = m.ID
+	}
+	ctx, cancel := context.WithTimeout(e.ctx, drainTimeout)
+	err = e.procs.Drain(ctx, ids)
+	cancel()
+	if err != nil {
+		return nil, ErrStillRunning
+	}
+
+	kept, deferred := e.keptBy(s, told != nil)
+	if told != nil && (told.Kept != kept || told.Deferred != deferred) {
+		return nil, ErrKeptChanged
+	}
+	keepRecord, err := e.finishCarryForDelete(s, told)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
-	e.waitSavedLocked(s)
+	project, scratch, leftIn := s.Project, s.Scratch, s.LeftIn
 	s.mu.Unlock()
-	e.StopProcesses(id, true)
-	doc, _, _, _ := s.Snapshot()
-	if err := e.store.Delete(id); err != nil {
-		return err
+	// A run whose launcher is gone orders its folder removed in its place.
+	owner := s.ID
+	if s.Parent != "" && e.LauncherGone(s.Parent) {
+		owner = s.Parent
 	}
-	// The files an attachment left behind belong to the session, so they go
-	// with it rather than sitting in the store with nothing pointing at them.
-	for _, entry := range doc.Entries {
-		for _, a := range entry.Attachments {
-			if a.File != "" {
-				e.files.Remove(a.File)
+	// A folder kept only while a session file is unread keeps its order,
+	// which nothing carries out until every file reads.
+	ordered := false
+	if kept != "" && told != nil && !deferred {
+		source := project
+		if !scratch {
+			source = leftIn
+		}
+		if store.IsScratch(e.scratch, source) {
+			if err := e.scratchLedger().Keep(source, owner); err != nil {
+				return nil, fmt.Errorf("Keep %s: %w", kept, err)
+			}
+		}
+	} else if scratch && (s.Parent == "" || owner == s.Parent) {
+		if ordered, err = e.orderRemoval(project, owner); err != nil {
+			return nil, err
+		}
+		if ordered && kept != "" && !deferred {
+			if err := e.scratchLedger().Withdraw(project); err != nil {
+				return nil, fmt.Errorf("Keep %s: %w", kept, err)
+			}
+			ordered = false
+		}
+	}
+	for _, run := range slices.Backward(missing) {
+		if err := e.store.RemoveMissingRun(run.parent, run.id); err != nil && !errors.Is(err, store.ErrNotFound) {
+			if ordered {
+				err = errors.Join(err, e.scratchLedger().Withdraw(project))
+			}
+			return nil, err
+		}
+	}
+	for i := len(group) - 1; i >= 0; i-- {
+		if err := e.remove(group[i], keepRecord && group[i] == s); err != nil {
+			if ordered && (group[i] != s || !errors.Is(err, store.ErrLeftBehind)) {
+				return nil, errors.Join(err, e.scratchLedger().Withdraw(project))
+			}
+			return nil, err
+		}
+	}
+	if ordered {
+		return e.removeScratch(project), nil
+	}
+	return nil, nil
+}
+
+// drainTimeout bounds the wait for a deleted session's commands to end. A
+// stopped command is killed within seconds, so only one that does not die
+// reaches it.
+const drainTimeout = 10 * time.Second
+
+type missingRun struct {
+	parent string
+	id     string
+}
+
+// reserve marks a session and the subagent runs under it as being deleted, or
+// none of them when any is working, holds a queued message, or is reserved.
+// The launcher comes first in what it returns.
+func (e *Engine) reserve(s *Session) ([]*Session, []missingRun, error) {
+	// A run only on disk is loaded, so its one instance is what is reserved.
+	// One whose file cannot be read refuses the delete by name.
+	var kids []*Session
+	var missing []missingRun
+	parents := []string{s.ID}
+	seen := map[string]bool{s.ID: true}
+	for i := 0; i < len(parents); i++ {
+		parent := parents[i]
+		for _, id := range e.store.Family(parent) {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			parents = append(parents, id)
+			// A run with output left behind is finished first, or its launcher
+			// would go while the run still waits on a fix.
+			done, err := e.store.FinishCleanup(id)
+			if err != nil {
+				return nil, nil, err
+			}
+			if done {
+				continue
+			}
+			kid, err := e.Get(id)
+			if errors.Is(err, ErrNotFound) {
+				missing = append(missing, missingRun{parent, id})
+				continue
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			kids = append(kids, kid)
+		}
+	}
+	group, err := e.claim(s, kids)
+	return group, missing, err
+}
+
+// claim is reserve for runs already loaded. Under the engine's lock it drops
+// the runs another delete removed, refuses the rest unless every one is free,
+// and marks them.
+func (e *Engine) claim(s *Session, kids []*Session) ([]*Session, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.live[s.ID] != s {
+		return nil, ErrNotFound
+	}
+	group := []*Session{s}
+	for _, kid := range kids {
+		// A run another delete removed since it was read has nothing left
+		// to reserve.
+		kid.mu.Lock()
+		gone := kid.gone
+		kid.mu.Unlock()
+		if !gone || e.deleting[kid.ID] || e.live[kid.ID] == kid {
+			group = append(group, kid)
+		}
+	}
+	// A run started a moment ago may be live before it is on disk.
+	for i := 0; i < len(group); i++ {
+		for _, m := range e.live {
+			if m.Parent == group[i].ID && !slices.Contains(group, m) {
+				group = append(group, m)
 			}
 		}
 	}
-	e.mu.Lock()
-	delete(e.live, id)
-	e.mu.Unlock()
-	for _, child := range e.store.Children(id) {
-		if err := e.Delete(child.ID); err != nil {
-			return err
+	for _, m := range group {
+		if e.deleting[m.ID] || e.live[m.ID] != m {
+			return nil, ErrBusy
 		}
+		m.mu.Lock()
+		free := m.state == StateIdle && m.steer == nil
+		m.mu.Unlock()
+		if !free {
+			return nil, ErrBusy
+		}
+	}
+	for _, m := range group {
+		e.deleting[m.ID] = true
+	}
+	return group, nil
+}
+
+// unreserve releases what reserve took. A session that was not removed can
+// take work again, starting with the messages held for it.
+func (e *Engine) unreserve(group []*Session) {
+	type due struct {
+		s    *Session
+		msgs []heldMessage
+	}
+	var deliver []due
+	e.mu.Lock()
+	for _, m := range group {
+		delete(e.deleting, m.ID)
+		if msgs := e.held[m.ID]; len(msgs) > 0 && e.live[m.ID] == m {
+			deliver = append(deliver, due{m, msgs})
+		}
+		delete(e.held, m.ID)
+	}
+	e.mu.Unlock()
+	for _, d := range deliver {
+		for _, msg := range d.msgs {
+			e.handOver(d.s, msg.from, msg.text)
+		}
+	}
+}
+
+// remove deletes one reserved session once its accepted writes are on disk.
+// A failed delete leaves it in place and writes back what changed meanwhile.
+// Output left behind after the file went is reported, with the session gone.
+func (e *Engine) remove(s *Session, keepRecord bool) error {
+	s.mu.Lock()
+	e.waitSavedLocked(s)
+	s.gone = true
+	s.mu.Unlock()
+	doc, _, _, _ := s.Snapshot()
+	err := e.store.Delete(s.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrLeftBehind) {
+		s.mu.Lock()
+		s.gone = false
+		e.markLocked(s, true)
+		e.waitSavedLocked(s)
+		s.mu.Unlock()
+		return err
+	}
+	if doc.Parent == "" && doc.LeftIn != "" {
+		if !keepRecord {
+			e.forgetCarry(doc.LeftIn)
+		}
+		if store.IsScratch(e.scratch, doc.LeftIn) {
+			e.scratchLedger().ForgetMissing(doc.LeftIn, s.ID)
+		}
+	}
+	// Stored copies of attachments belong to the session and go with it.
+	for _, entry := range doc.Entries {
+		e.dropFiles(entry.Attachments)
+	}
+	e.mu.Lock()
+	delete(e.live, s.ID)
+	e.liveIDs.Delete(s.ID)
+	if e.reads > 0 {
+		e.removed[s.ID] = true
+	}
+	e.mu.Unlock()
+	if d, ok := e.hub.(Dropper); ok {
+		d.Drop(s.ID)
+	}
+	if errors.Is(err, store.ErrLeftBehind) {
+		return err
 	}
 	return nil
 }
@@ -1203,6 +1647,9 @@ func carriesOutput(kind llm.EventKind) bool {
 // state a new message is accepted in. card holds the turn's totals and is nil
 // for a turn that recorded no model call.
 func (e *Engine) finish(s *Session, next State, finishReason string, iterations int, card map[string]any) {
+	// A move change_directory asked for happens once the turn is over, and
+	// before a new message can start another.
+	e.applyMove(s)
 	// The steps of the turn were written without a flush. The file reaches
 	// the disk before the session reads as idle.
 	e.save(s)
@@ -1224,6 +1671,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	s.mu.Lock()
 	s.launches = nil
 	s.mu.Unlock()
+	// A move the last turn approved but a restart cut off is applied before
+	// this one reads the project.
+	e.applyMove(s)
 	clock := turnClock{started: time.Now()}
 	a, err := e.ensureReady(ctx, s)
 	if err != nil {
@@ -1248,12 +1698,17 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	}
 	// The estimate reads the same prompt the first request sends.
 	e.estimateBase(s, a, b)
-	runner, rerr := tools.NewRunner(s.Project, cfg)
+	project, _ := s.Where()
+	runner, rerr := tools.NewRunner(project, cfg)
 	if rerr != nil {
 		e.fail(s, rerr, clock)
 		return
 	}
+	s.mu.Lock()
+	runner.Folders = slices.Clone(s.Folders)
+	s.mu.Unlock()
 	runner.Hide(e.cfg.Paths().Home)
+	runner.FenceOff(e.Fence(s))
 	runner.Seen = s.seen
 	runner.SpillTo(e.store.SpillDir(s.ID))
 	if e.mcp != nil {
@@ -1861,7 +2316,24 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
 
 	policy := cfg.Mode
-	if e.perms.Evaluate(s.Project, tool, command, path, runner.Outside(path), policy) == perms.ActionAllow {
+	if tool == "change_directory" || tool == "request_directory" {
+		req, ask, refused := e.directoryRequest(s, call, policy)
+		if refused != nil {
+			record.Decision = "auto"
+			return perms.Decision{Kind: perms.DecideOnce, Refused: refused.Error()}, record, false
+		}
+		if !ask {
+			record.Decision = "auto"
+			if policy == config.ModeFull {
+				record.Decision = "full"
+			}
+			return perms.Decision{Kind: perms.DecideOnce}, record, false
+		}
+		record.Path = req.Path
+		return e.askDirectory(ctx, s, a, req, record)
+	}
+	project, _ := s.Where()
+	if e.perms.Evaluate(project, tool, command, path, runner.Outside(path), policy) == perms.ActionAllow {
 		// A call skips the card two ways, and the record keeps them apart.
 		// "auto" is a policy that allowed this call, "full" is no policy.
 		record.Decision = "auto"
@@ -1870,12 +2342,8 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 		}
 		return perms.Decision{Kind: perms.DecideOnce}, record, false
 	}
-	// The id is minted here rather than inside Ask, so the record kept with the
-	// tool entry carries the same id the card was asked with, whether the card
-	// was answered or the turn was stopped under it.
 	req := perms.Request{
-		ID:        perms.NewRequestID(),
-		SessionID: s.ID, Project: s.Project, Tool: tool,
+		Tool:    tool,
 		Command: command, Path: path,
 		Prefix: perms.DefaultPrefix(command),
 		Args:   string(call.Function.Arguments),
@@ -1889,6 +2357,28 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 	if t, ok := runner.MCPTools[tool]; ok {
 		req.Server, req.MCPTool, req.Prefix = t.Server, t.Tool, ""
 	}
+	d, stopped := e.askCard(ctx, s, a, req, record)
+	if stopped {
+		return d, record, true
+	}
+	record.Decision = string(d.Kind)
+	record.Prefix = d.Prefix
+	record.Reason = d.Reason
+	e.publishDecided(s, record)
+	if d.Note != "" {
+		e.publish(s.ID, ev("error", map[string]any{"kind": "allowlist", "message": d.Note}))
+	}
+	return d, record, false
+}
+
+// askCard puts a card to the person and waits for the answer. stopped reports
+// that the session was stopped while waiting, and the record then reads so.
+// The id is minted here rather than inside Ask, so the record carries the id
+// the card was asked with either way.
+func (e *Engine) askCard(ctx context.Context, s *Session, a config.Agent, req perms.Request, record *store.PermissionRecord) (d perms.Decision, stopped bool) {
+	req.ID = perms.NewRequestID()
+	req.SessionID = s.ID
+	req.Project, _ = s.Where()
 	// A subagent's card belongs in the conversation the person has open, not
 	// in a transcript nobody is reading.
 	if root := e.rootOf(s); root != s.ID {
@@ -1902,16 +2392,9 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 	if err != nil {
 		record.Decision = "stopped"
 		e.publishDecided(s, record)
-		return perms.Decision{}, record, true
+		return perms.Decision{}, true
 	}
-	record.Decision = string(d.Kind)
-	record.Prefix = d.Prefix
-	record.Reason = d.Reason
-	e.publishDecided(s, record)
-	if d.Note != "" {
-		e.publish(s.ID, ev("error", map[string]any{"kind": "allowlist", "message": d.Note}))
-	}
-	return d, record, false
+	return d, false
 }
 
 // publishDecided closes a card that is open in the browser. The tab that
@@ -2082,12 +2565,21 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 			res, err = e.writePlan(s, args)
 		case "exit_plan_mode":
 			res, err = e.submitPlan(ctx, s, call)
+		case "change_directory", "request_directory":
+			switch {
+			case d.Refused != "":
+				err = errors.New(d.Refused)
+			case call.Function.Name == "change_directory":
+				res, err = e.changeDirectory(s, runner, call, d.Path)
+			default:
+				res, err = e.requestDirectory(s, runner, call, d)
+			}
 		default:
 			if mcp.IsWire(call.Function.Name) {
 				res, err = runner.CallMCP(ctx, call.Function.Name, args)
 				break
 			}
-			err = fmt.Errorf("no tool named %s: use read, read_image, grep, web_search, write, edit, bash, processes, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read, read_image, grep, web_search, write, edit, bash, processes, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, change_directory or request_directory", call.Function.Name)
 		}
 		if err != nil {
 			// The flag is what lets the row say the call failed, since only

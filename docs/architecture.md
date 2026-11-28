@@ -77,6 +77,13 @@ Paths live under `~/.quecto-harness` (overridable with `$QUECTO_HARNESS_HOME`):
 - **`Store`** (an `RWMutex`) is the sole writer of the two config files and copies the
   agent list so a config read before a write does not change with it. `AddProject`
   resolves and symlinks the path, which the path guard and the allowlist both key on.
+- **A project never lies inside the state directory.** `CheckProject` refuses such a folder,
+  links followed and folders compared by identity, and a folder that cannot be resolved is
+  an error. A project that holds the state directory is allowed; the file tools and the
+  file panel never reach it, though `bash` can, as any shell the user allows can.
+  `CheckRepo` refuses Git in the Git panel on a repository that holds it. `AddProject`
+  refuses a folder inside the state directory, and one an older build registered is
+  refused, with 409, by everything that works on a project.
 - `allowlist.json` maps a project root to command prefixes, deduped and sorted
   longest-first.
 - **No version field, no migration code**: unknown keys are ignored; missing keys take
@@ -206,6 +213,55 @@ directory). Output is truncated to a head and a tail with a marker; `looksBinary
 on a NUL byte or invalid UTF-8 above 1 % of an 8 KiB sniff, and UTF-16 reads as binary,
 accepted.
 
+**Conversation fence.** A conversation without a project works in its own folder under the
+scratch root. `read`, `read_image`, `grep`, `write` and `edit` refuse a path in another
+conversation's scratch folder, and the file panel, the file viewer and `@` mentions leave
+those folders out. The Git panel refuses repositories inside the scratch root and repositories whose tree
+contains it.
+`change_directory` refuses the scratch root and any folder above it; `request_directory`
+refuses only the scratch root and what is in it. `bash`, the background processes it
+starts, and MCP tools are not confined by the fence: a command the permission policy lets
+run reaches whatever the user's account can, other conversations' folders included.
+
+**Scratch removal.** A scratch folder goes when its conversation is deleted, or seven days
+after a move copied every file out of it, on a removal order bound to the owner record
+written when the folder was made. The order holds while the folder has its recorded
+identity, nothing in it changed after the order, and, after a copy, every file still matches
+its copy. These checks decide when a folder goes. The folder is then moved into the trash of
+its own volume with one rename, never deleted, so open files, modes, attributes, resource
+forks and access control lists stay with it. macOS uses `~/.Trash` on the home volume and
+`<top>/.Trashes/<uid>` on another. Linux uses the freedesktop home trash, or
+`$topdir/.Trash/$uid` or `$topdir/.Trash-$uid`, and writes the `.trashinfo` record first to
+reserve the name. A volume with no trash the account can use keeps the folder. The ledger
+saves the source and intended trash path before the rename. After the rename the entry in
+the trash is checked again: another entry moved by mistake goes back, and one that cannot go
+back is recorded with where it is in the trash. A trash entry that cannot be read leaves the
+order waiting, and a later removal settles it once the entry reads as the folder. If a later
+check finds a different entry, Storage names both paths for inspection. The ledger records
+the confirmed destination before clearing the order.
+
+**Retained folders.** The ledger keeps a notice beside the removal order for each folder
+that stays: a refused move, an order waiting for a check (a copy edited in the project, a
+tree that cannot be read, a trash entry not yet checked), and a folder kept for good. A
+change in the folder after its order cannot be undone, so that order is settled: it is
+withdrawn and the folder is kept, with a reason that names what the change came after, the
+delete of its conversation or the start of its copy. `GET /api/storage` lists every notice
+with `path` and `reason`. Optional fields include `kept`, `waiting`, `foreign`, `trash`,
+`record` and `file`. The owner record also stores why a folder was kept, so Storage
+can list it if its notice is removed. The `record` field names a damaged owner record,
+order or notice, or an order a settled notice could not withdraw. Removing an owner record or an
+order keeps the folder, which is then listed as kept while it is on disk. The sweep forgets
+the records of a listed folder once it is gone, and the notice of another entry once it has
+left the trash. Copy cleanup records each file it sends to the trash beside the scratch copy
+journal. The sweep leaves active moves alone. After a move finishes or the harness
+restarts, the sweep clears its notice once the file is verified or its trash path is empty.
+A misplaced entry stays listed while it remains at that path.
+
+**Responses.** When deletion removes the session but leaves its folder,
+`DELETE /api/sessions/{id}` returns 200 with that notice. `DELETE /api/projects` deletes the
+project's sessions first and returns `sessions_deleted` and `retained_folders`, the notices
+of the folders those deletes left; a removal that stops partway returns both beside `error`.
+
 ## 7. internal/perms
 
 The broker **decides and blocks**. `Evaluate` applies the static policy without blocking;
@@ -333,6 +389,23 @@ too late to be picked up starts a turn of its own.
 - **Concurrent turns** are not serialised. llama.cpp queues a request when every slot is
   busy, so a second session sits in `streaming` with no deltas until a slot frees. That is
   documented behaviour, not a defect to work around.
+- **Deleting** reserves the session and every subagent run under it, live or only on disk,
+  in one step under the engine's lock: if any of them is working, holds a queued message or
+  is already reserved, none is, and the delete is refused as busy. A run on disk that cannot
+  be read fails the delete by name rather than being left without its launcher, also when
+  its file was already unreadable at start. Every way of
+  starting work (a message, a queued message, a resend, a compaction) takes the engine's lock
+  and then the session's, and refuses a reserved session or an instance that is no longer
+  the live one; a queued message comes off the queue under that same lock. A run's report or
+  a command's notice that reaches a reserved session waits for the delete: it is delivered
+  once if the delete fails, and goes with the session if it succeeds. `Get` does not keep
+  a session it read from disk while its id is reserved or once a delete removed it. The
+  reserved sessions' background commands are stopped silently and waited on, outside every
+  lock, for up to 10 s; one still running after that fails the delete with nothing removed.
+  Runs are removed before their launcher. Each removal waits for accepted writes, then removes
+  the file; a file that cannot be removed leaves the session, its folder and its launcher in
+  place, writes back what changed meanwhile, and the delete can be tried again. The wait
+  covers the commands this process started.
 - **Subagents.** `subagent` creates a session on the named agent and waits for its first
   turn to end; the result is the call's own result, and no message follows it. Waiting calls
   made together in one reply are started together. With `wait` false it returns the handle,
@@ -358,13 +431,57 @@ drives what the UI keeps. The permission record preserves the decision, so a rel
 shows the card in its answered state.
 
 - A session is **one file at `0600`**, beside a sidecar folder holding the baseline copies,
-  with one mutex per id so sessions never serialise against each other. The header carries
+  with writes serialized by lock stripe. The header carries
   project, agent, parent, model, title, whether the title was typed, times, `n_ctx` and its
   source, compactions, the estimated context base, the todo list and the baselines. Each
   entry carries its own call record, and the entry that ended a turn carries that turn's
   totals. The system prompt is **regenerated, not stored**.
 - `Open` builds an index from a one-time scan, so `List` never touches the filesystem; a
-  corrupt file is skipped and named, not fatal. `Save` atomic-replaces with indented JSON.
+  corrupt file, or one that names a session other than its own, is skipped and named, not
+  fatal; `Load` refuses such a file, since paths and deletes go by the id. `Save`
+  atomic-replaces with indented JSON.
+- `ledger.json` records each run's launcher and project before the transcript is written.
+  The record survives an unreadable transcript. Settings > Projects lists unreadable
+  transcripts and their recorded runs. A run can be deleted with its saved output even
+  if its transcript is missing. Archiving an unreadable run removes it from its
+  launcher's list and keeps its renamed transcript and saved output in the sessions
+  folder after the launcher is deleted. A transcript with outstanding runs can be
+  archived once those runs are resolved. When the ledger has records for the session,
+  it names the archive before the rename. Startup uses that name to finish releasing
+  the records after an interruption. Check transcripts also lists readable runs whose launcher
+  is gone. Each new archive has a random suffix that stays with it across restarts.
+  The deletion request names the archive shown in the confirmation. An obsolete name returns 409.
+  Archived transcripts and retained output can be deleted separately. A restored
+  transcript keeps its output. A retained output directory receives a random recovery
+  marker when listed. A confirmation records both inodes and the marker’s change time.
+  On macOS it also records the directory’s birth time. On Linux ext filesystems it
+  records the directory’s inode generation when available. The saved identity survives
+  device renumbering. The order records a SHA-256 digest for each confirmed path,
+  including file contents and symbolic link targets. A retry accepts missing entries.
+  A new entry or changed file requires a fresh confirmation, including on a cloned
+  volume. Cleanup removes the marker last.
+  An older confirmation requires a refresh. If cleanup stops after removing the marker,
+  the retry can remove an empty directory only when its original lifetime can be verified.
+  If the directory cannot be marked, inspect it manually.
+- A deletion records its cleanup before removing anything. If removing the output fails,
+  the session stays listed and the cleanup is retried at startup or on a later deletion.
+  A failed removal also records its order in `<id>.cleanup` until completion or archival.
+  A run's relation expires when both transcripts and its output are gone. Pending
+  cleanups retain their recorded owners until settled.
+- An unreadable ledger stops startup. An invalid ledger is moved to the first free
+  `ledger.json.unreadable-<n>`. The second copy, `ledger.json.backup`, supplies known
+  relations and cleanups. An empty primary paired with a nonempty backup keeps the backup
+  in `ledger.json.backup.divergent-<n>`. A matching failure marker confirms a backup cleanup.
+  A contradictory marker is renamed to
+  `<id>.cleanup.ambiguous-<n>`. Check transcripts lists those markers and divergent
+  backups for inspection. A backup parent relation keeps an unreadable run in its
+  launcher’s family until the run is repaired or archived. Startup repairs missing or
+  differing copies. Without either copy, readable transcripts supply the relationships
+  and failed removal orders identify output to retry. Unclaimed output stays available in Settings > Projects.
+  Cleanup accepts a map of relations or a list of IDs resolved through the parent map.
+  On macOS and Linux the server locks both the state directory and the sessions directory before
+  opening its stores.
+  A store opened directly requires one writer per session directory.
 - **Size.** Tool output is capped at `output_limit_bytes`, but `write` content lives in
   the assistant's arguments, because a truncated argument makes the history unusable for a
   resend. A session that writes many large files grows large; the mitigation is a new
@@ -375,6 +492,15 @@ shows the card in its answered state.
 One method-and-pattern `ServeMux`, wrapped by `recoverPanic → logRequest → checkOrigin →
 auth`. A panic becomes a 500 with a stack in the log; it never takes the process down.
 
+- **The state directory.** Besides refusing a project inside it, the file panel
+  (`ViewFile`, `ListDir`, `FindFiles`) is given its location and leaves out, or answers
+  403 for, anything that leads into it, a link included. A file attached to a message or
+  previewed from the file dialog that lands in it is refused with 403, unless it is a file
+  a paste stored there, which `Uploads.Owns` recognises by its exact shape. Git is refused
+  for a repository whose working tree or git directories overlap it, even when the project
+  is a part of the tree that does not, since a stash, a commit of everything or a branch
+  switch reaches the whole tree. An untracked link is shown as a link and what it points to
+  is never read; the patch a draft is made from tells it as git stores it.
 - **Auth.** The binary prints and opens a `?token=` URL; a match sets an `HttpOnly`
   `SameSite` cookie for 30 days and 303s to `/`, so the token leaves the address bar. Every
   `/api/*` request needs the cookie or a Bearer token; a 401 is a full-page state.
@@ -534,8 +660,29 @@ The fourteen review questions, each settled and already folded into the sections
 | 13 | The protocol is named, not detected. |
 | 14 | `role == "router"` means router mode; an absent role means single. `model_alias` is not a discriminator. |
 
-Also settled: allowlist entries for a removed project stay on disk and are reachable via the
-two allowlist routes; deleting a session is 204, 409 when busy, 404 when unknown, and removes
-the file, the live entry, the hub channel and the subagent runs under it behind a
-confirmation (there is no undo); and reasoning is stored, shown and replayed to the model,
-which `preserve_reasoning` asks the template to keep.
+Also settled:
+
+- Allowlist entries for a removed project stay on disk and are reachable via the two
+  allowlist routes.
+- Deleting a session removes the file, the live entry and the subagent runs under it,
+  behind a confirmation. There is no undo. It answers 204, 409 when the session is busy or
+  reserved by another delete, 404 when it is unknown, 409 naming the file when a session
+  in it cannot be read or its saved output cannot be removed, and 500 when the store
+  cannot remove the file.
+- Each session a delete removes, a run or a project's session included, has its hub
+  channel dropped. A channel is made only for a session held in memory or whose file is
+  still there, so a late event or a reconnecting tab cannot make it again, and its event
+  stream answers 204. That covers one whose output a delete left behind. The hub also
+  remembers a drop for a minute. The engine keeps a removed id only while a
+  read from disk that began before the delete is under way.
+- A session neither live nor on the store's index answers 204 too, asked without loading
+  it. That covers one deleted before a restart.
+- An id that is not a session's is refused with 404 and gets no channel.
+- Removing a project needs a path in the project list, and is 404 otherwise, since an
+  empty path would name every project's sessions. It deletes the project's sessions and
+  keeps the busy ones. It finishes the sessions whose output a delete left behind, which
+  the ledger records with their project. It keeps the project when a session cannot be
+  deleted for any other reason, and otherwise removes the path from the list.
+- A message that is refused leaves no stored copy of its attachments.
+- Reasoning is stored, shown and replayed to the model, which `preserve_reasoning` asks
+  the template to keep.

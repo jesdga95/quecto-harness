@@ -1,9 +1,10 @@
 <script lang="ts">
   import CaretDown from "phosphor-svelte/lib/CaretDownIcon";
   import Check from "phosphor-svelte/lib/CheckIcon";
+  import ChatCircle from "phosphor-svelte/lib/ChatCircleIcon";
   import FolderPlus from "phosphor-svelte/lib/FolderPlusIcon";
   import Popover from "./Popover.svelte";
-  import { app, pickAndAddProject, selectProject } from "../state/app.svelte";
+  import { app, NO_FOLDER, NO_FOLDER_LABEL, pickAndAddProject, selectProject } from "../state/app.svelte";
 
   let open = $state(false);
   const current = $derived(app.projects.find((p) => p.path === app.projectPath));
@@ -19,7 +20,7 @@
 <!-- The empty screen's title is the project, and it is the picker for one. -->
 <div class="relative inline-block">
   <button class="hero-title" aria-haspopup="menu" aria-expanded={open} onclick={() => (open = !open)}>
-    <span class="hero-name">{current?.name ?? "Choose a project"}</span>
+    <span class="hero-name">{app.projectPath === NO_FOLDER ? NO_FOLDER_LABEL : (current?.name ?? "Choose a project")}</span>
     <span class="hero-caret"><CaretDown /></span>
   </button>
 
@@ -36,6 +37,17 @@
           {/if}
         </button>
       {/each}
+      <button class="popover-item" onclick={() => pick(NO_FOLDER)}>
+        <span class="min-w-0 flex-1">
+          <span class="block truncate">{NO_FOLDER_LABEL}</span>
+          <span class="block truncate text-[12px] text-muted">Work in a folder made for the conversation</span>
+        </span>
+        {#if app.projectPath === NO_FOLDER}
+          <Check size={14} class="text-accent" />
+        {:else}
+          <ChatCircle size={14} class="text-muted" />
+        {/if}
+      </button>
       <button
         class="popover-item text-ink-2"
         onclick={() => {

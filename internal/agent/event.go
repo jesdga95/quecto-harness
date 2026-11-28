@@ -21,6 +21,12 @@ type Publisher interface {
 	Publish(sessionID string, ev Event)
 }
 
+// Dropper is implemented by a publisher that keeps state for each session.
+// Drop lets go of that state once the session is deleted.
+type Dropper interface {
+	Drop(sessionID string)
+}
+
 // PermissionEvent renders a pending request for the browser. The broker calls
 // it from whichever goroutine is blocked on the decision.
 func PermissionEvent(r perms.Request) Event {
@@ -32,5 +38,6 @@ func PermissionEvent(r perms.Request) Event {
 		"prefix":      r.Prefix,
 		"args":        r.Args,
 		"description": r.Description,
+		"occupied":    r.Occupied,
 	})
 }

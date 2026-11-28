@@ -1,6 +1,19 @@
 // Shapes of the harness HTTP API and its SSE stream. Components read these
 // types only, so a real client can replace the mock without touching the UI.
 
+export interface RecoveryItem {
+  name: string;
+  id: string;
+  kind: "archive" | "output" | "run" | "record";
+  generation?: string;
+  repair?: string;
+}
+
+export interface UnreadableSession {
+  id: string;
+  runs: string[];
+}
+
 export type ModelStatus =
   | "unloaded"
   | "loading"
@@ -36,6 +49,40 @@ export interface Project {
   name: string;
 }
 
+export interface TrashFailure {
+  path: string;
+  reason: string;
+  /** The folder's removal was called off rather than refused. */
+  kept?: boolean;
+  /** A damaged record that holds the folder until it is repaired. */
+  record?: string;
+  /** Where a move put the folder, or, with foreign, another entry it took by mistake. */
+  trash?: string;
+  /** The move happened but its result could not be checked yet. */
+  waiting?: boolean;
+  foreign?: boolean;
+  /** The notice names a file a copy left in a project, not a folder. */
+  file?: boolean;
+}
+
+export interface DeletionPreview {
+  kept: string;
+  /** kept goes once every session file can be read. */
+  deferred?: boolean;
+  carry?: {
+    destination: string;
+    count: number;
+    names?: string[];
+    unavailable?: boolean;
+    recovery?: string;
+    /** The copy's record, which could not be read and is kept. */
+    record?: string;
+    unreadable?: boolean;
+    damaged_line?: number;
+  };
+  carry_token?: string;
+}
+
 export interface Session {
   id: string;
   project: string;
@@ -46,9 +93,16 @@ export interface Session {
   /** The session that launched this one, for a subagent run. Empty is a
       conversation somebody started, which is the only kind the sidebar lists. */
   parent: string;
+  launcherGone?: boolean;
   /** The subagent runs this session launched, which are reachable nowhere
       else. */
   children: Child[];
+  /** Set for a conversation started without a project, whose project is a
+      folder the harness made for it and never shows. */
+  scratch: boolean;
+  /** The folder a move left with files it did not copy, which stays when the
+      conversation is deleted. Empty when there is none. */
+  kept?: string;
 }
 
 /** One subagent run, as its launcher lists it. */
@@ -278,6 +332,9 @@ export interface State {
   projects: Project[];
   /** What the active agent's address holds. */
   models: Model[];
+  /** Whether a scratch folder is moved to the trash when its conversation is deleted.
+      Off unix the harness cannot tell a folder by identity and keeps them. */
+  removesFolders?: boolean;
 }
 
 import type { Plan } from "../plan";
@@ -294,7 +351,7 @@ export interface Todo {
 }
 
 export type PermissionDecision =
-  | { decision: "once" }
+  | { decision: "once"; path?: string }
   | { decision: "always"; prefix: string }
   | { decision: "deny"; reason: string };
 
@@ -332,8 +389,12 @@ export type HarnessEvent =
       id: string;
       tool: string;
       command: string;
+      /** The folder a directory card names, empty when it asks for one. */
+      path: string;
       prefix: string;
       description: string;
+      /** The folder a move goes to already holds files. */
+      occupied?: boolean;
       agent: string;
     }
   /** The card was answered, or a stop answered it, and every tab closes it. */
@@ -365,6 +426,9 @@ export type HarnessEvent =
   | { type: "status_entry"; text: string }
   /** The model named the session after its first turn. */
   | { type: "title"; title: string }
+  /** The conversation moved to another folder, or finished copying its
+      files there. */
+  | { type: "moved"; project: string }
   | { type: "compacted"; before: number; after: number; summary: string }
   /** The model rewrote the plan. It replaces the one held. */
   | { type: "todos"; todos: Todo[] }
@@ -467,9 +531,13 @@ export type TranscriptItem =
       id: string;
       tool: string;
       command: string;
+      /** The folder a directory card names, empty when it asks for one. */
+      path: string;
       prefix: string;
       /** What the call says the command does, in plain language. */
       description: string;
+      /** The folder a move goes to already holds files, which stay as they are. */
+      occupied: boolean;
       outcome: string | null;
       /** The subagent that asked. Empty is this conversation's own turn, and
           only that one blocks the composer. */
@@ -548,6 +616,8 @@ export interface GitFile {
   path: string;
   state: GitState;
   binary: boolean;
+  /** An untracked link, shown without what it points to. */
+  link: boolean;
   added: number;
   removed: number;
   /** Diff lines past the server's limit that were counted but not sent. */
@@ -796,6 +866,7 @@ export type SessionFeedHandler = (feed: Record<string, SessionFeed>, whole: bool
 
 export interface HarnessApi {
   getState(): Promise<State>;
+  trashFailures(): Promise<TrashFailure[]>;
   /** What the active agent's address holds. */
   listModels(refresh?: boolean): Promise<Model[]>;
   listAgents(): Promise<Agent[]>;
@@ -818,12 +889,17 @@ export interface HarnessApi {
       text, and answers with the path a message attaches it by. */
   pasteFile(name: string, data: string): Promise<string>;
   addProject(path: string): Promise<Project[]>;
-  removeProject(path: string): Promise<Project[]>;
+  /** retained lists folders the deleted sessions left in place. */
+  removeProject(path: string): Promise<{ projects: Project[]; retained: TrashFailure[] }>;
   /** Sets the order of the project list. It must name every project exactly
       once, since the harness stores the list it is given. */
   reorderProjects(paths: string[]): Promise<Project[]>;
   listSessions(project: string): Promise<Session[]>;
   createSession(project: string): Promise<Session>;
+  /** The conversations started without a project, newest first. */
+  listScratchSessions(): Promise<Session[]>;
+  /** Starts a conversation in a new folder of its own. */
+  createScratchSession(): Promise<Session>;
   /** Points an idle session at another model, keeping its history. */
   getSession(id: string): Promise<Transcript>;
   /** The project's repository and working tree. */
@@ -850,16 +926,27 @@ export interface HarnessApi {
       for a path outside the project, a folder, or a file that is not there. */
   readFile(id: string, path: string): Promise<ProjectFile>;
   /** Files in a project whose path holds every word of q, best first. */
-  findFiles(project: string, q: string): Promise<string[]>;
+  /** session names the conversation a folder without a project was made
+      for, which is the only one its files are found for. */
+  findFiles(project: string, q: string, session?: string): Promise<string[]>;
   /** One folder in the session's project, folders first. */
   listDir(id: string, path: string): Promise<ProjectDir>;
+  /** The folder that stays on disk when the session is deleted, empty when
+      none does. */
+  previewDelete(id: string): Promise<DeletionPreview>;
   /** Where an image in the session's project is served from. */
   fileUrl(id: string, path: string): string;
   /** Where a file chosen in the file dialog is served from, for a preview. */
   pickedUrl(path: string): string;
   /** Where a file the harness stored for a message is served from. */
   attachmentUrl(file: string): string;
-  deleteSession(id: string): Promise<void>;
+  recoveryItems(): Promise<RecoveryItem[]>;
+  deleteRetained(name: string, generation?: string): Promise<void>;
+  unreadableSessions(): Promise<UnreadableSession[]>;
+  archiveUnreadable(id: string): Promise<string>;
+  /** told is the preview the person saw of what stays on disk. The harness
+      refuses with 409 when that is no longer so. */
+  deleteSession(id: string, told?: DeletionPreview): Promise<TrashFailure | null>;
   renameSession(id: string, title: string): Promise<void>;
   /** Files are read by the harness and inlined into the message. What comes
       back is the attachments as it stored them, ids included, and the

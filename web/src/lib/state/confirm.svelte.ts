@@ -4,6 +4,7 @@
 export type ConfirmRequest = {
   title: string;
   body?: string;
+  files?: string[];
   confirmLabel?: string;
   destructive?: boolean;
   /** A second way to go ahead, drawn between Cancel and the confirm button. */

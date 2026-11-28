@@ -2,6 +2,8 @@ import type {
   Agent,
   Effort,
   AgentPatch,
+  DeletionPreview,
+  TrashFailure,
   Answer,
   Attached,
   Config,
@@ -203,7 +205,7 @@ const hunk = (old_start: number, new_start: number, lines: [DiffKind, string][],
   lines: lines.map(([kind, text]) => ({ kind, text })),
 });
 
-function counted(f: Omit<MockFile, "added" | "removed" | "omitted">): MockFile {
+function counted(f: Omit<MockFile, "link" | "added" | "removed" | "omitted">): MockFile {
   let added = 0;
   let removed = 0;
   for (const h of f.hunks)
@@ -211,7 +213,7 @@ function counted(f: Omit<MockFile, "added" | "removed" | "omitted">): MockFile {
       if (l.kind === "added") added++;
       if (l.kind === "removed") removed++;
     }
-  return { ...f, added, removed, omitted: 0 };
+  return { ...f, link: false, added, removed, omitted: 0 };
 }
 
 function mockFiles(): MockFile[] {
@@ -758,6 +760,8 @@ export class MockApi implements HarnessApi {
 
   // reads
 
+  async trashFailures(): Promise<TrashFailure[]> { return []; }
+
   async getState(): Promise<State> {
     await this.tick();
     const probe = this.probe(this.active());
@@ -773,6 +777,7 @@ export class MockApi implements HarnessApi {
       agents: this.agents.map((a) => ({ ...a })),
       projects: this.config.projects.map((p) => ({ path: p, name: baseName(p) })),
       models: probe.models.map((m) => ({ ...m })),
+      removesFolders: true,
     };
   }
 
@@ -922,6 +927,16 @@ export class MockApi implements HarnessApi {
     return `/Users/jay/.quecto-harness/uploads/${crypto.randomUUID()}/${name}`;
   }
 
+  async listScratchSessions(): Promise<Session[]> {
+    await this.tick();
+    return this.sessions.filter((s) => s.scratch && s.parent === "").map((s) => ({ ...s }));
+  }
+
+  async createScratchSession(): Promise<Session> {
+    const folder = `/Users/jay/Library/Application Support/Quecto Harness/scratch-workspaces/scratch-${nextId("w")}`;
+    return this.createSession(folder, true);
+  }
+
   async listSessions(project: string): Promise<Session[]> {
     await this.tick();
     // A subagent run is reachable from the row that launched it, not the list.
@@ -937,7 +952,7 @@ export class MockApi implements HarnessApi {
     if (!t) throw new Error(`session ${id} not found`);
     const run = this.running?.session === id ? this.running : null;
     return {
-      session: { ...t.session },
+      session: { ...t.session, launcherGone: !!t.session.parent && !this.transcripts.has(t.session.parent) },
       items: t.items.map((i) => ({ ...i })),
       usage: { ...t.usage },
       todos: t.todos.map((todo) => ({ ...todo })),
@@ -1181,6 +1196,11 @@ export class MockApi implements HarnessApi {
       .slice(0, 30);
   }
 
+  async previewDelete(_id: string): Promise<DeletionPreview> {
+    await this.tick();
+    return { kept: "" };
+  }
+
   async listDir(id: string, path: string): Promise<ProjectDir> {
     await this.tick();
     if (!this.transcripts.has(id)) throw new Error(`session ${id} not found`);
@@ -1217,10 +1237,17 @@ export class MockApi implements HarnessApi {
     if (session) session.title = title;
   }
 
-  async deleteSession(id: string): Promise<void> {
+  async recoveryItems() { return []; }
+  async deleteRetained(_name: string) {}
+  async unreadableSessions() { return []; }
+
+  async archiveUnreadable(): Promise<string> { throw new Error("Transcript not found"); }
+
+  async deleteSession(id: string, _told?: DeletionPreview): Promise<null> {
     await this.tick();
     this.sessions = this.sessions.filter((s) => s.id !== id);
     this.transcripts.delete(id);
+    return null;
   }
 
   // writes
@@ -1245,13 +1272,13 @@ export class MockApi implements HarnessApi {
     return this.config.projects.map((p) => ({ path: p, name: baseName(p) }));
   }
 
-  async removeProject(path: string): Promise<Project[]> {
+  async removeProject(path: string): Promise<{ projects: Project[]; retained: TrashFailure[] }> {
     await this.tick();
     this.config.projects = this.config.projects.filter((p) => p !== path);
-    return this.config.projects.map((p) => ({ path: p, name: baseName(p) }));
+    return { projects: this.config.projects.map((p) => ({ path: p, name: baseName(p) })), retained: [] };
   }
 
-  async createSession(project: string): Promise<Session> {
+  async createSession(project: string, scratch = false): Promise<Session> {
     await this.tick();
     const model = this.active()?.model ?? "";
     const session: Session = {
@@ -1262,6 +1289,7 @@ export class MockApi implements HarnessApi {
       updated: new Date().toISOString(),
       parent: "",
       children: [],
+      scratch,
     };
     // Newest first: a new conversation leads its project's list.
     this.sessions.unshift(session);
@@ -1645,6 +1673,7 @@ export class MockApi implements HarnessApi {
           tool: script.tool,
           agent: "",
           command: script.command,
+          path: "",
           description: "",
           prefix: prefixOf(script.command),
         });
@@ -1986,6 +2015,7 @@ export class MockApi implements HarnessApi {
       updated: new Date(Date.now() - 3_600_000).toISOString(),
       parent: "",
       children: [],
+      scratch: false,
     };
     const second: Session = {
       id: nextId("s"),
@@ -1995,6 +2025,7 @@ export class MockApi implements HarnessApi {
       updated: new Date(Date.now() - 600_000).toISOString(),
       parent: "",
       children: [],
+      scratch: false,
     };
     const third: Session = {
       id: nextId("s"),
@@ -2004,6 +2035,7 @@ export class MockApi implements HarnessApi {
       updated: new Date(Date.now() - 86_400_000).toISOString(),
       parent: "",
       children: [],
+      scratch: false,
     };
     // A subagent run, so the launched row, the way back and a message from an
     // agent are all on screen before anything is clicked.
@@ -2015,6 +2047,7 @@ export class MockApi implements HarnessApi {
       updated: new Date(Date.now() - 1_800_000).toISOString(),
       parent: first.id,
       children: [],
+      scratch: false,
     };
     // A second run, still working, so the chip counts one and the panel draws
     // a step that has not finished.
@@ -2026,6 +2059,7 @@ export class MockApi implements HarnessApi {
       updated: new Date(Date.now() - 300_000).toISOString(),
       parent: first.id,
       children: [],
+      scratch: false,
     };
     first.children = [
       { id: auditor.id, title: auditor.title, agent: "Cloud reasoner", status: "running", fill: 16400 },

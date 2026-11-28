@@ -46,11 +46,14 @@ type Hunk struct {
 // File is one path on one side of the index: staged, against HEAD, or
 // unstaged, against the index.
 type File struct {
-	Path    string `json:"path"`
-	State   string `json:"state"`
-	Binary  bool   `json:"binary,omitempty"`
-	Added   int    `json:"added"`
-	Removed int    `json:"removed"`
+	Path   string `json:"path"`
+	State  string `json:"state"`
+	Binary bool   `json:"binary,omitempty"`
+	// Link is an untracked symbolic link, shown without reading what it
+	// points to.
+	Link    bool `json:"link,omitempty"`
+	Added   int  `json:"added"`
+	Removed int  `json:"removed"`
 	// Omitted counts the diff lines past the limit that were not carried.
 	Omitted int    `json:"omitted"`
 	Hunks   []Hunk `json:"hunks"`
@@ -234,7 +237,13 @@ func (r *Repo) untracked(path string) File {
 	if err != nil {
 		return f
 	}
-	info, err := os.Stat(abs)
+	// Lstat, so a link is not followed: what it points to may be any file
+	// on the machine, and its content would reach the panel and a draft.
+	info, err := os.Lstat(abs)
+	if err == nil && info.Mode()&os.ModeSymlink != 0 {
+		f.Link = true
+		return f
+	}
 	if err != nil || !info.Mode().IsRegular() || info.Size() > untrackedRead {
 		f.Binary = err == nil && info.Mode().IsRegular()
 		return f

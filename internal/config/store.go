@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -66,7 +67,7 @@ func Open(p Paths) (*Store, error) {
 	}
 	s.mcp, s.mcpNotes = ResolveMCP(fileMCP)
 
-	if err := s.persistConfig(); err != nil {
+	if err := s.writeConfig(s.cfg); err != nil {
 		return nil, err
 	}
 	if err := s.persistAllow(); err != nil {
@@ -77,14 +78,19 @@ func Open(p Paths) (*Store, error) {
 
 func (s *Store) Paths() Paths { return s.paths }
 
+// clone copies c with every slice it holds, so a caller that writes into the
+// copy leaves c as it was.
+func (c Config) clone() Config {
+	c.Projects = append([]string(nil), c.Projects...)
+	c.Agents = cloneAgents(c.Agents)
+	c.Search.Accounts = cloneSearchAccounts(c.Search.Accounts)
+	return c
+}
+
 func (s *Store) Config() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	c := s.cfg
-	c.Projects = append([]string(nil), s.cfg.Projects...)
-	c.Agents = cloneAgents(s.cfg.Agents)
-	c.Search.Accounts = cloneSearchAccounts(s.cfg.Search.Accounts)
-	return c
+	return s.cfg.clone()
 }
 
 func (s *Store) Notes() []string {
@@ -93,28 +99,25 @@ func (s *Store) Notes() []string {
 	return append(append([]string(nil), s.notes...), s.mcpNotes...)
 }
 
-// Update applies fn to a copy, validates it, and persists. The lock is held
-// across the write so two concurrent updates cannot interleave.
+// Update applies fn to a copy, validates it, and persists it under the lock.
+// The copy replaces the configuration only once it is on disk.
 func (s *Store) Update(fn func(*Config)) (Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	next := s.cfg
-	next.Projects = append([]string(nil), s.cfg.Projects...)
-	next.Agents = cloneAgents(s.cfg.Agents)
-	next.Search.Accounts = cloneSearchAccounts(s.cfg.Search.Accounts)
+	next := s.cfg.clone()
 	fn(&next)
 	resolved, notes := next.File().Resolve(Defaults())
+	if err := s.writeConfig(resolved); err != nil {
+		return s.cfg.clone(), err
+	}
 	s.cfg = resolved
 	s.notes = notes
-	if err := s.persistConfig(); err != nil {
-		return s.cfg, err
-	}
-	return s.cfg, nil
+	return s.cfg.clone(), nil
 }
 
-// persistConfig writes config.json. The caller holds the lock.
-func (s *Store) persistConfig() error {
-	data, err := json.MarshalIndent(s.cfg.File(), "", "  ")
+// writeConfig writes c to config.json. The caller holds the lock.
+func (s *Store) writeConfig(c Config) error {
+	data, err := json.MarshalIndent(c.File(), "", "  ")
 	if err != nil {
 		return err
 	}
@@ -259,6 +262,12 @@ func (s *Store) AddProject(path string) (Config, error) {
 	if err != nil {
 		return s.Config(), err
 	}
+	if err := s.CheckProject(real); err != nil {
+		return s.Config(), err
+	}
+	if ContainsDirectory(s.paths.Scratch, real) {
+		return s.Config(), fmt.Errorf("%s is in the folder the harness keeps for conversations without a project, so it cannot be a project. Choose a folder outside it", real)
+	}
 	s.mu.Lock()
 	for _, p := range s.cfg.Projects {
 		if p == real {
@@ -270,19 +279,11 @@ func (s *Store) AddProject(path string) (Config, error) {
 	return s.Update(func(c *Config) { c.Projects = append([]string{real}, c.Projects...) })
 }
 
-func (s *Store) RemoveProject(path string) (Config, error) {
-	real := filepath.Clean(path)
-	if r, err := ResolveProject(path); err == nil {
-		real = r
-	}
+// RemoveProjectEntry removes the one entry written exactly as entry, and no
+// other entry its path may resolve to.
+func (s *Store) RemoveProjectEntry(entry string) (Config, error) {
 	return s.Update(func(c *Config) {
-		var keep []string
-		for _, p := range c.Projects {
-			if p != real && p != filepath.Clean(path) {
-				keep = append(keep, p)
-			}
-		}
-		c.Projects = keep
+		c.Projects = slices.DeleteFunc(c.Projects, func(p string) bool { return p == entry })
 	})
 }
 
@@ -463,4 +464,56 @@ func (s *Store) nameIsFree(name, own string) error {
 		}
 	}
 	return nil
+}
+
+// ContainsDirectory checks membership by path and by the identities of
+// existing ancestors, including on volumes with more than one spelling for a name.
+func ContainsDirectory(root, path string) bool {
+	if root == "" || path == "" {
+		return false
+	}
+	if Within(root, path) {
+		return true
+	}
+	root, path = ResolveLinks(root), ResolveLinks(path)
+	if Within(root, path) {
+		return true
+	}
+	want, err := os.Stat(root)
+	if err != nil || !want.IsDir() {
+		return false
+	}
+	for {
+		if info, err := os.Stat(path); err == nil && os.SameFile(info, want) {
+			return true
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return false
+		}
+		path = parent
+	}
+}
+
+// Within reports whether p is root or lies under it, comparing the paths as
+// written. Both are clean and absolute.
+func Within(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// ResolveLinks follows the links in the part of a path that exists.
+func ResolveLinks(path string) string {
+	p, tail := filepath.Clean(path), ""
+	for {
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(real, tail)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Clean(path)
+		}
+		tail = filepath.Join(filepath.Base(p), tail)
+		p = parent
+	}
 }

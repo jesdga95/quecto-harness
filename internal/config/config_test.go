@@ -727,10 +727,10 @@ func TestAddProject(t *testing.T) {
 	if _, err := s.AddProject(filepath.Join(proj, "missing")); err == nil {
 		t.Error("adding a missing directory must fail")
 	}
-	if _, err = s.RemoveProject(proj); err != nil {
+	if _, err = s.RemoveProjectEntry(real); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err = s.RemoveProject(proj2)
+	cfg, err = s.RemoveProjectEntry(real2)
 	if err != nil || len(cfg.Projects) != 0 {
 		t.Errorf("remove left %v (%v)", cfg.Projects, err)
 	}
@@ -894,5 +894,129 @@ func TestSearchPausedKeepsTheProvider(t *testing.T) {
 	back.Search.Paused = false
 	if !back.Search.Enabled() {
 		t.Error("unpaused search with a key is not on")
+	}
+}
+
+// An update that cannot be written leaves the configuration as it was, in
+// memory and on disk, and the same update succeeds once it can be.
+func TestAFailedSaveLeavesTheConfigurationAsItWas(t *testing.T) {
+	home := t.TempDir()
+	p := DiscoverPathsIn(home)
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, helper, err := s.AddAgent(Agent{Name: "Helper", URL: "http://127.0.0.1:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = s.AddAgent(Agent{Name: "Local", URL: "http://127.0.0.1:1", Calls: []string{helper.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := len(s.Config().Agents) - 1
+	if got := s.Config().Agents[local].Calls; len(got) != 1 {
+		t.Fatalf("calls = %v, want the helper", got)
+	}
+	before := s.Config().Listen
+	// A folder in the file's place fails the write whatever the process may do.
+	saved := p.Config + ".saved"
+	if err := os.Rename(p.Config, saved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(p.Config, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.Update(func(c *Config) {
+		c.Listen = "127.0.0.1:9999"
+		c.Agents[local].Calls[0] = "agt_other"
+	})
+	if err == nil {
+		t.Fatal("an update that could not be written reported success")
+	}
+	if got := s.Config().Listen; got != before {
+		t.Errorf("listen in memory = %q after a failed save, want %q", got, before)
+	}
+	if got := s.Config().Agents[local].Calls[0]; got != helper.ID {
+		t.Errorf("calls in memory = %q after a failed save, want %q", got, helper.ID)
+	}
+
+	if err := os.RemoveAll(p.Config); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(saved, p.Config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(func(c *Config) { c.Listen = "127.0.0.1:9999" }); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Config().Listen; got != "127.0.0.1:9999" {
+		t.Errorf("listen = %q, want the update applied", got)
+	}
+}
+
+// What Update returns is a copy, after a write that failed and one that went
+// through: writing into it leaves the store as it was.
+func TestUpdateReturnsACopy(t *testing.T) {
+	home := t.TempDir()
+	p := DiscoverPathsIn(home)
+	if err := p.EnsureDirs(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddProject(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	want := s.Config().Projects[0]
+
+	got, err := s.Update(func(*Config) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Projects[0] = "/elsewhere"
+	if p := s.Config().Projects[0]; p != want {
+		t.Errorf("after a saved update, project = %q, want %q", p, want)
+	}
+
+	if err := os.Remove(p.Config); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(p.Config, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Update(func(*Config) {})
+	if err == nil {
+		t.Fatal("an update that could not be written reported success")
+	}
+	got.Projects[0] = "/elsewhere"
+	if p := s.Config().Projects[0]; p != want {
+		t.Errorf("after a failed update, project = %q, want %q", p, want)
+	}
+}
+
+func TestDirectoryMembershipUsesTheVolumesSpellingRules(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "Pictures")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "PICTURES")
+	if _, err := os.Stat(alias); os.IsNotExist(err) {
+		t.Skip("Volume distinguishes case")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if !ContainsDirectory(alias, filepath.Join(dir, "albums")) {
+		t.Fatal("Alternate spelling did not contain its child")
+	}
+	if ContainsDirectory(alias, filepath.Join(base, "pictures-old")) {
+		t.Fatal("Matched a sibling")
 	}
 }

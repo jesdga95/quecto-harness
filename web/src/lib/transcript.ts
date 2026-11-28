@@ -186,8 +186,10 @@ export function applyEvent(items: TranscriptItem[], event: HarnessEvent): void {
         id: freshId(items, event.id || nextId("perm")),
         tool: event.tool,
         command: event.command,
+        path: event.path,
         prefix: event.prefix,
         description: event.description ?? "",
+        occupied: event.occupied ?? false,
         outcome: null,
         agent: event.agent,
       });

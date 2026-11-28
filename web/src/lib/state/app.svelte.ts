@@ -1,11 +1,13 @@
 import { tick } from "svelte";
+import { notice } from "../storage";
 import { COMPOSE_EVENT } from "../keys";
-import { ApiError, api } from "../api";
-import { dismissSticky, toast } from "./toast.svelte";
+import { ApiError, ProjectRemovalError, api } from "../api";
+import { dismissConnectionWarnings, toast } from "./toast.svelte";
 import type {
   Effort,
   Agent,
   AgentPatch,
+  DeletionPreview,
   Attached,
   Child,
   Config,
@@ -22,6 +24,7 @@ import type {
   Process,
   Protocol,
   Project,
+  TrashFailure,
   ProjectFile,
   ProjectDir,
   SearchConfig,
@@ -58,6 +61,14 @@ import { confirm } from "./confirm.svelte";
 
 // The panel holds the same window of a command's output the harness sends.
 const TAIL_LINES = 200;
+
+/** Stands in for a project in the sidebar and the empty screen for the
+    conversations started without one. It is not a path, so no route takes it
+    for a folder. */
+export const NO_FOLDER = ":no-folder";
+
+/** What the page calls the place of a conversation started without a project. */
+export const NO_FOLDER_LABEL = "No folder";
 
 // The dock's five sections. They are always there; what the conversation opens
 // joins the one it belongs to.
@@ -190,13 +201,15 @@ export const app = $state({
   detectKind: "",
   modelsError: "",
   modelsKind: "",
+  // Whether deleting a conversation without a project moves its folder to the trash.
+  removesFolders: false,
 });
 
 
 // The artifacts are read from the transcript, so they follow it without being
 // kept in step by hand. Files in the project follow them: the drawings, pages
 // and images a turn wrote, and whatever the reader opened.
-const written = $derived(writtenPreviews(app.items, app.projectPath));
+const written = $derived(writtenPreviews(app.items, workFolder()));
 const projectPaths = $derived.by(() => {
   const paths = [...written.keys()];
   for (const path of app.openFiles) if (!paths.includes(path)) paths.push(path);
@@ -240,7 +253,7 @@ function fail(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
   app.error = message;
   if (err instanceof ApiError && err.status === 401) {
-    toast(message, "warn", true);
+    toast(message, "connection", true);
     return;
   }
   toast(message);
@@ -257,6 +270,7 @@ export async function refreshState(): Promise<boolean> {
   app.detectKind = state.detectKind ?? "";
   app.modelsError = state.modelsError ?? "";
   app.modelsKind = state.modelsKind ?? "";
+  app.removesFolders = state.removesFolders === true;
   app.config = state.config;
   syncWorkMode();
   app.search = state.search;
@@ -264,6 +278,17 @@ export async function refreshState(): Promise<boolean> {
   app.projects = state.projects;
   app.models = state.models;
   return true;
+}
+
+/** The allowlist of a project. A conversation without one has none. */
+async function loadAllowlist(path: string): Promise<string[]> {
+  if (path === NO_FOLDER) return [];
+  return (await guard(() => api.listAllowlist(path))) ?? [];
+}
+
+/** The project a session is filed under on the page. */
+function placeOf(session: Session): string {
+  return session.scratch ? NO_FOLDER : session.project;
 }
 
 let unwatch: (() => void) | null = null;
@@ -331,11 +356,12 @@ export function hasBackground(id: string): boolean {
 
 async function loadSessions(): Promise<void> {
   const lists = await guard(() =>
-    Promise.all(app.projects.map((p) => api.listSessions(p.path))),
+    Promise.all([...app.projects.map((p) => api.listSessions(p.path)), api.listScratchSessions()]),
   );
   if (!lists) return;
   const next: Record<string, Session[]> = {};
   app.projects.forEach((p, i) => (next[p.path] = lists[i] ?? []));
+  next[NO_FOLDER] = lists[app.projects.length] ?? [];
   app.sessions = next;
 }
 
@@ -351,12 +377,18 @@ export function activeSession(): Session | undefined {
   return app.opened?.id === app.sessionId ? app.opened : undefined;
 }
 
+/** The folder the conversation works in. Without a project it is the folder
+    made for the conversation, empty until one is open. */
+export function workFolder(): string {
+  return app.projectPath === NO_FOLDER ? (activeSession()?.project ?? "") : app.projectPath;
+}
+
 /** Chooses the project a new session and a file path go to. With openFirst,
     the project's first conversation is opened; otherwise the screen is
     cleared and left empty, as the new session page wants it. */
 export async function selectProject(path: string, openFirst = true): Promise<void> {
   app.projectPath = path;
-  app.allowlist = (await guard(() => api.listAllowlist(path))) ?? [];
+  app.allowlist = await loadAllowlist(path);
   const first = sessionsOf(path)[0];
   if (openFirst && first) await selectSession(first.id);
   else clearSession();
@@ -395,7 +427,7 @@ function clearSession(): void {
   if (!app.connected) {
     app.connected = true;
     app.error = "";
-    dismissSticky();
+    dismissConnectionWarnings();
   }
 }
 
@@ -407,10 +439,10 @@ export async function selectSession(id: string): Promise<void> {
   if (!t) return;
   // A session opened from another project's list makes that project the one
   // a new session, a file path and an @ search go to.
-  const project = t.session.project;
+  const project = placeOf(t.session);
   if (project && project !== app.projectPath) {
     app.projectPath = project;
-    app.allowlist = (await guard(() => api.listAllowlist(project))) ?? [];
+    app.allowlist = await loadAllowlist(project);
     if (app.sessionId !== id) return;
   }
   app.opened = t.session;
@@ -437,7 +469,7 @@ export async function selectSession(id: string): Promise<void> {
   // since their state only reaches the launcher's stream when it changes.
   // The git section stays open across sessions; the others were this one's.
   closeRuns();
-  const keepGit = app.panel && app.section === "git";
+  const keepGit = app.panel && app.section === "git" && app.projectPath !== NO_FOLDER;
   app.runs = t.session.children;
   resetArtifacts();
   if (keepGit) showSection("git");
@@ -465,16 +497,23 @@ export function newSession(): void {
     False when the harness refused it, which leaves the screen empty. */
 async function createSession(): Promise<boolean> {
   if (!app.projectPath || !app.config) return false;
-  const session = await guard(() => api.createSession(app.projectPath));
+  const session = await guard(() =>
+    app.projectPath === NO_FOLDER ? api.createScratchSession() : api.createSession(app.projectPath),
+  );
   if (!session) return false;
   app.sessionId = session.id;
   unsubscribe = api.events(session.id, onEvent);
   return true;
 }
 
+/** Asks the host for a folder. Null when the dialog is dismissed. */
+export async function pickFolder(): Promise<string | null> {
+  return await guard(() => api.pickDirectory());
+}
+
 /** Asks the host for a folder and adds it. Does nothing if the dialog is dismissed. */
 export async function pickAndAddProject(): Promise<void> {
-  const path = await guard(() => api.pickDirectory());
+  const path = await pickFolder();
   if (path) await addProject(path);
 }
 
@@ -491,8 +530,23 @@ export async function addProject(path: string): Promise<void> {
 }
 
 export async function removeProject(path: string): Promise<void> {
-  const projects = await guard(() => api.removeProject(path));
-  if (!projects) return;
+  let removed: { projects: Project[]; retained: TrashFailure[] };
+  try {
+    removed = await api.removeProject(path);
+    app.error = "";
+  } catch (err) {
+    if (err instanceof ProjectRemovalError) {
+      toast(`${err.message}. ${err.deleted === 1 ? "1 session was" : `${err.deleted} sessions were`} deleted before it stopped.`, "warn", true);
+      retainedToasts(err.retained);
+      await loadSessions();
+      app.error = err.message;
+      return;
+    }
+    fail(err);
+    return;
+  }
+  retainedToasts(removed.retained);
+  const projects = removed.projects;
   app.projects = projects;
   if (app.projectPath === path) {
     clearSession();
@@ -501,6 +555,14 @@ export async function removeProject(path: string): Promise<void> {
     else app.projectPath = "";
   }
   await loadSessions();
+}
+
+function retainedToasts(retained: TrashFailure[]): void {
+  for (const failure of retained) {
+    const status = notice(failure);
+    const detail = failure.trash ? `${status.status} ${status.trash} ${failure.trash}` : `The folder stayed in place (${failure.reason}).`;
+    toast(`Session deleted. ${detail}`, "warn", true, failure.path);
+  }
 }
 
 /** Moves a project to where a drop put it. The whole order goes to the
@@ -519,8 +581,91 @@ export async function renameSession(id: string, title: string): Promise<void> {
   await loadSessions();
 }
 
-export async function deleteSession(id: string): Promise<void> {
-  if ((await guard(() => api.deleteSession(id))) === null) return;
+/** Asks before deleting a session, once the harness says what stays on disk,
+    and deletes with that answer. A delete refused because the answer changed
+    is asked again. */
+export async function deleteSessionAsked(id: string, scratch: boolean): Promise<void> {
+  let changed = "";
+  for (;;) {
+    let preview: DeletionPreview;
+    try {
+      preview = await api.previewDelete(id);
+    } catch (err) {
+      const again = await confirm({
+        title: "Could not check what stays on disk",
+        body: `${sentence(err instanceof Error ? err.message : String(err))} The session is not deleted.`,
+        confirmLabel: "Try again",
+      });
+      if (!again) return;
+      continue;
+    }
+    const { kept, deferred, carry } = preview;
+    let copy = "";
+    if (carry?.unreadable) {
+      const status = carry.damaged_line ? `is damaged at line ${carry.damaged_line}` : "cannot be read";
+      copy = ` The copy record ${carry.record} ${status}. It is kept, and the files left in ${carry.destination} are not checked.`;
+    } else if (carry) {
+      copy = carry.unavailable
+        ? ` The original destination, ${carry.destination}, is unavailable.`
+        : ` The interrupted copy left ${carry.count} ${carry.count === 1 ? "file" : "files"} in ${carry.destination}.`;
+      if (carry.recovery) copy += ` The recovery list will be saved in ${carry.recovery}.`;
+    }
+    const lead = changed ? `${changed} ` : "";
+    const ok = await confirm({
+      title: "Delete this session?",
+      body:
+        lead +
+        (scratch
+          ? kept
+            ? deferred
+              ? `Its transcript is removed from disk. This cannot be undone. The folder made for it, ${kept}, can be moved to the trash with its contents once every session file can be read and no session uses it.`
+              : `Its transcript is removed from disk. This cannot be undone. The folder made for it, ${kept}, stays where it is.`
+            : "Its transcript is removed from disk. This cannot be undone. The folder made for it, with every file in it, is moved to the trash. If its volume has no trash, the folder stays where it is."
+          : kept
+            ? deferred
+              ? `Its transcript is removed from disk. This cannot be undone. The folder it worked in before the move, ${kept}, can be moved to the trash once every session file can be read, no session uses it, and its files still match their copies.`
+              : `Its transcript is removed from disk. This cannot be undone. The folder it worked in before the move, ${kept}, stays where it is.`
+            : "Its transcript is removed from disk. This cannot be undone.") + copy,
+      files: carry?.names,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
+    try {
+      const failure = await api.deleteSession(id, preview);
+      if (failure) retainedToasts([failure]);
+      app.error = "";
+      if (carry?.recovery) toast(`The recovery list is saved in ${carry.recovery}.`, "ok", true);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && err.code === "aside_recovery") {
+        const retry = await confirm({
+          title: "Move the folder before deleting this session",
+          body: sentence(err.message),
+          confirmLabel: "Try again",
+        });
+        if (retry) continue;
+        return;
+      }
+      if (err instanceof ApiError && err.status === 409 && err.code === "kept_changed") {
+        changed = sentence(err.message);
+        continue;
+      }
+      fail(err);
+      return;
+    }
+    await forgetSession(id);
+    return;
+  }
+}
+
+/** A message from the harness ended as a sentence. */
+function sentence(message: string): string {
+  const text = message.trim();
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
+/** Takes a deleted session off the page, and opens the next one in its
+    project when it was the one open. */
+async function forgetSession(id: string): Promise<void> {
   const wasActive = app.sessionId === id;
   if (wasActive) clearSession();
   await loadSessions();
@@ -544,9 +689,12 @@ export async function pickAttachments(): Promise<string[]> {
 /** Files in the open project matching what follows an @ in the composer. It
     fails quietly: a list that does not come is a list with nothing in it. */
 export async function findFiles(q: string): Promise<string[]> {
-  if (!app.projectPath) return [];
+  // A conversation without a project searches the folder made for it, which
+  // exists once the conversation does.
+  const project = workFolder();
+  if (!project) return [];
   try {
-    return await api.findFiles(app.projectPath, q);
+    return await api.findFiles(project, q, activeSession()?.id ?? "");
   } catch {
     return [];
   }
@@ -708,22 +856,29 @@ export async function compact(): Promise<void> {
   await guard(() => api.compact(app.sessionId));
 }
 
+/** Answers a card, and reports whether the harness took this answer. */
+/** A path typed on a folder card, kept by permission id while the harness
+    checks it, so a refused one comes back in the field. */
+export const typedPaths = new Map<string, string>();
+
 export async function decide(
   item: TranscriptItem,
   decision: PermissionDecision,
-): Promise<void> {
+): Promise<boolean> {
   // A card answered from its buttons and from a key in the same moment is
   // sent once: the outcome is written before the first answer goes out.
-  if (item.kind !== "permission" || item.outcome !== null) return;
+  if (item.kind !== "permission" || item.outcome !== null) return false;
   item.outcome = outcomeLabel(decision);
   const done = await guard(() => api.decide(item.id, decision));
   if (done === null) {
     item.outcome = null;
-    return;
+    return false;
   }
-  if (decision.decision === "always") {
+  typedPaths.delete(item.id);
+  if (decision.decision === "always" && app.projectPath !== NO_FOLDER) {
     app.allowlist = (await guard(() => api.listAllowlist(app.projectPath))) ?? app.allowlist;
   }
+  return true;
 }
 
 /** The answer is written onto the row before it is sent, so the card closes on
@@ -736,6 +891,7 @@ export async function answer(item: TranscriptItem, chosen: Answer): Promise<void
 }
 
 export async function removeAllowed(prefix: string): Promise<void> {
+  if (app.projectPath === NO_FOLDER) return;
   const list = await guard(() => api.removeAllowed(app.projectPath, prefix));
   if (list) app.allowlist = list;
 }
@@ -984,7 +1140,7 @@ let gitRead = 0;
 export async function loadGit(): Promise<void> {
   const project = app.projectPath;
   const seq = ++gitRead;
-  if (!project) {
+  if (!project || project === NO_FOLDER) {
     app.git = null;
     return;
   }
@@ -1181,7 +1337,7 @@ export function toggleArtifactsWide(): void {
 export async function loadFile(raw: string, loud = false): Promise<ProjectFile | null> {
   const id = app.sessionId;
   if (!id) return null;
-  const path = inProject(raw, app.projectPath);
+  const path = inProject(raw, workFolder());
   try {
     const file = await api.readFile(id, path);
     if (app.sessionId !== id) return null;
@@ -1398,11 +1554,11 @@ function onEvent(event: HarnessEvent): void {
     app.connected = event.connected;
     if (event.connected) {
       app.error = "";
-      dismissSticky();
+      dismissConnectionWarnings();
     } else {
       const message = event.message ?? "The harness is not reachable, reconnecting";
       app.error = message;
-      toast(message, "warn", true);
+      toast(message, "connection", true);
     }
     return;
   }
@@ -1411,6 +1567,20 @@ function onEvent(event: HarnessEvent): void {
   // transcript, so it is refetched with the session list.
   if (event.type === "title") {
     void loadSessions();
+    return;
+  }
+
+  // The conversation now works in another folder, which files it under that
+  // project, and the transcript holds a line about the move.
+  if (event.type === "moved") {
+    const id = app.sessionId;
+    // A move can add the folder to the project list, so the list is read
+    // again before the sessions are filed under it.
+    void refreshState()
+      .then(() => loadSessions())
+      .then(() => {
+        if (app.sessionId === id) void selectSession(id);
+      });
     return;
   }
 
@@ -1463,7 +1633,7 @@ function onEvent(event: HarnessEvent): void {
     if (touched) void loadGit();
     // A file the panel holds is read again once a write to it lands.
     if (card?.kind === "tool" && (card.name === "write" || card.name === "edit")) {
-      const path = typeof card.args.path === "string" ? inProject(card.args.path, app.projectPath) : "";
+      const path = typeof card.args.path === "string" ? inProject(card.args.path, workFolder()) : "";
       if (path && (app.files[path] || written.has(path))) void loadFile(path);
       announceArtifacts();
     }
