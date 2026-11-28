@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jesdga95/quecto-harness/internal/tools"
 )
@@ -13,6 +14,16 @@ import (
 // tailLines is how many lines of a background command the browser and the
 // model can see at once.
 const tailLines = 200
+
+// tailLineMax caps one line of a background command's tail, in bytes. A line
+// past it keeps its end, which is what a terminal would be showing.
+const tailLineMax = 2000
+
+// noticeMax caps, in bytes, the output of a background command the model is
+// shown in an exit notice or a listing, so it does not fill the next request.
+const noticeMax = 4000
+
+const tailIndent = "  "
 
 // tailWindow is how long a tail waits before it is sent, so a command that
 // prints a line a millisecond does not send one event per line.
@@ -114,10 +125,11 @@ func (r *Registry) Start(ctx context.Context, runner *tools.Runner, session, cal
 	r.procs[pr.view.ID] = pr
 	r.order = append(r.order, pr.view.ID)
 	alive := r.runningLocked(pr.view.Session)
+	view := pr.view
 	r.mu.Unlock()
 	r.publish(pr.view.Session, ev("proc_start", map[string]any{
 		"id": pr.view.ID, "call": pr.view.Call, "command": pr.view.Command,
-		"pid": pr.view.PID, "started_at": pr.view.StartedAt,
+		"pid": pr.view.PID, "started_at": pr.view.StartedAt, "spill": pr.view.Spill,
 	}))
 	r.publish(pr.view.Session, ev("procs", map[string]any{"running": alive}))
 
@@ -126,7 +138,7 @@ func (r *Registry) Start(ctx context.Context, runner *tools.Runner, session, cal
 		code, _, _, _ := handle.Wait()
 		r.finish(pr, code)
 	}()
-	return pr.view, nil
+	return view, nil
 }
 
 // Watch starts a command for a bash call that waits on it. It is not listed
@@ -180,7 +192,7 @@ func (r *Registry) Promote(pr *running) bool {
 	r.mu.Unlock()
 	r.publish(pr.view.Session, ev("proc_start", map[string]any{
 		"id": pr.view.ID, "call": pr.view.Call, "command": pr.view.Command,
-		"pid": pr.view.PID, "started_at": pr.view.StartedAt,
+		"pid": pr.view.PID, "started_at": pr.view.StartedAt, "spill": pr.view.Spill,
 	}))
 	r.publish(pr.view.Session, ev("procs", map[string]any{"running": alive}))
 	go r.flush(pr)
@@ -190,14 +202,18 @@ func (r *Registry) Promote(pr *running) bool {
 // line records one line of output and queues it for the next tail event. A
 // watched command keeps only its tail, which Promote queues.
 func (r *Registry) line(pr *running, line string) {
+	shown := screenLine(line)
 	r.mu.Lock()
+	if shown != line {
+		pr.view.Truncated = true
+	}
 	if len(pr.view.Tail) >= tailLines {
 		pr.view.Tail = pr.view.Tail[1:]
 		pr.view.Truncated = true
 	}
-	pr.view.Tail = append(pr.view.Tail, line)
+	pr.view.Tail = append(pr.view.Tail, shown)
 	if !pr.watched {
-		pr.pending = append(pr.pending, line)
+		pr.pending = append(pr.pending, shown)
 	}
 	r.mu.Unlock()
 }
@@ -220,13 +236,14 @@ func (r *Registry) flush(pr *running) {
 func (r *Registry) send(pr *running) {
 	r.mu.Lock()
 	lines := pr.pending
+	truncated := pr.view.Truncated
 	pr.pending = nil
 	r.mu.Unlock()
 	if len(lines) == 0 {
 		return
 	}
 	r.publish(pr.view.Session, ev("proc_output", map[string]any{
-		"id": pr.view.ID, "lines": lines, "bytes": pr.handle.Total(),
+		"id": pr.view.ID, "lines": lines, "bytes": pr.handle.Total(), "truncated": truncated,
 	}))
 }
 
@@ -280,17 +297,59 @@ func exitNotice(pr Process) string {
 	} else {
 		b.WriteString(fmt.Sprintf("Background process %s (%s) exited with code %d.", pr.ID, pr.Command, *pr.ExitCode))
 	}
-	tail := pr.Tail
-	if len(tail) > 20 {
-		tail = tail[len(tail)-20:]
-	}
-	if len(tail) > 0 {
-		b.WriteString("\nLast lines of its output:")
-		for _, line := range tail {
-			b.WriteString("\n  " + line)
+	if lines, cut := lastLines(pr.Tail); len(lines) > 0 {
+		if cut {
+			b.WriteString("\nLast lines of its output, earlier ones left out to fit:")
+		} else {
+			b.WriteString("\nLast lines of its output:")
+		}
+		for _, line := range lines {
+			b.WriteString("\n" + tailIndent + line)
 		}
 	}
 	return b.String()
+}
+
+// lastLines is the end of a tail the model is shown: at most 20 lines and
+// noticeMax bytes. cut reports whether lines were left out for the bytes.
+func lastLines(tail []string) (lines []string, cut bool) {
+	if len(tail) > 20 {
+		tail = tail[len(tail)-20:]
+	}
+	const overhead = len(tailIndent) + 1
+	size, from := 0, len(tail)
+	for from > 0 && size+len(tail[from-1])+overhead <= noticeMax {
+		from--
+		size += len(tail[from]) + overhead
+	}
+	if from == len(tail) && len(tail) > 0 {
+		return []string{keepEnd(tail[len(tail)-1], noticeMax-overhead)}, true
+	}
+	return tail[from:], from > 0
+}
+
+// screenLine is the part of a line a terminal would still show: what follows
+// the last carriage return, as a progress bar redraws itself with one, cut to
+// tailLineMax.
+func screenLine(line string) string {
+	line = strings.TrimRight(line, "\r")
+	if i := strings.LastIndexByte(line, '\r'); i >= 0 {
+		line = line[i+1:]
+	}
+	return keepEnd(strings.ToValidUTF8(line, "�"), tailLineMax)
+}
+
+// keepEnd cuts s to its last max bytes, on a rune boundary, and marks the cut.
+func keepEnd(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	const marker = "…"
+	cut := len(s) - (max - len(marker))
+	for cut < len(s) && !utf8.RuneStart(s[cut]) {
+		cut++
+	}
+	return marker + s[cut:]
 }
 
 // runningLocked counts a session's commands still alive. The caller holds the

@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jesdga95/quecto-harness/internal/config"
 	"github.com/jesdga95/quecto-harness/internal/llm"
@@ -276,5 +278,106 @@ func TestAForegroundCommandCanBeStoppedOrMoved(t *testing.T) {
 				waitEnded(t, h, s.ID)
 			}
 		})
+	}
+}
+
+// A progress bar redraws itself with carriage returns and no newline, so its
+// whole run arrives as one long line. The tail keeps what a terminal shows.
+func TestTailKeepsWhatATerminalShows(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i <= 5000; i++ {
+		fmt.Fprintf(&b, "%d%% done\r", i/50)
+	}
+	b.WriteString("100% done")
+	if got := screenLine(b.String()); got != "100% done" {
+		t.Fatalf("screen line = %q", got)
+	}
+	if got := screenLine("progress\r"); got != "progress" {
+		t.Fatalf("line ending in a carriage return = %q", got)
+	}
+	long := strings.Repeat("é", tailLineMax)
+	got := screenLine(long)
+	if len(got) > tailLineMax || !strings.HasPrefix(got, "…") || !utf8.ValidString(got) {
+		t.Fatalf("long line kept %d bytes, valid %v", len(got), utf8.ValidString(got))
+	}
+}
+
+// However much a command printed, its exit notice stays small and ends with
+// its last line.
+func TestExitNoticeStaysSmall(t *testing.T) {
+	code := 0
+	pr := Process{ID: "p1", Command: "curl -O big", ExitCode: &code}
+	for i := 0; i < 20; i++ {
+		pr.Tail = append(pr.Tail, screenLine(strings.Repeat("x", 64<<10)))
+	}
+	pr.Tail = append(pr.Tail, "saved big")
+	notice := exitNotice(pr)
+	if len(notice) > noticeMax+500 {
+		t.Fatalf("notice is %d bytes", len(notice))
+	}
+	if !strings.HasSuffix(notice, "\n  saved big") || !strings.Contains(notice, "left out to fit") {
+		t.Fatalf("notice = %q", notice[len(notice)-200:])
+	}
+	short := exitNotice(Process{ID: "p2", Command: "ls", ExitCode: &code, Tail: []string{"a", "b"}})
+	if !strings.HasSuffix(short, "Last lines of its output:\n  a\n  b") {
+		t.Fatalf("short notice = %q", short)
+	}
+}
+
+func TestTailBudgetIncludesLineFormatting(t *testing.T) {
+	line := strings.Repeat("x", 200)
+	var tail []string
+	for range 20 {
+		tail = append(tail, line)
+	}
+	lines, cut := lastLines(tail)
+	if !cut || len(lines) != 19 {
+		t.Fatalf("Kept %d lines, cut %v, want 19 and true", len(lines), cut)
+	}
+}
+
+func TestShortenedProcessTailKeepsTheFullLogAvailable(t *testing.T) {
+	dir := t.TempDir()
+	runner, err := tools.NewRunner(dir, config.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.SpillTo(t.TempDir())
+	raw := "loading\r" + strings.Repeat("é", 2000) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "progress"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var rec recorder
+	output := make(chan Event, 1)
+	ended := make(chan struct{})
+	registry := NewRegistry(func(id string, e Event) {
+		rec.Publish(id, e)
+		if e.Type == "proc_output" {
+			output <- e
+		}
+	}, func(string, string) { close(ended) })
+	pr, err := registry.Start(t.Context(), runner, "s1", "c1", tools.RunShellArgs{Command: "cat progress"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ended:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Missing exit notice")
+	}
+	view, whole, cut, found := registry.Output("s1", pr.ID, len(raw)+1)
+	if !found || !view.Truncated || cut || whole != raw {
+		t.Errorf("Found %v, tail cut %v, log cut %v, full output matches %v", found, view.Truncated, cut, whole == raw)
+	}
+	if ev := rec.ofType("proc_start"); len(ev) != 1 || view.Spill == "" || ev[0].Fields["spill"] != view.Spill {
+		t.Error("Start event does not identify the saved log")
+	}
+	select {
+	case ev := <-output:
+		if ev.Fields["truncated"] != true {
+			t.Error("Output event does not flag the shortened line")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Missing output event")
 	}
 }

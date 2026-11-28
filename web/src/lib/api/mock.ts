@@ -1853,9 +1853,10 @@ export class MockApi implements HarnessApi {
     const timer = setInterval(() => {
       const take = state.lines.slice(sent, sent + 3);
       sent += take.length;
+      state.proc.tailCut ||= state.proc.tail.length + take.length > 200;
       state.proc.tail = [...state.proc.tail, ...take].slice(-200);
       state.proc.bytes += take.reduce((n, line) => n + line.length + 1, 0);
-      this.emit(session, { type: "proc_output", id, lines: take, bytes: state.proc.bytes });
+      this.emit(session, { type: "proc_output", id, lines: take, bytes: state.proc.bytes, truncated: state.proc.tailCut });
       if (sent >= state.lines.length) {
         clearInterval(timer);
         this.procTimers.delete(id);

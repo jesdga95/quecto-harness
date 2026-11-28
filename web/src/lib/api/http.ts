@@ -1346,6 +1346,7 @@ function mapEvent(ev: WireEvent, calls: Map<number, OpenCall>): HarnessEvent[] {
           id: ev.id ?? "",
           lines: ev.lines ?? [],
           bytes: ev.bytes ?? 0,
+          truncated: ev.truncated ?? false,
         },
       ];
 
