@@ -77,6 +77,13 @@ Paths live under `~/.quecto-harness` (overridable with `$QUECTO_HARNESS_HOME`):
 - **`Store`** (an `RWMutex`) is the sole writer of the two config files and copies the
   agent list so a config read before a write does not change with it. `AddProject`
   resolves and symlinks the path, which the path guard and the allowlist both key on.
+- **A project never lies inside the state directory.** `CheckProject` refuses such a folder,
+  links followed and folders compared by identity, and a folder that cannot be resolved is
+  an error. A project that holds the state directory is allowed; the file tools and the
+  file panel never reach it, though `bash` can, as any shell the user allows can.
+  `CheckRepo` refuses Git in the Git panel on a repository that holds it. `AddProject`
+  refuses a folder inside the state directory, and one an older build registered is
+  refused, with 409, by everything that works on a project.
 - `allowlist.json` maps a project root to command prefixes, deduped and sorted
   longest-first.
 - **No version field, no migration code**: unknown keys are ignored; missing keys take
@@ -375,6 +382,15 @@ shows the card in its answered state.
 One method-and-pattern `ServeMux`, wrapped by `recoverPanic → logRequest → checkOrigin →
 auth`. A panic becomes a 500 with a stack in the log; it never takes the process down.
 
+- **The state directory.** Besides refusing a project inside it, the file panel
+  (`ViewFile`, `ListDir`, `FindFiles`) is given its location and leaves out, or answers
+  403 for, anything that leads into it, a link included. A file attached to a message or
+  previewed from the file dialog that lands in it is refused with 403, unless it is a file
+  a paste stored there, which `Uploads.Owns` recognises by its exact shape. Git is refused
+  for a repository whose working tree or git directories overlap it, even when the project
+  is a part of the tree that does not, since a stash, a commit of everything or a branch
+  switch reaches the whole tree. An untracked link is shown as a link and what it points to
+  is never read; the patch a draft is made from tells it as git stores it.
 - **Auth.** The binary prints and opens a `?token=` URL; a match sets an `HttpOnly`
   `SameSite` cookie for 30 days and 303s to `/`, so the token leaves the address bar. Every
   `/api/*` request needs the cookie or a Bearer token; a 401 is a full-page state.

@@ -9,10 +9,12 @@ import (
 	"strings"
 )
 
-// hiddenPath is the refusal for the harness's own state directory, whichever
+// hiddenError is the refusal for the harness's own state directory, whichever
 // way the path reached it.
-func hiddenPath(arg string) error {
-	return fmt.Errorf("path is in the harness state folder, which no tool reaches: %s", arg)
+type hiddenError struct{ arg string }
+
+func (e hiddenError) Error() string {
+	return "path is in the harness state folder, which no tool reaches: " + e.arg
 }
 
 // resolve turns a tool path argument into an absolute path, relative ones
@@ -40,8 +42,8 @@ func (r *Runner) resolve(p string) (string, error) {
 		real = prefix
 	}
 	resolved := filepath.Join(real, tail)
-	if r.Hidden != "" && within(r.Hidden, resolved) {
-		return "", hiddenPath(arg)
+	if r.inHidden(resolved) {
+		return "", hiddenError{arg}
 	}
 	return resolved, nil
 }
@@ -76,7 +78,7 @@ func (r *Runner) Outside(p string) bool {
 		return false
 	case r.Spill != "" && within(r.Spill, real):
 		return false
-	case r.Hidden != "" && within(r.Hidden, real):
+	case r.inHidden(real):
 		return false
 	}
 	return true
@@ -93,13 +95,54 @@ func (r *Runner) resolveRead(p string) (string, error) {
 	return r.resolve(p)
 }
 
-// reachable reports whether a path the walk came to may be read: outside the
-// state directory, or inside the saved output.
-func (r *Runner) reachable(p string) bool {
-	if r.Spill != "" && within(r.Spill, p) {
+// reachable reports whether a folder the walk came to may be entered: not the
+// state directory, or inside the saved output. The walk starts from a resolved
+// path, so a folder below one it entered is checked by itself alone.
+func (r *Runner) reachable(dir string) bool {
+	if r.Spill != "" && within(r.Spill, dir) {
 		return true
 	}
-	return r.Hidden == "" || !within(r.Hidden, p)
+	return !r.isHidden(dir)
+}
+
+// inHidden reports whether p, its links already followed, is the state
+// directory or lies inside it. Folders are compared by identity as well as by
+// name, so another casing on a volume that ignores case does not slip by.
+func (r *Runner) inHidden(p string) bool {
+	if r.Hidden == "" {
+		return false
+	}
+	if within(r.Hidden, p) {
+		return true
+	}
+	prefix, _ := splitExisting(p)
+	for q := prefix; ; q = filepath.Dir(q) {
+		if r.isHidden(q) {
+			return true
+		}
+		if filepath.Dir(q) == q {
+			return false
+		}
+	}
+}
+
+// isHidden reports whether dir is the state directory itself, by name or by
+// identity.
+func (r *Runner) isHidden(dir string) bool {
+	if r.Hidden == "" {
+		return false
+	}
+	if within(r.Hidden, dir) {
+		return true
+	}
+	// The identity is read on every check, since the folder can be replaced
+	// during a turn. One that cannot be read holds nothing to reach.
+	id, err := os.Stat(r.Hidden)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(dir)
+	return err == nil && os.SameFile(info, id)
 }
 
 // realPath follows the links in the part of p that exists.
