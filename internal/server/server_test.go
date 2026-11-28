@@ -1995,8 +1995,31 @@ func TestFolderPick(t *testing.T) {
 	if w.Code != http.StatusNotImplemented {
 		t.Errorf("status = %d, want 501", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "install zenity, or type the path") {
+	if !strings.Contains(w.Body.String(), "install zenity or kdialog") {
 		t.Errorf("body = %s", w.Body.String())
+	}
+}
+
+// TestPickErrorsFitEitherDialog asserts that a dialog failure reads the same
+// from the folder and the file chooser and points to no typed path, since
+// the callers of this route have none.
+func TestPickErrorsFitEitherDialog(t *testing.T) {
+	f := newFixture(t)
+	folder, file := folderPicker, filePicker
+	t.Cleanup(func() { folderPicker, filePicker = folder, file })
+
+	for _, err := range []error{errNoDialog, fmt.Errorf("The dialog did not answer in time: try again")} {
+		folderPicker = func(context.Context) (string, error) { return "", err }
+		filePicker = func(context.Context) ([]string, error) { return nil, err }
+		for _, body := range []any{nil, map[string]string{"kind": "file"}} {
+			msg, _ := decode(t, f.do(t, "POST", "/api/fs/pick", body))["error"].(string)
+			if msg != err.Error() {
+				t.Errorf("kind %v: error = %q, want %q", body, msg, err.Error())
+			}
+			if strings.Contains(strings.ToLower(msg), "type the path") {
+				t.Errorf("kind %v: %q points to a typed path", body, msg)
+			}
+		}
 	}
 }
 
