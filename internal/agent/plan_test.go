@@ -343,16 +343,18 @@ func TestASubagentKeepsItsLaunchersMode(t *testing.T) {
 	}
 }
 
-// A compaction carries the approved plan once the message that approved it is
-// summarised away. Plan mode's rules are not stored: the request renders them.
+// A compaction carries what the messages it summarised held: plan mode's rules
+// while the session is in it, and the approved plan once the message that
+// approved it is summarised away.
 func TestCompactionCarriesTheModeAndThePlan(t *testing.T) {
 	s := newSession("sess_carry", "/p", "a", "m", config.ToolsetFull)
+	b := brief{offer: tools.Offer{Mode: config.WorkPlan, Ask: true}}
 	s.appendEntry(store.Entry{Kind: "user", Content: "plan it", Meta: map[string]any{"mode": "plan"}})
 	if mode := s.modeAt(0, false); mode != config.WorkPlan {
 		t.Fatalf("mode = %s, want plan", mode)
 	}
-	if carry := s.carryFor(config.WorkPlan, 0, false); carry != "" {
-		t.Errorf("carry in plan mode = %q, want nothing stored", carry)
+	if carry := s.carryFor(config.WorkPlan, b, 0, false); !strings.Contains(carry, "now in plan mode") {
+		t.Errorf("carry in plan mode = %q", carry)
 	}
 
 	plan := store.Plan{Title: "Cache the list", Steps: []string{"Add it"}}
@@ -362,10 +364,10 @@ func TestCompactionCarriesTheModeAndThePlan(t *testing.T) {
 	if mode := s.modeAt(0, false); mode != config.WorkExecute {
 		t.Fatalf("mode after the approval = %s, want execute", mode)
 	}
-	if carry := s.carryFor(config.WorkExecute, 0, false); !strings.Contains(carry, "Plan: Cache the list") {
+	if carry := s.carryFor(config.WorkExecute, b, 0, false); !strings.Contains(carry, "Plan: Cache the list") {
 		t.Errorf("carry once the approval is summarised = %q", carry)
 	}
-	if carry := s.carryFor(config.WorkExecute, kickoff.Seq, true); carry != "" {
+	if carry := s.carryFor(config.WorkExecute, b, kickoff.Seq, true); carry != "" {
 		t.Errorf("carry with the approval kept = %q, want nothing", carry)
 	}
 }
@@ -479,9 +481,9 @@ func TestSessionEffortReplacesTheAgents(t *testing.T) {
 	}
 }
 
-// Through the engine: a compaction made in plan mode stores no rules, and the
-// next request in plan mode sends them with the summary, the same text each
-// time.
+// Through the engine: a compaction made in plan mode stores its mode and the
+// rules as rendered then, and the next requests send the rules with the
+// summary, the same text each time.
 func TestPlanCompactionSendsRulesRenderedOnTheRequest(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt", "stream_summary.txt", "stream_plain.txt", "stream_plain.txt")
 	s := h.session(t)
@@ -497,8 +499,8 @@ func TestPlanCompactionSendsRulesRenderedOnTheRequest(t *testing.T) {
 	doc, _, _, _ := s.Snapshot()
 	for _, e := range doc.Entries {
 		if e.Kind == "compaction" {
-			if e.Meta["mode"] != "plan" || e.Meta["carry"] != nil {
-				t.Errorf("compaction meta = %v, want mode plan and no stored rules", e.Meta)
+			if carry, _ := e.Meta["carry"].(string); e.Meta["mode"] != "plan" || !strings.Contains(carry, "now in plan mode") {
+				t.Errorf("compaction meta = %v, want mode plan and the rules stored", e.Meta)
 			}
 		}
 	}

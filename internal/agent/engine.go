@@ -2415,12 +2415,12 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 		meta["tail"] = tailSeq
 	}
 	// The summarised messages may hold what the work still needs: the rules
-	// of the mode they were sent in, or the plan being carried out. The mode
-	// is kept and its rules rendered with each request; the plan is kept as
-	// it was approved.
+	// of the mode they were sent in, or the plan being carried out. A request
+	// renders the rules again from the mode; the plan is kept as it was
+	// approved.
 	mode := s.modeAt(tailSeq, kept)
 	meta["mode"] = string(mode)
-	if carry := s.carryFor(mode, tailSeq, kept); carry != "" {
+	if carry := s.carryFor(mode, b, tailSeq, kept); carry != "" {
 		meta["carry"] = carry
 	}
 	// The plan is kept as it stood rather than read live, so the message
