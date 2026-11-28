@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -61,10 +62,13 @@ type Manager struct {
 	version  string
 
 	readFile         func(string) ([]byte, error)
+	linkKey          func(string, string) error
 	maintenance      sync.Once
 	keyMu            sync.Mutex
-	catalogKey       []byte
+	lease            *os.File
+	readKey          func(*os.File) ([]byte, error)
 	keyWarningLogged bool
+	lockWarning      sync.Once
 
 	// cacheMu orders cache publication and eviction. When both locks are
 	// needed, cacheMu is taken first.
@@ -104,7 +108,8 @@ type instance struct {
 // logDir. Initial configuration cleans obsolete entries in an existing cache.
 func NewManager(cacheDir, logDir, version string) *Manager {
 	return &Manager{
-		cacheDir: cacheDir, logDir: logDir, version: version, readFile: os.ReadFile,
+		cacheDir: cacheDir, logDir: logDir, version: version, readFile: os.ReadFile, linkKey: os.Link,
+		readKey: func(f *os.File) ([]byte, error) { return io.ReadAll(io.LimitReader(f, 33)) },
 		servers: map[string]Server{}, inst: map[instKey]*instance{},
 		tools: map[instKey][]Tool{}, dirty: map[instKey]bool{}, generation: map[instKey]uint64{}, probed: map[string]catalogView{},
 	}
@@ -171,11 +176,20 @@ func (m *Manager) Configure(servers []Server) {
 	for _, in := range stop {
 		go in.stop()
 	}
-	if m.cacheDir != "" {
-		m.maintenance.Do(func() { m.cleanCatalogs(next) })
-		for _, name := range evict {
-			m.evictCatalogs(name)
+	if m.cacheDir != "" && !m.isClosed() {
+		if len(next) == 0 {
+			if _, err := os.Lstat(m.cacheDir); os.IsNotExist(err) {
+				return
+			}
 		}
+		m.withCatalogWrite(func(alone bool) {
+			m.maintenance.Do(func() { m.cleanCatalogs(next, alone) })
+			if alone {
+				for _, name := range evict {
+					m.evictCatalogs(name)
+				}
+			}
+		})
 	}
 }
 
@@ -356,12 +370,9 @@ func (m *Manager) publishList(in *instance, tools []Tool, generation uint64) err
 	if tmp != "" {
 		defer os.Remove(tmp)
 	}
-	var status string
-	if in.srv.PerProject() {
-		status = m.prepareCache(in.srv, in.key, tools)
-		if status != "" {
-			defer os.Remove(status)
-		}
+	status := m.prepareCache(in.srv, in.key, tools)
+	if status != "" {
+		defer os.Remove(status)
 	}
 	m.cacheMu.Lock()
 	defer m.cacheMu.Unlock()
@@ -376,16 +387,17 @@ func (m *Manager) publishList(in *instance, tools []Tool, generation uint64) err
 	}
 	m.tools[in.key] = tools
 	delete(m.dirty, in.key)
-	if in.srv.PerProject() {
-		m.probed[in.key.server] = catalogView{Project: in.key.project, Tools: tools}
-	}
-	published := tmp != "" && os.Rename(tmp, m.catalogPath(in.key)) == nil
-	if status != "" {
-		_ = os.Rename(status, m.statusPath(in.key.server))
-	}
+	m.probed[in.key.server] = catalogView{Project: in.key.project, Tools: tools}
 	m.mu.Unlock()
-	if published && in.key.project != "" {
-		m.trimProjects(in.key.server, filepath.Base(m.catalogPath(in.key)))
+	if tmp != "" || status != "" {
+		m.withCatalogWrite(func(alone bool) {
+			key := m.catalogKeyFor(false)
+			published := m.publishCatalog(tmp, m.catalogPath(in.key), in.srv, in.key, key, alone)
+			m.publishCatalog(status, m.statusPath(in.key.server), in.srv, in.key, key, alone)
+			if published && in.key.project != "" {
+				m.trimProjects(in.srv, filepath.Base(m.catalogPath(in.key)))
+			}
+		})
 	}
 	return nil
 }
@@ -421,38 +433,90 @@ func (in *instance) list(ctx context.Context, m *Manager) ([]Tool, uint64, error
 
 // A failed key read is retried so disk caching resumes after a repair.
 func (m *Manager) cacheKey() []byte {
+	return m.catalogKeyFor(true)
+}
+
+func (m *Manager) catalogKeyFor(create bool) []byte {
 	m.keyMu.Lock()
 	defer m.keyMu.Unlock()
-	if m.catalogKey != nil {
-		return m.catalogKey
-	}
-	key, err := m.loadCacheKey()
+	key, err := m.loadCacheKey(create)
 	if err != nil {
-		if !m.keyWarningLogged {
+		if !m.keyWarningLogged && !(errors.Is(err, os.ErrNotExist) && !create) {
 			log.Printf("MCP disk cache unavailable: %v. Check permissions on %s, move a damaged key aside, or use a filesystem that supports locks and atomic renames", err, filepath.Join(m.cacheDir, ".catalog-key"))
 			m.keyWarningLogged = true
 		}
 		return nil
 	}
-	m.catalogKey = key
+	m.keyWarningLogged = false
 	return key
 }
 
-// loadCacheKey publishes a complete private key before another process can read it.
-func (m *Manager) loadCacheKey() ([]byte, error) {
+func privateKeyInfo(info os.FileInfo) bool {
+	return info.Mode().IsRegular() && catalogOwned(info) && info.Mode().Perm()&0077 == 0
+}
+
+func privateCatalogDir(path string) error {
+	if err := checkCatalogVolume(path); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || !catalogOwned(info) || info.Mode().Perm() != 0700 {
+		return errors.New("catalog directory must be owned by this account with mode 0700")
+	}
+	return nil
+}
+
+func (m *Manager) loadCacheKey(create bool) ([]byte, error) {
+	if create {
+		if err := os.MkdirAll(m.cacheDir, 0700); err != nil {
+			return nil, err
+		}
+	}
+	if err := privateCatalogDir(m.cacheDir); err != nil {
+		return nil, err
+	}
 	path := filepath.Join(m.cacheDir, ".catalog-key")
 	read := func() ([]byte, error) {
-		key, err := m.readFile(path)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, err
+		}
+		if !privateKeyInfo(info) {
+			return nil, errors.New("catalog key is not private to this account")
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		opened, err := file.Stat()
+		if err != nil {
+			return nil, err
+		}
+		if !os.SameFile(opened, info) || !privateKeyInfo(opened) {
+			return nil, errors.New("catalog key changed while opening it")
+		}
+		key, err := m.readKey(file)
 		if err == nil && len(key) != 32 {
 			return nil, errors.New("invalid catalog key")
 		}
-		return key, err
+		if err != nil {
+			return nil, err
+		}
+		current, err := os.Lstat(path)
+		if err != nil {
+			return nil, err
+		}
+		if !os.SameFile(opened, current) || !privateKeyInfo(current) {
+			return nil, errors.New("catalog key changed while reading it")
+		}
+		return key, nil
 	}
-	if key, err := read(); !errors.Is(err, os.ErrNotExist) {
+	if key, err := read(); !create || !errors.Is(err, os.ErrNotExist) {
 		return key, err
-	}
-	if err := os.MkdirAll(m.cacheDir, 0700); err != nil {
-		return nil, err
 	}
 	key := make([]byte, 32)
 	rand.Read(key)
@@ -461,7 +525,7 @@ func (m *Manager) loadCacheKey() ([]byte, error) {
 		return nil, err
 	}
 	defer os.Remove(tmp)
-	if err := os.Link(tmp, path); err == nil {
+	if err := m.linkKey(tmp, path); err == nil {
 		return key, nil
 	} else if errors.Is(err, os.ErrExist) {
 		return read()
@@ -487,7 +551,10 @@ func (m *Manager) loadCacheKey() ([]byte, error) {
 }
 
 func (m *Manager) launchDigest(s Server, k instKey) string {
-	key := m.cacheKey()
+	return digestFor(m.cacheKey(), s, k)
+}
+
+func digestFor(key []byte, s Server, k instKey) string {
 	if key == nil {
 		return ""
 	}
@@ -500,21 +567,31 @@ func (m *Manager) launchDigest(s Server, k instKey) string {
 	return fmt.Sprintf("%x", mac.Sum(nil))
 }
 
-func (m *Manager) cachePath(server string) string { return filepath.Join(m.cacheDir, server+".json") }
+func (m *Manager) cachePath(server string) string {
+	return filepath.Join(m.cacheDir, catalogStem(server)+".json")
+}
 func (m *Manager) catalogPath(k instKey) string {
 	if k.project == "" {
 		return m.cachePath(k.server)
 	}
-	return m.cachePath(fmt.Sprintf("%s.%x", k.server, sha256.Sum256([]byte(k.project))))
+	return filepath.Join(m.cacheDir, fmt.Sprintf("%s.%x.json", catalogStem(k.server), sha256.Sum256([]byte(k.project))))
 }
 
 func (m *Manager) readCache(s Server, k instKey) ([]Tool, bool) {
 	if m.cacheDir == "" || !catalogServer.MatchString(k.server) {
 		return nil, false
 	}
-	c, ok := m.readCatalog(m.catalogPath(k))
-	if !ok || c.Launch != m.launchDigest(s, k) {
+	key := m.catalogKeyFor(false)
+	if key == nil {
 		return nil, false
+	}
+	c, ok := m.readCatalog(m.catalogPath(k))
+	if !ok || c.Launch != digestFor(key, s, k) {
+		return nil, false
+	}
+	if k.project != "" {
+		now := time.Now()
+		_ = os.Chtimes(m.catalogPath(k), now, now)
 	}
 	return c.Tools, true
 }
@@ -523,6 +600,12 @@ func stageFile(dir string, data []byte) (string, error) {
 	f, err := os.CreateTemp(dir, fmt.Sprintf(".catalog-%d-*", os.Getpid()))
 	if err != nil {
 		return "", err
+	}
+	info, err := f.Stat()
+	if err != nil || !catalogOwned(info) || info.Mode().Perm()&0077 != 0 {
+		f.Close()
+		os.Remove(f.Name())
+		return "", errors.New("the volume cannot create private catalog files")
 	}
 	_, writeErr := f.Write(data)
 	closeErr := f.Close()
@@ -870,7 +953,7 @@ func (m *Manager) Status(projects ...string) []ServerStatus {
 	missing := map[string]Server{}
 	for _, name := range order {
 		view, ok := m.probed[name]
-		if tools, shared := m.tools[instKey{server: name}]; shared && (!m.servers[name].PerProject() || !ok) {
+		if tools, shared := m.tools[instKey{server: name}]; shared && !ok {
 			view, ok = catalogView{Tools: tools}, true
 		}
 		if ok {
@@ -958,7 +1041,9 @@ func (m *Manager) Probe(ctx context.Context, s Server, project string) (ServerIn
 	}
 	m.mu.Unlock()
 	if current && tmp != "" {
-		_ = os.Rename(tmp, m.statusPath(s.Name))
+		m.withCatalogWrite(func(alone bool) {
+			m.publishCatalog(tmp, m.statusPath(s.Name), s, k, m.catalogKeyFor(false), alone)
+		})
 	}
 	return c.Info, tools, notes, nil
 }
@@ -979,6 +1064,12 @@ func (m *Manager) Close() {
 	}
 	m.inst = map[instKey]*instance{}
 	m.mu.Unlock()
+	m.cacheMu.Lock()
+	if m.lease != nil {
+		m.lease.Close()
+		m.lease = nil
+	}
+	m.cacheMu.Unlock()
 	var wg sync.WaitGroup
 	for _, in := range all {
 		wg.Add(1)

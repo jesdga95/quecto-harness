@@ -575,6 +575,7 @@ func TestToolsBelongToTheConfiguredLaunch(t *testing.T) {
 	if got := stateOf(offline, s.Name).Tools; len(got) != 0 {
 		t.Errorf("Catalog after restart with a different launch: %v", got)
 	}
+	offline.Close()
 	m.Configure([]Server{s})
 	if _, err := os.Stat(m.cachePath(s.Name)); !os.IsNotExist(err) {
 		t.Fatalf("Previous cache remains: %v", err)
@@ -726,7 +727,7 @@ func TestLaunchFingerprintIsPrivateToTheCache(t *testing.T) {
 	}
 }
 
-func TestCatalogKeyIsReusedAcrossStatusReads(t *testing.T) {
+func TestStatusWaitsForThePrivateKeyToReturn(t *testing.T) {
 	s := fakeServer("local")
 	m := newTestManager(t, s)
 	seedCache(t, m, s, "saved")
@@ -734,13 +735,17 @@ func TestCatalogKeyIsReusedAcrossStatusReads(t *testing.T) {
 	if err := os.Rename(path, path+".aside"); err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
-		if got := stateOf(m, s.Name).Tools; len(got) != 1 || got[0] != "saved" {
-			t.Fatalf("Cached catalog = %v", got)
-		}
+	if got := stateOf(m, s.Name); got.Listed {
+		t.Fatalf("Listed with missing key: %+v", got)
 	}
 	if _, err := os.Lstat(path); !os.IsNotExist(err) {
 		t.Fatalf("Status recreated the key: %v", err)
+	}
+	if err := os.Rename(path+".aside", path); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(m, s.Name).Tools; len(got) != 1 || got[0] != "saved" {
+		t.Fatal(got)
 	}
 }
 
@@ -845,6 +850,9 @@ func TestProjectStatusSurvivesRestartAndProbe(t *testing.T) {
 
 func TestCatalogMaintenancePreservesUnrelatedFiles(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	s := fakeServer("local")
 	data, err := json.Marshal(launchFields(s))
 	if err != nil {
@@ -863,6 +871,9 @@ func TestCatalogMaintenancePreservesUnrelatedFiles(t *testing.T) {
 	write("local.notes.json", "keep")
 	m := NewManager(dir, "", "test")
 	defer m.Close()
+	if m.cacheKey() == nil {
+		t.Fatal("Could not create a private catalog key")
+	}
 	m.Configure([]Server{s})
 	for _, name := range []string{"local.json", ".catalog-123456"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
@@ -877,31 +888,41 @@ func TestCatalogMaintenancePreservesUnrelatedFiles(t *testing.T) {
 	s.Args = append(s.Args, "{project}")
 	m.Configure([]Server{s})
 	for i := range 40 {
+		if i == maxProjectCatalogs {
+			if _, ok := m.readCache(s, keyFor(s, "0")); !ok {
+				t.Fatal("Missing catalog before eviction")
+			}
+		}
 		in := m.instanceFor(s, fmt.Sprint(i))
 		if err := m.publishList(in, []Tool{}, 0); err != nil {
 			t.Fatal(err)
 		}
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
+		at := time.Unix(1600000000+int64(i), 0)
+		if err := os.Chtimes(m.catalogPath(in.key), at, at); err != nil {
+			t.Fatal(err)
+		}
 	}
 	count := 0
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "local.") && len(e.Name()) == len("local.")+64+len(".json") {
+	for i := range 40 {
+		_, err := os.Lstat(m.catalogPath(keyFor(s, fmt.Sprint(i))))
+		want := i == 0 || i >= 9
+		if (err == nil) != want || err != nil && !os.IsNotExist(err) {
+			t.Errorf("Project %d: wanted retained=%v, stat=%v", i, want, err)
+		}
+		if err == nil {
 			count++
 		}
 	}
-	if count > 32 || count == 0 {
-		t.Fatalf("Retained %d project catalogs", count)
-	}
-	if _, ok := m.readCache(s, keyFor(s, "39")); !ok {
-		t.Fatal("Latest catalog evicted")
+	if count != 32 {
+		t.Fatalf("Retained %d catalogs", count)
 	}
 }
 
 func TestConcurrentCatalogCreatorsUseTheSameKey(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	start := make(chan struct{})
 	keys := make(chan []byte, 12)
 	for range cap(keys) {
@@ -966,6 +987,7 @@ func TestStartupDropsCatalogsOfRemovedServers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	m.Close()
 	other := NewManager(m.cacheDir, m.logDir, "test")
 	defer other.Close()
 	kept.Enabled = false
@@ -983,5 +1005,135 @@ func TestStartupDropsCatalogsOfRemovedServers(t *testing.T) {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestSharedStatusUsesTheLastSuccessfulListing(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	h.catalog = []string{"first", "second"}
+	s := httpServer(srv)
+	m := newTestManager(t, s)
+	if got, _ := m.Tools(context.Background(), ""); wires(got) != "mcp__remote__first" {
+		t.Fatal(got)
+	}
+	if _, _, _, err := m.Probe(context.Background(), s, ""); err != nil {
+		t.Fatal(err)
+	}
+	fresh := NewManager(m.cacheDir, m.logDir, "test")
+	defer fresh.Close()
+	fresh.Configure([]Server{s})
+	for _, current := range []*Manager{m, fresh} {
+		if got := stateOf(current, s.Name).Tools; len(got) != 1 || got[0] != "second" {
+			t.Fatalf("Latest listing = %v", got)
+		}
+		if got, ok := current.readCache(s, keyFor(s, "")); !ok || got[0].Name != "first" {
+			t.Fatalf("Turn catalog = %v", got)
+		}
+	}
+}
+
+func TestCatalogNamesAndLaunchesSurviveRestart(t *testing.T) {
+	upper, lower := fakeServer("Local"), fakeServer("local")
+	m := newTestManager(t, upper, lower)
+	for _, s := range []Server{upper, lower} {
+		seedCache(t, m, s, s.Name)
+	}
+	if strings.EqualFold(m.cachePath(upper.Name), m.cachePath(lower.Name)) {
+		t.Fatal("Catalog paths collide on a case-insensitive volume")
+	}
+	fresh := func(servers ...Server) *Manager {
+		n := NewManager(m.cacheDir, m.logDir, "test")
+		t.Cleanup(n.Close)
+		n.Configure(servers)
+		return n
+	}
+	m.Close()
+	n := fresh(upper, lower)
+	for _, s := range []Server{upper, lower} {
+		if got := stateOf(n, s.Name).Tools; len(got) != 1 || got[0] != s.Name {
+			t.Fatal(got)
+		}
+	}
+	alternate := upper.Clone()
+	alternate.Args = append(alternate.Args, "other")
+	n.Close()
+	fresh(alternate, lower).Close()
+	n = fresh(upper, lower)
+	if stateOf(n, upper.Name).Listed || !stateOf(n, lower.Name).Listed {
+		t.Fatal("Old launch survived or unrelated catalog was lost")
+	}
+}
+
+func TestPublicCatalogKeyDisablesDiskCache(t *testing.T) {
+	s := fakeServer("local")
+	m := newTestManager(t, s)
+	if err := os.MkdirAll(m.cacheDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(m.cacheDir, ".catalog-key")
+	if err := os.WriteFile(path, make([]byte, 32), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if tmp := m.prepareCache(s, keyFor(s, ""), []Tool{}); tmp != "" {
+		t.Fatalf("Published with a readable key: %s", tmp)
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if m.cacheKey() == nil {
+		t.Fatal("Private key was not usable after repair")
+	}
+}
+
+func TestUnreadableRetiredCatalogNamesItsRecoveryPath(t *testing.T) {
+	m := newTestManager(t)
+	if err := os.MkdirAll(m.cacheDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := m.cachePath("removed")
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var messages bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&messages)
+	t.Cleanup(func() { log.SetOutput(old) })
+	other := NewManager(m.cacheDir, m.logDir, "test")
+	defer other.Close()
+	other.Configure(nil)
+	if !strings.Contains(messages.String(), path) {
+		t.Fatalf("Missing record path in %s", messages.String())
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "{" {
+		t.Fatalf("Recovery record = %q, %v", data, err)
+	}
+}
+
+func TestSharedCatalogMigrationUsesTheLatestListing(t *testing.T) {
+	s := fakeServer("Local")
+	m := newTestManager(t, s)
+	early := time.Unix(1500000000, 0)
+	for i, item := range []struct{ name, tool string }{{".last-Local.json", "probe"}, {"Local.json", "turn"}} {
+		tmp := m.prepareCache(s, keyFor(s, ""), []Tool{{Name: item.tool}})
+		path := filepath.Join(m.cacheDir, item.name)
+		if err := os.Rename(tmp, path); err != nil {
+			t.Fatal(err)
+		}
+		at := early.Add(time.Duration(i) * time.Hour)
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := NewManager(m.cacheDir, m.logDir, "test")
+	defer other.Close()
+	other.Configure([]Server{s, fakeServer("local")})
+	if got := stateOf(other, s.Name).Tools; len(got) != 1 || got[0] != "turn" {
+		t.Fatalf("Migrated listing = %v", got)
+	}
+	if stateOf(other, "local").Listed {
+		t.Fatal("Legacy catalog assigned to both names")
 	}
 }

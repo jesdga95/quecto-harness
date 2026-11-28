@@ -191,13 +191,19 @@ arguments, environment or folder name `{project}`, and keeps it until the harnes
 its launch fields change. A crash or two consecutive session expirations start a retry
 delay of 1, 2, 4, 8, then 30 seconds. A successful live list or tool call clears the
 failure count. Connecting, using a cached list, or receiving a JSON-RPC error leaves it
-in place. Shared servers cache their last tool list in `mcp/<server>.json`. Servers that
-expand `{project}` keep up to 32 turn catalogs per server, each named with the project
-path's SHA-256 digest. Settings retains the last project listing or probe separately and
-records the project that supplied it. A successful empty list counts as a listing.
-Each turn catalog belongs to the transport, command, arguments, environment, working folder,
-URL and headers that produced it. Changing those settings discards the list. A disk cache
-without a matching launch fingerprint is ignored until a live list succeeds.
+in place. Shared servers cache their last tool list in `mcp/~<hex server name>.json`.
+Servers that expand `{project}` keep up to 32 verified project catalogs per launch. The
+filename includes the SHA-256 digest of the project path. Reading a turn catalog refreshes
+its eviction time, including when Settings selects it as the latest listing. Settings also
+retains the last successful listing or probe and its project. An empty list is a listing.
+
+Each catalog belongs to the transport, command, arguments, environment, working folder,
+URL and headers that produced it. Disk access checks the private key, the owner of the
+directory, its 0700 mode and the volume’s ownership support. Tool lists remain available
+in memory when disk caching is unavailable. Migration and publication share a file lock.
+Managers that share the directory lock preserve each other’s launches. Running an older
+build without the lock alongside a newer build can require a fresh tool listing.
+Unrecognized catalog files stay on disk and their paths are logged for inspection.
 `notifications/tools/list_changed` requests a fresh list on the next turn. Server stderr
 goes to `log/mcp-<server>.log`.
 

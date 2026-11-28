@@ -35,3 +35,17 @@ func catalogProcessGone(pid int) bool {
 func lockCatalogKey(file *os.File) error {
 	return syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
 }
+
+func catalogOwned(info os.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Uid == uint32(os.Geteuid())
+}
+
+func catalogLease(f *os.File) (bool, error) {
+	err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if errors.Is(err, syscall.EWOULDBLOCK) {
+		return false, shareCatalogLease(f)
+	}
+	return err == nil, err
+}
+func shareCatalogLease(f *os.File) error { return syscall.Flock(int(f.Fd()), syscall.LOCK_SH) }

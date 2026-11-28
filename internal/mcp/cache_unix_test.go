@@ -3,11 +3,13 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 
 	"testing"
 	"time"
@@ -85,7 +87,11 @@ func TestSlowCatalogPreparationDoesNotDelayRemoval(t *testing.T) {
 	if err := os.WriteFile(path, make([]byte, 32), 0600); err != nil {
 		t.Fatal(err)
 	}
-	started, release := pauseRead(m, path)
+	started, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	hold := sync.OnceFunc(func() { close(started); <-resume })
+	read := m.readKey
+	m.readKey = func(f *os.File) ([]byte, error) { hold(); return read(f) }
 	defer release()
 	in := m.instanceFor(s, "")
 	done := make(chan error, 1)
@@ -105,5 +111,46 @@ func TestSlowCatalogPreparationDoesNotDelayRemoval(t *testing.T) {
 	}
 	if _, err := os.Stat(m.cachePath(s.Name)); !os.IsNotExist(err) {
 		t.Fatalf("Removed catalog reappeared: %v", err)
+	}
+}
+
+func TestKeyPublicationWaitsForTheVolumeLock(t *testing.T) {
+	m := newTestManager(t)
+	if err := os.MkdirAll(m.cacheDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(m.cacheDir, ".catalog-key")
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := lockCatalogKey(lock); err != nil {
+		t.Fatal(err)
+	}
+	atLink := make(chan struct{})
+	m.linkKey = func(string, string) error { close(atLink); return syscall.ENOTSUP }
+	result := make(chan []byte, 1)
+	go func() { result <- m.cacheKey() }()
+	awaitSignal(t, atLink, "the hard link attempt")
+	select {
+	case <-result:
+		t.Fatal("Published a key while another creator held the lock")
+	case <-time.After(150 * time.Millisecond):
+	}
+	want := bytes.Repeat([]byte{42}, 32)
+	if err := os.WriteFile(path, want, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-result:
+		if !bytes.Equal(got, want) {
+			t.Fatal("Replaced the first creator's key")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Creator did not finish")
 	}
 }
