@@ -55,6 +55,9 @@ type Client struct {
 	notify func(string, json.RawMessage)
 	next   atomic.Int64
 	done   chan struct{}
+	// expired is set when the server answered that it no longer knows the
+	// session, which ends this client without the server having failed.
+	expired atomic.Bool
 
 	mu      sync.Mutex
 	pending map[int64]chan message
@@ -63,8 +66,17 @@ type Client struct {
 }
 
 // Start connects to a server and runs the initialize exchange. A server that
-// does not finish it before ctx ends is stopped.
+// does not finish it before ctx ends is stopped. One that ends the session
+// before the exchange is over gets one more try with a new session.
 func Start(ctx context.Context, spec Spec, o Options) (*Client, error) {
+	c, err := connect(ctx, spec, o)
+	if errors.Is(err, errSessionExpired) {
+		c, err = connect(ctx, spec, o)
+	}
+	return c, err
+}
+
+func connect(ctx context.Context, spec Spec, o Options) (*Client, error) {
 	var t transport
 	switch {
 	case spec.Stdio != nil:
@@ -180,7 +192,13 @@ func (c *Client) send(ctx context.Context, m message) error {
 	if err != nil {
 		return err
 	}
-	return c.t.Send(ctx, frame)
+	err = c.t.Send(ctx, frame)
+	if errors.Is(err, errSessionExpired) && !c.expired.Swap(true) {
+		// A session the server forgot is gone for good, whatever was being
+		// sent: the client ends, and a new one starts with a new initialize.
+		go c.t.Close()
+	}
+	return err
 }
 
 // call sends a request and waits for its answer. When ctx ends first the
@@ -243,6 +261,10 @@ func (c *Client) closedErr() error {
 	return ErrClosed
 }
 
+// Expired reports that the server ended the session, which a new client
+// recovers from at once.
+func (c *Client) Expired() bool { return c.expired.Load() }
+
 // Done closes when the connection ends, for whatever reason.
 func (c *Client) Done() <-chan struct{} { return c.done }
 
@@ -298,6 +320,9 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, []string, error) {
 		}
 		if err := c.call(ctx, "tools/list", params, &res); err != nil {
 			return nil, nil, fmt.Errorf("list tools: %w", err)
+		}
+		if res.Tools == nil {
+			return nil, nil, errors.New("list tools: the server did not return a tools array")
 		}
 		for _, raw := range res.Tools {
 			t, note := decodeTool(raw)

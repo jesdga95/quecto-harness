@@ -48,6 +48,11 @@ func TestHelperProcess(t *testing.T) {
 			return
 		}
 		switch mode {
+		case "project":
+			if m.Method == "tools/list" {
+				f.reply(m, map[string]any{"tools": []any{map[string]string{"name": os.Getenv("MCP_TOOL")}}})
+				return
+			}
 		case "silent":
 			return
 		case "crash":
@@ -252,14 +257,42 @@ type httpFake struct {
 	missing []string
 	waiting map[string]chan message
 	stale   bool
+	// initStatus, when set, is the status every initialize is refused with.
+	initStatus int
+	inits      int
+	// lost is how many notifications/initialized are answered 404, as by a
+	// server that forgets a session as soon as it hands it out.
+	lost int
+	// catalog, when set, is the one tool each session lists, by the
+	// initialize that opened it.
+	catalog          []string
+	listResult       json.RawMessage
+	expireMethod     string
+	notifyDuringList bool
+	// live maps each session handed out and not forgotten to the number of
+	// the initialize that opened it.
+	live map[string]int
 }
 
 func newHTTPFake(t *testing.T) (*httpFake, *httptest.Server) {
-	h := &httpFake{t: t, waiting: map[string]chan message{}}
+	h := &httpFake{t: t, waiting: map[string]chan message{}, live: map[string]int{}}
 	h.fake = newFake("", h.route)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return h, srv
+}
+
+// httpSpec reaches the fake with the credential it asks for.
+func httpSpec(srv *httptest.Server) *HTTPSpec {
+	return &HTTPSpec{URL: srv.URL, Headers: map[string]string{"X-Key": "secret"}}
+}
+
+// forgetSession makes the fake answer 404 to the session it handed out.
+func forgetSession(h *httpFake) {
+	h.mu.Lock()
+	h.session = "forgotten"
+	clear(h.live)
+	h.mu.Unlock()
 }
 
 // route sends a frame to the POST waiting on its id, or drops a server
@@ -280,6 +313,7 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	session, stale := h.session, h.stale
+	opened, live := h.live[r.Header.Get("Mcp-Session-Id")]
 	h.mu.Unlock()
 	if r.Method == http.MethodDelete {
 		h.mu.Lock()
@@ -290,8 +324,27 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	var m message
 	_ = json.Unmarshal(raw, &m)
+	if m.Method == "initialize" {
+		h.mu.Lock()
+		h.inits++
+		refuse := h.initStatus
+		h.mu.Unlock()
+		if refuse != 0 {
+			http.Error(w, "busy", refuse)
+			return
+		}
+	}
 	if m.Method != "initialize" {
-		if stale || r.Header.Get("Mcp-Session-Id") != session {
+		h.mu.Lock()
+		lose := m.Method == "notifications/initialized" && h.lost > 0
+		if lose {
+			h.lost--
+		}
+		h.mu.Unlock()
+		h.mu.Lock()
+		expire := m.Method != "" && m.Method == h.expireMethod
+		h.mu.Unlock()
+		if expire || lose || stale || !live {
 			http.Error(w, "unknown session", http.StatusNotFound)
 			return
 		}
@@ -300,6 +353,33 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.missing = append(h.missing, m.Method)
 			h.mu.Unlock()
 		}
+	}
+	h.mu.Lock()
+	catalog := h.catalog
+	listResult := h.listResult
+	notify := h.notifyDuringList && m.Method == "tools/list"
+	if notify {
+		h.notifyDuringList = false
+		h.catalog = []string{"updated"}
+	}
+	h.mu.Unlock()
+	if m.Method == "tools/list" && listResult != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(message{JSONRPC: "2.0", ID: m.ID, Result: listResult})
+		return
+	}
+	if m.Method == "tools/list" && catalog != nil {
+		out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{
+			"tools": []any{map[string]any{"name": catalog[min(opened, len(catalog))-1], "inputSchema": map[string]any{"type": "object"}}},
+		}})
+		if notify {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\ndata: %s\n\n", out)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(out)
+		return
 	}
 	if len(m.ID) == 0 || m.Method == "" {
 		h.fake.handle(m)
@@ -312,9 +392,10 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	if m.Method == "initialize" {
 		h.mu.Lock()
-		h.session = "sess-1"
+		id := fmt.Sprintf("sess-%d", h.inits)
+		h.session, h.live[id] = id, h.inits
 		h.mu.Unlock()
-		w.Header().Set("Mcp-Session-Id", "sess-1")
+		w.Header().Set("Mcp-Session-Id", id)
 	}
 	go h.fake.handle(m)
 	var reply message
@@ -335,7 +416,7 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func TestHTTP(t *testing.T) {
 	h, srv := newHTTPFake(t)
-	spec := Spec{HTTP: &HTTPSpec{URL: srv.URL, Headers: map[string]string{"X-Key": "secret"}}}
+	spec := Spec{HTTP: httpSpec(srv)}
 	c := start(t, spec, Options{})
 	ctx := context.Background()
 	tools, _, err := c.ListTools(ctx)
@@ -367,7 +448,7 @@ func TestHTTP(t *testing.T) {
 
 func TestHTTPStaleSession(t *testing.T) {
 	h, srv := newHTTPFake(t)
-	c := start(t, Spec{HTTP: &HTTPSpec{URL: srv.URL, Headers: map[string]string{"X-Key": "secret"}}}, Options{})
+	c := start(t, Spec{HTTP: httpSpec(srv)}, Options{})
 	h.mu.Lock()
 	h.stale = true
 	h.mu.Unlock()
@@ -387,5 +468,74 @@ func TestHTTPRefusedCredential(t *testing.T) {
 func TestHTTPRefusesAddress(t *testing.T) {
 	if _, err := Start(context.Background(), Spec{HTTP: &HTTPSpec{URL: "ftp://x"}}, Options{}); err == nil {
 		t.Fatal("accepted an ftp address")
+	}
+}
+
+// A session found ended on a notification ends the client as well, so no
+// later request goes out without a session.
+func TestHTTPEndedSessionOnANotification(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	c := start(t, Spec{HTTP: httpSpec(srv)}, Options{})
+	forgetSession(h)
+	_ = c.send(context.Background(), message{Method: "notifications/cancelled", Params: json.RawMessage(`{}`)})
+	select {
+	case <-c.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the client did not end")
+	}
+	if !c.Expired() {
+		t.Error("the client did not mark the session ended")
+	}
+}
+
+// Once the session is known to be ended, nothing more goes out on it: a
+// request would otherwise reach the server with no session id.
+func TestHTTPSendsNothingOnAnEndedSession(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	tr, err := newHTTP(*httpSpec(srv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tr.Close() })
+	tr.mu.Lock()
+	tr.session = "sess-1"
+	tr.mu.Unlock()
+	h.mu.Lock()
+	h.session = "other"
+	h.mu.Unlock()
+	if err := tr.Send(context.Background(), []byte(`{"jsonrpc":"2.0","method":"notifications/x"}`)); !errors.Is(err, errSessionExpired) {
+		t.Fatalf("first send = %v", err)
+	}
+	if err := tr.Send(context.Background(), []byte(`{"jsonrpc":"2.0","id":9,"method":"ping"}`)); !errors.Is(err, errSessionExpired) {
+		t.Errorf("a send after the session ended = %v, want it refused before going out", err)
+	}
+}
+
+// A call already sent when another request finds the session ended fails,
+// but never as an ended session, which would have it sent again on a new one.
+func TestHTTPCallInFlightWhenTheSessionEnds(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	c := start(t, Spec{HTTP: httpSpec(srv)}, Options{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.CallTool(context.Background(), "slow", nil)
+		done <- err
+	}()
+	waitFor(t, func() bool {
+		h.fake.mu.Lock()
+		defer h.fake.mu.Unlock()
+		return len(h.fake.slow) == 1
+	})
+	forgetSession(h)
+	if err := c.Ping(context.Background()); !errors.Is(err, errSessionExpired) {
+		t.Fatalf("ping = %v", err)
+	}
+	select {
+	case err := <-done:
+		if err == nil || errors.Is(err, errSessionExpired) {
+			t.Fatalf("call in flight = %v, want a failure other than an ended session", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call outlived the session")
 	}
 }

@@ -27,12 +27,17 @@ type mcpServerJSON struct {
 	TimeoutS  int               `json:"timeout_s"`
 	ReadOnly  bool              `json:"read_only"`
 	Allow     []string          `json:"allow"`
-	Problem   string            `json:"problem"`
+	// EnabledTools is null when every tool is offered but those disabled.
+	EnabledTools  []string `json:"enabled_tools"`
+	DisabledTools []string `json:"disabled_tools"`
+	Problem       string   `json:"problem"`
 
 	State   string   `json:"state"`
 	Error   string   `json:"error"`
 	Tools   []string `json:"tools"`
 	Running int      `json:"running"`
+	Listed  bool     `json:"listed"`
+	Project string   `json:"listed_project,omitempty"`
 }
 
 func toMCPServerJSON(srv config.MCPServer, st mcp.ServerStatus) mcpServerJSON {
@@ -41,10 +46,12 @@ func toMCPServerJSON(srv config.MCPServer, st mcp.ServerStatus) mcpServerJSON {
 		Command: srv.Command, Args: orEmpty(srv.Args), Env: orEmptyMap(srv.Env), Cwd: srv.Cwd,
 		URL: srv.URL, Headers: orEmptyMap(srv.Headers), TimeoutS: int(srv.Timeout / time.Second),
 		ReadOnly: srv.ReadOnly, Allow: orEmpty(srv.Allow), Problem: srv.Problem,
+		EnabledTools: srv.EnabledTools, DisabledTools: orEmpty(srv.DisabledTools),
 		State: string(mcp.StateIdle), Tools: []string{},
 	}
 	if st.Name != "" {
 		out.State, out.Tools, out.Running = string(st.State), st.Tools, st.Running
+		out.Listed, out.Project = st.Listed, st.Project
 		if st.Error != "" {
 			out.Error = "The last start failed: " + st.Error
 		}
@@ -62,7 +69,7 @@ func orEmptyMap(m map[string]string) map[string]string {
 func (s *Server) writeMCP(w http.ResponseWriter, status int) {
 	byName := map[string]mcp.ServerStatus{}
 	if m := s.engine.MCP(); m != nil {
-		for _, st := range m.Status() {
+		for _, st := range m.Status(s.cfg.Config().Projects...) {
 			byName[st.Name] = st
 		}
 	}
@@ -90,6 +97,9 @@ type mcpServerBody struct {
 	TimeoutS  int               `json:"timeout_s"`
 	ReadOnly  bool              `json:"read_only"`
 	Allow     []string          `json:"allow"`
+	// EnabledTools absent or null offers every tool not disabled.
+	EnabledTools  []string `json:"enabled_tools"`
+	DisabledTools []string `json:"disabled_tools"`
 }
 
 var mcpName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
@@ -111,6 +121,7 @@ func (b mcpServerBody) record() (config.MCPServer, error) {
 		Command:   strings.TrimSpace(b.Command), Args: b.Args, Env: cleanMap(b.Env),
 		Cwd: strings.TrimSpace(b.Cwd), URL: strings.TrimSpace(b.URL), Headers: cleanMap(b.Headers),
 		Timeout: time.Duration(b.TimeoutS) * time.Second, ReadOnly: b.ReadOnly, Allow: b.Allow,
+		EnabledTools: b.EnabledTools, DisabledTools: b.DisabledTools,
 	}
 	if len(srv.Args) == 0 {
 		srv.Args = nil
@@ -211,6 +222,6 @@ func (s *Server) probeMCP(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "server": map[string]string{"name": info.Name, "version": info.Version, "protocol": info.Protocol},
-		"tools": list, "notes": notes,
+		"tools": list, "notes": notes, "listed_project": project,
 	})
 }

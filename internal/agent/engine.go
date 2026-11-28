@@ -1508,7 +1508,10 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 		// next request carries execute's prompt and tools, and the budget
 		// starts again for the work the plan describes.
 		if e.takeApproval(s) {
-			b = e.briefFor(ctx, s, cfg)
+			// The MCP tools stay the ones the turn started with, and the new
+			// mode's rules apply to them; a change saved meanwhile waits for
+			// the next turn.
+			b = e.briefWith(ctx, s, cfg, true, b.offer.MCP)
 			runner.MCPTools = mcpTable(b.offer)
 			calls = 0
 			e.estimateBase(s, a, b)
@@ -1861,7 +1864,7 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
 
 	policy := cfg.Mode
-	if e.perms.Evaluate(s.Project, tool, command, path, runner.Outside(path), policy) == perms.ActionAllow {
+	if e.evaluate(s, runner, tool, command, path, policy) == perms.ActionAllow {
 		// A call skips the card two ways, and the record keeps them apart.
 		// "auto" is a policy that allowed this call, "full" is no policy.
 		record.Decision = "auto"
@@ -1912,6 +1915,15 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 		e.publish(s.ID, ev("error", map[string]any{"kind": "allowlist", "message": d.Note}))
 	}
 	return d, record, false
+}
+
+// evaluate asks the policy about one call. An MCP call is judged as the
+// tool this turn offered under that name, never by the name alone.
+func (e *Engine) evaluate(s *Session, runner *tools.Runner, tool, command, path string, mode config.Mode) perms.Action {
+	if t, ok := runner.MCPTools[tool]; ok {
+		return e.perms.EvaluateMCP(t.Server, t.Tool, mode)
+	}
+	return e.perms.Evaluate(s.Project, tool, command, path, runner.Outside(path), mode)
 }
 
 // publishDecided closes a card that is open in the browser. The tab that
@@ -1993,7 +2005,7 @@ func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, runne
 			break
 		}
 		command, path := argSummary(call)
-		if e.perms.Evaluate(s.Project, name, command, path, runner.Outside(path), cfg.Mode) != perms.ActionAllow {
+		if e.evaluate(s, runner, name, command, path, cfg.Mode) != perms.ActionAllow {
 			break
 		}
 		n++

@@ -122,3 +122,33 @@ func TestStoreMCPBadJSON(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// The tool choice round-trips: no enabled list stays none, an empty one stays
+// empty, and the disabled list is trimmed and sorted.
+func TestMCPToolChoiceRoundTrips(t *testing.T) {
+	var in FileMCP
+	text := `{"mcpServers": {
+		"all": {"url": "http://a", "disabled_tools": [" b ", "a", "b"]},
+		"none": {"url": "http://n", "enabled_tools": []}
+	}}`
+	if err := json.Unmarshal([]byte(text), &in); err != nil {
+		t.Fatal(err)
+	}
+	servers, notes := ResolveMCP(in)
+	if len(notes) != 0 {
+		t.Fatalf("notes = %v", notes)
+	}
+	if servers[0].EnabledTools != nil || strings.Join(servers[0].DisabledTools, ",") != "a,b" {
+		t.Errorf("all = %+v", servers[0])
+	}
+	if servers[1].EnabledTools == nil || len(servers[1].EnabledTools) != 0 {
+		t.Errorf("none = %+v, want an empty enabled list", servers[1])
+	}
+	raw, err := json.Marshal(FileMCPFrom(servers))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"enabled_tools":[]`) || strings.Count(string(raw), "enabled_tools") != 1 {
+		t.Errorf("written = %s", raw)
+	}
+}

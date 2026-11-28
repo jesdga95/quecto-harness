@@ -1766,7 +1766,8 @@ class HttpApi implements HarnessApi {
       ok: wire.ok ?? false,
       error: wire.error ?? "",
       server: wire.server,
-      tools: wire.tools ?? [],
+      listed_project: wire.listed_project,
+      tools: Array.isArray(wire.tools) ? wire.tools : undefined,
       notes: wire.notes ?? [],
     };
   }
@@ -2013,10 +2014,14 @@ function toMcp(w: Partial<McpServer>): McpServer {
     timeout_s: w.timeout_s ?? 0,
     read_only: w.read_only ?? false,
     allow: w.allow ?? [],
+    enabled_tools: Array.isArray(w.enabled_tools) ? w.enabled_tools : null,
+    disabled_tools: Array.isArray(w.disabled_tools) ? w.disabled_tools : [],
     problem: w.problem ?? "",
     state: w.state ?? "idle",
     error: w.error ?? "",
     tools: w.tools ?? [],
+    listed: w.listed ?? Boolean(w.tools?.length),
+    listed_project: w.listed_project ?? "",
     running: w.running ?? 0,
   };
 }

@@ -44,6 +44,10 @@ type FileMCPServer struct {
 	TimeoutS *int              `json:"timeout_s,omitempty"`
 	ReadOnly *bool             `json:"read_only,omitempty"`
 	Allow    []string          `json:"allow,omitempty"`
+	// EnabledTools absent offers every tool not in DisabledTools; an empty
+	// list offers none. DisabledTools names tools never offered.
+	EnabledTools  []string `json:"enabled_tools,omitzero"`
+	DisabledTools []string `json:"disabled_tools,omitempty"`
 }
 
 // transportNames maps what the type field may say to a transport. The
@@ -89,6 +93,8 @@ func resolveServer(name string, f FileMCPServer) MCPServer {
 		s.ReadOnly = *f.ReadOnly
 	}
 	s.Allow = normaliseTools(f.Allow)
+	s.DisabledTools = normaliseTools(f.DisabledTools)
+	s.EnabledTools = normaliseTools(f.EnabledTools)
 	problem := func(p string) {
 		if s.Problem == "" {
 			s.Problem = p
@@ -140,7 +146,10 @@ func resolveServer(name string, f FileMCPServer) MCPServer {
 func FileMCPFrom(servers []MCPServer) FileMCP {
 	out := FileMCP{Servers: map[string]FileMCPServer{}}
 	for _, s := range servers {
-		f := FileMCPServer{Args: s.Args, Env: s.Env, Headers: s.Headers, Allow: s.Allow}
+		f := FileMCPServer{
+			Args: s.Args, Env: s.Env, Headers: s.Headers, Allow: s.Allow,
+			EnabledTools: s.EnabledTools, DisabledTools: s.DisabledTools,
+		}
 		if s.Transport != "" {
 			t := string(s.Transport)
 			f.Type = &t
@@ -170,8 +179,13 @@ func FileMCPFrom(servers []MCPServer) FileMCP {
 	return out
 }
 
+// normaliseTools trims, dedupes and sorts names. It keeps nil apart from an
+// empty list, since an empty enabled list offers no tool.
 func normaliseTools(in []string) []string {
-	var out []string
+	if in == nil {
+		return nil
+	}
+	out := []string{}
 	for _, t := range in {
 		if t = strings.TrimSpace(t); t != "" && !slices.Contains(out, t) {
 			out = append(out, t)
@@ -243,20 +257,14 @@ func (s *Store) SetMCP(servers []MCPServer) ([]MCPServer, error) {
 	return cloneServers(s.mcp), nil
 }
 
-// MCPAllows reports whether the tool sent under a wire name is on its
-// server's allow list. The name is matched by rebuilding it, since the wire
-// form of a tool name cannot be read back.
-func (s *Store) MCPAllows(wire string) bool {
+// MCPAllows reports whether a server's tool, by the names configured, is on
+// that server's allow list.
+func (s *Store) MCPAllows(server, tool string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, srv := range s.mcp {
-		if !strings.HasPrefix(wire, mcp.WirePrefix+srv.Name+"__") {
-			continue
-		}
-		for _, t := range srv.Allow {
-			if w, ok := mcp.WireName(srv.Name, t); ok && w == wire {
-				return true
-			}
+		if srv.Name == server {
+			return srv.Allows(tool)
 		}
 	}
 	return false

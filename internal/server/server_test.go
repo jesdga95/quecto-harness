@@ -2692,3 +2692,37 @@ func TestProbeSearch(t *testing.T) {
 		t.Errorf("bad address: status = %d, want 400", w.Code)
 	}
 }
+
+// The settings dialog saves and reads back which tools a server offers.
+func TestTheMCPToolChoiceIsSaved(t *testing.T) {
+	f := newFixture(t)
+	body := map[string]any{"servers": []map[string]any{{
+		"name": "notes", "transport": "http", "url": "http://127.0.0.1:1/mcp",
+		"enabled_tools": []string{}, "disabled_tools": []string{"write"},
+	}, {
+		"name": "wiki", "transport": "http", "url": "http://127.0.0.1:1/wiki",
+	}}}
+	if w := f.do(t, "PUT", "/api/mcp", body); w.Code != http.StatusOK {
+		t.Fatalf("save = %d %s", w.Code, w.Body.String())
+	}
+	got := decode(t, f.do(t, "GET", "/api/mcp", nil))
+	servers, _ := got["servers"].([]any)
+	if len(servers) != 2 {
+		t.Fatalf("servers = %v", got)
+	}
+	byName := map[string]map[string]any{}
+	for _, s := range servers {
+		srv, _ := s.(map[string]any)
+		name, _ := srv["name"].(string)
+		byName[name] = srv
+	}
+	notes := byName["notes"]
+	enabled, isList := notes["enabled_tools"].([]any)
+	disabled, _ := notes["disabled_tools"].([]any)
+	if !isList || len(enabled) != 0 || len(disabled) != 1 || disabled[0] != "write" {
+		t.Errorf("notes: enabled = %v, disabled = %v", notes["enabled_tools"], notes["disabled_tools"])
+	}
+	if v, ok := byName["wiki"]["enabled_tools"]; !ok || v != nil {
+		t.Errorf("wiki: enabled = %v, want null", v)
+	}
+}

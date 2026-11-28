@@ -119,11 +119,8 @@ func (b *Broker) Evaluate(project, tool, command, path string, outside bool, mod
 	}
 	auto := mode == config.ModeAllowlist
 	if mcp.IsWire(tool) {
-		// What an MCP tool does is the server's business, so it is shown
-		// before it runs unless the user put it on the server's allow list.
-		if auto && b.cfg.MCPAllows(tool) {
-			return ActionAllow
-		}
+		// The fallback for a wire name missing from the turn's table: a wire
+		// name alone cannot say which tool it is, so it is shown first.
 		return ActionPrompt
 	}
 	switch tool {
@@ -168,6 +165,19 @@ func (b *Broker) Evaluate(project, tool, command, path string, outside bool, mod
 			return ActionAllow
 		}
 		return ActionPrompt
+	}
+	return ActionPrompt
+}
+
+// EvaluateMCP is Evaluate for an MCP tool, by its server and configured name.
+// Full mode allows the call, and allowlist mode allows it when the tool is on
+// the server's allow list. Anything else is shown before it runs.
+func (b *Broker) EvaluateMCP(server, tool string, mode config.Mode) Action {
+	switch {
+	case mode == config.ModeFull:
+		return ActionAllow
+	case mode == config.ModeAllowlist && b.cfg.MCPAllows(server, tool):
+		return ActionAllow
 	}
 	return ActionPrompt
 }

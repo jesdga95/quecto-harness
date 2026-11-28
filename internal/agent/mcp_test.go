@@ -161,3 +161,20 @@ func TestMCPPlanModeRunsReadOnlyServersOnly(t *testing.T) {
 		t.Fatalf("servers = %s", got)
 	}
 }
+
+// A turn that keeps its MCP tools, as after a plan's approval, reads no
+// server: one added meanwhile is not started until the next turn.
+func TestKeptMCPToolsReadNoServer(t *testing.T) {
+	h := newHarness(t)
+	m := withMCP(t, h, mcpFake("fake"))
+	s := h.session(t)
+	b := h.engine.briefWith(context.Background(), s, h.cfg.Config(), true, nil)
+	if len(b.offer.MCP) != 0 {
+		t.Errorf("offered = %v, want the kept empty list", b.offer.MCP)
+	}
+	for _, st := range m.Status() {
+		if st.Running != 0 {
+			t.Errorf("%s was started for a turn that kept its tools", st.Name)
+		}
+	}
+}

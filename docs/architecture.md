@@ -188,11 +188,24 @@ answers any other server request with `-32601`. `initialize` asks for `2025-06-1
 accepts four listed versions. A cancelled call sends `notifications/cancelled` and returns at
 once. The `Manager` starts a server the first time a turn needs it, once per project when its
 arguments, environment or folder name `{project}`, and keeps it until the harness stops or
-its launch fields change. A crash marks it failed and the next call restarts it after 1, 2,
-4, 8 then 30 s. The last good tool list is kept in memory and in `mcp/<server>.json`; a
-server that is down keeps offering it, so the head of the prompt does not change, and its
-calls answer that it is not running. `notifications/tools/list_changed` marks the list to
-be read again at the next turn start. stderr goes to `log/mcp-<server>.log`.
+its launch fields change. A crash or two consecutive session expirations start a retry
+delay of 1, 2, 4, 8, then 30 seconds. A successful live list or tool call clears the
+failure count. Connecting, using a cached list, or receiving a JSON-RPC error leaves it
+in place. Shared servers cache their last tool list in `mcp/~<hex server name>.json`.
+Servers that expand `{project}` keep up to 32 verified project catalogs per launch. The
+filename includes the SHA-256 digest of the project path. Reading a turn catalog refreshes
+its eviction time, including when Settings selects it as the latest listing. Settings also
+retains the last successful listing or probe and its project. An empty list is a listing.
+
+Each catalog belongs to the transport, command, arguments, environment, working folder,
+URL and headers that produced it. Disk access checks the private key, the owner of the
+directory, its 0700 mode and the volume’s ownership support. Tool lists remain available
+in memory when disk caching is unavailable. Migration and publication share a file lock.
+Managers that share the directory lock preserve each other’s launches. Running an older
+build without the lock alongside a newer build can require a fresh tool listing.
+Unrecognized catalog files stay on disk and their paths are logged for inspection.
+`notifications/tools/list_changed` requests a fresh list on the next turn. Server stderr
+goes to `log/mcp-<server>.log`.
 
 Unknown argument fields are **tolerated** (a small model invents one and the call should
 still run); a missing required field is a one-line tool error.

@@ -236,22 +236,31 @@ export interface McpServer {
   read_only: boolean;
   /** Tools that run without a card in allowlist mode. */
   allow: string[];
+  /** The only tools offered a turn, or null to offer every tool not
+      disabled. */
+  enabled_tools: string[] | null;
+  /** Tools never offered. */
+  disabled_tools: string[];
   /** Why the record cannot run as written, empty when it can. */
   problem: string;
   state: McpState;
   error: string;
   /** What the server listed last, by name. */
   tools: string[];
+  /** Whether that list is known, even when it is empty. */
+  listed: boolean;
+  listed_project: string;
   running: number;
 }
 
 /** The fields of a server the dialog writes. */
-export type McpServerRecord = Omit<McpServer, "problem" | "state" | "error" | "tools" | "running">;
+export type McpServerRecord = Omit<McpServer, "problem" | "state" | "error" | "tools" | "listed" | "listed_project" | "running">;
 
 /** The answer to the Test button. A failure is reported here rather than
     thrown, so the form can draw it. */
 export interface McpProbe {
   ok: boolean;
+  listed_project?: string;
   error?: string;
   server?: { name: string; version: string; protocol: string };
   tools?: { name: string; description: string }[];
