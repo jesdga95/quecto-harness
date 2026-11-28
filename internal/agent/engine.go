@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -40,19 +41,20 @@ const loadTimeout = 10 * time.Minute
 const maxAttachments = 5
 
 var (
-	ErrBusy       = errors.New("The session is busy: stop the current turn first")
-	ErrNotFound   = errors.New("No session with that id")
-	ErrEmptyText  = errors.New("The message is empty: type something or attach a file")
-	ErrNotLast    = errors.New("That is not the last message: only the last one can be sent again")
-	ErrNoProject  = errors.New("That folder is not in the project list: add it first")
-	ErrNoAgent    = errors.New("No agent is selected: create one in the agents dialog")
-	ErrAgentsOff  = errors.New("Every agent is disabled: enable one in the agents dialog")
-	ErrAgentOff   = errors.New("The agent is disabled: enable it in the agents dialog")
-	ErrNoAddress  = errors.New("The agent has no address: add it in the agents dialog")
-	ErrNoModel    = errors.New("The agent has no model: choose one in the agents dialog")
-	ErrCompacting = errors.New("The conversation is being compacted: that finishes on its own")
-	ErrTooShort   = errors.New("Not enough content to compact: keep working and try again later")
-	ErrNoShell    = errors.New("That command is not running in the foreground any more")
+	ErrBusy         = errors.New("The session is busy: stop the current turn first")
+	ErrNotFound     = errors.New("No session with that id")
+	ErrEmptyText    = errors.New("The message is empty: type something or attach a file")
+	ErrNotLast      = errors.New("That is not the last message: only the last one can be sent again")
+	ErrNoProject    = errors.New("That folder is not in the project list: add it first")
+	ErrNoAgent      = errors.New("No agent is selected: create one in the agents dialog")
+	ErrAgentsOff    = errors.New("Every agent is disabled: enable one in the agents dialog")
+	ErrAgentOff     = errors.New("The agent is disabled: enable it in the agents dialog")
+	ErrNoAddress    = errors.New("The agent has no address: add it in the agents dialog")
+	ErrNoModel      = errors.New("The agent has no model: choose one in the agents dialog")
+	ErrCompacting   = errors.New("The conversation is being compacted: that finishes on its own")
+	ErrTooShort     = errors.New("Not enough content to compact: keep working and try again later")
+	ErrNoShell      = errors.New("That command is not running in the foreground any more")
+	ErrStillRunning = errors.New("A background command of the session did not stop: try the delete again")
 )
 
 // Engine owns every live session and dispatches turns.
@@ -75,9 +77,24 @@ type Engine struct {
 	// reason that says nothing about the request itself.
 	retry []time.Duration
 
+	// mu guards live and deleting. A path that holds both takes mu first and
+	// a session's own lock second, and nothing that holds a session's lock
+	// reaches for mu.
 	mu   sync.Mutex
 	live map[string]*Session
-	wg   sync.WaitGroup
+	// deleting holds the ids a delete has reserved. removed holds the ids
+	// deleted while reads from disk were under way, until none is, so a read
+	// that began before a delete is not kept.
+	deleting map[string]bool
+	removed  map[string]bool
+	reads    int
+	// held holds the messages the harness sent to a reserved session, kept
+	// until its delete ends: delivered if it stays, dropped if it goes.
+	held map[string][]heldMessage
+	// liveIDs mirrors the keys of live outside mu, for a caller that may
+	// hold a session's lock.
+	liveIDs sync.Map
+	wg      sync.WaitGroup
 }
 
 func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files *store.Files,
@@ -86,6 +103,7 @@ func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files
 		cfg: cfg, store: st, files: files, backends: backends, searches: searches,
 		perms: pb, asks: newAsker(), hub: hub,
 		ctx: ctx, os: runtime.GOOS, live: map[string]*Session{},
+		deleting: map[string]bool{}, removed: map[string]bool{}, held: map[string][]heldMessage{},
 		retry: []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second},
 	}
 	e.procs = NewRegistry(
@@ -95,9 +113,7 @@ func NewEngine(ctx context.Context, cfg *config.Store, st *store.Sessions, files
 			if err != nil {
 				return
 			}
-			if _, err := e.deliverFrom(s, sender{Name: "Background process"}, text, nil); err != nil {
-				e.publish(session, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
-			}
+			e.handOver(s, sender{Name: "Background process"}, text)
 		},
 	)
 	return e
@@ -335,7 +351,7 @@ func (e *Engine) Create(project string) (*Session, error) {
 	}
 	s := newSession(store.NewID(), project, a.ID, a.Model, e.cfg.Config().Toolset)
 	e.mu.Lock()
-	e.live[s.ID] = s
+	e.setLive(s)
 	e.mu.Unlock()
 	e.save(s)
 	return s, nil
@@ -365,10 +381,15 @@ func (e *Engine) Get(id string) (*Session, error) {
 		return s, nil
 	}
 	e.mu.Unlock()
+	e.beginRead()
+	defer e.endRead()
 
 	doc, err := e.store.Load(id)
-	if err != nil {
+	if errors.Is(err, store.ErrNotFound) {
 		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
 	}
 	s := fromDoc(doc)
 	s.turnSeq = 0
@@ -381,16 +402,46 @@ func (e *Engine) Get(id string) (*Session, error) {
 	// cut off by a harness that stopped. They are closed before anything
 	// else can append.
 	repaired := s.closeInterrupted()
-	e.mu.Lock()
-	if existing, ok := e.live[id]; ok {
-		e.mu.Unlock()
-		return existing, nil
+	kept, err := e.keep(s)
+	if err != nil {
+		return nil, err
 	}
-	e.live[id] = s
-	e.mu.Unlock()
-	if repaired {
+	if repaired && kept == s {
 		e.save(s)
 	}
+	return kept, nil
+}
+
+// beginRead counts a read from disk under way.
+func (e *Engine) beginRead() {
+	e.mu.Lock()
+	e.reads++
+	e.mu.Unlock()
+}
+
+// endRead ends a read from disk. The last one lets go of the removed ids.
+func (e *Engine) endRead() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.reads--
+	if e.reads == 0 {
+		clear(e.removed)
+	}
+}
+
+// keep makes a session read from disk the live one for its id, or returns the
+// one already live. A read that began before a delete and ended after it is
+// not kept, or the next message would write the file back.
+func (e *Engine) keep(s *Session) (*Session, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if existing, ok := e.live[s.ID]; ok {
+		return existing, nil
+	}
+	if e.deleting[s.ID] || e.removed[s.ID] {
+		return nil, ErrNotFound
+	}
+	e.setLive(s)
 	return s, nil
 }
 
@@ -414,6 +465,28 @@ func (e *Engine) LiveFill(id string) (fill int, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.computeFill(), true
+}
+
+// setLive makes s the live session for its id. The caller holds mu.
+func (e *Engine) setLive(s *Session) {
+	e.live[s.ID] = s
+	e.liveIDs.Store(s.ID, true)
+}
+
+// Holds reports whether a session is held in memory, taking no engine lock,
+// so it is safe to ask while holding a session's.
+func (e *Engine) Holds(id string) bool {
+	_, ok := e.liveIDs.Load(id)
+	return ok
+}
+
+// IsLive reports whether a session is held in memory, without reading anything
+// from disk or keeping anything for an id that is not.
+func (e *Engine) IsLive(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, ok := e.live[id]
+	return ok
 }
 
 // LiveState is what a session is doing, without reading one back from disk to
@@ -477,7 +550,22 @@ func (e *Engine) Send(id, text string, files []string) (Sent, error) {
 	if err != nil {
 		return Sent{}, err
 	}
-	return e.deliver(s, text, attachments)
+	sent, err := e.deliver(s, text, attachments)
+	if err != nil {
+		e.dropFiles(attachments)
+	}
+	return sent, err
+}
+
+// dropFiles removes the stored copies of attachments no entry will hold, so a
+// message that was refused leaves nothing in the store. The files a person
+// picked are not touched.
+func (e *Engine) dropFiles(attachments []store.Attachment) {
+	for _, a := range attachments {
+		if a.File != "" {
+			e.files.Remove(a.File)
+		}
+	}
 }
 
 // deliver starts a turn with the message, or queues it. Every path that
@@ -491,7 +579,15 @@ func (e *Engine) deliver(s *Session, text string, attachments []store.Attachment
 // written; the sender is put in front of it where the prompt is built, since
 // that is the only place it means anything.
 func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments []store.Attachment) (Sent, error) {
-	s.mu.Lock()
+	if err := e.lockForWork(s); err != nil {
+		return Sent{}, err
+	}
+	return e.deliverLocked(s, from, text, attachments)
+}
+
+// deliverLocked is deliverFrom once the session is locked for work. It
+// releases the lock.
+func (e *Engine) deliverLocked(s *Session, from sender, text string, attachments []store.Attachment) (Sent, error) {
 	if s.state != StateIdle {
 		if err := s.queue(from, text, attachments); err != nil {
 			s.mu.Unlock()
@@ -526,6 +622,62 @@ func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments [
 	return Sent{Seq: entry.Seq}, nil
 }
 
+// heldMessage is a message the harness sent while a delete held the session.
+type heldMessage struct {
+	from sender
+	text string
+}
+
+// errHeld says a message was kept for a session a delete holds.
+var errHeld = errors.New("held until the delete ends")
+
+// lockForWork locks a session for a change that may start work, refusing one
+// a delete has reserved or an instance no longer live. The session's lock is
+// taken under the engine's, so a delete either reserves first or finds it busy.
+func (e *Engine) lockForWork(s *Session) error { return e.lockOrHold(s, nil) }
+
+// lockOrHold is lockForWork that keeps m for a reserved session instead of
+// refusing it, and answers errHeld.
+func (e *Engine) lockOrHold(s *Session, m *heldMessage) error {
+	e.mu.Lock()
+	if e.deleting[s.ID] {
+		if m != nil {
+			e.held[s.ID] = append(e.held[s.ID], *m)
+			e.mu.Unlock()
+			return errHeld
+		}
+		e.mu.Unlock()
+		return ErrBusy
+	}
+	if e.live[s.ID] != s {
+		e.mu.Unlock()
+		return ErrNotFound
+	}
+	s.mu.Lock()
+	e.mu.Unlock()
+	if s.gone {
+		s.mu.Unlock()
+		return ErrNotFound
+	}
+	return nil
+}
+
+// handOver delivers a message the harness sends: a run's report or a notice
+// that a command ended. A session being deleted gets it once the delete fails,
+// and one already gone does not.
+func (e *Engine) handOver(s *Session, from sender, text string) {
+	err := e.lockOrHold(s, &heldMessage{from: from, text: text})
+	if errors.Is(err, errHeld) || errors.Is(err, ErrNotFound) {
+		return
+	}
+	if err == nil {
+		_, err = e.deliverLocked(s, from, text, nil)
+	}
+	if err != nil {
+		e.publish(s.ID, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
+	}
+}
+
 // absorbSteer appends the queued message, so the turn carries on with it in
 // the history. It reports whether there was one.
 func (e *Engine) absorbSteer(s *Session) bool {
@@ -558,15 +710,20 @@ func (e *Engine) publishMessage(s *Session, entry store.Entry) {
 // flushSteer sends a message the turn ended without picking up. A stop leaves
 // one behind, and the message was typed to be delivered.
 func (e *Engine) flushSteer(s *Session) {
-	s.mu.Lock()
-	held := s.steer
-	s.steer = nil
-	s.mu.Unlock()
-	if held == nil {
+	// The message comes off the queue under the same lock that starts its
+	// turn, so a delete finds it either queued or under way.
+	if err := e.lockForWork(s); err != nil {
 		return
 	}
-	sent, err := e.deliverFrom(s, held.From, held.Text, held.Attachments)
+	held := s.steer
+	if held == nil {
+		s.mu.Unlock()
+		return
+	}
+	s.steer = nil
+	sent, err := e.deliverLocked(s, held.From, held.Text, held.Attachments)
 	if err != nil {
+		e.dropFiles(held.Attachments)
 		e.publish(s.ID, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
 		return
 	}
@@ -611,7 +768,9 @@ func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	s.mu.Lock()
+	if err := e.lockForWork(s); err != nil {
+		return 0, err
+	}
 	if s.state != StateIdle {
 		s.mu.Unlock()
 		return 0, ErrBusy
@@ -692,30 +851,42 @@ func (e *Engine) readAttachments(s *Session, paths []string) ([]store.Attachment
 	out := make([]store.Attachment, 0, len(paths))
 	var server *readable
 	for _, p := range paths {
-		read, err := tools.ReadAttachment(p)
+		a, err := e.readAttachment(s, p, &server)
 		if err != nil {
+			// The copies already taken belong to a message that is not sent.
+			e.dropFiles(out)
 			return nil, err
-		}
-		if read.Kind == "document" || read.Kind == "video" {
-			if server == nil {
-				server = e.readableBy(s)
-			}
-			if err := server.takes(p, read.Kind); err != nil {
-				return nil, err
-			}
-		}
-		a := store.Attachment{Path: p, Kind: read.Kind, Mime: read.Mime,
-			Bytes: read.Bytes, Content: read.Content}
-		if read.Kind != "text" {
-			id, size, err := e.files.Put(p)
-			if err != nil {
-				return nil, err
-			}
-			a.File, a.Bytes, a.Content = id, size, ""
 		}
 		out = append(out, a)
 	}
 	return out, nil
+}
+
+// readAttachment reads one attached file, storing a copy of anything that is
+// not text. server is what the model server reads, asked for once per message.
+func (e *Engine) readAttachment(s *Session, p string, server **readable) (store.Attachment, error) {
+	read, err := tools.ReadAttachment(p)
+	if err != nil {
+		return store.Attachment{}, err
+	}
+	if read.Kind == "document" || read.Kind == "video" {
+		if *server == nil {
+			*server = e.readableBy(s)
+		}
+		if err := (*server).takes(p, read.Kind); err != nil {
+			return store.Attachment{}, err
+		}
+	}
+	a := store.Attachment{Path: p, Kind: read.Kind, Mime: read.Mime,
+		Bytes: read.Bytes, Content: read.Content}
+	if read.Kind != "text" {
+		id, size, err := e.files.Put(p)
+		if err != nil {
+			return store.Attachment{}, err
+		}
+		a.File, a.Bytes, a.Content = id, size, ""
+	}
+	return a, nil
 }
 
 // Stop cancels the turn. It never appends: the loop reaches stopped and
@@ -771,7 +942,9 @@ func (e *Engine) Compact(id string) error {
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
+	if err := e.lockForWork(s); err != nil {
+		return err
+	}
 	if s.state != StateIdle {
 		s.mu.Unlock()
 		return ErrBusy
@@ -905,43 +1078,185 @@ func (e *Engine) Rename(id, title string) error {
 }
 
 func (e *Engine) Delete(id string) error {
+	e.mu.Lock()
+	reserved := e.deleting[id]
+	e.mu.Unlock()
+	if reserved {
+		return ErrBusy
+	}
+	// A session whose file went but whose saved output stayed has only the
+	// output left to remove.
+	if done, err := e.store.FinishCleanup(id); done || err != nil {
+		return err
+	}
 	s, err := e.Get(id)
 	if err != nil {
 		return err
 	}
-	// A turn is stopped first. The session is marked gone as it goes, so one
-	// that starts between this check and the delete does not write the file
-	// back out.
-	if s.State() != StateIdle {
-		return ErrBusy
-	}
-	s.forget()
-	// A write already under way finishes before the file is removed, or it
-	// would put the file back.
-	s.mu.Lock()
-	e.waitSavedLocked(s)
-	s.mu.Unlock()
-	e.StopProcesses(id, true)
-	doc, _, _, _ := s.Snapshot()
-	if err := e.store.Delete(id); err != nil {
+	group, err := e.reserve(s)
+	if err != nil {
 		return err
 	}
-	// The files an attachment left behind belong to the session, so they go
-	// with it rather than sitting in the store with nothing pointing at them.
-	for _, entry := range doc.Entries {
-		for _, a := range entry.Attachments {
-			if a.File != "" {
-				e.files.Remove(a.File)
-			}
-		}
+	defer e.unreserve(group)
+
+	// A command still running could write into the session's folder once it
+	// is gone, so nothing is removed until every one of them has ended.
+	ids := make([]string, len(group))
+	for i, m := range group {
+		ids[i] = m.ID
 	}
-	e.mu.Lock()
-	delete(e.live, id)
-	e.mu.Unlock()
-	for _, child := range e.store.Children(id) {
-		if err := e.Delete(child.ID); err != nil {
+	ctx, cancel := context.WithTimeout(e.ctx, drainTimeout)
+	err = e.procs.Drain(ctx, ids)
+	cancel()
+	if err != nil {
+		return ErrStillRunning
+	}
+
+	// Subagent runs go before their launcher, so a failure part way leaves
+	// the launcher in place to be deleted again.
+	for _, m := range group[1:] {
+		if err := e.remove(m); err != nil {
 			return err
 		}
+	}
+	return e.remove(s)
+}
+
+// drainTimeout bounds the wait for a deleted session's commands to end. A
+// stopped command is killed within seconds, so only one that does not die
+// reaches it.
+const drainTimeout = 10 * time.Second
+
+// reserve marks a session and the subagent runs under it as being deleted, or
+// none of them when any is working, holds a queued message, or is reserved.
+// The launcher comes first in what it returns.
+func (e *Engine) reserve(s *Session) ([]*Session, error) {
+	// A run only on disk is loaded, so its one instance is what is reserved.
+	// One whose file cannot be read refuses the delete by name.
+	var kids []*Session
+	for _, id := range e.store.Family(s.ID) {
+		// A run with output left behind is finished first, or its launcher
+		// would go while the run still waits on a fix.
+		done, err := e.store.FinishCleanup(id)
+		if err != nil {
+			return nil, err
+		}
+		if done {
+			continue
+		}
+		kid, err := e.Get(id)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		kids = append(kids, kid)
+	}
+	return e.claim(s, kids)
+}
+
+// claim is reserve for runs already loaded. Under the engine's lock it drops
+// the runs another delete removed, refuses the rest unless every one is free,
+// and marks them.
+func (e *Engine) claim(s *Session, kids []*Session) ([]*Session, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.live[s.ID] != s {
+		return nil, ErrNotFound
+	}
+	group := []*Session{s}
+	for _, kid := range kids {
+		// A run another delete removed since it was read has nothing left
+		// to reserve.
+		kid.mu.Lock()
+		gone := kid.gone
+		kid.mu.Unlock()
+		if !gone || e.deleting[kid.ID] || e.live[kid.ID] == kid {
+			group = append(group, kid)
+		}
+	}
+	// A run started a moment ago may be live before it is on disk.
+	for _, m := range e.live {
+		if m.Parent == s.ID && !slices.Contains(group, m) {
+			group = append(group, m)
+		}
+	}
+	for _, m := range group {
+		if e.deleting[m.ID] || e.live[m.ID] != m {
+			return nil, ErrBusy
+		}
+		m.mu.Lock()
+		free := m.state == StateIdle && m.steer == nil
+		m.mu.Unlock()
+		if !free {
+			return nil, ErrBusy
+		}
+	}
+	for _, m := range group {
+		e.deleting[m.ID] = true
+	}
+	return group, nil
+}
+
+// unreserve releases what reserve took. A session that was not removed can
+// take work again, starting with the messages held for it.
+func (e *Engine) unreserve(group []*Session) {
+	type due struct {
+		s    *Session
+		msgs []heldMessage
+	}
+	var deliver []due
+	e.mu.Lock()
+	for _, m := range group {
+		delete(e.deleting, m.ID)
+		if msgs := e.held[m.ID]; len(msgs) > 0 && e.live[m.ID] == m {
+			deliver = append(deliver, due{m, msgs})
+		}
+		delete(e.held, m.ID)
+	}
+	e.mu.Unlock()
+	for _, d := range deliver {
+		for _, msg := range d.msgs {
+			e.handOver(d.s, msg.from, msg.text)
+		}
+	}
+}
+
+// remove deletes one reserved session once its accepted writes are on disk.
+// A failed delete leaves it in place and writes back what changed meanwhile.
+// Output left behind after the file went is reported, with the session gone.
+func (e *Engine) remove(s *Session) error {
+	s.mu.Lock()
+	e.waitSavedLocked(s)
+	s.gone = true
+	s.mu.Unlock()
+	doc, _, _, _ := s.Snapshot()
+	err := e.store.Delete(s.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrLeftBehind) {
+		s.mu.Lock()
+		s.gone = false
+		e.markLocked(s, true)
+		e.waitSavedLocked(s)
+		s.mu.Unlock()
+		return err
+	}
+	// Stored copies of attachments belong to the session and go with it.
+	for _, entry := range doc.Entries {
+		e.dropFiles(entry.Attachments)
+	}
+	e.mu.Lock()
+	delete(e.live, s.ID)
+	e.liveIDs.Delete(s.ID)
+	if e.reads > 0 {
+		e.removed[s.ID] = true
+	}
+	e.mu.Unlock()
+	if d, ok := e.hub.(Dropper); ok {
+		d.Drop(s.ID)
+	}
+	if errors.Is(err, store.ErrLeftBehind) {
+		return err
 	}
 	return nil
 }

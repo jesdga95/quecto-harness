@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -447,5 +448,305 @@ func TestListIsNewestFirst(t *testing.T) {
 	}
 	if got, want := ids(reopened.List("/proj")), []string{d.ID, c.ID, b.ID, a.ID}; !slices.Equal(got, want) {
 		t.Errorf("the reopened store lists %v, want the newest-first order %v", got, want)
+	}
+}
+
+// lockedOutput puts a saved output in a session's side folder that cannot be
+// removed, and returns the function that lets it go.
+func lockedOutput(t *testing.T, dir, id string) (folder string, release func()) {
+	t.Helper()
+	if os.Getuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	folder = filepath.Join(dir, id+".files")
+	spill := filepath.Join(folder, "spill")
+	if err := os.MkdirAll(spill, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spill, "out.txt"), []byte("output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(spill, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	release = func() { os.Chmod(spill, 0o700) }
+	t.Cleanup(release)
+	return folder, release
+}
+
+// A delete that cannot remove the side folder says so and keeps the session
+// listed. A later delete retries it, and once the folder goes so does the
+// session.
+func TestADeleteThatLeavesTheFolderIsNotDone(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	if err := s.Save(sample(id, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	folder, release := lockedOutput(t, dir, id)
+
+	if err := s.Delete(id); !errors.Is(err, ErrLeftBehind) {
+		t.Fatalf("Delete = %v, want the folder left behind", err)
+	}
+	if !s.Has(id) {
+		t.Error("the session left the index although its folder stayed")
+	}
+	if err := s.Delete(id); !errors.Is(err, ErrLeftBehind) {
+		t.Fatalf("the second delete = %v, want the folder left behind", err)
+	}
+
+	release()
+	if err := s.Delete(id); err != nil {
+		t.Fatalf("the delete after the fix = %v", err)
+	}
+	if _, err := os.Stat(folder); !os.IsNotExist(err) {
+		t.Errorf("the folder is still there: %v", err)
+	}
+	if s.Has(id) {
+		t.Error("the session is still indexed")
+	}
+	if err := s.Delete(id); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a delete once done = %v, want not found", err)
+	}
+}
+
+// A folder a delete could not remove is removed at the next start, and by a
+// delete of another session.
+func TestALeftFolderIsRemovedLater(t *testing.T) {
+	for _, by := range []string{"start", "another delete"} {
+		t.Run(by, func(t *testing.T) {
+			dir := t.TempDir()
+			s, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id, other := NewID(), NewID()
+			for _, v := range []string{id, other} {
+				if err := s.Save(sample(v, time.Now())); err != nil {
+					t.Fatal(err)
+				}
+			}
+			folder, release := lockedOutput(t, dir, id)
+			if err := s.Delete(id); !errors.Is(err, ErrLeftBehind) {
+				t.Fatalf("Delete = %v, want the folder left behind", err)
+			}
+			release()
+
+			if by == "start" {
+				if _, err := Open(dir); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := s.Delete(other); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(folder); !os.IsNotExist(err) {
+				t.Errorf("the folder is still there: %v", err)
+			}
+		})
+	}
+}
+
+// A delete whose cleanup cannot be recorded removes nothing: the session file
+// stays, and so does its place in the index.
+func TestADeleteThatCannotRecordItsCleanupKeepsTheSession(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	if err := s.Save(sample(id, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	// A folder in the ledger's place fails its write.
+	if err := os.MkdirAll(filepath.Join(dir, ledgerFile, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(id); err == nil {
+		t.Fatal("the delete went through without its cleanup recorded")
+	}
+	if _, err := os.Stat(filepath.Join(dir, id+".json")); err != nil {
+		t.Errorf("the session file went: %v", err)
+	}
+	if !s.Has(id) {
+		t.Error("the session left the index")
+	}
+}
+
+// An id in the ledger that is not a session's is never used on disk.
+func TestALedgerIdThatIsNoSessionIsIgnored(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "sessions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(base, "victim.files")
+	if err := os.MkdirAll(victim, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	led := `{"cleanup":{"../victim":{"parent":"","project":""}},"parents":{"../x":{"parent":"sess_aaaaaaaaaaaaaaaa","project":"/p"}}}`
+	if err := os.WriteFile(filepath.Join(dir, ledgerFile), []byte(led), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("a folder outside the sessions went: %v", err)
+	}
+	if got := s.Family("sess_aaaaaaaaaaaaaaaa"); len(got) != 0 {
+		t.Errorf("family = %v, want nothing from a bad id", got)
+	}
+}
+
+// A ledger that cannot be read stops the start and is left as it was, and one
+// that does not parse is kept aside rather than written over.
+func TestALedgerThatCannotBeReadIsKept(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, child := NewID(), NewID()
+	if err := s.Save(sample(parent, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	run := sample(child, time.Now())
+	run.Parent = parent
+	if err := s.Save(run); err != nil {
+		t.Fatal(err)
+	}
+	// The run's file says what a rebuilt ledger would hold, so a ledger
+	// holding less shows whether it was written over.
+	path := filepath.Join(dir, ledgerFile)
+	want := []byte(`{"parents":{}}`)
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil {
+		t.Error("the start went on without the ledger")
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(want) {
+		t.Errorf("the unreadable ledger was written over: %s", got)
+	}
+
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path + ".unreadable-1"); err != nil || string(got) != "{not json" {
+		t.Errorf("the ledger that did not parse = %q, %v, want it kept aside", got, err)
+	}
+}
+
+// Each ledger that does not parse is kept aside under a name of its own, so a
+// second one does not replace the first.
+func TestEachUnparsedLedgerIsKeptAside(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ledgerFile)
+	for _, body := range []string{"{first", "{second"} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	aside, err := filepath.Glob(path + ".unreadable*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, p := range aside {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept = append(kept, string(raw))
+	}
+	slices.Sort(kept)
+	if !slices.Equal(kept, []string{"{first", "{second"}) {
+		t.Errorf("kept aside = %q, want both ledgers", kept)
+	}
+}
+
+// A ledger whose cleanup is the earlier list of ids is read, and the folders
+// it names are still removed.
+func TestALedgerWithACleanupListIsRead(t *testing.T) {
+	dir := t.TempDir()
+	id := NewID()
+	folder := filepath.Join(dir, id+".files")
+	if err := os.MkdirAll(filepath.Join(folder, "spill"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	led := `{"cleanup":["` + id + `"]}`
+	if err := os.WriteFile(filepath.Join(dir, ledgerFile), []byte(led), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(folder); !os.IsNotExist(err) {
+		t.Errorf("the folder the list named is still there: %v", err)
+	}
+	if aside, _ := filepath.Glob(filepath.Join(dir, ledgerFile+".unreadable*")); len(aside) != 0 {
+		t.Errorf("the ledger was set aside as unreadable: %v", aside)
+	}
+}
+
+func TestCleanupKeepsOutputWhileATranscriptLinkIsPresent(t *testing.T) {
+	dir := t.TempDir()
+	id, parent := NewID(), NewID()
+	path := filepath.Join(dir, id+".json")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "transcript.json"), path); err != nil {
+		t.Skipf("Cannot make a link: %v", err)
+	}
+	out := filepath.Join(dir, id+".files")
+	if err := os.Mkdir(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte(`{"cleanup":{"` + id + `":{"parent":"` + parent + `"}}}`)
+	if err := os.WriteFile(filepath.Join(dir, ledgerFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Family(parent); !slices.Contains(got, id) {
+		t.Errorf("Family = %v, want %s", got, id)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("Saved output: %v", err)
+	}
+}
+
+func TestALedgerLinkWithAMissingTargetStopsStartup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ledgerFile)
+	if err := os.Symlink(filepath.Join(t.TempDir(), "ledger.json"), path); err != nil {
+		t.Skipf("Cannot make a link: %v", err)
+	}
+	if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("Open = %v, want an error naming the ledger", err)
+	}
+	if _, err := os.Readlink(path); err != nil {
+		t.Fatal(err)
 	}
 }

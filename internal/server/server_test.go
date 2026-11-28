@@ -634,6 +634,153 @@ func TestProjectRoutes(t *testing.T) {
 	}
 }
 
+// Deleting a session the store cannot read is a conflict that names the file,
+// an unknown one is not found, and neither removes anything.
+func TestDeletingASessionAnswersByCause(t *testing.T) {
+	f := newFixture(t)
+	if w := f.do(t, "DELETE", "/api/sessions/sess_aaaaaaaaaaaaaaaa", nil); w.Code != http.StatusNotFound {
+		t.Errorf("unknown session = %d, want 404", w.Code)
+	}
+	id := "sess_bbbbbbbbbbbbbbbb"
+	path := filepath.Join(f.cfg.Paths().Sessions, id+".json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", "/api/sessions/"+id, nil); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), path) {
+		t.Errorf("unreadable session = %d %s, want 409 naming the file", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the unreadable file went: %v", err)
+	}
+}
+
+// A project whose folder moved and whose old path now leads to another
+// project is removed by its own registered path, and the other keeps its
+// place and its conversations.
+func TestRemovingAMovedProjectLeavesTheOneItLeadsTo(t *testing.T) {
+	f := newFixture(t)
+	base := t.TempDir()
+	a, b := filepath.Join(base, "a"), filepath.Join(base, "b")
+	for _, dir := range []string{a, b} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if w := f.do(t, "POST", "/api/projects", map[string]string{"path": dir}); w.Code != http.StatusOK {
+			t.Fatalf("add project = %d %s", w.Code, w.Body.String())
+		}
+	}
+	realA, _ := filepath.EvalSymlinks(a)
+	realB, _ := filepath.EvalSymlinks(b)
+	inA, err := f.engine.Create(realA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inB, err := f.engine.Create(realB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(realA, realA+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realB, realA); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": realA}); w.Code != http.StatusOK {
+		t.Fatalf("remove = %d %s", w.Code, w.Body.String())
+	}
+	if _, err := f.engine.Get(inB.ID); err != nil {
+		t.Errorf("the other project's session went: %v", err)
+	}
+	if _, err := f.engine.Get(inA.ID); err == nil {
+		t.Error("the removed project's session survived")
+	}
+	projects := f.cfg.Config().Projects
+	if !slices.Contains(projects, realB) || slices.Contains(projects, realA) {
+		t.Errorf("projects = %v, want %s kept and %s gone", projects, realB, realA)
+	}
+
+	// The same removal sent again names nothing in the list now.
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": realA}); w.Code != http.StatusNotFound {
+		t.Errorf("the repeated remove = %d, want 404", w.Code)
+	}
+	if _, err := f.engine.Get(inB.ID); err != nil {
+		t.Errorf("the repeated remove took the other project's session: %v", err)
+	}
+	if !slices.Contains(f.cfg.Config().Projects, realB) {
+		t.Error("the repeated remove took the other project off the list")
+	}
+}
+
+// A project whose removal cannot be saved stays in the list, and the same
+// removal succeeds once the configuration can be written.
+func TestAFailedProjectRemovalCanBeRetried(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	if w := f.do(t, "POST", "/api/projects", map[string]string{"path": dir}); w.Code != http.StatusOK {
+		t.Fatalf("add project = %d %s", w.Code, w.Body.String())
+	}
+	real, _ := filepath.EvalSymlinks(dir)
+	// A folder in the file's place fails the write whatever the process may do.
+	conf := f.cfg.Paths().Config
+	if err := os.Rename(conf, conf+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(conf, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": real}); w.Code != http.StatusInternalServerError {
+		t.Errorf("remove with the configuration unwritable = %d, want 500", w.Code)
+	}
+	if !slices.Contains(f.cfg.Config().Projects, real) {
+		t.Fatal("the project left the list although the removal was not saved")
+	}
+	if err := os.RemoveAll(conf); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(conf+".saved", conf); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": real}); w.Code != http.StatusOK {
+		t.Errorf("the retry = %d %s, want 200", w.Code, w.Body.String())
+	}
+}
+
+// Removing a project by a path the list does not hold deletes nothing: an
+// empty path would otherwise name every project's sessions.
+func TestRemovingAnUnknownProjectDeletesNothing(t *testing.T) {
+	f := newFixture(t)
+	other := t.TempDir()
+	if w := f.do(t, "POST", "/api/projects", map[string]string{"path": other}); w.Code != http.StatusOK {
+		t.Fatalf("add project = %d %s", w.Code, w.Body.String())
+	}
+	realOther, _ := filepath.EvalSymlinks(other)
+	var ids []string
+	for _, p := range []string{f.project, realOther} {
+		s, err := f.engine.Create(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, s.ID)
+	}
+
+	for _, path := range []string{"", "/no/such/project"} {
+		w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": path})
+		if w.Code != http.StatusNotFound {
+			t.Errorf("remove %q = %d, want 404", path, w.Code)
+		}
+	}
+	for _, id := range ids {
+		if _, err := f.engine.Get(id); err != nil {
+			t.Errorf("session %s did not survive: %v", id, err)
+		}
+	}
+	if got := len(f.cfg.Config().Projects); got != 2 {
+		t.Errorf("projects = %d, want both kept", got)
+	}
+}
+
 // TestProjectReorderRoute asserts that a whole new order is stored and that an
 // order the project list does not hold is refused.
 func TestProjectReorderRoute(t *testing.T) {
@@ -1655,18 +1802,19 @@ func TestStateWithNoAgents(t *testing.T) {
 
 func TestSSEReplayAndResync(t *testing.T) {
 	f := newFixture(t)
+	id := f.sessionID(t)
 	// Every event here is one the hub passes straight through, so the ring
 	// holds one frame per publish.
 	for i := 0; i < 3; i++ {
-		f.hub.Publish("s1", agent.Event{Type: "status_entry", Fields: map[string]any{"content": fmt.Sprint(i)}})
+		f.hub.Publish(id, agent.Event{Type: "status_entry", Fields: map[string]any{"content": fmt.Sprint(i)}})
 	}
 
-	got := f.readStream(t, "/api/events?session=s1&from=1", 2)
+	got := f.readStream(t, "/api/events?session="+id+"&from=1", 2)
 	if len(got) != 2 || got[0]["seq"] != 2.0 || got[1]["content"] != "2" {
 		t.Errorf("replay from ?from= = %v", got)
 	}
 
-	req := newRequest("GET", "/api/events?session=s1", nil)
+	req := newRequest("GET", "/api/events?session="+id, nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Last-Event-ID", "2")
 	got = f.readStreamReq(t, req, 1)
@@ -1676,9 +1824,9 @@ func TestSSEReplayAndResync(t *testing.T) {
 
 	// Roll the ring past the requested sequence.
 	for i := 0; i < ringSize+10; i++ {
-		f.hub.Publish("s1", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
+		f.hub.Publish(id, agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
 	}
-	got = f.readStream(t, "/api/events?session=s1&from=1", 1)
+	got = f.readStream(t, "/api/events?session="+id+"&from=1", 1)
 	if len(got) != 1 || got[0]["type"] != "resync" {
 		t.Errorf("rolled ring = %v, want a resync", got)
 	}
@@ -1687,14 +1835,15 @@ func TestSSEReplayAndResync(t *testing.T) {
 // TestSSEResyncAfterRestart asserts that a mark from before a restart, which is
 // ahead of anything the new hub sent, is answered with a resync.
 func TestSSEResyncAfterRestart(t *testing.T) {
-	f := newFixture(t)
-	f.hub.Publish("s1", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "0"}})
-	_, cancel, replay := f.hub.Subscribe("s1", 800)
+	// A hub on its own, since these ids are not sessions.
+	h := NewHub()
+	h.Publish("s1", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "0"}})
+	_, cancel, replay := h.Subscribe("s1", 800)
 	defer cancel()
 	if len(replay) != 1 || replay[0].Type != resyncEvType {
 		t.Errorf("replay for a mark ahead of the hub = %+v, want one resync", replay)
 	}
-	_, cancel2, replay := f.hub.Subscribe("s1", 1)
+	_, cancel2, replay := h.Subscribe("s1", 1)
 	defer cancel2()
 	if len(replay) != 0 {
 		t.Errorf("replay for a mark at the last frame = %+v, want none", replay)
@@ -1702,11 +1851,12 @@ func TestSSEResyncAfterRestart(t *testing.T) {
 }
 
 func TestSlowSubscriberGetsResyncAndStaysAttached(t *testing.T) {
-	f := newFixture(t)
-	ch, cancel, _ := f.hub.Subscribe("s2", 0)
+	// A hub on its own, since these ids are not sessions.
+	h := NewHub()
+	ch, cancel, _ := h.Subscribe("s2", 0)
 	defer cancel()
 	for i := 0; i < subscriberQ+50; i++ {
-		f.hub.Publish("s2", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
+		h.Publish("s2", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
 	}
 	select {
 	case fr, open := <-ch:
@@ -1728,10 +1878,11 @@ func TestSlowSubscriberGetsResyncAndStaysAttached(t *testing.T) {
 
 func TestStreamedTextGoesOutAsOneFrame(t *testing.T) {
 	f := newFixture(t)
+	id := f.sessionID(t)
 	for _, word := range []string{"one ", "two ", "three"} {
-		f.hub.Publish("s4", agent.Event{Type: "delta", Fields: map[string]any{"text": word}})
+		f.hub.Publish(id, agent.Event{Type: "delta", Fields: map[string]any{"text": word}})
 	}
-	got := f.readStream(t, "/api/events?session=s4&from=0", 1)
+	got := f.readStream(t, "/api/events?session="+id+"&from=0", 1)
 	if len(got) != 1 || got[0]["text"] != "one two three" {
 		t.Errorf("joined text = %v", got)
 	}
@@ -1739,9 +1890,10 @@ func TestStreamedTextGoesOutAsOneFrame(t *testing.T) {
 
 func TestAnEventSendsTheTextWaitingBeforeIt(t *testing.T) {
 	f := newFixture(t)
-	f.hub.Publish("s5", agent.Event{Type: "delta", Fields: map[string]any{"text": "hi"}})
-	f.hub.Publish("s5", agent.Event{Type: "done", Fields: map[string]any{}})
-	got := f.readStream(t, "/api/events?session=s5&from=0", 2)
+	id := f.sessionID(t)
+	f.hub.Publish(id, agent.Event{Type: "delta", Fields: map[string]any{"text": "hi"}})
+	f.hub.Publish(id, agent.Event{Type: "done", Fields: map[string]any{}})
+	got := f.readStream(t, "/api/events?session="+id+"&from=0", 2)
 	if len(got) != 2 || got[0]["text"] != "hi" || got[1]["type"] != "done" {
 		t.Errorf("order = %v, want the text then done", got)
 	}
@@ -1749,9 +1901,10 @@ func TestAnEventSendsTheTextWaitingBeforeIt(t *testing.T) {
 
 func TestThinkingAndTheReplyAreSeparateFrames(t *testing.T) {
 	f := newFixture(t)
-	f.hub.Publish("s6", agent.Event{Type: "reasoning", Fields: map[string]any{"text": "why"}})
-	f.hub.Publish("s6", agent.Event{Type: "delta", Fields: map[string]any{"text": "because"}})
-	got := f.readStream(t, "/api/events?session=s6&from=0", 2)
+	id := f.sessionID(t)
+	f.hub.Publish(id, agent.Event{Type: "reasoning", Fields: map[string]any{"text": "why"}})
+	f.hub.Publish(id, agent.Event{Type: "delta", Fields: map[string]any{"text": "because"}})
+	got := f.readStream(t, "/api/events?session="+id+"&from=0", 2)
 	if len(got) != 2 || got[0]["type"] != "reasoning" || got[0]["text"] != "why" {
 		t.Fatalf("first frame = %v, want the thinking on its own", got)
 	}
@@ -1765,8 +1918,9 @@ func TestThinkingAndTheReplyAreSeparateFrames(t *testing.T) {
 // reconnect from.
 func TestAFrameNamesItsIDInLowercase(t *testing.T) {
 	f := newFixture(t)
-	f.hub.Publish("s7", agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
-	req := newRequest("GET", "/api/events?session=s7&from=0", nil)
+	id := f.sessionID(t)
+	f.hub.Publish(id, agent.Event{Type: "status_entry", Fields: map[string]any{"content": "x"}})
+	req := newRequest("GET", "/api/events?session="+id+"&from=0", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	lines := f.readStreamLines(t, req, 1)
 	if len(lines) == 0 || lines[0] != "id: 1" {
@@ -1779,10 +1933,11 @@ func TestAFrameNamesItsIDInLowercase(t *testing.T) {
 // turn twice.
 func TestAReconnectResumesFromTheHeaderNotTheStaleURL(t *testing.T) {
 	f := newFixture(t)
+	id := f.sessionID(t)
 	for i := 0; i < 4; i++ {
-		f.hub.Publish("s8", agent.Event{Type: "status_entry", Fields: map[string]any{"content": fmt.Sprint(i)}})
+		f.hub.Publish(id, agent.Event{Type: "status_entry", Fields: map[string]any{"content": fmt.Sprint(i)}})
 	}
-	req := newRequest("GET", "/api/events?session=s8&from=1", nil)
+	req := newRequest("GET", "/api/events?session="+id+"&from=1", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	req.Header.Set("Last-Event-ID", "3")
 	got := f.readStreamReq(t, req, 1)
@@ -1940,11 +2095,12 @@ func TestSSENeedsASession(t *testing.T) {
 
 func TestToolEventsCarryTheIndex(t *testing.T) {
 	f := newFixture(t)
-	f.hub.Publish("s3", agent.Event{Type: "tool_call", Fields: map[string]any{
+	id := f.sessionID(t)
+	f.hub.Publish(id, agent.Event{Type: "tool_call", Fields: map[string]any{
 		"index": 0, "id": "call_0", "name": "bash", "arguments": "{"}})
-	f.hub.Publish("s3", agent.Event{Type: "tool_output", Fields: map[string]any{
+	f.hub.Publish(id, agent.Event{Type: "tool_output", Fields: map[string]any{
 		"index": 0, "id": "call_0", "name": "bash", "output": "x", "exit_code": 0, "truncated": false}})
-	got := f.readStream(t, "/api/events?session=s3&from=0", 2)
+	got := f.readStream(t, "/api/events?session="+id+"&from=0", 2)
 	for _, e := range got {
 		if _, ok := e["index"]; !ok {
 			t.Errorf("%v has no index", e)
@@ -2209,6 +2365,16 @@ func (f *fixture) newSession(t *testing.T) string {
 	}
 	f.waitIdle(t, id)
 	return id
+}
+
+// sessionID creates a session in the engine directly and returns its id.
+func (f *fixture) sessionID(t *testing.T) string {
+	t.Helper()
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sess.ID
 }
 
 func (f *fixture) waitIdle(t *testing.T, id string) {
@@ -2690,5 +2856,306 @@ func TestProbeSearch(t *testing.T) {
 	}
 	if w := f.do(t, "POST", "/api/search/probe", map[string]any{"provider": "exa", "url": "ftp://x", "key": "k"}); w.Code != http.StatusBadRequest {
 		t.Errorf("bad address: status = %d, want 400", w.Code)
+	}
+}
+
+// A dropped session's channel is gone for good: a late event does not make it
+// again, a subscriber gets nothing, and the event stream answers 204 so a tab
+// stops reconnecting. Another session keeps its channel.
+func TestADroppedChannelStaysGone(t *testing.T) {
+	h := NewHub()
+	h.Publish("sess_aaaaaaaaaaaaaaaa", agent.Event{Type: "status", Fields: map[string]any{"state": "idle"}})
+	h.Publish("sess_bbbbbbbbbbbbbbbb", agent.Event{Type: "status", Fields: map[string]any{"state": "idle"}})
+	ch, cancel, _ := h.Subscribe("sess_aaaaaaaaaaaaaaaa", 0)
+	defer cancel()
+
+	h.Drop("sess_aaaaaaaaaaaaaaaa")
+	if _, open := <-ch; open {
+		t.Error("a subscriber of the dropped session is still open")
+	}
+	h.Publish("sess_aaaaaaaaaaaaaaaa", agent.Event{Type: "done"})
+	if again, _, _ := h.Subscribe("sess_aaaaaaaaaaaaaaaa", 0); again != nil {
+		t.Error("a dropped session took a subscriber")
+	}
+	h.mu.Lock()
+	_, back := h.sessions["sess_aaaaaaaaaaaaaaaa"]
+	_, other := h.sessions["sess_bbbbbbbbbbbbbbbb"]
+	h.mu.Unlock()
+	if back || !other {
+		t.Errorf("dropped channel back = %v, other channel kept = %v", back, other)
+	}
+
+	f := newFixture(t)
+	sess := f.sessionID(t)
+	if w := f.do(t, "DELETE", "/api/sessions/"+sess, nil); w.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d", w.Code)
+	}
+	if w := f.do(t, "GET", "/api/events?session="+sess, nil); w.Code != http.StatusNoContent {
+		t.Errorf("events of a deleted session = %d, want 204", w.Code)
+	}
+
+	// After a restart the hub knows nothing of the delete; the store does.
+	kept := f.sessionID(t)
+	f.hub = NewHub()
+	f.srv.hub = f.hub
+	if w := f.do(t, "GET", "/api/events?session="+sess, nil); w.Code != http.StatusNoContent {
+		t.Errorf("events of a deleted session after a restart = %d, want 204", w.Code)
+	}
+	f.hub.Publish(kept, agent.Event{Type: "status", Fields: map[string]any{"state": "idle"}})
+	if got := f.readStream(t, "/api/events?session="+kept+"&from=0", 1); len(got) != 1 {
+		t.Errorf("events of a kept session after a restart = %v, want its event", got)
+	}
+}
+
+// Only a session has a stream: an id of another shape is refused and leaves
+// no channel behind, and a live session whose file is not on disk, as after a
+// failed first save, still streams.
+func TestTheEventStreamIsForSessionsAlone(t *testing.T) {
+	f := newFixture(t)
+	if w := f.do(t, "GET", "/api/events?session=not-a-session", nil); w.Code != http.StatusNotFound {
+		t.Errorf("events of a malformed id = %d, want 404", w.Code)
+	}
+	f.hub.mu.Lock()
+	_, made := f.hub.sessions["not-a-session"]
+	f.hub.mu.Unlock()
+	if made {
+		t.Error("a malformed id made a channel")
+	}
+
+	// Live and not on the index, as after a failed first save.
+	sess := f.sessionID(t)
+	if err := f.srv.store.Delete(sess); err != nil {
+		t.Fatal(err)
+	}
+	if f.srv.store.Has(sess) || !f.engine.IsLive(sess) {
+		t.Fatal("the session is not live and off the index")
+	}
+	f.hub.Publish(sess, agent.Event{Type: "status", Fields: map[string]any{"state": "idle"}})
+	if got := f.readStream(t, "/api/events?session="+sess+"&from=0", 1); len(got) != 1 {
+		t.Errorf("events of a live session off the index = %v, want its event", got)
+	}
+
+	// On disk and not live, as after a restart: a new engine and store over
+	// the same folder still stream it.
+	kept := f.sessionID(t)
+	sessions, err := store.Open(f.cfg.Paths().Sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	hub := NewHub()
+	fresh := agent.NewEngine(ctx, f.cfg, sessions, f.files, agent.Clients{Pool: llm.NewPool()}, search.NewProviders(), f.perms, hub)
+	f.srv.engine, f.srv.store, f.srv.hub, f.hub = fresh, sessions, hub, hub
+	if fresh.IsLive(kept) {
+		t.Fatal("the new engine holds the session already")
+	}
+	hub.Publish(kept, agent.Event{Type: "status", Fields: map[string]any{"state": "idle"}})
+	if got := f.readStream(t, "/api/events?session="+kept+"&from=0", 1); len(got) != 1 {
+		t.Errorf("events of a session on disk after a restart = %v, want its event", got)
+	}
+	if w := f.do(t, "GET", "/api/events?session="+sess, nil); w.Code != http.StatusNoContent {
+		t.Errorf("events of a session neither live nor on disk = %d, want 204", w.Code)
+	}
+}
+
+// A delete that leaves the session's saved output behind answers 409 with
+// what to do, and the same delete finishes once the folder can be removed.
+func TestDeletingASessionWhoseOutputStaysIsAConflict(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	f := newFixture(t)
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spill := filepath.Join(f.cfg.Paths().Sessions, sess.ID+".files", "spill")
+	if err := os.MkdirAll(spill, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spill, "out.txt"), []byte("output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(spill, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(spill, 0o700) })
+
+	w := f.do(t, "DELETE", "/api/sessions/"+sess.ID, nil)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "permissions") {
+		t.Fatalf("delete = %d %s, want 409 naming the fix", w.Code, w.Body.String())
+	}
+	if err := os.Chmod(spill, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", "/api/sessions/"+sess.ID, nil); w.Code != http.StatusNoContent {
+		t.Fatalf("the delete after the fix = %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A run that became unreadable after start keeps its launcher and its project.
+// Both deletes answer 409 naming the run's file, and work once it is removed.
+func TestAnUnreadableRunIsAConflictThatNamesIt(t *testing.T) {
+	f := newFixture(t)
+	parent, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	child := &store.Session{ID: store.NewID(), Project: f.project, Parent: parent.ID,
+		Created: now, Updated: now, Entries: []store.Entry{}}
+	if err := f.srv.store.Save(child); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(f.cfg.Paths().Sessions, child.ID+".json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	w := f.do(t, "DELETE", "/api/sessions/"+parent.ID, nil)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), path) {
+		t.Errorf("delete launcher = %d %s, want 409 naming the run", w.Code, w.Body.String())
+	}
+	w = f.do(t, "DELETE", "/api/projects", map[string]string{"path": f.project})
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), path) {
+		t.Errorf("remove project = %d %s, want 409 naming the run", w.Code, w.Body.String())
+	}
+	if !slices.Contains(f.cfg.Config().Projects, f.project) {
+		t.Error("the project went although a session in it was kept")
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": f.project}); w.Code != http.StatusOK {
+		t.Fatalf("remove project after the fix = %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A dropped session is remembered only for a while after its drop: long enough
+// for a late event or a reconnect under way, after which the hub lets it go.
+func TestADroppedSessionIsLetGoLater(t *testing.T) {
+	h := NewHub()
+	now := time.Now()
+	h.now = func() time.Time { return now }
+	h.Drop("sess_aaaaaaaaaaaaaaaa")
+	h.Publish("sess_aaaaaaaaaaaaaaaa", agent.Event{Type: "done"})
+	if ch, _, _ := h.Subscribe("sess_aaaaaaaaaaaaaaaa", 0); ch != nil {
+		t.Error("a session just dropped took a subscriber")
+	}
+
+	now = now.Add(goneFor + time.Second)
+	h.Drop("sess_bbbbbbbbbbbbbbbb")
+	h.mu.Lock()
+	_, kept := h.gone["sess_aaaaaaaaaaaaaaaa"]
+	n := len(h.gone)
+	h.mu.Unlock()
+	if kept || n != 1 {
+		t.Errorf("after the window: first kept = %v, %d remembered, want only the second", kept, n)
+	}
+}
+
+// A session whose file went while its output stayed has no stream, also once
+// the hub has let go of its drop: the events handler answers 204 and a late
+// event makes no channel.
+func TestARemovedTranscriptGetsNoStreamAfterTheWindow(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	f := newFixture(t)
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spill := filepath.Join(f.cfg.Paths().Sessions, sess.ID+".files", "spill")
+	if err := os.MkdirAll(spill, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spill, "out.txt"), []byte("output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(spill, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(spill, 0o700) })
+	if w := f.do(t, "DELETE", "/api/sessions/"+sess.ID, nil); w.Code != http.StatusConflict {
+		t.Fatalf("delete = %d %s, want 409", w.Code, w.Body.String())
+	}
+
+	now := time.Now().Add(goneFor + time.Second)
+	f.hub.mu.Lock()
+	f.hub.now = func() time.Time { return now }
+	f.hub.mu.Unlock()
+	f.hub.Drop("sess_zzzzzzzzzzzzzzzz") // prunes what the window has passed
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req := newRequest("GET", "/api/events?session="+sess.ID, nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	w := httptest.NewRecorder()
+	f.handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Errorf("events after the window = %d, want 204", w.Code)
+	}
+	f.hub.Publish(sess.ID, agent.Event{Type: "done"})
+	f.hub.mu.Lock()
+	_, back := f.hub.sessions[sess.ID]
+	f.hub.mu.Unlock()
+	if back {
+		t.Error("a late event made the channel again")
+	}
+}
+
+// A project whose session's output a delete left behind keeps answering 409
+// after a restart, and stays in the list, until the output can be removed.
+func TestRemovingAProjectWithOutputLeftWaitsAcrossARestart(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permissions do not bind root")
+	}
+	f := newFixture(t)
+	sess, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spill := filepath.Join(f.cfg.Paths().Sessions, sess.ID+".files", "spill")
+	if err := os.MkdirAll(spill, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(spill, "out.txt"), []byte("output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(spill, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(spill, 0o700) })
+	body := map[string]string{"path": f.project}
+	if w := f.do(t, "DELETE", "/api/projects", body); w.Code != http.StatusConflict {
+		t.Fatalf("remove = %d %s, want 409", w.Code, w.Body.String())
+	}
+
+	sessions, err := store.Open(f.cfg.Paths().Sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	f.srv.store = sessions
+	f.srv.engine = agent.NewEngine(ctx, f.cfg, sessions, f.files, agent.Clients{Pool: llm.NewPool()}, search.NewProviders(), f.perms, f.hub)
+	if w := f.do(t, "DELETE", "/api/projects", body); w.Code != http.StatusConflict {
+		t.Errorf("remove after a restart = %d %s, want 409", w.Code, w.Body.String())
+	}
+	if !slices.Contains(f.cfg.Config().Projects, f.project) {
+		t.Fatal("the project went while its session's output stayed")
+	}
+
+	if err := os.Chmod(spill, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", "/api/projects", body); w.Code != http.StatusOK {
+		t.Fatalf("remove after the fix = %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(spill); !os.IsNotExist(err) {
+		t.Errorf("the output is still there: %v", err)
 	}
 }

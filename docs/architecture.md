@@ -333,6 +333,23 @@ too late to be picked up starts a turn of its own.
 - **Concurrent turns** are not serialised. llama.cpp queues a request when every slot is
   busy, so a second session sits in `streaming` with no deltas until a slot frees. That is
   documented behaviour, not a defect to work around.
+- **Deleting** reserves the session and every subagent run under it, live or only on disk,
+  in one step under the engine's lock: if any of them is working, holds a queued message or
+  is already reserved, none is, and the delete is refused as busy. A run on disk that cannot
+  be read fails the delete by name rather than being left without its launcher, also when
+  its file was already unreadable at start. Every way of
+  starting work (a message, a queued message, a resend, a compaction) takes the engine's lock
+  and then the session's, and refuses a reserved session or an instance that is no longer
+  the live one; a queued message comes off the queue under that same lock. A run's report or
+  a command's notice that reaches a reserved session waits for the delete: it is delivered
+  once if the delete fails, and goes with the session if it succeeds. `Get` does not keep
+  a session it read from disk while its id is reserved or once a delete removed it. The
+  reserved sessions' background commands are stopped silently and waited on, outside every
+  lock, for up to 10 s; one still running after that fails the delete with nothing removed.
+  Runs are removed before their launcher. Each removal waits for accepted writes, then removes
+  the file; a file that cannot be removed leaves the session, its folder and its launcher in
+  place, writes back what changed meanwhile, and the delete can be tried again. The wait
+  covers the commands this process started.
 - **Subagents.** `subagent` creates a session on the named agent and waits for its first
   turn to end; the result is the call's own result, and no message follows it. Waiting calls
   made together in one reply are started together. With `wait` false it returns the handle,
@@ -364,7 +381,19 @@ shows the card in its answered state.
   entry carries its own call record, and the entry that ended a turn carries that turn's
   totals. The system prompt is **regenerated, not stored**.
 - `Open` builds an index from a one-time scan, so `List` never touches the filesystem; a
-  corrupt file is skipped and named, not fatal. `Save` atomic-replaces with indented JSON.
+  corrupt file, or one that names a session other than its own, is skipped and named, not
+  fatal; `Load` refuses such a file, since paths and deletes go by the id. `Save`
+  atomic-replaces with indented JSON.
+- `ledger.json` beside the sessions records each subagent run's launcher and project as
+  last read, written before the run's file, so a run whose file turns unreadable is still
+  known to its launcher. A file never read is known to nobody and blocks no delete. It
+  also holds the sessions whose side folder a delete could not remove, with their
+  launcher: such a delete fails, the session stays listed, its launcher stays until the
+  folder is gone, and a later delete or the next start removes the folder. A delete
+  records its cleanup before it removes anything, and removes nothing if it cannot. An
+  entry that names no session is dropped. A ledger that cannot be read stops the start;
+  one that does not parse is moved to the first free `ledger.json.unreadable-<n>` and
+  rebuilt. A cleanup written as a list of ids, as it first was, is still read.
 - **Size.** Tool output is capped at `output_limit_bytes`, but `write` content lives in
   the assistant's arguments, because a truncated argument makes the history unusable for a
   resend. A session that writes many large files grows large; the mitigation is a new
@@ -534,8 +563,29 @@ The fourteen review questions, each settled and already folded into the sections
 | 13 | The protocol is named, not detected. |
 | 14 | `role == "router"` means router mode; an absent role means single. `model_alias` is not a discriminator. |
 
-Also settled: allowlist entries for a removed project stay on disk and are reachable via the
-two allowlist routes; deleting a session is 204, 409 when busy, 404 when unknown, and removes
-the file, the live entry, the hub channel and the subagent runs under it behind a
-confirmation (there is no undo); and reasoning is stored, shown and replayed to the model,
-which `preserve_reasoning` asks the template to keep.
+Also settled:
+
+- Allowlist entries for a removed project stay on disk and are reachable via the two
+  allowlist routes.
+- Deleting a session removes the file, the live entry and the subagent runs under it,
+  behind a confirmation. There is no undo. It answers 204, 409 when the session is busy or
+  reserved by another delete, 404 when it is unknown, 409 naming the file when a session
+  in it cannot be read or its saved output cannot be removed, and 500 when the store
+  cannot remove the file.
+- Each session a delete removes, a run or a project's session included, has its hub
+  channel dropped. A channel is made only for a session held in memory or whose file is
+  still there, so a late event or a reconnecting tab cannot make it again, and its event
+  stream answers 204. That covers one whose output a delete left behind. The hub also
+  remembers a drop for a minute. The engine keeps a removed id only while a
+  read from disk that began before the delete is under way.
+- A session neither live nor on the store's index answers 204 too, asked without loading
+  it. That covers one deleted before a restart.
+- An id that is not a session's is refused with 404 and gets no channel.
+- Removing a project needs a path in the project list, and is 404 otherwise, since an
+  empty path would name every project's sessions. It deletes the project's sessions and
+  keeps the busy ones. It finishes the sessions whose output a delete left behind, which
+  the ledger records with their project. It keeps the project when a session cannot be
+  deleted for any other reason, and otherwise removes the path from the list.
+- A message that is refused leaves no stored copy of its attachments.
+- Reasoning is stored, shown and replayed to the model, which `preserve_reasoning` asks
+  the template to keep.

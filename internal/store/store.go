@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +24,43 @@ import (
 )
 
 var ErrNotFound = errors.New("No session with that id")
+
+// ErrLeftBehind marks a delete that removed the session file but not its side
+// folder. The folder is removed again by a later delete or the next start.
+var ErrLeftBehind = errors.New("session folder left behind")
+
+// ErrUnreadable marks a session file that cannot be read or does not hold the
+// session its name gives.
+var ErrUnreadable = errors.New("session file unreadable")
+
+// fileError is a failure the person clears by fixing a file. Kind is the
+// sentinel it matches; the message names the file and what to do.
+type fileError struct {
+	kind error
+	msg  string
+}
+
+func (e *fileError) Error() string        { return e.msg }
+func (e *fileError) Is(target error) bool { return target == e.kind }
+
+// ledgerFile sits beside the sessions. Its name is not a session's, so Open
+// never reads it as one.
+const ledgerFile = "ledger.json"
+
+// ledger is what the session files alone cannot record. Parents holds each
+// subagent run's launcher as last read from its file, so a run whose file
+// turns unreadable is still known. Cleanup holds the sessions whose side
+// folder a delete has still to remove, with their launcher, if any, so the
+// family knows them until it is gone.
+type ledger struct {
+	Parents map[string]relation `json:"parents,omitempty"`
+	Cleanup map[string]relation `json:"cleanup,omitempty"`
+}
+
+type relation struct {
+	Parent  string `json:"parent"`
+	Project string `json:"project"`
+}
 
 // Entry is one row of a session. Kind drives rendering; InContext drives what
 // is sent to the model.
@@ -236,6 +275,10 @@ type Sessions struct {
 	mu    sync.RWMutex
 	index map[string]Summary
 	locks map[string]*sync.Mutex
+
+	// ledMu guards led and serialises writes of its file.
+	ledMu sync.Mutex
+	led   ledger
 }
 
 var (
@@ -253,27 +296,343 @@ func Open(dir string) (*Sessions, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Read %s: check the permissions on the folder", dir)
 	}
+	if s.led, err = readLedger(filepath.Join(dir, ledgerFile)); err != nil {
+		return nil, err
+	}
+	parents := map[string]relation{}
 	for _, e := range entries {
-		if e.IsDir() || !namePattern.MatchString(e.Name()) {
+		if !namePattern.MatchString(e.Name()) {
 			continue
 		}
-		path := filepath.Join(dir, e.Name())
-		raw, err := os.ReadFile(path)
+		id := strings.TrimSuffix(e.Name(), ".json")
+		sess, size, err := s.readSession(id)
 		if err != nil {
 			log.Printf("sessions/%s: %v: the file is skipped", e.Name(), err)
+			keepRelation(parents, s.led, id)
 			continue
 		}
-		var sess Session
-		if err := json.Unmarshal(raw, &sess); err != nil {
-			log.Printf("sessions/%s: %v: the file is skipped", e.Name(), err)
-			continue
+		s.index[id] = summarise(sess, size)
+		if sess.Parent != "" {
+			parents[sess.ID] = relation{Parent: sess.Parent, Project: sess.Project}
 		}
-		if sess.ID == "" {
-			continue
-		}
-		s.index[sess.ID] = summarise(&sess, int64(len(raw)))
 	}
+	// A relation is kept for a file read now or one that could not be, and
+	// dropped for a file that is gone.
+	if !maps.Equal(parents, s.led.Parents) {
+		s.led.Parents = parents
+		if err := s.writeLedgerLocked(); err != nil {
+			log.Printf("sessions/%s: %v", ledgerFile, err)
+		}
+	}
+	s.retryCleanup("")
 	return s, nil
+}
+
+// keepRelation carries a run's recorded launcher over when its file cannot be
+// read, since the file no longer says.
+func keepRelation(into map[string]relation, previous ledger, id string) {
+	r, ok := previous.Parents[id]
+	if !ok {
+		r = previous.Cleanup[id]
+	}
+	if r.Parent != "" {
+		into[id] = r
+	}
+}
+
+// Family returns every run known to belong to a launcher: those indexed, those
+// whose file could not be read, and those whose output is still to be removed.
+func (s *Sessions) Family(parent string) []string {
+	if parent == "" {
+		return nil
+	}
+	var out []string
+	s.mu.RLock()
+	for _, v := range s.index {
+		if v.Parent == parent {
+			out = append(out, v.ID)
+		}
+	}
+	s.mu.RUnlock()
+	s.ledMu.Lock()
+	for _, m := range []map[string]relation{s.led.Parents, s.led.Cleanup} {
+		for id, r := range m {
+			if r.Parent == parent && !slices.Contains(out, id) {
+				out = append(out, id)
+			}
+		}
+	}
+	s.ledMu.Unlock()
+	sort.Strings(out)
+	return out
+}
+
+// relate records a run's launcher before its file is written, so the file is
+// never on disk without it.
+func (s *Sessions) relate(sess *Session) error {
+	if sess.Parent == "" {
+		return nil
+	}
+	r := relation{Parent: sess.Parent, Project: sess.Project}
+	s.ledMu.Lock()
+	defer s.ledMu.Unlock()
+	old, had := s.led.Parents[sess.ID]
+	if had && old == r {
+		return nil
+	}
+	if s.led.Parents == nil {
+		s.led.Parents = map[string]relation{}
+	}
+	s.led.Parents[sess.ID] = r
+	if err := s.writeLedgerLocked(); err != nil {
+		if had {
+			s.led.Parents[sess.ID] = old
+		} else {
+			delete(s.led.Parents, sess.ID)
+		}
+		return fmt.Errorf("Save session %s: %w", sess.ID, err)
+	}
+	return nil
+}
+
+// readRecord follows links to regular files. Only a missing directory entry
+// counts as absent. A link whose target is missing needs repair.
+func readRecord(path string) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			return nil, errors.New("not a regular file")
+		}
+		var data []byte
+		data, err = os.ReadFile(path)
+		if err == nil {
+			return data, nil
+		}
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		if _, err = os.Lstat(path); err == nil {
+			return nil, errors.New("the entry is present but its target is missing")
+		}
+	}
+	return nil, err
+}
+
+// readLedger reads the ledger, or starts an empty one where there is none. One
+// that does not parse is moved aside rather than written over, and one that
+// cannot be read is an error. Entries naming no session are dropped.
+func readLedger(path string) (ledger, error) {
+	var l ledger
+	raw, err := readRecord(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return l, nil
+	}
+	if err != nil {
+		return l, fmt.Errorf("Read %s: %v: check the permissions on the file", path, err)
+	}
+	if err := decodeLedger(raw, &l); err != nil {
+		aside, rerr := moveAside(path)
+		if rerr != nil {
+			return l, fmt.Errorf("Read %s: it is not valid JSON and cannot be moved aside: move or remove it", path)
+		}
+		log.Printf("sessions/%s: %v: moved to %s and started again", ledgerFile, err, filepath.Base(aside))
+		return ledger{}, nil
+	}
+	for _, m := range []map[string]relation{l.Parents, l.Cleanup} {
+		for id, r := range m {
+			if !ValidID(id) || (r.Parent != "" && !ValidID(r.Parent)) {
+				log.Printf("sessions/%s: %q is not a session: the entry is dropped", ledgerFile, id)
+				delete(m, id)
+			}
+		}
+	}
+	return l, nil
+}
+
+// decodeLedger reads a ledger, including one whose cleanup is a plain list of
+// ids, as it was first written. Such an entry takes the launcher recorded for
+// it, if any.
+func decodeLedger(raw []byte, l *ledger) error {
+	var file struct {
+		Parents map[string]relation `json:"parents"`
+		Cleanup json.RawMessage     `json:"cleanup"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return err
+	}
+	l.Parents = file.Parents
+	trimmed := strings.TrimSpace(string(file.Cleanup))
+	if trimmed == "" || trimmed == "null" {
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var ids []string
+		if err := json.Unmarshal(file.Cleanup, &ids); err != nil {
+			return err
+		}
+		l.Cleanup = map[string]relation{}
+		for _, id := range ids {
+			l.Cleanup[id] = file.Parents[id]
+		}
+		return nil
+	}
+	return json.Unmarshal(file.Cleanup, &l.Cleanup)
+}
+
+// moveAside renames a file to the first free name of the form
+// <name>.unreadable-<n>, so an earlier copy is never replaced.
+func moveAside(path string) (string, error) {
+	for n := 1; ; n++ {
+		aside := fmt.Sprintf("%s.unreadable-%d", path, n)
+		if _, err := os.Lstat(aside); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return "", err
+			}
+			continue
+		}
+		return aside, os.Rename(path, aside)
+	}
+}
+
+// writeLedgerLocked saves the ledger. The caller holds ledMu.
+func (s *Sessions) writeLedgerLocked() error {
+	data, err := json.Marshal(s.led)
+	if err != nil {
+		return err
+	}
+	return config.WriteAtomic(filepath.Join(s.dir, ledgerFile), append(data, '\n'), 0o600)
+}
+
+// Pending reports whether a delete of the session removed its file and still
+// has its side folder to remove.
+func (s *Sessions) Pending(id string) bool {
+	s.ledMu.Lock()
+	defer s.ledMu.Unlock()
+	_, ok := s.led.Cleanup[id]
+	return ok
+}
+
+// PendingIn returns the sessions of a project, launched by nobody, whose file
+// a delete removed and whose side folder is still to be removed.
+func (s *Sessions) PendingIn(project string) []string {
+	s.ledMu.Lock()
+	defer s.ledMu.Unlock()
+	var out []string
+	for id, r := range s.led.Cleanup {
+		if r.Parent == "" && r.Project == project {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// markPending records that the session's side folder is to be removed, before
+// anything is. A failed write records nothing.
+func (s *Sessions) markPending(id string) error {
+	s.mu.RLock()
+	sum := s.index[id]
+	s.mu.RUnlock()
+	s.ledMu.Lock()
+	defer s.ledMu.Unlock()
+	if _, ok := s.led.Cleanup[id]; ok {
+		return nil
+	}
+	if s.led.Cleanup == nil {
+		s.led.Cleanup = map[string]relation{}
+	}
+	rel, ok := s.led.Parents[id]
+	if !ok {
+		rel = relation{Parent: sum.Parent, Project: sum.Project}
+	}
+	s.led.Cleanup[id] = rel
+	if err := s.writeLedgerLocked(); err != nil {
+		delete(s.led.Cleanup, id)
+		return err
+	}
+	return nil
+}
+
+// settle drops the session's pending cleanup, and its launcher too once the
+// session is gone. It reports whether a cleanup was pending.
+func (s *Sessions) settle(id string, gone bool) bool {
+	s.ledMu.Lock()
+	defer s.ledMu.Unlock()
+	_, was := s.led.Cleanup[id]
+	_, related := s.led.Parents[id]
+	if !was && !(gone && related) {
+		return false
+	}
+	delete(s.led.Cleanup, id)
+	if gone {
+		delete(s.led.Parents, id)
+	}
+	if err := s.writeLedgerLocked(); err != nil {
+		log.Printf("sessions/%s: %v", ledgerFile, err)
+	}
+	return was
+}
+
+// retryCleanup removes the side folders earlier deletes left, except the one
+// of skip. A session whose file is back keeps its folder.
+func (s *Sessions) retryCleanup(skip string) {
+	s.ledMu.Lock()
+	ids := slices.Collect(maps.Keys(s.led.Cleanup))
+	s.ledMu.Unlock()
+	for _, id := range ids {
+		if id != skip {
+			s.finishCleanup(id)
+		}
+	}
+}
+
+// FinishCleanup removes pending output if the transcript is still absent.
+// A restored transcript goes through the usual session deletion checks.
+func (s *Sessions) FinishCleanup(id string) (bool, error) {
+	if !s.Pending(id) {
+		return false, nil
+	}
+	s.retryCleanup(id)
+	return s.finishCleanup(id)
+}
+
+func (s *Sessions) finishCleanup(id string) (bool, error) {
+	lock := s.lockFor(id)
+	lock.Lock()
+	defer lock.Unlock()
+	if !s.Pending(id) {
+		return false, nil
+	}
+	sess, size, err := s.readSession(id)
+	if errors.Is(err, ErrNotFound) {
+		return true, s.removeOutput(id)
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := s.relate(sess); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	s.index[id] = summarise(sess, size)
+	s.mu.Unlock()
+	s.settle(id, false)
+	return false, nil
+}
+
+// removeFolder removes a session's side folder. Only a folder that is then
+// not there counts as removed.
+func (s *Sessions) removeFolder(id string) error {
+	if err := os.RemoveAll(s.filesDir(id)); err != nil {
+		return err
+	}
+	_, err := os.Lstat(s.filesDir(id))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err == nil {
+		err = errors.New("it is still there")
+	}
+	return err
 }
 
 // List returns the sessions of one project, newest first, or every session
@@ -333,18 +692,39 @@ func (s *Sessions) Load(id string) (*Session, error) {
 	lock := s.lockFor(id)
 	lock.Lock()
 	defer lock.Unlock()
-	raw, err := os.ReadFile(s.path(id))
+	sess, _, err := s.readSession(id)
+	return sess, err
+}
+
+func (s *Sessions) readSession(id string) (*Session, int64, error) {
+	raw, err := readRecord(s.path(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, ErrNotFound
+			return nil, 0, ErrNotFound
 		}
-		return nil, fmt.Errorf("Read session %s: %w", id, err)
+		var pe *os.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
+		return nil, 0, s.unreadable(id, err.Error())
 	}
 	var sess Session
 	if err := json.Unmarshal(raw, &sess); err != nil {
-		return nil, fmt.Errorf("Read session %s: %w: the file is not valid JSON", id, err)
+		return nil, 0, s.unreadable(id, "it is not valid JSON")
 	}
-	return &sess, nil
+	// What is done to a session is done by its id, so a file that names
+	// another one is not taken at its word.
+	if sess.ID != id {
+		return nil, 0, s.unreadable(id, fmt.Sprintf("it names session %q", sess.ID))
+	}
+	return &sess, int64(len(raw)), nil
+}
+
+// unreadable names a session file that cannot be used and what clears it.
+func (s *Sessions) unreadable(id, why string) error {
+	return &fileError{kind: ErrUnreadable, msg: fmt.Sprintf(
+		"Session %s cannot be read from %s (%s): fix the file's permissions or remove the file, then try again",
+		id, s.path(id), why)}
 }
 
 // Save writes the file, flushes it to the disk and refreshes the index.
@@ -371,6 +751,9 @@ func (s *Sessions) save(sess *Session, sync bool) error {
 	if sync {
 		write = config.WriteAtomic
 	}
+	if err := s.relate(sess); err != nil {
+		return err
+	}
 	lock := s.lockFor(sess.ID)
 	lock.Lock()
 	err = write(s.path(sess.ID), data, 0o600)
@@ -395,28 +778,61 @@ func (s *Sessions) SpillDir(id string) string {
 	return filepath.Join(s.filesDir(id), "spill")
 }
 
+// Delete records the cleanup, then removes the session file and its side
+// folder of saved tool output. A folder that cannot be removed keeps the
+// session indexed and its cleanup recorded, for a later delete or the next
+// start.
 func (s *Sessions) Delete(id string) error {
+	s.retryCleanup(id)
 	lock := s.lockFor(id)
 	lock.Lock()
-	err := os.Remove(s.path(id))
-	// The session's side folder holds its saved tool output, and goes with it.
-	rmErr := os.RemoveAll(s.filesDir(id))
-	lock.Unlock()
-	if rmErr != nil {
-		log.Printf("sessions/%s.files: %v: the folder is left behind", id, rmErr)
+	defer lock.Unlock()
+	_, statErr := os.Lstat(s.path(id))
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("Delete session %s: %w", id, statErr)
 	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if statErr != nil && !s.Pending(id) {
+		s.mu.Lock()
+		delete(s.index, id)
+		delete(s.locks, id)
+		s.mu.Unlock()
+		return ErrNotFound
+	}
+	if err := s.markPending(id); err != nil {
 		return fmt.Errorf("Delete session %s: %w", id, err)
 	}
+	if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// The session is still there, so its side folder stays with it and
+		// the delete can be tried again.
+		s.settle(id, false)
+		return fmt.Errorf("Delete session %s: %w", id, err)
+	}
+	return s.removeOutput(id)
+}
+
+func (s *Sessions) removeOutput(id string) error {
+	if rmErr := s.removeFolder(id); rmErr != nil {
+		log.Printf("sessions/%s.files: %v: the folder is left behind", id, rmErr)
+		return &fileError{kind: ErrLeftBehind, msg: fmt.Sprintf(
+			"Session %s is deleted, but its saved output in %s could not be removed: check the permissions on that folder, then delete the session again",
+			id, s.filesDir(id))}
+	}
+	s.settle(id, true)
 	s.mu.Lock()
 	delete(s.index, id)
 	delete(s.locks, id)
 	s.mu.Unlock()
-	if err != nil {
-		return ErrNotFound
-	}
 	return nil
 }
+
+// Exists reports whether the session's file is still there: indexed, and not
+// deleted with its output left to remove.
+func (s *Sessions) Exists(id string) bool {
+	return s.Has(id) && !s.Pending(id)
+}
+
+// ValidID reports whether id has the shape NewID gives a session.
+func ValidID(id string) bool { return namePattern.MatchString(id + ".json") }
 
 func (s *Sessions) Has(id string) bool {
 	s.mu.RLock()
