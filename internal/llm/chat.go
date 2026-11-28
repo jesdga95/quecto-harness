@@ -3,11 +3,14 @@ package llm
 import (
 	"encoding/base64"
 	"encoding/json"
+	"slices"
 )
 
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content,omitempty"`
+	// Update marks user text that continues the request a tool batch is answering.
+	Update bool `json:"-"`
 	// Parts carry a message the endpoint takes as an array rather than a
 	// string, which is how an image travels. They replace Content when set.
 	Parts []Part `json:"-"`
@@ -182,6 +185,25 @@ type Timings struct {
 	PredictedN         int
 	PredictedPerSecond float64
 	CacheN             int
+}
+
+// chatMessages keeps a mid-turn update at the end of the batch for chat
+// templates that treat a new user message as a new request.
+func chatMessages(messages []Message) []Message {
+	out := make([]Message, 0, len(messages))
+	for _, m := range messages {
+		if m.Update && len(out) > 0 && out[len(out)-1].Role == "tool" {
+			result := &out[len(out)-1]
+			if len(result.Parts) == 0 {
+				result.Content += "\n\n" + m.Content
+			} else {
+				result.Parts = append(slices.Clip(result.Parts), TextPart("\n\n"+m.Content))
+			}
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // baseBody is the request every server takes: the fields the OpenAI chat API

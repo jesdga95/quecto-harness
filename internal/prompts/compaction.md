@@ -4,7 +4,7 @@ Summary of earlier work:
 
 {{.Summary}}
 
-{{if .LastUser}}The last message the user sent before the compaction:
+{{if .LastUser}}The most recent request and its updates:
 
 {{.LastUser}}
 

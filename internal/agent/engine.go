@@ -491,59 +491,60 @@ func (e *Engine) deliver(s *Session, text string, attachments []store.Attachment
 // written; the sender is put in front of it where the prompt is built, since
 // that is the only place it means anything.
 func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments []store.Attachment) (Sent, error) {
+	message := Steer{Text: text, From: from, Attachments: attachments}
 	s.mu.Lock()
-	if s.state != StateIdle {
-		if err := s.queue(from, text, attachments); err != nil {
-			s.mu.Unlock()
-			return Sent{}, err
-		}
+	if s.state == StateIdle {
+		return e.startWithQueue(s, &message), nil
+	}
+	if err := s.queue(message); err != nil {
 		s.mu.Unlock()
-		held := s.Steer()
-		e.publish(s.ID, ev("queued", steerFields(held)))
-		return Sent{Queued: true, Steer: held}, nil
+		return Sent{}, err
+	}
+	held := s.steerPreview()
+	s.mu.Unlock()
+	e.publish(s.ID, ev("queued", steerFields(held)))
+	return Sent{Queued: true, Steer: held}, nil
+}
+
+// startWithQueue starts one turn with the waiting messages followed by any
+// new input. The caller holds the lock, which this function releases.
+func (e *Engine) startWithQueue(s *Session, message *Steer) Sent {
+	entries := s.takeSteer(false)
+	queued := len(entries)
+	if message != nil {
+		entries = append(entries, s.appendEntry(message.entry(s.Mode)))
 	}
 	s.state = StatePreflight
 	ctx, cancel := context.WithCancel(e.ctx)
 	s.cancel = cancel
-	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text,
-		From: from.Name, FromSession: from.Session,
-		Attachments: attachments, InContext: true, Visible: true,
-		Meta: map[string]any{"mode": string(s.Mode)}})
 	if s.Title == "" {
-		s.Title = store.Title(text)
+		s.Title = store.Title(entries[0].Content)
 	}
 	s.mu.Unlock()
 
 	e.save(s)
-	// A message from another agent was typed into no composer, so nothing has
-	// drawn it and the turn it starts would answer a message the page cannot
-	// see. One from a person is already on the page it was typed into.
-	if from.Name != "" {
-		e.publishMessage(s, entry)
+	for i, entry := range entries {
+		if i < queued || entry.From != "" {
+			e.publishMessage(s, entry)
+		}
 	}
 	e.announce(s, StatePreflight)
 	e.startTurn(ctx, s, cancel)
-	return Sent{Seq: entry.Seq}, nil
+	return Sent{Seq: entries[len(entries)-1].Seq}
 }
 
-// absorbSteer appends the queued message, so the turn carries on with it in
-// the history. It reports whether there was one.
+// absorbSteer delivers all pending messages at the same step boundary.
 func (e *Engine) absorbSteer(s *Session) bool {
 	s.mu.Lock()
-	held := s.steer
-	if held == nil {
-		s.mu.Unlock()
+	entries := s.takeSteer(true)
+	s.mu.Unlock()
+	if len(entries) == 0 {
 		return false
 	}
-	s.steer = nil
-	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: held.Text,
-		From: held.From.Name, FromSession: held.From.Session,
-		Attachments: held.Attachments, InContext: true, Visible: true,
-		Meta: map[string]any{"mode": string(s.Mode), "steer": true}})
-	s.mu.Unlock()
-
 	e.save(s)
-	e.publishMessage(s, entry)
+	for _, entry := range entries {
+		e.publishMessage(s, entry)
+	}
 	return true
 }
 
@@ -559,21 +560,11 @@ func (e *Engine) publishMessage(s *Session, entry store.Entry) {
 // one behind, and the message was typed to be delivered.
 func (e *Engine) flushSteer(s *Session) {
 	s.mu.Lock()
-	held := s.steer
-	s.steer = nil
-	s.mu.Unlock()
-	if held == nil {
+	if s.state != StateIdle || len(s.steer) == 0 {
+		s.mu.Unlock()
 		return
 	}
-	sent, err := e.deliverFrom(s, held.From, held.Text, held.Attachments)
-	if err != nil {
-		e.publish(s.ID, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
-		return
-	}
-	if !sent.Queued {
-		e.publishMessage(s, store.Entry{Seq: sent.Seq, Content: held.Text, From: held.From.Name,
-			Attachments: held.Attachments})
-	}
+	e.startWithQueue(s, nil)
 }
 
 // steerFields renders a queued message for the browser.
@@ -2419,7 +2410,8 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	// kept as they stood, so the message does not change under the cache.
 	mode := s.modeAt(tailSeq, kept)
 	meta["mode"] = string(mode)
-	if carry := s.carryFor(mode, b, tailSeq, kept); carry != "" {
+	carry := s.carryFor(mode, b, tailSeq, kept)
+	if carry != "" {
 		meta["carry"] = carry
 	}
 	// The plan is kept as it stood rather than read live, so the message
@@ -2427,15 +2419,8 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	if s.carriesTodos() {
 		meta["todos"] = renderTodos(s.Todos)
 	}
-	// The last message the user sent is carried in the summary unless it is
-	// one of the messages kept.
-	for i := len(s.Entries) - 1; i >= 0; i-- {
-		if s.Entries[i].Kind == "user" {
-			if !kept || s.Entries[i].Seq < tailSeq {
-				meta["last_user"] = s.Entries[i].Content
-			}
-			break
-		}
+	if request := recentRequest(s.Entries, tailSeq, kept, mode == config.WorkExecute && carry != ""); request != "" {
+		meta["last_user"] = request
 	}
 	s.appendEntry(store.Entry{Kind: "compaction", Role: "user",
 		Content: summary, InContext: true, Visible: true, Meta: meta, Usage: rec})
@@ -2446,6 +2431,24 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 	e.save(s)
 	e.publish(s.ID, ev("compacted", map[string]any{"before": before, "after": after, "summary": summary}))
 	return nil
+}
+
+// recentRequest carries the latest request and updates outside the retained
+// tail. A plan carried in full already supplies its kickoff.
+func recentRequest(entries []store.Entry, tailSeq int, kept, planCarried bool) string {
+	var messages []string
+	for _, e := range entries[turnStart(entries):] {
+		if kept && e.Seq >= tailSeq {
+			break
+		}
+		if planCarried && e.Meta["kickoff"] == true {
+			continue
+		}
+		if e.Kind == "user" && e.Meta["continue"] != true {
+			messages = append(messages, messageText(e))
+		}
+	}
+	return strings.Join(messages, "\n\n")
 }
 
 // answerTarget is the request an answer-now names and the server it went to.

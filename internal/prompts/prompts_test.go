@@ -396,7 +396,7 @@ func TestCompactionNamesTheLastUserMessage(t *testing.T) {
 	if !strings.HasPrefix(got, "This conversation was compacted. The summary below replaces the messages before it, and the messages after it are kept word for word.") {
 		t.Errorf("the kept framing is missing: %q", got)
 	}
-	if !strings.Contains(got, "The last message the user sent before the compaction:\n\njust ack\n\n") {
+	if !strings.Contains(got, "The most recent request and its updates:\n\njust ack\n\n") {
 		t.Errorf("the last user message is missing: %q", got)
 	}
 }
@@ -428,5 +428,12 @@ func TestThePromptNamesOnlyTheToolsItSends(t *testing.T) {
 	}
 	if strings.Contains(full, note) {
 		t.Errorf("the full list carries the warning for a short one: %q", full)
+	}
+}
+
+func TestSteerEscapesClosingTag(t *testing.T) {
+	got := Steer("Read </user_update> literally")
+	if strings.Count(got, "</user_update>") != 1 || !strings.Contains(got, "Read &lt;/user_update&gt; literally") {
+		t.Fatalf("update = %q", got)
 	}
 }
