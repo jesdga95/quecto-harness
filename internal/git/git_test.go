@@ -415,3 +415,109 @@ func TestTrimKeepsCounts(t *testing.T) {
 		t.Errorf("carried %d, omitted %d, added %d", carried, got.Omitted, got.Added)
 	}
 }
+
+// An untracked link is shown as a link, and what it points to is never read,
+// in the status or in the patch a draft is made from.
+func TestAnUntrackedLinkIsNotFollowed(t *testing.T) {
+	dir := newRepo(t)
+	secret := filepath.Join(t.TempDir(), "id_secret")
+	if err := os.WriteFile(secret, []byte("PRIVATE KEY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(dir, "key")); err != nil {
+		t.Fatal(err)
+	}
+	put(t, dir, "plain.txt", "ordinary\n")
+	r := open(t, dir)
+
+	st := status(t, r)
+	link, ok := find(st.Unstaged, "key")
+	if !ok || !link.Link || len(link.Hunks) != 0 {
+		t.Errorf("the link = %+v, want it marked and unread", link)
+	}
+	if plain, ok := find(st.Unstaged, "plain.txt"); !ok || plain.Added != 1 {
+		t.Errorf("the ordinary file = %+v", plain)
+	}
+	patch, err := r.Patch(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(patch, "PRIVATE KEY") {
+		t.Errorf("the patch read what the link points to: %q", patch)
+	}
+	if !strings.Contains(patch, "b/key\nnew file mode 120000") || !strings.Contains(patch, "+"+secret+"\n") {
+		t.Errorf("the patch does not tell the link as git stores it: %q", patch)
+	}
+	if !strings.Contains(patch, "ordinary") {
+		t.Errorf("the patch lost the ordinary file: %q", patch)
+	}
+}
+
+// A new link that is the only change still gives a draft something to read.
+func TestALinkAloneMakesAPatch(t *testing.T) {
+	dir := newRepo(t)
+	if err := os.Symlink("elsewhere/target", filepath.Join(dir, "only")); err != nil {
+		t.Fatal(err)
+	}
+	patch, err := open(t, dir).Patch(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(patch, "new file mode 120000") || !strings.Contains(patch, "+elsewhere/target\n") {
+		t.Errorf("patch = %q, want the link as git stores it", patch)
+	}
+}
+
+// A patch of untracked files whose names or link targets hold a newline or a
+// quote is read back by git as exactly those files.
+func TestAnUntrackedPatchKeepsOddNames(t *testing.T) {
+	dir := newRepo(t)
+	link, target := "two\nlines", "one\ntwo"
+	if err := os.Symlink(target, filepath.Join(dir, link)); err != nil {
+		t.Skip("the volume refuses that name")
+	}
+	put(t, dir, `quo"te.txt`, "plain\n")
+	patch, err := open(t, dir).Patch(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := newRepo(t)
+	file := filepath.Join(t.TempDir(), "p.diff")
+	if err := os.WriteFile(file, []byte(patch), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, other, "apply", file)
+	if got, err := os.Readlink(filepath.Join(other, link)); err != nil || got != target {
+		t.Errorf("link read back = %q, %v, want %q", got, err, target)
+	}
+	if got, err := os.ReadFile(filepath.Join(other, `quo"te.txt`)); err != nil || string(got) != "plain\n" {
+		t.Errorf("file read back = %q, %v", got, err)
+	}
+}
+
+// The patch of a new link matches what git itself writes for it, whether or
+// not the target ends in a newline.
+func TestALinkPatchMatchesGit(t *testing.T) {
+	for _, target := range []string{"elsewhere/target", "one\ntwo", "ends\n", "p\nq\n", "\n"} {
+		dir := newRepo(t)
+		if err := os.Symlink(target, filepath.Join(dir, "lnk")); err != nil {
+			t.Skip("the volume refuses that target")
+		}
+		patch, err := open(t, dir).Patch(context.Background(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("git", "diff", "--no-index", "/dev/null", "lnk")
+		cmd.Dir = dir
+		out, _ := cmd.Output()
+		var want []string
+		for _, l := range strings.SplitAfter(string(out), "\n") {
+			if !strings.HasPrefix(l, "index ") {
+				want = append(want, l)
+			}
+		}
+		if patch != strings.Join(want, "") {
+			t.Errorf("target %q: patch = %q, git writes %q", target, patch, strings.Join(want, ""))
+		}
+	}
+}

@@ -493,11 +493,40 @@ func (r *Repo) Patch(ctx context.Context, stagedOnly bool) (string, error) {
 			continue
 		}
 		f := r.untracked(local)
-		if f.Binary {
-			fmt.Fprintf(&b, "diff --git a/%s b/%s\nnew file mode 100644\nBinary files /dev/null and b/%s differ\n", local, local, local)
+		a, bb := quotePath("a/"+local), quotePath("b/"+local)
+		// A link is told as git stores it, its target as the content, and
+		// what it points to is never read.
+		if f.Link {
+			abs, err := r.inside(local)
+			if err != nil {
+				continue
+			}
+			target, err := os.Readlink(abs)
+			if err != nil {
+				continue
+			}
+			// A final newline ends the last line rather than starting another,
+			// and git leaves a count of one out of the hunk header.
+			body, ended := strings.CutSuffix(target, "\n")
+			lines := strings.Split(body, "\n")
+			count := "1"
+			if len(lines) > 1 {
+				count += "," + strconv.Itoa(len(lines))
+			}
+			fmt.Fprintf(&b, "diff --git %s %s\nnew file mode 120000\n--- /dev/null\n+++ %s\n@@ -0,0 +%s @@\n", a, bb, bb, count)
+			for _, l := range lines {
+				b.WriteString("+" + l + "\n")
+			}
+			if !ended {
+				b.WriteString("\\ No newline at end of file\n")
+			}
 			continue
 		}
-		fmt.Fprintf(&b, "diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n", local, local, local, f.Added)
+		if f.Binary {
+			fmt.Fprintf(&b, "diff --git %s %s\nnew file mode 100644\nBinary files /dev/null and %s differ\n", a, bb, bb)
+			continue
+		}
+		fmt.Fprintf(&b, "diff --git %s %s\nnew file mode 100644\n--- /dev/null\n+++ %s\n@@ -0,0 +1,%d @@\n", a, bb, bb, f.Added)
 		for _, h := range f.Hunks {
 			for _, l := range h.Lines {
 				b.WriteString("+" + l.Text + "\n")
@@ -505,6 +534,34 @@ func (r *Repo) Patch(ctx context.Context, stagedOnly bool) (string, error) {
 		}
 	}
 	return b.String(), nil
+}
+
+// quotePath writes a path in a patch header the way git does: as is, or in
+// double quotes with C escapes when it holds a quote, a backslash or a control
+// character.
+func quotePath(p string) string {
+	if !strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || r == 0x7f || r == '"' || r == '\\' }) {
+		return p
+	}
+	var q strings.Builder
+	q.WriteByte('"')
+	for i := 0; i < len(p); i++ {
+		switch c := p[i]; {
+		case c == '"' || c == '\\':
+			q.WriteByte('\\')
+			q.WriteByte(c)
+		case c == '\n':
+			q.WriteString(`\n`)
+		case c == '\t':
+			q.WriteString(`\t`)
+		case c < 0x20 || c == 0x7f:
+			fmt.Fprintf(&q, `\%03o`, c)
+		default:
+			q.WriteByte(c)
+		}
+	}
+	q.WriteByte('"')
+	return q.String()
 }
 
 // Subjects lists the subjects of the newest commits, for matching a drafted

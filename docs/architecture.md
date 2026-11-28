@@ -375,6 +375,8 @@ shows the card in its answered state.
 One method-and-pattern `ServeMux`, wrapped by `recoverPanic → logRequest → checkOrigin →
 auth`. A panic becomes a 500 with a stack in the log; it never takes the process down.
 
+- An untracked link is shown as a link and what it points to is never read. The patch
+  for a draft records its target as Git stores it.
 - **Auth.** The binary prints and opens a `?token=` URL; a match sets an `HttpOnly`
   `SameSite` cookie for 30 days and 303s to `/`, so the token leaves the address bar. Every
   `/api/*` request needs the cookie or a Bearer token; a 401 is a full-page state.
