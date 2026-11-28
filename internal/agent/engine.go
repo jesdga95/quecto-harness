@@ -2415,8 +2415,9 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 		meta["tail"] = tailSeq
 	}
 	// The summarised messages may hold what the work still needs: the rules
-	// of the mode they were sent in, or the plan being carried out. Both are
-	// kept as they stood, so the message does not change under the cache.
+	// of the mode they were sent in, or the plan being carried out. A request
+	// renders the rules again from the mode; the plan is kept as it was
+	// approved.
 	mode := s.modeAt(tailSeq, kept)
 	meta["mode"] = string(mode)
 	if carry := s.carryFor(mode, b, tailSeq, kept); carry != "" {

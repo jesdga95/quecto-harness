@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/jesdga95/quecto-harness/internal/config"
 	"github.com/jesdga95/quecto-harness/internal/prompts"
+	"github.com/jesdga95/quecto-harness/internal/search"
 	"github.com/jesdga95/quecto-harness/internal/store"
 	"github.com/jesdga95/quecto-harness/internal/tools"
 )
@@ -371,6 +373,83 @@ func TestCompactionCarriesTheModeAndThePlan(t *testing.T) {
 	}
 }
 
+// compactedInPlan is a session whose history was summarised in plan mode, with
+// rules stored as an older record held them.
+func compactedInPlan(meta map[string]any) *Session {
+	s := newSession("sess_resume", "/p", "a", "m", config.ToolsetFull)
+	s.appendEntry(store.Entry{Kind: "user", Content: "plan it", Meta: map[string]any{"mode": "plan"}})
+	s.Entries[0].InContext = false
+	s.appendEntry(store.Entry{Kind: "compaction", Role: "user", Content: "Read the code.",
+		InContext: true, Meta: meta})
+	return s
+}
+
+// A summary made in plan mode is sent with the rules the request renders now,
+// so a tool switched off since is no longer named. One that names no mode
+// keeps the rules it stored.
+func TestCompactedPlanRulesFollowTheTurn(t *testing.T) {
+	stale := "STORED RULES"
+	with := brief{offer: tools.Offer{Mode: config.WorkPlan, Ask: true, Search: true}}
+	without := brief{offer: tools.Offer{Mode: config.WorkPlan, Ask: true}}
+
+	s := compactedInPlan(map[string]any{"mode": "plan", "carry": stale})
+	summaryOf := func(b brief) string {
+		return s.contextMessages(config.Agent{}, "darwin", "", b, nil)[1].Content
+	}
+	on, off := summaryOf(with), summaryOf(without)
+	if strings.Contains(on, stale) || strings.Contains(off, stale) {
+		t.Errorf("stored rules were sent:\n%s", on)
+	}
+	if !strings.Contains(on, "now in plan mode") || !strings.Contains(on, "web_search") {
+		t.Errorf("rules with search on lack web_search:\n%s", on)
+	}
+	if strings.Contains(off, "web_search") {
+		t.Errorf("rules with search off still name web_search:\n%s", off)
+	}
+	if again := summaryOf(with); again != on {
+		t.Error("the same turn rendered different rules, which moves the cached prefix")
+	}
+
+	old := compactedInPlan(map[string]any{"carry": stale})
+	if got := old.contextMessages(config.Agent{}, "darwin", "", with, nil)[1].Content; !strings.Contains(got, stale) {
+		t.Errorf("a record with no mode lost the rules it stored:\n%s", got)
+	}
+}
+
+// Approving a plan after a compaction in plan mode leaves every message before
+// the approval as it was sent, and the plan is in the request once.
+func TestApprovalAfterCompactionKeepsThePrefix(t *testing.T) {
+	b := brief{offer: tools.Offer{Mode: config.WorkPlan, Ask: true, Search: true}}
+	s := compactedInPlan(map[string]any{"mode": "plan"})
+	s.appendEntry(store.Entry{Kind: "user", Content: "and the tests", InContext: true,
+		Meta: map[string]any{"mode": "plan"}})
+	before := s.contextMessages(config.Agent{}, "darwin", "", b, nil)
+
+	plan := store.Plan{Title: "Cache the list", Steps: []string{"Add it"}}
+	s.Plan = &plan
+	s.Mode = config.WorkExecute
+	s.appendEntry(store.Entry{Kind: "user", Content: prompts.PlanApproved(plan.Title, renderPlan(plan)), InContext: true,
+		Meta: map[string]any{"mode": "execute", "kickoff": true}})
+	b.offer.Mode = config.WorkExecute
+	after := s.contextMessages(config.Agent{}, "darwin", "", b, nil)
+
+	if len(after) != len(before)+1 {
+		t.Fatalf("approval sent %d messages, want %d", len(after), len(before)+1)
+	}
+	for i := range before {
+		if !reflect.DeepEqual(before[i], after[i]) {
+			t.Errorf("message %d changed on approval:\nbefore %v\nafter  %v", i, before[i].Content, after[i].Content)
+		}
+	}
+	n := 0
+	for _, m := range after {
+		n += strings.Count(m.Content, renderPlan(plan))
+	}
+	if n != 1 {
+		t.Errorf("the plan is in the request %d times, want once", n)
+	}
+}
+
 // A session's effort reaches the request in place of the agent's, leaves the
 // agent's own setting alone, and goes when the session moves to another agent.
 func TestSessionEffortReplacesTheAgents(t *testing.T) {
@@ -400,5 +479,64 @@ func TestSessionEffortReplacesTheAgents(t *testing.T) {
 	s.mu.Unlock()
 	if kept != config.EffortLow || gone != "" {
 		t.Errorf("effort after a model change = %q, after an agent change = %q", kept, gone)
+	}
+}
+
+// Through the engine: a compaction made in plan mode stores its mode and the
+// rules as rendered then. With web search switched off after it, the next
+// requests send the rules rendered for them, the same text each time.
+func TestPlanCompactionSendsRulesRenderedOnTheRequest(t *testing.T) {
+	h := newHarness(t, "stream_plain.txt", "stream_summary.txt", "stream_plain.txt", "stream_plain.txt")
+	setSearch := func(paused bool) {
+		t.Helper()
+		if _, err := h.cfg.Update(func(c *config.Config) {
+			c.Search = config.Search{Provider: config.SearchProvider(search.NameExa), Paused: paused,
+				Accounts: []config.SearchAccount{{Name: config.SearchProvider(search.NameExa), Key: "test"}}}
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setSearch(false)
+	s := h.session(t)
+	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
+		t.Fatal(err)
+	}
+	h.engine.Send(s.ID, earlierWork, nil)
+	waitIdle(t, s)
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+	doc, _, _, _ := s.Snapshot()
+	for _, e := range doc.Entries {
+		if e.Kind == "compaction" {
+			if carry, _ := e.Meta["carry"].(string); e.Meta["mode"] != "plan" || !strings.Contains(carry, "web_search") {
+				t.Errorf("compaction meta = %v, want mode plan and the rules stored with web_search", e.Meta)
+			}
+		}
+	}
+	setSearch(true)
+
+	summaryIn := func(req int) string {
+		t.Helper()
+		msgs, _ := h.replay.Body(req)["messages"].([]any)
+		for _, m := range msgs {
+			if c, _ := m.(map[string]any)["content"].(string); strings.Contains(c, "Summary of earlier work:") {
+				return c
+			}
+		}
+		t.Fatalf("request %d has no summary", req)
+		return ""
+	}
+	h.engine.Send(s.ID, "and the tests", nil)
+	waitIdle(t, s)
+	h.engine.Send(s.ID, "and the docs", nil)
+	waitIdle(t, s)
+	first, second := summaryIn(2), summaryIn(3)
+	if !strings.Contains(first, "now in plan mode") || strings.Contains(first, "web_search") {
+		t.Errorf("the summary does not carry the rules rendered for this request:\n%s", first)
+	}
+	if first != second {
+		t.Error("the summary changed between two requests of the same turn setup")
 	}
 }

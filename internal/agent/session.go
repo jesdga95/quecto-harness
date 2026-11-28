@@ -677,6 +677,12 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 		last, _ := e.Meta["last_user"].(string)
 		_, kept := e.Meta["tail"]
 		mode = entryMode(e)
+		// Plan mode's rules are rendered for this request, as they are for a
+		// message sent in plan mode, so they name the tools the turn has. A
+		// record that names no mode keeps the rules it stored.
+		if _, named := e.Meta["mode"]; named && mode == config.WorkPlan {
+			carry = modeRules(config.WorkPlan, b)
+		}
 		msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(prompts.CompactionVars{
 			Summary: e.Content, Todos: todos, Carry: carry, LastUser: last, Kept: kept})})
 	}
@@ -729,12 +735,12 @@ func (s *Session) modeAt(tailSeq int, kept bool) config.WorkMode {
 	return mode
 }
 
-// carryFor is what a compaction carries past the messages it summarises:
-// plan mode's rules while in it, or the approved plan when the message that
-// approved it is not among the ones kept. The caller holds the lock.
+// carryFor is what a compaction carries: plan mode's rules, which a request
+// renders again and an older build reads as stored, or the approved plan when
+// its approval is not among the messages kept. The caller holds the lock.
 func (s *Session) carryFor(mode config.WorkMode, b brief, tailSeq int, kept bool) string {
 	if mode == config.WorkPlan {
-		return prompts.ModePlan(b.offer.Ask, b.offer.Search)
+		return modeRules(config.WorkPlan, b)
 	}
 	if s.Plan == nil {
 		return ""
