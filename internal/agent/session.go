@@ -735,11 +735,9 @@ func (s *Session) modeAt(tailSeq int, kept bool) config.WorkMode {
 	return mode
 }
 
-// carryFor is what a compaction carries past the messages it summarises:
-// plan mode's rules while in it, or the approved plan when the message that
-// approved it is not among the ones kept. The rules are stored for a reader
-// that does not render them; a request renders them again. The caller holds
-// the lock.
+// carryFor is what a compaction carries: plan mode's rules, which a request
+// renders again and an older build reads as stored, or the approved plan when
+// its approval is not among the messages kept. The caller holds the lock.
 func (s *Session) carryFor(mode config.WorkMode, b brief, tailSeq int, kept bool) string {
 	if mode == config.WorkPlan {
 		return modeRules(config.WorkPlan, b)

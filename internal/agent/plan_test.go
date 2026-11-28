@@ -12,6 +12,7 @@ import (
 
 	"github.com/jesdga95/quecto-harness/internal/config"
 	"github.com/jesdga95/quecto-harness/internal/prompts"
+	"github.com/jesdga95/quecto-harness/internal/search"
 	"github.com/jesdga95/quecto-harness/internal/store"
 	"github.com/jesdga95/quecto-harness/internal/tools"
 )
@@ -482,10 +483,20 @@ func TestSessionEffortReplacesTheAgents(t *testing.T) {
 }
 
 // Through the engine: a compaction made in plan mode stores its mode and the
-// rules as rendered then, and the next requests send the rules with the
-// summary, the same text each time.
+// rules as rendered then. With web search switched off after it, the next
+// requests send the rules rendered for them, the same text each time.
 func TestPlanCompactionSendsRulesRenderedOnTheRequest(t *testing.T) {
 	h := newHarness(t, "stream_plain.txt", "stream_summary.txt", "stream_plain.txt", "stream_plain.txt")
+	setSearch := func(paused bool) {
+		t.Helper()
+		if _, err := h.cfg.Update(func(c *config.Config) {
+			c.Search = config.Search{Provider: config.SearchProvider(search.NameExa), Paused: paused,
+				Accounts: []config.SearchAccount{{Name: config.SearchProvider(search.NameExa), Key: "test"}}}
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setSearch(false)
 	s := h.session(t)
 	if err := h.engine.SetMode(s.ID, config.WorkPlan); err != nil {
 		t.Fatal(err)
@@ -499,11 +510,12 @@ func TestPlanCompactionSendsRulesRenderedOnTheRequest(t *testing.T) {
 	doc, _, _, _ := s.Snapshot()
 	for _, e := range doc.Entries {
 		if e.Kind == "compaction" {
-			if carry, _ := e.Meta["carry"].(string); e.Meta["mode"] != "plan" || !strings.Contains(carry, "now in plan mode") {
-				t.Errorf("compaction meta = %v, want mode plan and the rules stored", e.Meta)
+			if carry, _ := e.Meta["carry"].(string); e.Meta["mode"] != "plan" || !strings.Contains(carry, "web_search") {
+				t.Errorf("compaction meta = %v, want mode plan and the rules stored with web_search", e.Meta)
 			}
 		}
 	}
+	setSearch(true)
 
 	summaryIn := func(req int) string {
 		t.Helper()
@@ -521,8 +533,8 @@ func TestPlanCompactionSendsRulesRenderedOnTheRequest(t *testing.T) {
 	h.engine.Send(s.ID, "and the docs", nil)
 	waitIdle(t, s)
 	first, second := summaryIn(2), summaryIn(3)
-	if !strings.Contains(first, "now in plan mode") {
-		t.Errorf("the summary went without plan mode's rules:\n%s", first)
+	if !strings.Contains(first, "now in plan mode") || strings.Contains(first, "web_search") {
+		t.Errorf("the summary does not carry the rules rendered for this request:\n%s", first)
 	}
 	if first != second {
 		t.Error("the summary changed between two requests of the same turn setup")
