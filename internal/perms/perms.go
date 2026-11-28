@@ -109,11 +109,12 @@ func New(cfg *config.Store, emit func(string, Request)) *Broker {
 	}
 }
 
-// Evaluate applies the static policy. It never blocks and never asks. ModeFull
-// is answered before the tool name is read, so nothing about the call changes
-// the answer. outside says the call's path lands outside the project, which
-// every other mode asks about for the file tools.
+// Evaluate applies the static policy. Outside reports whether the call's path
+// lands outside the project. Saving a personal note requires a decision in every mode.
 func (b *Broker) Evaluate(project, tool, command, path string, outside bool, mode config.Mode) Action {
+	if tool == "remember" {
+		return ActionPrompt
+	}
 	if mode == config.ModeFull {
 		return ActionAllow
 	}

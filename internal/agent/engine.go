@@ -502,10 +502,15 @@ func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments [
 		e.publish(s.ID, ev("queued", steerFields(held)))
 		return Sent{Queued: true, Steer: held}, nil
 	}
+	var memory *string
+	var warning string
+	if s.Parent == "" && s.lastUserEntry() < 0 {
+		memory, warning = e.readSessionMemory()
+	}
 	s.state = StatePreflight
 	ctx, cancel := context.WithCancel(e.ctx)
 	s.cancel = cancel
-	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text,
+	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text, Memory: memory,
 		From: from.Name, FromSession: from.Session,
 		Attachments: attachments, InContext: true, Visible: true,
 		Meta: map[string]any{"mode": string(s.Mode)}})
@@ -515,6 +520,9 @@ func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments [
 	s.mu.Unlock()
 
 	e.save(s)
+	if warning != "" {
+		e.showNote(s, &s.memoryNote, warning)
+	}
 	// A message from another agent was typed into no composer, so nothing has
 	// drawn it and the turn it starts would answer a message the page cannot
 	// see. One from a person is already on the page it was typed into.
@@ -634,7 +642,7 @@ func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 	// message in the discarded range is the one whose files carry over.
 	s.rewindTo(i)
 	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: content,
-		Attachments: previous.Attachments, Edited: edited, InContext: true, Visible: true})
+		Memory: previous.Memory, Attachments: previous.Attachments, Edited: edited, InContext: true, Visible: true})
 	// A session takes its name from its opening message, so a rewritten one
 	// renames it unless the name was typed.
 	if s.firstTurn() {
@@ -2068,6 +2076,12 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 			res, err = e.runBash(ctx, s, runner, call)
 		case "processes":
 			res, err = e.listProcesses(s)
+		case "remember":
+			var note rememberArgs
+			if err = tools.DecodeArgs("remember", args, &note); err == nil {
+				err = e.cfg.Remember(note.Text)
+				res.Output = "Saved for new conversations and the next compaction."
+			}
 		case "todo_write":
 			res, err = e.writeTodos(s, args)
 		case "ask_user_question":
@@ -2085,7 +2099,7 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 				res, err = runner.CallMCP(ctx, call.Function.Name, args)
 				break
 			}
-			err = fmt.Errorf("no tool named %s: use read, read_image, grep, web_search, write, edit, bash, processes, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read, read_image, grep, web_search, write, edit, bash, processes, remember, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
 		}
 		if err != nil {
 			// The flag is what lets the row say the call failed, since only
@@ -2326,6 +2340,10 @@ func (e *Engine) refuseImages(s *Session, err error) bool {
 	return true
 }
 
+type rememberArgs struct {
+	Text string `json:"text"`
+}
+
 // permissionRecord reads the fields the policy uses with the tool's own argument type.
 func permissionRecord(call llm.ToolCall) (*store.PermissionRecord, error) {
 	name := call.Function.Name
@@ -2361,6 +2379,10 @@ func permissionRecord(call llm.ToolCall) (*store.PermissionRecord, error) {
 		var args tools.WebSearchArgs
 		err = tools.DecodeArgs(name, raw, &args)
 		r.Command = args.Query
+	case "remember":
+		var args rememberArgs
+		err = tools.DecodeArgs(name, raw, &args)
+		r.Command = strings.TrimSpace(args.Text)
 	default:
 		if mcp.IsWire(name) {
 			r.Command = string(raw)
@@ -2370,6 +2392,14 @@ func permissionRecord(call llm.ToolCall) (*store.PermissionRecord, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+func (e *Engine) readSessionMemory() (*string, string) {
+	m, err := e.cfg.Memory()
+	if err != nil {
+		return new(string), "Memory could not be loaded. " + err.Error()
+	}
+	return &m.Text, ""
 }
 
 // compact replaces the in-context set with one summary of everything but the
@@ -2426,16 +2456,41 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 		return errors.New("The model returned an empty summary: try again or start a new session")
 	}
 
+	var memory *string
+	var warning string
+	if s.Parent == "" {
+		memory, warning = e.readSessionMemory()
+	}
 	s.mu.Lock()
-	// The kept messages are found again by sequence number, since the turn
-	// may have appended since the request was made.
-	for i := range s.Entries {
-		if s.Entries[i].Seq < tailSeq || !kept {
-			s.Entries[i].InContext = false
+	e.waitSavedLocked(s)
+	if s.gone {
+		s.mu.Unlock()
+		return ErrNotFound
+	}
+	if err := ctx.Err(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	if warning != "" {
+		memory = nil
+		for _, entry := range s.Entries {
+			if entry.InContext && entry.Memory != nil {
+				memory = entry.Memory
+			}
 		}
 	}
-	s.Compactions++
-	meta := map[string]any{"before": before, "n": s.Compactions}
+	// Build the replacement on a copy so a failed write leaves the active context intact.
+	doc := s.doc()
+	next := Session{Entries: doc.Entries, ContextBase: s.ContextBase, turnSeq: s.turnSeq, usageSince: s.usageSince}
+	// The kept messages are found again by sequence number, since the turn
+	// may have appended since the request was made.
+	for i := range next.Entries {
+		if next.Entries[i].Seq < tailSeq || !kept {
+			next.Entries[i].InContext = false
+		}
+	}
+	doc.Compactions++
+	meta := map[string]any{"before": before, "n": doc.Compactions}
 	if kept {
 		meta["tail"] = tailSeq
 	}
@@ -2462,13 +2517,19 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 			break
 		}
 	}
-	s.appendEntry(store.Entry{Kind: "compaction", Role: "user",
+	next.appendEntry(store.Entry{Memory: memory, Kind: "compaction", Role: "user",
 		Content: summary, InContext: true, Visible: true, Meta: meta, Usage: rec})
-	after := s.computeFill()
-	s.Entries[len(s.Entries)-1].Meta["after"] = after
+	after := next.computeFill()
+	meta["after"] = after
+	doc.Entries, doc.Updated = next.Entries, next.Updated
+	if err := e.store.Save(doc); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.Entries, s.Updated, s.turnSeq, s.Compactions = doc.Entries, doc.Updated, next.turnSeq, doc.Compactions
 	s.mu.Unlock()
 
-	e.save(s)
+	e.showNote(s, &s.memoryNote, warning)
 	e.publish(s.ID, ev("compacted", map[string]any{"before": before, "after": after, "summary": summary}))
 	return nil
 }

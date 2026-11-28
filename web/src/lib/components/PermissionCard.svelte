@@ -48,6 +48,7 @@
       const action = `use ${parts.tool} on ${parts.server}`;
       return agent ? `${agent} wants to ${action}` : `Wants to ${action}`;
     }
+    if (tool === "remember") return "Save this note to memory?";
     const action =
       tool === "web_search"
         ? "search the web"

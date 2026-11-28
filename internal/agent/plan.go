@@ -313,6 +313,9 @@ func (e *Engine) unavailable(s *Session, call llm.ToolCall, offer tools.Offer) s
 	if offer.InMode(name) && !offer.InSet(name) {
 		content = fmt.Sprintf("%s is not available: the toolset is %s", name, offer.Set)
 	}
+	if name == "remember" && !offer.Ask {
+		content = "remember is available only in a conversation with the user"
+	}
 	s.mu.Lock()
 	entry := s.appendEntry(store.Entry{Kind: "tool", Role: "tool",
 		ToolCallID: call.ID, ToolName: call.Function.Name, Content: content,

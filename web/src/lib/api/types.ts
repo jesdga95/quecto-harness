@@ -794,7 +794,15 @@ export type SessionFeed = { state?: TurnStatus; running?: number };
     when whole is set, otherwise one session that changed. */
 export type SessionFeedHandler = (feed: Record<string, SessionFeed>, whole: boolean) => void;
 
+export interface Memory {
+  warning?: string;
+  text: string;
+  revision: string;
+}
+
 export interface HarnessApi {
+  getMemory(): Promise<Memory>;
+  replaceMemory(memory: Memory): Promise<Memory>;
   getState(): Promise<State>;
   /** What the active agent's address holds. */
   listModels(refresh?: boolean): Promise<Model[]>;

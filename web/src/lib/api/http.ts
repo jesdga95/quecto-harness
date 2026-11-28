@@ -6,6 +6,7 @@ import type {
   AttachedKind,
   Breakdown,
   Config,
+  Memory,
   Effort,
   Git,
   GitActionBody,
@@ -1732,6 +1733,14 @@ class HttpApi implements HarnessApi {
 
   async answer(questionId: string, answer: Answer): Promise<void> {
     await call(`/questions/${encodeURIComponent(questionId)}`, "POST", answer);
+  }
+
+  getMemory(): Promise<Memory> {
+    return call("/memory");
+  }
+
+  replaceMemory(memory: Memory): Promise<Memory> {
+    return call("/memory", "PUT", memory);
   }
 
   async updateConfig(patch: Partial<Config>): Promise<Config> {

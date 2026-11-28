@@ -5,8 +5,8 @@
   import ShieldCheck from "phosphor-svelte/lib/ShieldCheckIcon";
   import Sliders from "phosphor-svelte/lib/SlidersIcon";
   import Wrench from "phosphor-svelte/lib/WrenchIcon";
-  import { untrack } from "svelte";
-  import type { Config, SearchConfig } from "../api";
+  import { onMount, untrack } from "svelte";
+  import { api, ApiError, type Config, type Memory, type SearchConfig } from "../api";
   import { app, saveConfig, saveSearch } from "../state/app.svelte";
   import { confirm } from "../state/confirm.svelte";
   import SettingsGeneral from "./SettingsGeneral.svelte";
@@ -80,7 +80,54 @@
   // What the harness holds, as the dialog opened. Save compares against this
   // and moves it to the answer once a write has landed.
   let stored = $state<Draft>(seed());
-  const dirty = $derived(JSON.stringify(draft) !== JSON.stringify(stored));
+  let memory = $state<Memory | null>(null);
+  let notes = $state("");
+  let memoryError = $state("");
+  let reload = $state(false);
+  let loadingMemory = $state(false);
+  const memoryDirty = $derived(memory !== null && notes !== memory.text);
+  const canRepairMemory = $derived(memory?.warning && !memoryDirty && !reload &&
+    new Blob([notes, notes && !notes.endsWith("\n") ? "\n" : ""]).size <= 4096);
+  const settingsDirty = $derived(JSON.stringify(draft) !== JSON.stringify(stored));
+  const dirty = $derived(memoryDirty || settingsDirty);
+  const canSave = $derived(settingsDirty || (memoryDirty && !reload && !loadingMemory));
+
+  async function loadMemory() {
+    loadingMemory = true;
+    reload = false;
+    memoryError = "";
+    try {
+      memory = await api.getMemory();
+      notes = memory.text;
+      memoryError = memory.warning ?? "";
+    } catch (err) {
+      memoryError = err instanceof Error ? err.message : "Could not read memory.";
+      reload = true;
+    } finally {
+      loadingMemory = false;
+    }
+  }
+
+  onMount(() => { void loadMemory(); });
+
+  async function saveMemory() {
+    if (!memory) return;
+    const text = notes;
+    try {
+      memory = await api.replaceMemory({ text, revision: memory.revision });
+      if (notes === text) notes = memory.text;
+      memoryError = "";
+    } catch (err) {
+      memoryError = err instanceof Error ? err.message : "Could not save memory.";
+      reload = err instanceof ApiError && err.status === 409;
+      pane = "general";
+    }
+  }
+
+  async function repairMemory() {
+    saving = true;
+    try { await saveMemory(); } finally { saving = false; }
+  }
 
   function editConfig(patch: Partial<Config>) {
     draft = { ...draft, config: { ...draft.config, ...patch } };
@@ -145,7 +192,7 @@
 
   async function save() {
     current?.flush();
-    if (!dirty || saving) return;
+    if (!canSave || saving) return;
     saving = true;
     const changes = configPatch();
     const searchChanged = JSON.stringify(draft.search) !== JSON.stringify(stored.search);
@@ -155,6 +202,7 @@
     const [configSaved, searchSaved] = await Promise.all([
       Object.keys(changes).length > 0 ? saveConfig(changes) : Promise.resolve(true),
       searchChanged ? saveSearch(searchBody) : Promise.resolve(true),
+      memoryDirty && !reload && !loadingMemory ? saveMemory() : undefined,
     ]);
     saving = false;
     // The answer is what the harness now holds, and the dialog takes it as
@@ -219,6 +267,22 @@
     <div class="flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto px-6 pt-4 pb-6">
       {#if pane === "general"}
         <SettingsGeneral bind:this={current} config={draft.config} onchange={editConfig} onmanage={() => manage("agents")} />
+        <div class="field-card">
+          <label class="flex flex-col gap-1.5">
+            <span class="field-head">Memory</span>
+            <textarea class="input min-h-24" bind:value={notes} disabled={!memory || saving || loadingMemory}></textarea>
+            <span class="text-[11.5px] text-muted">Preferences sent to the selected model when a conversation starts or compacts. Up to 4096 bytes.</span>
+          </label>
+          {#if memoryError}<p role="alert" class="text-[12px] text-crit">{memoryError}</p>{/if}
+          {#if canRepairMemory}
+            <button class="btn btn-sm btn-ghost" disabled={saving || loadingMemory} onclick={repairMemory}>Save displayed memory</button>
+          {/if}
+          {#if reload}
+            <button disabled={saving || loadingMemory} class="btn btn-sm btn-ghost" onclick={loadMemory}>
+              {memoryDirty ? "Discard memory edits and reload" : "Reload memory"}
+            </button>
+          {/if}
+        </div>
       {:else if pane === "permissions"}
         <SettingsPermissions bind:this={current} config={draft.config} onchange={editConfig} />
       {:else if pane === "tools"}
@@ -233,7 +297,7 @@
     <footer
       class="flex shrink-0 items-center justify-end gap-2.5 border-t border-hair bg-panel px-6 py-3"
     >
-      <button class="btn btn-primary" disabled={!dirty || saving} onclick={save}>
+      <button class="btn btn-primary" disabled={!canSave || saving} onclick={save}>
         {saving ? "Saving" : "Save"}
       </button>
     </footer>
