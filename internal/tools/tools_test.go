@@ -790,7 +790,7 @@ func TestToolsStayOutOfLinksAndTheStateDir(t *testing.T) {
 	if !strings.Contains(res.Output, "inside.txt") || strings.Contains(res.Output, "outside") || strings.Contains(res.Output, "token") {
 		t.Errorf("grep = %q, want the file inside only", res.Output)
 	}
-	if _, err := r.ReadFile(context.Background(), json.RawMessage(`{"path":".quecto-harness/token"}`)); err == nil || !strings.Contains(err.Error(), "state folder") {
+	if _, err := r.ReadFile(context.Background(), json.RawMessage(`{"path":".quecto-harness/token"}`)); err == nil || !strings.Contains(err.Error(), "state folder, which the file tools do not reach") {
 		t.Errorf("read of the state dir = %v, want it refused", err)
 	}
 	if _, err := r.WriteFile(context.Background(), json.RawMessage(`{"path":".quecto-harness/allowlist.json","content":"{}"}`)); err == nil {

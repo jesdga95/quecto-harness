@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -43,10 +44,19 @@ type Runner struct {
 	// against. Nil runs the tools with no such check.
 	Seen *Seen
 
-	// Hidden is the harness's own state directory, which the file tools refuse
-	// even when the project contains it: it holds the token and the allowlist.
+	// Hidden is the harness's own state directory, which the file tools do not
+	// reach even when the project contains it: it holds the token and the allowlist.
 	// A bash command is not confined by it.
 	Hidden string
+
+	// Folders are folders outside Root the conversation was given. A path in
+	// one is not outside the project.
+	Folders []string
+
+	// Fence is the scratch folders of other conversations, which the path
+	// tools refuse and walks pass over even when the project contains them.
+	// bash is not confined by it.
+	Fence Fence
 
 	// Spill is the folder where a command whose output was cut saves all of
 	// it. read and grep reach it by absolute path; empty saves nothing.
@@ -68,6 +78,87 @@ func (r *Runner) Hide(dir string) {
 	if abs, err := filepath.Abs(dir); err == nil {
 		r.Hidden = realPath(abs)
 	}
+}
+
+// Fence names the folder that holds every conversation's scratch folder, Root,
+// and the ones in it this conversation may reach, Own. The rest are fenced.
+type Fence struct {
+	Root string
+	Own  []string
+}
+
+// FenceOff sets the fence, resolved the way Root is.
+func (r *Runner) FenceOff(f Fence) {
+	r.Fence = Fence{}
+	if f.Root == "" {
+		return
+	}
+	if abs, err := filepath.Abs(f.Root); err == nil {
+		r.Fence.Root = realPath(abs)
+	}
+	for _, o := range f.Own {
+		if abs, err := filepath.Abs(o); err == nil && o != "" {
+			r.Fence.Own = append(r.Fence.Own, filepath.Join(realPath(filepath.Dir(abs)), filepath.Base(abs)))
+		}
+	}
+}
+
+// fenced reports whether p lies in another conversation's scratch folder: in
+// the fence's root, below it, and in none of the folders it allows.
+func (r *Runner) fenced(p string) bool { return r.fencedIn(p, nil) }
+
+// fenceWalk holds, for one walk, whether each folder at the depth of the
+// fence's root is that root, so its entries do not compare identities again.
+type fenceWalk map[string]bool
+
+// fencedIn is fenced, reusing the decisions walk holds when it is not nil.
+func (r *Runner) fencedIn(p string, walk fenceWalk) bool {
+	root := r.Fence.Root
+	if root == "" || p == root {
+		return false
+	}
+	// Only an immediate child of root can own the path. Compare names at
+	// that depth so a volume's spelling rules apply to both directories.
+	sep := string(filepath.Separator)
+	depth := strings.Count(p, sep) - strings.Count(root, sep)
+	if depth < 1 {
+		return false
+	}
+	child := p
+	for i := 1; i < depth; i++ {
+		child = child[:strings.LastIndex(child, sep)]
+	}
+	dir := filepath.Dir(child)
+	isRoot, seen := walk[dir]
+	if !seen {
+		isRoot = sameFenceDir(dir, root)
+		if walk != nil {
+			walk[dir] = isRoot
+		}
+	}
+	if !isRoot {
+		return false
+	}
+	for _, own := range r.Fence.Own {
+		if sameFenceDir(child, own) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameFenceDir reports whether a and b are one directory. A variable so tests
+// can count the comparisons a walk makes.
+var sameFenceDir = func(a, b string) bool {
+	if a == b {
+		return true
+	}
+	left, err := os.Lstat(a)
+	if err != nil || !left.IsDir() {
+		return false
+	}
+	right, err := os.Lstat(b)
+	return err == nil && right.IsDir() && os.SameFile(left, right)
 }
 
 // SpillTo sets the folder cut-off output is saved to. It may not exist yet;

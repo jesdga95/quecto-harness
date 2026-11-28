@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
 // hiddenError is the refusal for the harness's own state directory, whichever
@@ -14,7 +16,7 @@ import (
 type hiddenError struct{ arg string }
 
 func (e hiddenError) Error() string {
-	return "path is in the harness state folder, which no tool reaches: " + e.arg
+	return "path is in the harness state folder, which the file tools do not reach: " + e.arg
 }
 
 // resolve turns a tool path argument into an absolute path, relative ones
@@ -45,6 +47,9 @@ func (r *Runner) resolve(p string) (string, error) {
 	if r.inHidden(resolved) {
 		return "", hiddenError{arg}
 	}
+	if r.fenced(resolved) {
+		return "", fmt.Errorf("path is in another conversation's folder, which the file tools do not reach: %s", arg)
+	}
 	return resolved, nil
 }
 
@@ -55,7 +60,7 @@ func (r *Runner) resolveInside(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !within(r.Root, abs) {
+	if !config.Within(r.Root, abs) {
 		return "", fmt.Errorf("path is outside the project: %s", p)
 	}
 	return abs, nil
@@ -74,12 +79,17 @@ func (r *Runner) Outside(p string) bool {
 	}
 	real := realPath(filepath.Clean(p))
 	switch {
-	case within(r.Root, real):
+	case config.Within(r.Root, real):
 		return false
-	case r.Spill != "" && within(r.Spill, real):
+	case r.Spill != "" && config.Within(r.Spill, real):
 		return false
 	case r.inHidden(real):
 		return false
+	}
+	for _, f := range r.Folders {
+		if config.Within(f, real) {
+			return false
+		}
 	}
 	return true
 }
@@ -88,21 +98,21 @@ func (r *Runner) Outside(p string) bool {
 // folder cut-off output is saved to, by the absolute path the result named.
 func (r *Runner) resolveRead(p string) (string, error) {
 	if r.Spill != "" && filepath.IsAbs(p) && !strings.ContainsRune(p, 0) {
-		if real := realPath(filepath.Clean(p)); within(r.Spill, real) {
+		if real := realPath(filepath.Clean(p)); config.Within(r.Spill, real) {
 			return real, nil
 		}
 	}
 	return r.resolve(p)
 }
 
-// reachable reports whether a folder the walk came to may be entered: not the
-// state directory, or inside the saved output. The walk starts from a resolved
-// path, so a folder below one it entered is checked by itself alone.
-func (r *Runner) reachable(dir string) bool {
-	if r.Spill != "" && within(r.Spill, dir) {
+// reachable reports whether a folder the walk came to may be entered: outside
+// the state directory and other conversations' folders, or inside the saved
+// output. A folder below one the walk entered is checked by itself alone.
+func (r *Runner) reachable(dir string, walk fenceWalk) bool {
+	if r.Spill != "" && config.Within(r.Spill, dir) {
 		return true
 	}
-	return !r.isHidden(dir)
+	return !r.isHidden(dir) && !r.fencedIn(dir, walk)
 }
 
 // inHidden reports whether p, its links already followed, is the state
@@ -112,7 +122,7 @@ func (r *Runner) inHidden(p string) bool {
 	if r.Hidden == "" {
 		return false
 	}
-	if within(r.Hidden, p) {
+	if config.Within(r.Hidden, p) {
 		return true
 	}
 	prefix, _ := splitExisting(p)
@@ -132,7 +142,7 @@ func (r *Runner) isHidden(dir string) bool {
 	if r.Hidden == "" {
 		return false
 	}
-	if within(r.Hidden, dir) {
+	if config.Within(r.Hidden, dir) {
 		return true
 	}
 	// The identity is read on every check, since the folder can be replaced
@@ -153,13 +163,6 @@ func realPath(p string) string {
 		return p
 	}
 	return filepath.Join(real, tail)
-}
-
-// within reports whether p is base or lies under it. Both are clean and
-// absolute.
-func within(base, p string) bool {
-	rel, err := filepath.Rel(base, p)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // splitExisting walks up until a component exists, so a write target under a
@@ -187,7 +190,7 @@ func splitExisting(p string) (prefix, tail string) {
 // rel is the path as the model asked for it, relative to the project root. A
 // path outside the project stays absolute.
 func (r *Runner) rel(abs string) string {
-	if !within(r.Root, abs) {
+	if !config.Within(r.Root, abs) {
 		return abs
 	}
 	if p, err := filepath.Rel(r.Root, abs); err == nil {

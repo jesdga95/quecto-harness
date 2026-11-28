@@ -679,7 +679,7 @@ func (s *Server) getProjectFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	arg := r.URL.Query().Get("path")
-	v, err := tools.ViewFile(sess.Project, s.cfg.Paths().Home, arg, viewLimit)
+	v, err := tools.ViewFile(sess.Project, s.cfg.Paths().Home, arg, viewLimit, tools.Fence{})
 	switch {
 	case errors.Is(err, tools.ErrHidden):
 		writeError(w, http.StatusForbidden, "That path is in the harness state folder")
@@ -742,7 +742,7 @@ func (s *Server) getProjectDir(w http.ResponseWriter, r *http.Request) {
 	if !s.projectOK(w, sess.Project) {
 		return
 	}
-	rel, entries, err := tools.ListDir(sess.Project, s.cfg.Paths().Home, r.URL.Query().Get("path"))
+	rel, entries, err := tools.ListDir(sess.Project, s.cfg.Paths().Home, r.URL.Query().Get("path"), tools.Fence{})
 	switch {
 	case errors.Is(err, tools.ErrHidden):
 		writeError(w, http.StatusForbidden, "That folder is in the harness state folder")
@@ -771,7 +771,7 @@ func (s *Server) getProjectFiles(w http.ResponseWriter, r *http.Request) {
 	if !s.projectOK(w, project) {
 		return
 	}
-	files, err := tools.FindFiles(project, s.cfg.Paths().Home, r.URL.Query().Get("q"), 30)
+	files, err := tools.FindFiles(project, s.cfg.Paths().Home, r.URL.Query().Get("q"), 30, tools.Fence{})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "List the project files: "+err.Error())
 		return

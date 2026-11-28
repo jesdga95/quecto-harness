@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/jesdga95/quecto-harness/internal/config"
 )
 
 const (
@@ -113,6 +115,7 @@ type finder struct {
 }
 
 func (f *finder) walk(ctx context.Context, base string) error {
+	fence := fenceWalk{}
 	return filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -122,7 +125,7 @@ func (f *finder) walk(ctx context.Context, base string) error {
 			return nil
 		}
 		if d.IsDir() {
-			if !f.runner.reachable(p) {
+			if !f.runner.reachable(p, fence) {
 				return fs.SkipDir
 			}
 			if p != base && f.skipping && slices.Contains(skipDirs, d.Name()) {
@@ -138,7 +141,7 @@ func (f *finder) walk(ctx context.Context, base string) error {
 		// folder searched, which is what the call was allowed to read.
 		if d.Type()&fs.ModeSymlink != 0 {
 			abs, err := f.runner.resolve(p)
-			if err != nil || !(within(f.runner.Root, abs) || within(f.base, abs)) {
+			if err != nil || !(config.Within(f.runner.Root, abs) || config.Within(f.base, abs)) {
 				return nil
 			}
 		}

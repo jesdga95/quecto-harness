@@ -79,7 +79,7 @@ func (r *Runner) shown(abs string, typ fs.FileMode) bool {
 	if r.Hidden == "" {
 		return true
 	}
-	if within(r.Hidden, abs) {
+	if config.Within(r.Hidden, abs) {
 		return false
 	}
 	// The names a walk or a listing comes to sit under a resolved folder, so
@@ -97,13 +97,14 @@ func (r *Runner) shown(abs string, typ fs.FileMode) bool {
 }
 
 // ViewFile reads a file under root the way a tool argument is resolved, and
-// nothing outside root or in the state folder hidden. Text past limit is
-// reported as large.
-func ViewFile(root, hidden, p string, limit int64) (View, error) {
+// nothing outside root, in the state folder hidden or behind the fence. Text
+// past limit is reported as large.
+func ViewFile(root, hidden, p string, limit int64, fence Fence) (View, error) {
 	r, err := viewer(root, hidden)
 	if err != nil {
 		return View{}, err
 	}
+	r.FenceOff(fence)
 	abs, err := r.resolveInside(p)
 	if err != nil {
 		return View{}, refusal(err)
@@ -157,12 +158,14 @@ type Entry struct {
 
 // ListDir lists one folder under root, folders first and then files, each by
 // name without regard to case, leaving out what leads into the state folder
-// hidden. rel is the folder relative to root, empty for root itself.
-func ListDir(root, hidden, p string) (rel string, entries []Entry, err error) {
+// hidden or is behind the fence. rel is the folder relative to root, empty for
+// root itself.
+func ListDir(root, hidden, p string, fence Fence) (rel string, entries []Entry, err error) {
 	r, err := viewer(root, hidden)
 	if err != nil {
 		return "", nil, err
 	}
+	r.FenceOff(fence)
 	if strings.TrimSpace(p) == "" {
 		p = "."
 	}
@@ -189,8 +192,9 @@ func ListDir(root, hidden, p string) (rel string, entries []Entry, err error) {
 		return rel, nil, fmt.Errorf("read %s: check the permissions on the folder", rel)
 	}
 	entries = make([]Entry, 0, len(list))
+	walk := fenceWalk{}
 	for _, d := range list {
-		if !r.shown(filepath.Join(abs, d.Name()), d.Type()) {
+		if !r.shown(filepath.Join(abs, d.Name()), d.Type()) || r.fencedIn(filepath.Join(abs, d.Name()), walk) {
 			continue
 		}
 		e := Entry{Name: d.Name(), Dir: d.IsDir()}
@@ -217,13 +221,14 @@ func ListDir(root, hidden, p string) (rel string, entries []Entry, err error) {
 }
 
 // FindFiles lists files under root whose path holds every word of q in any
-// case, a match in the name and a shorter path first. It skips what grep skips
-// and the state folder, and stops after scanLimit files.
-func FindFiles(root, hidden, q string, limit int) ([]string, error) {
+// case, a match in the name and a shorter path first. It skips what grep skips,
+// the state folder and what is behind the fence, and stops after scanLimit files.
+func FindFiles(root, hidden, q string, limit int, fence Fence) ([]string, error) {
 	r, err := viewer(root, hidden)
 	if err != nil {
 		return nil, err
 	}
+	r.FenceOff(fence)
 	const scanLimit = 50000
 	words := strings.Fields(strings.ToLower(q))
 	type hit struct {
@@ -233,9 +238,16 @@ func FindFiles(root, hidden, q string, limit int) ([]string, error) {
 	var hits []hit
 	scanned := 0
 	errStop := errors.New("stop")
+	walk := fenceWalk{}
 	walkErr := filepath.WalkDir(r.Root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if r.fencedIn(p, walk) {
+			if d.IsDir() {
 				return fs.SkipDir
 			}
 			return nil

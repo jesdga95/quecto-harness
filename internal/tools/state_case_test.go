@@ -72,14 +72,14 @@ func TestAnotherCasingDoesNotReachTheState(t *testing.T) {
 		if _, err := r.ReplaceInFile(ctx, e); err == nil {
 			t.Errorf("edit %s was allowed", p)
 		}
-		if _, err := ViewFile(base, state, p, 1<<20); !errors.Is(err, ErrHidden) && !errors.Is(err, ErrOutside) {
+		if _, err := ViewFile(base, state, p, 1<<20, Fence{}); !errors.Is(err, ErrHidden) && !errors.Is(err, ErrOutside) {
 			t.Errorf("ViewFile(%s) = %v, want it refused", p, err)
 		}
 	}
 	if _, err := r.WriteFile(ctx, json.RawMessage(`{"path":".QUECTO-HARNESS/new.json","content":"{}"}`)); err == nil {
 		t.Error("a new file in another casing of the state folder was allowed")
 	}
-	if _, _, err := ListDir(base, state, ".QUECTO-HARNESS"); !errors.Is(err, ErrHidden) {
+	if _, _, err := ListDir(base, state, ".QUECTO-HARNESS", Fence{}); !errors.Is(err, ErrHidden) {
 		t.Errorf("ListDir(.QUECTO-HARNESS) = %v, want it hidden", err)
 	}
 	for _, path := range []string{".QUECTO-HARNESS", ""} {
@@ -113,7 +113,7 @@ func TestARootInAnotherCasingSkipsTheState(t *testing.T) {
 	if err != nil || strings.Contains(res.Output, "token") {
 		t.Errorf("grep = %q, %v, want the state folder skipped", res.Output, err)
 	}
-	_, entries, err := ListDir(upper, state, "")
+	_, entries, err := ListDir(upper, state, "", Fence{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestARootInAnotherCasingSkipsTheState(t *testing.T) {
 			t.Errorf("listing shows the state folder: %+v", entries)
 		}
 	}
-	if found, _ := FindFiles(upper, state, "token", 30); len(found) != 0 {
+	if found, _ := FindFiles(upper, state, "token", 30, Fence{}); len(found) != 0 {
 		t.Errorf("FindFiles = %v, want the state folder skipped", found)
 	}
 }
