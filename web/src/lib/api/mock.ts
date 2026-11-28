@@ -684,6 +684,8 @@ export class MockApi implements HarnessApi {
       state: "running",
       error: "",
       tools: ["execute_blender_code", "get_objects_summary", "get_screenshot_of_window_as_image", "search_api_docs"],
+      listed: true,
+      listed_project: "",
       running: 1,
     },
     {
@@ -703,6 +705,8 @@ export class MockApi implements HarnessApi {
       state: "failed",
       error: "The last start failed: reach http://127.0.0.1:3845/mcp: connection refused",
       tools: [],
+      listed: false,
+      listed_project: "",
       running: 0,
     },
   ];
@@ -1342,6 +1346,8 @@ export class MockApi implements HarnessApi {
         state: was?.state ?? "idle",
         error: was?.error ?? "",
         tools: was?.tools ?? [],
+        listed: was?.listed ?? false,
+        listed_project: was?.listed_project ?? "",
         running: was?.running ?? 0,
       };
     });
