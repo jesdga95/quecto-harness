@@ -236,12 +236,18 @@ export interface McpServer {
   read_only: boolean;
   /** Tools that run without a card in allowlist mode. */
   allow: string[];
+  /** The only tools offered a turn, or null to offer every tool not
+      disabled. */
+  enabled_tools: string[] | null;
+  /** Tools never offered. */
+  disabled_tools: string[];
   /** Why the record cannot run as written, empty when it can. */
   problem: string;
   state: McpState;
   error: string;
   /** What the server listed last, by name. */
   tools: string[];
+  /** Whether that list is known, even when it is empty. */
   listed: boolean;
   listed_project: string;
   running: number;

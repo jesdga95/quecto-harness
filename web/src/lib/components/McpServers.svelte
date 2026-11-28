@@ -85,6 +85,8 @@
       timeout_s: 0,
       read_only: false,
       allow: [],
+      enabled_tools: null,
+      disabled_tools: [],
     };
   }
 
@@ -105,10 +107,14 @@
     return out;
   }
 
+  /** Fields that choose among the tools a test listed, which leave that list
+      standing. Anything else changes the server, and the list goes. */
+  const choiceFields = new Set<keyof McpServerRecord>(["allow", "enabled_tools", "disabled_tools"]);
+
   function edit(patch: Partial<McpServerRecord>) {
     if (!draft) return;
     draft = { ...draft, ...patch };
-    probe = null;
+    if (!Object.keys(patch).every((k) => choiceFields.has(k as keyof McpServerRecord))) probe = null;
   }
 
   /** Answers whether it is alright to move off what is on screen. */
@@ -253,6 +259,8 @@
       timeout_s: typeof value.timeout_s === "number" ? value.timeout_s : 0,
       read_only: value.read_only === true,
       allow: Array.isArray(value.allow) ? value.allow.map(String) : [],
+      enabled_tools: Array.isArray(value.enabled_tools) ? value.enabled_tools.map(String) : null,
+      disabled_tools: Array.isArray(value.disabled_tools) ? value.disabled_tools.map(String) : [],
     };
   }
 
@@ -264,6 +272,28 @@
     draft = { ...draft, allow };
   }
 
+  /** Whether a turn is offered the tool. */
+  function offered(tool: string): boolean {
+    if (!draft) return false;
+    if (draft.enabled_tools && !draft.enabled_tools.includes(tool)) return false;
+    return !draft.disabled_tools.includes(tool);
+  }
+
+  function toggleOffered(tool: string) {
+    if (!draft) return;
+    if (offered(tool)) {
+      edit({
+        enabled_tools: draft.enabled_tools ? draft.enabled_tools.filter((t) => t !== tool) : null,
+        disabled_tools: draft.enabled_tools ? draft.disabled_tools : [...draft.disabled_tools, tool].sort(),
+      });
+    } else {
+      edit({
+        enabled_tools: draft.enabled_tools ? [...draft.enabled_tools, tool].sort() : null,
+        disabled_tools: draft.disabled_tools.filter((t) => t !== tool),
+      });
+    }
+  }
+
   /** The tools to draw: what the last test listed, else what the server
       listed when it last ran. */
   const tools = $derived.by(() => {
@@ -271,7 +301,11 @@
     return (stored?.tools ?? []).map((t) => ({ name: t, description: "" }));
   });
 
-  const listed = $derived.by(() => probe?.ok === true || stored?.listed === true);
+  /** Whether a list of the server's tools is known, even an empty one. */
+  const listed = $derived.by(() => {
+    const p: McpProbe | null = probe;
+    return (!!p?.ok && !!p.tools) || !!stored?.listed;
+  });
   const listedProject = $derived.by(() => probe?.ok ? probe.listed_project : stored?.listed_project);
   const allowed = $derived.by(() => new Set(draft?.allow ?? []));
   const choices = $derived.by(() => {
@@ -304,7 +338,7 @@
       case "failed":
         return "Failed";
     }
-    return "Starts with the next turn";
+    return s.enabled_tools?.length === 0 ? "No tools selected" : "Starts with the next turn";
   }
 
   const summary = $derived.by(() => {
@@ -566,20 +600,51 @@
 
         <div class="field-card">
           <div class="flex items-center justify-between gap-4">
-            <h4 class="field-head">Tools</h4>
-            <span class="text-[12px] text-muted">
-              {allowed.size} {allowed.size === 1 ? "tool" : "tools"} allowed
-            </span>
+            <h4 class="field-head">Offered to the model</h4>
+            {#if tools.length > 0}
+              <span class="flex items-center gap-3 text-[12px] text-muted">
+                {tools.filter((t) => offered(t.name)).length} of {tools.length}
+                <button class="chip chip-plain" type="button" onclick={() => edit({ enabled_tools: null, disabled_tools: [] })}>All</button>
+                <button class="chip chip-plain" type="button" onclick={() => edit({ enabled_tools: [], disabled_tools: [] })}>None</button>
+              </span>
+            {/if}
           </div>
           {#if listedProject}
             <p class="break-all text-[12px] text-muted">Last listed for {listedProject}</p>
           {/if}
-          {#if tools.length === 0}
+          {#if tools.length === 0 && listed}
+            <p class="text-[12px] text-muted">This server lists no tools.</p>
+          {:else if tools.length === 0}
             <p class="text-[12px] text-muted">
-              {listed ? "The server listed no tools." : "Press Test, or send a message, to list what this server offers."}
+              {#if stored?.enabled && !stored.problem && !dirty && draft.enabled_tools?.length !== 0}
+                Press Test, or send a message, to list what this server offers.
+              {:else}
+                Press Test to list what this server offers.
+              {/if}
             </p>
+          {:else}
+            <span class="text-[11.5px] text-muted">
+              Every tool offered is sent with each turn and fills the model's context.
+            </span>
+            <div class="flex flex-col">
+              {#each tools as t (t.name)}
+                <label class="flex cursor-pointer items-center justify-between gap-4 py-1.5" title={t.description || t.name}>
+                  <span class="mono min-w-0 truncate text-[12px]" class:text-muted={!offered(t.name)}>{t.name}</span>
+                  <input class="switch" type="checkbox" checked={offered(t.name)} onchange={() => toggleOffered(t.name)} />
+                </label>
+              {/each}
+            </div>
           {/if}
-          {#if choices.length}
+        </div>
+
+        {#if choices.length}
+          <div class="field-card">
+            <div class="flex items-center justify-between gap-4">
+              <h4 class="field-head">Tools</h4>
+              <span class="text-[12px] text-muted">
+                {allowed.size} {allowed.size === 1 ? "tool" : "tools"} allowed
+              </span>
+            </div>
             <span class="text-[11.5px] text-muted">
               A highlighted tool runs without a card in allowlist mode. Ask mode still shows every call.
             </span>
@@ -595,6 +660,7 @@
                   class:border-line={!allowed.has(t.name)}
                   class:bg-surface={!allowed.has(t.name)}
                   class:text-ink-2={!allowed.has(t.name)}
+                  class:opacity-45={!offered(t.name)}
                   title={t.description || t.name}
                   onclick={() => toggleAllow(t.name)}
                 >
@@ -602,8 +668,8 @@
                 </button>
               {/each}
             </div>
-          {/if}
-        </div>
+          </div>
+        {/if}
       </div>
 
       <footer class="flex shrink-0 items-center justify-end gap-2.5 border-t border-hair bg-panel px-6 py-3">

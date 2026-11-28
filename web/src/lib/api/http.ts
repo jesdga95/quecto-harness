@@ -2014,6 +2014,8 @@ function toMcp(w: Partial<McpServer>): McpServer {
     timeout_s: w.timeout_s ?? 0,
     read_only: w.read_only ?? false,
     allow: w.allow ?? [],
+    enabled_tools: Array.isArray(w.enabled_tools) ? w.enabled_tools : null,
+    disabled_tools: Array.isArray(w.disabled_tools) ? w.disabled_tools : [],
     problem: w.problem ?? "",
     state: w.state ?? "idle",
     error: w.error ?? "",
