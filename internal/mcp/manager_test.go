@@ -1,9 +1,11 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -106,12 +108,13 @@ func TestManagerDiskCache(t *testing.T) {
 	dir := t.TempDir()
 	cache := filepath.Join(dir, "mcp")
 	m := NewManager(cache, dir, "test")
-	m.Configure([]Server{fakeServer("fake")})
+	_, srv := newHTTPFake(t)
+	broken := httpServer(srv)
+	broken.Name = "fake"
+	m.Configure([]Server{broken})
 	m.Tools(context.Background(), "")
 	m.Close()
-
-	broken := fakeServer("fake")
-	broken.Command = "/no/such/server"
+	srv.Close()
 	other := broken
 	other.Name = "other"
 	m2 := NewManager(cache, dir, "test")
@@ -132,7 +135,7 @@ func TestManagerRefreshesTheDiskListAfterAnOutage(t *testing.T) {
 	h.initStatus = http.StatusServiceUnavailable
 	s := httpServer(srv)
 	m := newTestManager(t, s)
-	m.writeCache(s.Name, []Tool{{Name: "saved"}})
+	seedCache(t, m, s, "saved")
 	ctx := context.Background()
 	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__saved" {
 		t.Fatalf("offer during the outage = %s", wires(offered))
@@ -212,12 +215,12 @@ func TestManagerListChanged(t *testing.T) {
 	waitFor(t, func() bool {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		return m.dirty["fake"]
+		return m.dirty[instKey{server: "fake"}]
 	})
 	m.Tools(ctx, "")
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.dirty["fake"] {
+	if m.dirty[instKey{server: "fake"}] {
 		t.Fatal("the list was not read again")
 	}
 }
@@ -228,8 +231,8 @@ func TestManagerNamesAndOrder(t *testing.T) {
 	}
 	m := newTestManager(t, missing("b"), missing("a"))
 	long := strings.Repeat("d", maxDescription+10)
-	m.tools["a"] = []Tool{{Name: "z"}, {Name: "x.y", Description: long}, {Name: "x_y"}, {Name: strings.Repeat("n", 70)}}
-	m.tools["b"] = []Tool{{Name: "t", Title: "Titled"}}
+	m.tools[instKey{server: "a"}] = []Tool{{Name: "z"}, {Name: "x.y", Description: long}, {Name: "x_y"}, {Name: strings.Repeat("n", 70)}}
+	m.tools[instKey{server: "b"}] = []Tool{{Name: "t", Title: "Titled"}}
 	offered, notes := m.Tools(context.Background(), "")
 	if got := wires(offered); got != "mcp__a__x_y,mcp__a__z,mcp__b__t" {
 		t.Fatalf("order = %s", got)
@@ -338,7 +341,7 @@ func TestManagerRenewsASessionEndedUnderAList(t *testing.T) {
 	}
 	forgetSession(h)
 	m.mu.Lock()
-	m.dirty["remote"] = true
+	m.dirty[instKey{server: "remote"}] = true
 	m.mu.Unlock()
 	if offered, _ := m.Tools(ctx, ""); len(offered) != 4 {
 		t.Fatalf("list after the session ended = %d tools", len(offered))
@@ -551,5 +554,221 @@ func TestManagerOffersTheRunningListAfterAFirstTest(t *testing.T) {
 	}
 	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__b" {
 		t.Fatalf("offer = %s, want the running session's", wires(offered))
+	}
+}
+
+func TestToolsBelongToTheConfiguredLaunch(t *testing.T) {
+	a, first := newHTTPFake(t)
+	b, second := newHTTPFake(t)
+	a.catalog, b.catalog = []string{"alpha"}, []string{"beta"}
+	m := newTestManager(t, httpServer(first))
+	ctx := context.Background()
+	if got, _ := m.Tools(ctx, ""); wires(got) != "mcp__remote__alpha" {
+		t.Fatal(wires(got))
+	}
+	s := httpServer(second)
+	offline := NewManager(m.cacheDir, m.logDir, "test")
+	offline.Configure([]Server{s})
+	defer offline.Close()
+	if got := stateOf(offline, s.Name).Tools; len(got) != 0 {
+		t.Errorf("Catalog after restart with a different launch: %v", got)
+	}
+	m.Configure([]Server{s})
+	if _, err := os.Stat(m.cachePath(s.Name)); !os.IsNotExist(err) {
+		t.Fatalf("Previous cache remains: %v", err)
+	}
+	if _, _, _, err := m.Probe(ctx, s, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(m, s.Name).Tools; len(got) != 1 || got[0] != "beta" {
+		t.Errorf("Settings after replacement: %v", got)
+	}
+	if got, _ := m.Tools(ctx, ""); wires(got) != "mcp__remote__beta" {
+		t.Errorf("Offer after replacement: %s", wires(got))
+	}
+}
+
+func TestReplacementSessionExpiryWaits(t *testing.T) {
+	for _, method := range []string{"tools/list", "tools/call"} {
+		t.Run(method, func(t *testing.T) {
+			h, srv := newHTTPFake(t)
+			h.expireMethod = method
+			m := newTestManager(t, httpServer(srv))
+			request := func() {
+				if method == "tools/list" {
+					m.Tools(context.Background(), "")
+				} else {
+					m.Call(context.Background(), "", "remote", "echo", nil, time.Second)
+				}
+			}
+			request()
+			request()
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.inits != 2 || stateOf(m, "remote").State != StateFailed {
+				t.Errorf("Initializations = %d, state = %v", h.inits, stateOf(m, "remote").State)
+			}
+		})
+	}
+}
+
+func TestListChangedDuringListIsFetchedNextTurn(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	h.catalog = []string{"old"}
+	h.notifyDuringList = true
+	m := newTestManager(t, httpServer(srv))
+	m.Tools(context.Background(), "")
+	if got, _ := m.Tools(context.Background(), ""); wires(got) != "mcp__remote__updated" {
+		t.Errorf("Second offer = %s", wires(got))
+	}
+}
+
+func TestClosedManagerExplainsWhyToolsAreUnavailable(t *testing.T) {
+	s := fakeServer("fake")
+	m := newTestManager(t, s)
+	m.Tools(context.Background(), "")
+	m.Close()
+	tools, notes := m.Tools(context.Background(), "")
+	if len(tools) != 0 || !strings.Contains(strings.Join(notes, " "), "stopping") {
+		t.Fatalf("Closed manager: %d tools, %v", len(tools), notes)
+	}
+}
+
+func TestProjectCatalogsSurviveSeparateLaunches(t *testing.T) {
+	s := fakeServer("local")
+	s.Env = map[string]string{"MCP_FAKE": "project", "MCP_TOOL": "{project}"}
+	m := newTestManager(t, s)
+	for _, project := range []string{"alpha", "beta", "alpha"} {
+		if offered, _ := m.Tools(context.Background(), project); wires(offered) != "mcp__local__"+project {
+			t.Fatalf("Project %s offered %s", project, wires(offered))
+		}
+	}
+	other := NewManager(m.cacheDir, m.logDir, "test")
+	defer other.Close()
+	for _, project := range []string{"alpha", "beta"} {
+		k := keyFor(s, project)
+		tools, ok := other.readCache(s, k)
+		if !ok || len(tools) != 1 || tools[0].Name != project {
+			t.Fatalf("Disk catalog for %s = %v", project, tools)
+		}
+	}
+	m.invalidate(m.instanceFor(s, "beta"))
+	m.mu.Lock()
+	dirty := m.dirty[keyFor(s, "alpha")]
+	m.mu.Unlock()
+	if dirty {
+		t.Fatal("Changed another project's catalog")
+	}
+	m.Configure(nil)
+	for _, project := range []string{"alpha", "beta"} {
+		if _, err := os.Stat(m.catalogPath(keyFor(s, project))); !os.IsNotExist(err) {
+			t.Fatalf("Evicted project cache = %v", err)
+		}
+	}
+
+}
+
+func TestRPCErrorBreaksConsecutiveExpirations(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	m := newTestManager(t, httpServer(srv))
+	ctx := context.Background()
+	if _, err := m.Call(ctx, "", "remote", "echo", nil, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	forgetSession(h)
+	if _, err := m.Call(ctx, "", "remote", "unknown", nil, time.Second); err == nil || !strings.Contains(err.Error(), "unknown tool") {
+		t.Fatalf("Remote error = %v", err)
+	}
+	forgetSession(h)
+	if _, err := m.Call(ctx, "", "remote", "echo", nil, time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEmptyLaunchFieldsPreserveCache(t *testing.T) {
+	s := fakeServer("local")
+	s.Env = map[string]string{}
+	m := newTestManager(t, s)
+	seedCache(t, m, s, "kept")
+	s.Env = nil
+	m.Configure([]Server{s})
+	if _, err := os.Stat(m.cachePath(s.Name)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedCache(t *testing.T, m *Manager, s Server, name string) {
+	t.Helper()
+	k := keyFor(s, "")
+	tmp := m.prepareCache(s, k, []Tool{{Name: name}})
+	if err := os.Rename(tmp, m.catalogPath(k)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLaunchFingerprintIsPrivateToTheCache(t *testing.T) {
+	s := Server{Name: "test", Transport: TransportHTTP, URL: "https://localhost", Headers: map[string]string{"Authorization": "test-credential"}}
+	a, b := newTestManager(t, s), newTestManager(t, s)
+	k := keyFor(s, "")
+	digest := a.launchDigest(s, k)
+	if digest == "" || digest == b.launchDigest(s, k) {
+		t.Fatal("Independent cache keys produced the same fingerprint")
+	}
+	info, err := os.Stat(filepath.Join(a.cacheDir, ".catalog-key"))
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal("Missing private key", err)
+	}
+	s.Headers["Authorization"] = "rotated"
+	if digest == a.launchDigest(s, k) {
+		t.Fatal("Rotating the credential retained the fingerprint")
+	}
+}
+
+func TestCatalogKeyIsReusedAcrossStatusReads(t *testing.T) {
+	s := fakeServer("local")
+	m := newTestManager(t, s)
+	seedCache(t, m, s, "saved")
+	path := filepath.Join(m.cacheDir, ".catalog-key")
+	if err := os.Rename(path, path+".aside"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if got := stateOf(m, s.Name).Tools; len(got) != 1 || got[0] != "saved" {
+			t.Fatalf("Cached catalog = %v", got)
+		}
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("Status recreated the key: %v", err)
+	}
+}
+
+func TestCatalogKeyFailureReportsTheRepairOnceAndRetries(t *testing.T) {
+	s := fakeServer("local")
+	m := newTestManager(t, s)
+	if err := os.MkdirAll(m.cacheDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(m.cacheDir, ".catalog-key")
+	if err := os.WriteFile(path, []byte("short"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&out)
+	defer log.SetOutput(previous)
+	for range 2 {
+		if tmp := m.prepareCache(s, keyFor(s, ""), []Tool{{Name: "saved"}}); tmp != "" {
+			t.Fatal("Published with a damaged key")
+		}
+	}
+	if !strings.Contains(out.String(), path) || strings.Count(out.String(), "MCP disk cache") != 1 {
+		t.Fatalf("Diagnostic = %q", out.String())
+	}
+	if err := os.Rename(path, path+".aside"); err != nil {
+		t.Fatal(err)
+	}
+	seedCache(t, m, s, "recovered")
+	if got := stateOf(m, s.Name).Tools; len(got) != 1 || got[0] != "recovered" {
+		t.Fatalf("Recovered catalog = %v", got)
 	}
 }

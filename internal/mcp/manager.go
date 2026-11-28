@@ -2,9 +2,13 @@ package mcp
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -55,14 +59,22 @@ type Manager struct {
 	logDir   string
 	version  string
 
-	mu      sync.Mutex
-	servers map[string]Server
-	order   []string
-	inst    map[instKey]*instance
-	tools   map[string][]Tool
-	dirty   map[string]bool
-	// probed is what Test listed on a session of its own, shown in the
-	// settings until a running session lists. Offers never read it.
+	keyMu            sync.Mutex
+	catalogKey       []byte
+	keyWarningLogged bool
+
+	// cacheMu orders cache publication and eviction. When both locks are
+	// needed, cacheMu is taken first.
+	cacheMu    sync.Mutex
+	mu         sync.Mutex
+	servers    map[string]Server
+	order      []string
+	inst       map[instKey]*instance
+	tools      map[instKey][]Tool
+	dirty      map[instKey]bool
+	generation map[instKey]uint64
+	// Settings can show the last probe or project-specific list. Tool offers
+	// use only the catalog for their own instance.
 	probed map[string][]Tool
 	closed bool
 }
@@ -78,6 +90,7 @@ type instance struct {
 	state    State
 	lastErr  string
 	failures int
+	expired  bool
 	retryAt  time.Time
 	starting chan struct{}
 	stopping bool
@@ -90,13 +103,22 @@ func NewManager(cacheDir, logDir, version string) *Manager {
 	return &Manager{
 		cacheDir: cacheDir, logDir: logDir, version: version,
 		servers: map[string]Server{}, inst: map[instKey]*instance{},
-		tools: map[string][]Tool{}, dirty: map[string]bool{}, probed: map[string][]Tool{},
+		tools: map[instKey][]Tool{}, dirty: map[instKey]bool{}, generation: map[instKey]uint64{}, probed: map[string][]Tool{},
 	}
 }
 
 // launchFields are what a running instance was started with. A change to
 // anything else, such as the allow list, leaves it running.
 func launchFields(s Server) Server {
+	if len(s.Args) == 0 {
+		s.Args = nil
+	}
+	if len(s.Env) == 0 {
+		s.Env = nil
+	}
+	if len(s.Headers) == 0 {
+		s.Headers = nil
+	}
 	return Server{Transport: s.Transport, Command: s.Command, Args: s.Args, Env: s.Env, Cwd: s.Cwd, URL: s.URL, Headers: s.Headers}
 }
 
@@ -104,6 +126,8 @@ func launchFields(s Server) Server {
 // disabled or relaunched differently are stopped; the next turn that needs
 // one starts it again.
 func (m *Manager) Configure(servers []Server) {
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
 	m.mu.Lock()
 	next := map[string]Server{}
 	var order []string
@@ -112,10 +136,23 @@ func (m *Manager) Configure(servers []Server) {
 		order = append(order, s.Name)
 	}
 	sort.Strings(order)
-	for name := range m.probed {
+	var evict []string
+	for name := range m.servers {
 		replacement, ok := next[name]
 		if !ok || !reflect.DeepEqual(launchFields(m.servers[name]), launchFields(replacement)) {
 			delete(m.probed, name)
+			for k := range m.tools {
+				if k.server == name {
+					delete(m.tools, k)
+				}
+			}
+			for k := range m.generation {
+				if k.server == name {
+					delete(m.generation, k)
+					delete(m.dirty, k)
+				}
+			}
+			evict = append(evict, name)
 		}
 	}
 	var stop []*instance
@@ -130,6 +167,15 @@ func (m *Manager) Configure(servers []Server) {
 	m.mu.Unlock()
 	for _, in := range stop {
 		go in.stop()
+	}
+	if m.cacheDir != "" {
+		for _, name := range evict {
+			_ = os.Remove(m.cachePath(name))
+			paths, _ := filepath.Glob(filepath.Join(m.cacheDir, name+".*.json"))
+			for _, path := range paths {
+				_ = os.Remove(path)
+			}
+		}
 	}
 }
 
@@ -233,93 +279,275 @@ func describe(t Tool) string {
 // a fresh one from a running instance when the server said it changed, and
 // the cache on disk when the server cannot be reached.
 func (m *Manager) listFor(ctx context.Context, s Server, project string) ([]Tool, error) {
+	key := keyFor(s, project)
 	m.mu.Lock()
-	tools, known := m.tools[s.Name]
-	dirty := m.dirty[s.Name]
+	current, ok := m.servers[s.Name]
+	tools, known := m.tools[key]
+	dirty, closed := m.dirty[key], m.closed
 	m.mu.Unlock()
+	if closed {
+		return nil, errStopping
+	}
+	if !ok || !current.Usable() || !reflect.DeepEqual(launchFields(current), launchFields(s)) {
+		return nil, errConfigChanged
+	}
 	if known && !dirty {
 		return tools, nil
 	}
 	in := m.instanceFor(s, project)
-	client, err := in.ensure(ctx, m)
+	if in == nil {
+		if m.isClosed() {
+			return nil, errStopping
+		}
+		return nil, errConfigChanged
+	}
+	fresh, generation, err := in.list(ctx, m)
 	if err == nil {
-		var fresh []Tool
-		fresh, _, err = client.ListTools(ctx)
-		if errors.Is(err, errSessionExpired) {
-			if client, err = in.renew(ctx, m, client); err == nil {
-				fresh, _, err = client.ListTools(ctx)
-			}
+		if fresh == nil {
+			fresh = []Tool{}
 		}
-		if err == nil {
-			m.keepTools(s.Name, fresh)
-			return fresh, nil
+		if err := m.publishList(in, fresh, generation); err != nil {
+			return nil, err
 		}
+		return fresh, nil
 	}
-	if known {
-		return tools, nil
+	m.mu.Lock()
+	saved, ok := m.tools[key]
+	stateErr := m.instanceErrorLocked(in)
+	m.mu.Unlock()
+	if stateErr != nil {
+		return nil, stateErr
 	}
-	if cached, ok := m.readCache(s.Name); ok {
+	if ok {
+		return saved, nil
+	}
+	cached, ok := m.readCache(s, key)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if stateErr := m.instanceErrorLocked(in); stateErr != nil {
+		return nil, stateErr
+	}
+	if saved, ok := m.tools[key]; ok {
+		return saved, nil
+	}
+	if ok {
 		return cached, nil
 	}
 	return nil, err
 }
 
-func (m *Manager) keepTools(server string, tools []Tool) {
-	if tools == nil {
-		tools = []Tool{}
+var (
+	errStopping      = errors.New("the harness is stopping")
+	errConfigChanged = errors.New("the server configuration changed")
+)
+
+func (m *Manager) instanceErrorLocked(in *instance) error {
+	if m.closed {
+		return errStopping
 	}
+	if m.inst[in.key] != in {
+		return errConfigChanged
+	}
+	return nil
+}
+
+func (m *Manager) publishList(in *instance, tools []Tool, generation uint64) error {
+	tmp := m.prepareCache(in.srv, in.key, tools)
+	if tmp != "" {
+		defer os.Remove(tmp)
+	}
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
 	m.mu.Lock()
-	m.tools[server] = tools
-	delete(m.dirty, server)
-	m.mu.Unlock()
-	m.writeCache(server, tools)
+	defer m.mu.Unlock()
+	if err := m.instanceErrorLocked(in); err != nil {
+		return err
+	}
+	if m.generation[in.key] == generation {
+		m.tools[in.key] = tools
+		delete(m.dirty, in.key)
+		if in.srv.PerProject() {
+			m.probed[in.key.server] = tools
+		}
+		if tmp != "" {
+			_ = os.Rename(tmp, m.catalogPath(in.key))
+		}
+	}
+	return nil
 }
 
-func (m *Manager) cachePath(server string) string {
-	return filepath.Join(m.cacheDir, server+".json")
+func (in *instance) list(ctx context.Context, m *Manager) ([]Tool, uint64, error) {
+	client, err := in.ensure(ctx, m)
+	if err != nil {
+		return nil, 0, err
+	}
+	for attempt := 0; ; attempt++ {
+		m.mu.Lock()
+		generation := m.generation[in.key]
+		m.mu.Unlock()
+		tools, _, err := client.ListTools(ctx)
+		if err == nil {
+			in.succeeded(client)
+			return tools, generation, nil
+		}
+		if !errors.Is(err, errSessionExpired) {
+			in.answered(client, err)
+			return nil, 0, err
+		}
+		if attempt == 1 {
+			in.forget(client)
+			return nil, 0, err
+		}
+		client, err = in.renew(ctx, m, client)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
 }
 
-func (m *Manager) readCache(server string) ([]Tool, bool) {
-	raw, err := os.ReadFile(m.cachePath(server))
+// A failed key read is retried so disk caching resumes after a repair.
+func (m *Manager) cacheKey() []byte {
+	m.keyMu.Lock()
+	defer m.keyMu.Unlock()
+	if m.catalogKey != nil {
+		return m.catalogKey
+	}
+	key, err := loadCacheKey(m.cacheDir)
+	if err != nil {
+		if !m.keyWarningLogged {
+			log.Printf("MCP disk cache unavailable: %v. Check permissions on %s or move the damaged key aside to generate another", err, filepath.Join(m.cacheDir, ".catalog-key"))
+			m.keyWarningLogged = true
+		}
+		return nil
+	}
+	m.catalogKey = key
+	return key
+}
+
+// loadCacheKey publishes a complete private key before another process can read it.
+func loadCacheKey(dir string) ([]byte, error) {
+	path := filepath.Join(dir, ".catalog-key")
+	key, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err = os.MkdirAll(dir, 0700); err != nil {
+			return nil, err
+		}
+		key = make([]byte, 32)
+		if _, err = rand.Read(key); err != nil {
+			return nil, err
+		}
+		tmp, err := stageFile(dir, key)
+		if err != nil {
+			return nil, err
+		}
+		defer os.Remove(tmp)
+		if err = os.Link(tmp, path); err == nil {
+			return key, nil
+		} else if !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+		key, err = os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	if len(key) != 32 {
+		return nil, errors.New("invalid catalog key")
+	}
+	return key, nil
+}
+
+func (m *Manager) launchDigest(s Server, k instKey) string {
+	key := m.cacheKey()
+	if key == nil {
+		return ""
+	}
+	data, err := json.Marshal(launchFields(s).Spec(k.project))
+	if err != nil {
+		return ""
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write(data)
+	return fmt.Sprintf("%x", mac.Sum(nil))
+}
+
+func (m *Manager) cachePath(server string) string { return filepath.Join(m.cacheDir, server+".json") }
+func (m *Manager) catalogPath(k instKey) string {
+	if k.project == "" {
+		return m.cachePath(k.server)
+	}
+	return m.cachePath(fmt.Sprintf("%s.%x", k.server, sha256.Sum256([]byte(k.project))))
+}
+
+func (m *Manager) readCache(s Server, k instKey) ([]Tool, bool) {
+	if m.cacheDir == "" {
+		return nil, false
+	}
+	raw, err := os.ReadFile(m.catalogPath(k))
 	if err != nil {
 		return nil, false
 	}
 	var c struct {
-		Tools []Tool `json:"tools"`
+		Launch string `json:"launch"`
+		Tools  []Tool `json:"tools"`
 	}
-	if json.Unmarshal(raw, &c) != nil || c.Tools == nil {
+	if json.Unmarshal(raw, &c) != nil || c.Launch == "" || c.Tools == nil || c.Launch != m.launchDigest(s, k) {
 		return nil, false
 	}
 	return c.Tools, true
 }
 
-func (m *Manager) writeCache(server string, tools []Tool) {
+func stageFile(dir string, data []byte) (string, error) {
+	f, err := os.CreateTemp(dir, ".catalog-*")
+	if err != nil {
+		return "", err
+	}
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+func (m *Manager) prepareCache(s Server, k instKey, tools []Tool) string {
 	if m.cacheDir == "" {
-		return
+		return ""
 	}
-	data, err := json.MarshalIndent(map[string]any{"tools": tools}, "", "  ")
-	if err != nil || os.MkdirAll(m.cacheDir, 0o700) != nil {
-		return
+	launch := m.launchDigest(s, k)
+	if launch == "" {
+		return ""
 	}
-	tmp := m.cachePath(server) + ".tmp"
-	if os.WriteFile(tmp, data, 0o600) == nil {
-		_ = os.Rename(tmp, m.cachePath(server))
+	data, err := json.Marshal(map[string]any{"launch": launch, "tools": tools})
+	if err != nil {
+		return ""
 	}
+	path, _ := stageFile(m.cacheDir, data)
+	return path
+}
+
+func keyFor(s Server, project string) instKey {
+	if !s.PerProject() {
+		project = ""
+	}
+	return instKey{s.Name, project}
 }
 
 func (m *Manager) instanceFor(s Server, project string) *instance {
-	k := instKey{server: s.Name}
-	if s.PerProject() {
-		k.project = project
-	}
+	k := keyFor(s, project)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	current, ok := m.servers[s.Name]
+	if m.closed || !ok || !current.Usable() || !reflect.DeepEqual(launchFields(current), launchFields(s)) {
+		return nil
+	}
 	in := m.inst[k]
 	if in == nil {
 		in = &instance{key: k, srv: s.Clone(), state: StateIdle}
-		if !m.closed {
-			m.inst[k] = in
-		}
+		m.inst[k] = in
 	}
 	return in
 }
@@ -335,6 +563,9 @@ func (m *Manager) Call(ctx context.Context, project, server, tool string, args j
 		return Rendered{}, fmt.Errorf("MCP server %s is not configured or is turned off", server)
 	}
 	in := m.instanceFor(s, project)
+	if in == nil {
+		return Rendered{}, fmt.Errorf("MCP server %s is %w", server, ErrNotRunning)
+	}
 	client, err := in.ensure(ctx, m)
 	if err != nil {
 		return Rendered{}, fmt.Errorf("MCP server %s is %w: %s", server, ErrNotRunning, err)
@@ -359,8 +590,12 @@ func (m *Manager) Call(ctx context.Context, project, server, tool string, args j
 			return Rendered{}, fmt.Errorf("MCP server %s is %w: %s", server, ErrNotRunning, err)
 		}
 		res, err = client.CallTool(cctx, tool, args)
+		if errors.Is(err, errSessionExpired) {
+			in.forget(client)
+		}
 	}
 	if err != nil {
+		in.answered(client, err)
 		switch {
 		case errors.Is(err, ErrClosed):
 			return Rendered{}, fmt.Errorf("MCP server %s stopped during the call: %s", server, err)
@@ -371,6 +606,7 @@ func (m *Manager) Call(ctx context.Context, project, server, tool string, args j
 		}
 		return Rendered{}, fmt.Errorf("%s on %s failed: %s", tool, server, err)
 	}
+	in.succeeded(client)
 	return Render(res), nil
 }
 
@@ -400,7 +636,7 @@ func (in *instance) ensure(ctx context.Context, m *Manager) (*Client, error) {
 		}
 		if m.isClosed() {
 			in.mu.Unlock()
-			return nil, errors.New("the harness is stopping")
+			return nil, errStopping
 		}
 		if in.state == StateFailed && time.Now().Before(in.retryAt) {
 			err := errors.New(in.lastErr)
@@ -423,9 +659,7 @@ func (in *instance) ensure(ctx context.Context, m *Manager) (*Client, error) {
 			return nil, ctx.Err()
 		}
 		if err != nil {
-			in.state, in.lastErr = StateFailed, err.Error()
-			in.retryAt = time.Now().Add(backoff[min(in.failures, len(backoff)-1)])
-			in.failures++
+			in.failed(err.Error())
 			in.mu.Unlock()
 			return nil, err
 		}
@@ -434,7 +668,7 @@ func (in *instance) ensure(ctx context.Context, m *Manager) (*Client, error) {
 			c.Close()
 			return nil, errors.New("it is being stopped")
 		}
-		in.client, in.state, in.lastErr, in.failures = c, StateRunning, "", 0
+		in.client, in.state, in.lastErr = c, StateRunning, ""
 		in.mu.Unlock()
 		go in.watch(m, c)
 		return c, nil
@@ -451,12 +685,9 @@ func (in *instance) start(ctx context.Context, m *Manager) (*Client, error) {
 			spec.Stdio.Stderr = in.log
 		}
 	}
-	name := in.key.server
 	c, err := Start(sctx, spec, Options{Version: m.version, OnNotify: func(method string, _ json.RawMessage) {
 		if method == "notifications/tools/list_changed" {
-			m.mu.Lock()
-			m.dirty[name] = true
-			m.mu.Unlock()
+			m.invalidate(in)
 		}
 	}})
 	if err != nil {
@@ -470,7 +701,7 @@ func (in *instance) start(ctx context.Context, m *Manager) (*Client, error) {
 
 // watch marks the instance failed when its connection ends without being
 // asked to, so the next call starts it again after the backoff. A session the
-// server ended is no failure, and the next offer lists its tools again.
+// server ended invalidates its list. Consecutive expirations enter backoff.
 func (in *instance) watch(m *Manager, c *Client) {
 	<-c.Done()
 	in.mu.Lock()
@@ -478,23 +709,59 @@ func (in *instance) watch(m *Manager, c *Client) {
 		in.mu.Unlock()
 		return
 	}
-	in.client = nil
+	defer in.mu.Unlock()
 	if c.Expired() {
-		in.idle()
-		in.mu.Unlock()
-		m.mu.Lock()
-		m.dirty[in.key.server] = true
-		m.mu.Unlock()
+		m.invalidate(in)
+		in.expire()
 		return
 	}
-	defer in.mu.Unlock()
-	in.state = StateFailed
-	in.lastErr = "it stopped"
+	in.client = nil
+	reason := "it stopped"
 	if err := c.Err(); err != nil {
-		in.lastErr = strings.TrimPrefix(err.Error(), ErrClosed.Error()+": ")
+		reason = strings.TrimPrefix(err.Error(), ErrClosed.Error()+": ")
 	}
+	in.failed(reason)
+}
+
+func (m *Manager) invalidate(in *instance) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.inst[in.key] == in {
+		m.dirty[in.key] = true
+		m.generation[in.key]++
+	}
+}
+
+func (in *instance) failed(reason string) {
+	in.state, in.lastErr = StateFailed, reason
 	in.retryAt = time.Now().Add(backoff[min(in.failures, len(backoff)-1)])
 	in.failures++
+	in.expired = false
+}
+
+func (in *instance) answered(c *Client, err error) {
+	var rpc *RPCError
+	if errors.As(err, &rpc) {
+		in.succeeded(c)
+	}
+}
+
+func (in *instance) succeeded(c *Client) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.client == c {
+		in.failures, in.expired = 0, false
+	}
+}
+
+func (in *instance) expire() {
+	in.client = nil
+	if in.expired {
+		in.failed(errSessionExpired.Error())
+		return
+	}
+	in.expired = true
+	in.idle()
 }
 
 // renew replaces a client whose session the server ended with a new one.
@@ -502,9 +769,7 @@ func (in *instance) watch(m *Manager, c *Client) {
 // new session may list other tools, so the next offer lists again.
 func (in *instance) renew(ctx context.Context, m *Manager, old *Client) (*Client, error) {
 	in.forget(old)
-	m.mu.Lock()
-	m.dirty[in.key.server] = true
-	m.mu.Unlock()
+	m.invalidate(in)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -512,14 +777,13 @@ func (in *instance) renew(ctx context.Context, m *Manager, old *Client) (*Client
 }
 
 // forget drops a client whose session the server ended, so the next call
-// starts a new session without a backoff. A client the instance no longer
+// can renew it or wait after repeated expirations. A client the instance no longer
 // holds is left alone, along with whatever state replaced it.
 func (in *instance) forget(c *Client) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.client == c {
-		in.client = nil
-		in.idle()
+		in.expire()
 	}
 }
 
@@ -581,20 +845,26 @@ func (m *Manager) Status() []ServerStatus {
 		byServer[k.server] = append(byServer[k.server], in)
 	}
 	known := map[string][]Tool{}
-	for k, v := range m.probed {
-		known[k] = v
-	}
-	for k, v := range m.tools {
-		known[k] = v
+	missing := map[string]Server{}
+	for _, name := range order {
+		tools, ok := m.tools[instKey{server: name}]
+		if !ok {
+			tools, ok = m.probed[name]
+		}
+		if ok {
+			known[name] = tools
+		} else {
+			missing[name] = m.servers[name]
+		}
 	}
 	m.mu.Unlock()
 
 	out := make([]ServerStatus, 0, len(order))
 	for _, n := range order {
 		st := ServerStatus{Name: n, State: StateIdle, Tools: []string{}}
-		tools, ok := known[n]
-		if !ok {
-			tools, _ = m.readCache(n)
+		tools := known[n]
+		if server, ok := missing[n]; ok {
+			tools, _ = m.readCache(server, keyFor(server, ""))
 		}
 		for _, t := range tools {
 			st.Tools = append(st.Tools, t.Name)

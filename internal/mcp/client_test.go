@@ -48,6 +48,11 @@ func TestHelperProcess(t *testing.T) {
 			return
 		}
 		switch mode {
+		case "project":
+			if m.Method == "tools/list" {
+				f.reply(m, map[string]any{"tools": []any{map[string]string{"name": os.Getenv("MCP_TOOL")}}})
+				return
+			}
 		case "silent":
 			return
 		case "crash":
@@ -260,7 +265,9 @@ type httpFake struct {
 	lost int
 	// catalog, when set, is the one tool each session lists, by the
 	// initialize that opened it.
-	catalog []string
+	catalog          []string
+	expireMethod     string
+	notifyDuringList bool
 	// live maps each session handed out and not forgotten to the number of
 	// the initialize that opened it.
 	live map[string]int
@@ -333,7 +340,10 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.lost--
 		}
 		h.mu.Unlock()
-		if lose || stale || !live {
+		h.mu.Lock()
+		expire := m.Method != "" && m.Method == h.expireMethod
+		h.mu.Unlock()
+		if expire || lose || stale || !live {
 			http.Error(w, "unknown session", http.StatusNotFound)
 			return
 		}
@@ -345,11 +355,21 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	catalog := h.catalog
+	notify := h.notifyDuringList && m.Method == "tools/list"
+	if notify {
+		h.notifyDuringList = false
+		h.catalog = []string{"updated"}
+	}
 	h.mu.Unlock()
 	if m.Method == "tools/list" && catalog != nil {
 		out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{
 			"tools": []any{map[string]any{"name": catalog[min(opened, len(catalog))-1], "inputSchema": map[string]any{"type": "object"}}},
 		}})
+		if notify {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}\n\ndata: %s\n\n", out)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(out)
 		return
