@@ -1,6 +1,19 @@
 // Shapes of the harness HTTP API and its SSE stream. Components read these
 // types only, so a real client can replace the mock without touching the UI.
 
+export interface RecoveryItem {
+  name: string;
+  id: string;
+  kind: "archive" | "output" | "run" | "record";
+  generation?: string;
+  repair?: string;
+}
+
+export interface UnreadableSession {
+  id: string;
+  runs: string[];
+}
+
 export type ModelStatus =
   | "unloaded"
   | "loading"
@@ -859,6 +872,10 @@ export interface HarnessApi {
   pickedUrl(path: string): string;
   /** Where a file the harness stored for a message is served from. */
   attachmentUrl(file: string): string;
+  recoveryItems(): Promise<RecoveryItem[]>;
+  deleteRetained(name: string, generation?: string): Promise<void>;
+  unreadableSessions(): Promise<UnreadableSession[]>;
+  archiveUnreadable(id: string): Promise<string>;
   deleteSession(id: string): Promise<void>;
   renameSession(id: string, title: string): Promise<void>;
   /** Files are read by the harness and inlined into the message. What comes

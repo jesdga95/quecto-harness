@@ -7,7 +7,7 @@
   import Wrench from "phosphor-svelte/lib/WrenchIcon";
   import { untrack } from "svelte";
   import type { Config, SearchConfig } from "../api";
-  import { app, saveConfig, saveSearch } from "../state/app.svelte";
+  import { app, saveConfig, saveSearch, selectSession } from "../state/app.svelte";
   import { confirm } from "../state/confirm.svelte";
   import SettingsGeneral from "./SettingsGeneral.svelte";
   import SettingsPermissions from "./SettingsPermissions.svelte";
@@ -226,7 +226,12 @@
       {:else if pane === "search"}
         <SettingsSearch bind:this={current} search={draft.search} onchange={editSearch} />
       {:else}
-        <SettingsProjects bind:this={current} />
+        <SettingsProjects bind:this={current} onopen={async (id) => {
+          if (await keepDraft()) {
+            onclose();
+            await selectSession(id);
+          }
+        }} />
       {/if}
     </div>
 

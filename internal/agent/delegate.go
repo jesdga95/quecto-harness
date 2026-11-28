@@ -391,7 +391,7 @@ func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (
 	child.Named = true
 	child.waiter = waiter
 	e.mu.Lock()
-	e.live[child.ID] = child
+	e.setLive(child)
 	e.mu.Unlock()
 	e.save(child)
 
@@ -507,9 +507,7 @@ func (e *Engine) report(child *Session) {
 		waiter <- text
 		return
 	}
-	if _, err := e.deliverFrom(parent, sender{Name: from.Name, Session: child.ID}, text, nil); err != nil {
-		e.publish(parent.ID, ev("error", map[string]any{"kind": "internal", "message": err.Error()}))
-	}
+	e.handOver(parent, sender{Name: from.Name, Session: child.ID}, text)
 }
 
 // answerOf is what a subagent finished with: its last reply, or the sentence

@@ -1,6 +1,8 @@
 import type {
   Agent,
   AgentPatch,
+  UnreadableSession,
+  RecoveryItem,
   Answer,
   Attached,
   AttachedKind,
@@ -1678,6 +1680,24 @@ class HttpApi implements HarnessApi {
 
   async setMode(id: string, mode: WorkMode): Promise<void> {
     await call<unknown>(`/sessions/${encodeURIComponent(id)}/mode`, "PUT", { mode });
+  }
+
+  async recoveryItems(): Promise<RecoveryItem[]> {
+    return call<RecoveryItem[]>("/recovery/items");
+  }
+
+  async deleteRetained(name: string, generation?: string): Promise<void> {
+    const query = generation ? `?generation=${encodeURIComponent(generation)}` : "";
+    await call<unknown>(`/recovery/items/${encodeURIComponent(name)}${query}`, "DELETE");
+  }
+
+  async unreadableSessions(): Promise<UnreadableSession[]> {
+    return call<UnreadableSession[]>("/recovery/sessions?include=runs");
+  }
+
+  async archiveUnreadable(id: string): Promise<string> {
+    const result = await call<{ path: string }>(`/recovery/sessions/${encodeURIComponent(id)}/archive`, "POST");
+    return result.path;
   }
 
   async deleteSession(id: string): Promise<void> {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -66,7 +67,7 @@ func Open(p Paths) (*Store, error) {
 	}
 	s.mcp, s.mcpNotes = ResolveMCP(fileMCP)
 
-	if err := s.persistConfig(); err != nil {
+	if err := s.writeConfig(s.cfg); err != nil {
 		return nil, err
 	}
 	if err := s.persistAllow(); err != nil {
@@ -77,14 +78,19 @@ func Open(p Paths) (*Store, error) {
 
 func (s *Store) Paths() Paths { return s.paths }
 
+// clone copies c with every slice it holds, so a caller that writes into the
+// copy leaves c as it was.
+func (c Config) clone() Config {
+	c.Projects = append([]string(nil), c.Projects...)
+	c.Agents = cloneAgents(c.Agents)
+	c.Search.Accounts = cloneSearchAccounts(c.Search.Accounts)
+	return c
+}
+
 func (s *Store) Config() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	c := s.cfg
-	c.Projects = append([]string(nil), s.cfg.Projects...)
-	c.Agents = cloneAgents(s.cfg.Agents)
-	c.Search.Accounts = cloneSearchAccounts(s.cfg.Search.Accounts)
-	return c
+	return s.cfg.clone()
 }
 
 func (s *Store) Notes() []string {
@@ -93,28 +99,25 @@ func (s *Store) Notes() []string {
 	return append(append([]string(nil), s.notes...), s.mcpNotes...)
 }
 
-// Update applies fn to a copy, validates it, and persists. The lock is held
-// across the write so two concurrent updates cannot interleave.
+// Update applies fn to a copy, validates it, and persists it under the lock.
+// The copy replaces the configuration only once it is on disk.
 func (s *Store) Update(fn func(*Config)) (Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	next := s.cfg
-	next.Projects = append([]string(nil), s.cfg.Projects...)
-	next.Agents = cloneAgents(s.cfg.Agents)
-	next.Search.Accounts = cloneSearchAccounts(s.cfg.Search.Accounts)
+	next := s.cfg.clone()
 	fn(&next)
 	resolved, notes := next.File().Resolve(Defaults())
+	if err := s.writeConfig(resolved); err != nil {
+		return s.cfg.clone(), err
+	}
 	s.cfg = resolved
 	s.notes = notes
-	if err := s.persistConfig(); err != nil {
-		return s.cfg, err
-	}
-	return s.cfg, nil
+	return s.cfg.clone(), nil
 }
 
-// persistConfig writes config.json. The caller holds the lock.
-func (s *Store) persistConfig() error {
-	data, err := json.MarshalIndent(s.cfg.File(), "", "  ")
+// writeConfig writes c to config.json. The caller holds the lock.
+func (s *Store) writeConfig(c Config) error {
+	data, err := json.MarshalIndent(c.File(), "", "  ")
 	if err != nil {
 		return err
 	}
@@ -268,6 +271,14 @@ func (s *Store) AddProject(path string) (Config, error) {
 	}
 	s.mu.Unlock()
 	return s.Update(func(c *Config) { c.Projects = append([]string{real}, c.Projects...) })
+}
+
+// DropProject removes the project the list holds under exactly this path,
+// without resolving it again.
+func (s *Store) DropProject(path string) (Config, error) {
+	return s.Update(func(c *Config) {
+		c.Projects = slices.DeleteFunc(c.Projects, func(p string) bool { return p == path })
+	})
 }
 
 func (s *Store) RemoveProject(path string) (Config, error) {

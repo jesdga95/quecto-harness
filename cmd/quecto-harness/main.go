@@ -121,6 +121,18 @@ func serve(argv []string) error {
 	if err := p.EnsureDirs(); err != nil {
 		return err
 	}
+	// The state has one owner for the life of the process, taken before any
+	// store is read, so no two servers write or sweep the same folders.
+	release, err := config.LockState(p.Home)
+	if err != nil {
+		return err
+	}
+	defer release()
+	releaseSessions, err := config.LockSessions(p.Sessions)
+	if err != nil {
+		return err
+	}
+	defer releaseSessions()
 	cfg, err := config.Open(p)
 	if err != nil {
 		return err

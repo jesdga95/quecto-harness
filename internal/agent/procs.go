@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -360,6 +361,36 @@ func (r *Registry) StopAll(session string, silent bool) {
 	for _, pr := range targets {
 		_ = pr.handle.Stop()
 	}
+}
+
+// Drain stops every command of the sessions named, silently, and waits until
+// each has ended, one already asked to stop included. It waits holding no
+// lock, and returns the context's error if any is still running when it ends.
+func (r *Registry) Drain(ctx context.Context, sessions []string) error {
+	for _, id := range sessions {
+		r.StopAll(id, true)
+	}
+	r.mu.Lock()
+	var waits []chan struct{}
+	for _, pr := range r.procs {
+		if !slices.Contains(sessions, pr.view.Session) {
+			continue
+		}
+		select {
+		case <-pr.done:
+		default:
+			waits = append(waits, pr.done)
+		}
+	}
+	r.mu.Unlock()
+	for _, done := range waits {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
 }
 
 // List returns a session's processes in the order they started.

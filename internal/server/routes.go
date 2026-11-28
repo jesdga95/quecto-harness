@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -331,19 +332,46 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	// A project that is gone has no conversations, so its sessions go with it.
-	// A running one is left alone and reported rather than killed underfoot.
-	removed, busy := 0, 0
-	for _, sum := range s.store.List(body.Path) {
-		if err := s.engine.Delete(sum.ID); err != nil {
-			busy++
-			continue
-		}
-		removed++
+	// The path is the one the list holds, taken as it is: resolving it could
+	// lead to another project, and an empty one would name every project's
+	// sessions.
+	project := body.Path
+	if strings.TrimSpace(project) == "" || !s.cfg.HasProject(project) {
+		writeError(w, http.StatusNotFound, "No project at that path: it may have been removed already")
+		return
 	}
-	cfg, err := s.cfg.RemoveProject(body.Path)
+	// The project's sessions go with it. A running one is kept and reported;
+	// one that fails for another reason keeps the project for a retry.
+	removed, busy := 0, 0
+	var ids []string
+	for _, sum := range s.store.List(project) {
+		ids = append(ids, sum.ID)
+	}
+	// A session whose output a delete left behind is finished here too.
+	for _, id := range s.store.PendingIn(project) {
+		if !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	for _, id := range ids {
+		err := s.engine.Delete(id)
+		switch {
+		case err == nil:
+			removed++
+		case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrStillRunning):
+			busy++
+		case errors.Is(err, agent.ErrNotFound):
+		case errors.Is(err, store.ErrLeftBehind), errors.Is(err, store.ErrUnreadable), errors.Is(err, store.ErrRecoveryConflict):
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	cfg, err := s.cfg.DropProject(project)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	out := map[string]any{"projects": orEmpty(cfg.Projects), "sessions_deleted": removed}
@@ -392,6 +420,72 @@ func (s *Server) deleteAllowlist(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"project": body.Project, "prefixes": orEmpty(s.cfg.Allowlist(body.Project)),
 	})
+}
+
+func (s *Server) listRecoveryItems(w http.ResponseWriter, r *http.Request) {
+	items, err := s.store.RecoveryItems()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Read the sessions folder: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) deleteRetained(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if id, ok := strings.CutSuffix(name, ".files"); ok && store.ValidID(id) && s.engine.Holds(id) {
+		writeError(w, http.StatusConflict, "The session is open: restart the harness and check again")
+		return
+	}
+	err := s.store.DeleteRetained(name, r.URL.Query().Get("generation"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "The item is gone: refresh the list")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listUnreadableSessions(w http.ResponseWriter, r *http.Request) {
+	ids, err := s.store.UnreadableSessions()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Read the sessions folder: "+err.Error())
+		return
+	}
+	if r.URL.Query().Get("include") == "runs" {
+		type entry struct {
+			ID   string   `json:"id"`
+			Runs []string `json:"runs"`
+		}
+		entries := make([]entry, 0, len(ids))
+		for _, id := range ids {
+			entries = append(entries, entry{ID: id, Runs: append([]string{}, s.store.Family(id)...)})
+		}
+		writeJSON(w, http.StatusOK, entries)
+		return
+	}
+	writeJSON(w, http.StatusOK, ids)
+}
+
+func (s *Server) archiveUnreadableSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.engine.Holds(id) {
+		writeError(w, http.StatusConflict, "The session is open: restart the harness and check again")
+		return
+	}
+	path, err := s.store.ArchiveUnreadable(id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "The transcript is gone: refresh the list")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"path": path})
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
@@ -732,16 +826,23 @@ func (s *Server) putEffort(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": sess.ID, "effort": body.Effort})
 }
 
+// deleteSession goes to the engine with the id as it was asked for, so a
+// session another delete has reserved answers busy rather than not found.
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
-	sess, ok := s.session(w, r)
-	if !ok {
-		return
-	}
-	if err := s.engine.Delete(sess.ID); err != nil {
+	id := r.PathValue("id")
+	err := s.engine.Delete(id)
+	switch {
+	case err == nil:
+	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrStillRunning), errors.Is(err, agent.ErrNotFound):
 		writeEngineError(w, err)
 		return
+	case errors.Is(err, store.ErrLeftBehind), errors.Is(err, store.ErrUnreadable), errors.Is(err, store.ErrRecoveryConflict):
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	s.hub.Drop(sess.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1101,7 +1202,8 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) (*agent.Session
 func writeEngineError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrNotLast),
-		errors.Is(err, agent.ErrCompacting), errors.Is(err, agent.ErrTooShort), errors.Is(err, agent.ErrNoShell):
+		errors.Is(err, agent.ErrCompacting), errors.Is(err, agent.ErrTooShort), errors.Is(err, agent.ErrNoShell),
+		errors.Is(err, agent.ErrStillRunning):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, agent.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
