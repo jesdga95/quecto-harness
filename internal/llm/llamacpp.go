@@ -302,6 +302,7 @@ func applyPreserve(kwargs map[string]any, preserve bool, caps Caps) {
 // buildLlamaBody renders the wire request. It is a map because the field set
 // is conditional, and a map also marshals with sorted keys for the tests.
 func buildLlamaBody(req ChatRequest) ([]byte, error) {
+	req.Messages = chatMessages(req.Messages)
 	body := baseBody(req)
 	body["reasoning_format"] = "deepseek"
 	// top_k and repeat_penalty are this server's, and the OpenAI API defines

@@ -2,11 +2,15 @@ package agent
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jesdga95/quecto-harness/internal/config"
+	"github.com/jesdga95/quecto-harness/internal/llm"
+	"github.com/jesdga95/quecto-harness/internal/prompts"
+	"github.com/jesdga95/quecto-harness/internal/store"
 )
 
 // queueDuringTurn sends a message while the model is answering, which is where
@@ -66,6 +70,11 @@ func TestSteerBecomesTheNextTurn(t *testing.T) {
 	if h.replay.Count() != 2 {
 		t.Errorf("requests = %d, want the turn to have carried on", h.replay.Count())
 	}
+	msgs := h.replay.Body(1)["messages"].([]any)
+	last := msgs[len(msgs)-1].(map[string]any)
+	if last["role"] != "user" || last["content"] != prompts.Steer("and the tests") {
+		t.Fatalf("follow-up after a plain reply = %v", last)
+	}
 	if s.Steer() != nil {
 		t.Error("the queue still holds the message it delivered")
 	}
@@ -74,18 +83,22 @@ func TestSteerBecomesTheNextTurn(t *testing.T) {
 // Work already under way is not thrown away: the batch the model asked for
 // runs, and the message lands after it.
 func TestSteerWaitsForTheToolBatch(t *testing.T) {
-	h := newHarness(t, "stream_two_tools.txt", "stream_plain.txt")
+	h := newHarness(t, "stream_two_tools.txt", "stream_plain.txt", "stream_summary.txt")
 	h.replay.Delay = 8 * time.Millisecond
 	h.cfg.Update(func(c *config.Config) { c.Mode = config.ModeFull })
 	s := h.session(t)
-	h.engine.Send(s.ID, "list", nil)
-	queueDuringTurn(t, h, s, "read the readme instead")
+	const follow = "Also read the readme."
+	first := earlierWork + "List the files."
+	h.engine.Send(s.ID, first, nil)
+	queueDuringTurn(t, h, s, follow)
 	waitIdle(t, s)
 
 	doc, _, _, _ := s.Snapshot()
 	kinds := []string{}
 	for _, e := range doc.Entries {
-		kinds = append(kinds, e.Kind)
+		if e.Kind != "status" {
+			kinds = append(kinds, e.Kind)
+		}
 	}
 	if strings.Join(kinds, ",") != "user,assistant,tool,tool,user,assistant" {
 		t.Fatalf("entries = %v, want both calls run before the message", kinds)
@@ -96,21 +109,140 @@ func TestSteerWaitsForTheToolBatch(t *testing.T) {
 		}
 	}
 
-	// The request that follows answers every call and carries the message.
-	body := h.replay.Body(1)
-	msgs, _ := body["messages"].([]any)
-	tools, users := 0, 0
-	for _, m := range msgs {
-		row, _ := m.(map[string]any)
-		switch row["role"] {
-		case "tool":
-			tools++
-		case "user":
-			users++
+	framed := prompts.Steer(follow)
+	rows := h.replay.Body(1)["messages"].([]any)
+	if len(rows) != 5 || rows[1].(map[string]any)["role"] != "user" || rows[1].(map[string]any)["content"] != first {
+		t.Fatal("the request must contain the original user message and end with the two results")
+	}
+	for i, id := range []string{"call_0", "call_1"} {
+		row := rows[3+i].(map[string]any)
+		want := doc.Entries[2+i].Content
+		if i == 1 {
+			want += "\n\n" + framed
+		}
+		if row["role"] != "tool" || row["tool_call_id"] != id || row["name"] != "bash" || row["content"] != want {
+			t.Fatalf("result %s = %v", id, row)
 		}
 	}
-	if tools != 2 || users != 2 {
-		t.Errorf("tool messages = %d, user messages = %d, want two of each", tools, users)
+
+	if err := h.engine.Compact(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+	saved, err := h.store.Load(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := saved.Entries[4]
+	if saved.Compactions != 1 || !entry.InContext || entry.Content != follow || entry.Meta["steer"] != true {
+		t.Fatal("compaction did not preserve the raw follow-up in the retained tail")
+	}
+	reopened := fromDoc(saved)
+	messages := reopened.contextMessages(config.Agent{}, "", "", brief{}, nil)
+	if messages[len(messages)-3].Content != doc.Entries[3].Content ||
+		!messages[len(messages)-2].Update || messages[len(messages)-2].Content != framed ||
+		strings.Count(messages[1].Content, first) != 1 || strings.Contains(messages[1].Content, follow) {
+		t.Fatal("the compacted session lost the request or repeated the retained update")
+	}
+}
+
+func TestToolUpdateKeepsMediaInOrder(t *testing.T) {
+	image := llm.ImagePart("image/png", []byte("output"))
+	attachment := llm.ImagePart("image/png", []byte("input"))
+	video := llm.VideoPart("video/mp4", []byte("video"))
+	images := map[string]llm.Part{"out": image, "in": attachment, "clip": video}
+	s := &Session{Entries: []store.Entry{
+		{Kind: "assistant", InContext: true, ToolCalls: []llm.ToolCall{{ID: "last"}}},
+		{Kind: "tool", ToolCallID: "last", Content: "result", InContext: true,
+			Attachments: []store.Attachment{{Kind: "image", File: "out"}}},
+		{Kind: "user", Content: "update", InContext: true, Meta: map[string]any{"steer": true},
+			Attachments: []store.Attachment{{Kind: "image", File: "in"}}},
+	}}
+	messages := func() []llm.Message { return s.contextMessages(config.Agent{}, "", "", brief{}, images)[2:] }
+	msgs := messages()
+	want := []llm.Part{llm.TextPart("result"), image}
+	if len(msgs) != 3 || msgs[0].ToolCallID != "last" || !slices.Equal(msgs[0].Parts, want) ||
+		msgs[1].Role != "user" || !msgs[1].Update || msgs[1].Content != prompts.Steer("update") ||
+		msgs[2].Role != "user" || !slices.Equal(msgs[2].Parts, []llm.Part{attachment}) {
+		t.Fatalf("image placement = %v", msgs)
+	}
+	s.Entries[2].Attachments = append(s.Entries[2].Attachments, store.Attachment{Kind: "video", File: "clip"})
+	s.Entries[2].Meta["mode"] = string(config.WorkPlan)
+	msgs = messages()
+	if len(msgs) != 3 || !slices.Equal(msgs[0].Parts, want) || msgs[1].Role != "user" || msgs[1].Update ||
+		msgs[1].Content != modeRules(config.WorkPlan, brief{})+"\n\n"+prompts.Steer("update") ||
+		msgs[2].Role != "user" || !slices.Equal(msgs[2].Parts, []llm.Part{attachment, video}) {
+		t.Fatalf("mode change with attachments = %v", msgs)
+	}
+}
+
+func TestQueuedSendersKeepTheirAttribution(t *testing.T) {
+	h := newHarness(t)
+	s := h.session(t)
+	s.appendEntry(store.Entry{Kind: "assistant", InContext: true, ToolCalls: []llm.ToolCall{{ID: "call"}}})
+	s.appendEntry(store.Entry{Kind: "tool", ToolCallID: "call", Content: "result", InContext: true})
+	from := sender{Name: "Reviewer", Session: "child"}
+	note := store.Attachment{Path: "note.txt", Content: "Text from the file"}
+	batch := []Steer{
+		{Text: "First", From: from},
+		{Text: "Second"},
+		{Text: "Third", From: from, Attachments: []store.Attachment{note}},
+	}
+	for _, m := range batch {
+		if err := s.queue(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.engine.absorbSteer(s)
+	doc, err := h.store.Load(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Entries) != 2+len(batch) {
+		t.Fatalf("entries = %d", len(doc.Entries))
+	}
+	for i, m := range batch {
+		entry := doc.Entries[i+2]
+		if entry.Content != m.Text || entry.From != m.From.Name || entry.FromSession != m.From.Session ||
+			entry.Meta["steer"] != true || !slices.Equal(entry.Attachments, m.Attachments) {
+			t.Fatalf("stored entry %d = %+v", i, entry)
+		}
+	}
+	msgs := fromDoc(doc).contextMessages(config.Agent{}, "", "", brief{}, nil)
+	want := []string{prompts.Message(from.Name, from.Session, "First"), prompts.Steer("Second"),
+		prompts.Message(from.Name, from.Session, "Third")}
+	if len(msgs) != 7 || msgs[2].Content != "result" || msgs[6].Role != "user" ||
+		msgs[6].Content != prompts.Attachment(note.Path, note.Content) {
+		t.Fatalf("mixed batch and attachment = %v", msgs)
+	}
+	for i, text := range want {
+		if m := msgs[3+i]; m.Role != "user" || !m.Update || m.Content != text {
+			t.Fatalf("update %d = %+v", i, m)
+		}
+	}
+}
+
+func TestCompactionCarriesOpenRequestAndUpdates(t *testing.T) {
+	entries := []store.Entry{
+		{Kind: "user", Seq: 1, Content: "Older request"},
+		{Kind: "user", Seq: 2, Content: "Open request"},
+		{Kind: "user", Seq: 3, Content: "Extra detail", Meta: map[string]any{"steer": true}},
+		{Kind: "user", Seq: 4, From: "Worker", Content: "Done", Meta: map[string]any{"steer": true}},
+		{Kind: "user", Seq: 5, Content: "Continue the plan", Meta: map[string]any{"continue": true}},
+	}
+	human := "Open request\n\n" + prompts.Steer("Extra detail")
+	if got := recentRequest(entries, 0, false, false); got != human+"\n\n"+prompts.Message("Worker", "", "Done") {
+		t.Fatalf("whole turn = %q", got)
+	}
+	if got := recentRequest(entries, 4, true, false); got != human {
+		t.Fatalf("before the retained tail = %q", got)
+	}
+	entries[1].Meta = map[string]any{"kickoff": true}
+	if got := recentRequest(entries, 4, true, true); got != prompts.Steer("Extra detail") {
+		t.Fatalf("updates beside the carried plan = %q", got)
+	}
+	if got := recentRequest(entries, 4, true, false); got != human {
+		t.Fatalf("request without a carried plan = %q", got)
 	}
 }
 
@@ -147,6 +279,10 @@ func TestStopDeliversTheQueue(t *testing.T) {
 	if err != nil || !sent.Queued {
 		t.Fatalf("send during a command = %+v %v, want it queued", sent, err)
 	}
+	from := sender{Name: "Worker", Session: "child"}
+	if sent, err := h.engine.deliverFrom(s, from, "Work finished", nil); err != nil || !sent.Queued {
+		t.Fatalf("second sender = %+v, %v", sent, err)
+	}
 	h.engine.Stop(s.ID)
 
 	waitForEntry(t, s, "never mind, what is here")
@@ -159,10 +295,13 @@ func TestStopDeliversTheQueue(t *testing.T) {
 	if s.Steer() != nil {
 		t.Error("the queue still holds the message the stop delivered")
 	}
-	// No browser drew this one for itself, so the harness has to.
-	if len(h.rec.ofType("message")) != 1 {
-		t.Errorf("message events = %d, want the delivered message on the stream",
-			len(h.rec.ofType("message")))
+	if len(h.rec.ofType("message")) != 2 {
+		t.Errorf("message events = %d, want one per sender", len(h.rec.ofType("message")))
+	}
+	entries := doc.Entries[len(doc.Entries)-3:]
+	if entries[0].Content != "never mind, what is here" || entries[1].FromSession != from.Session ||
+		entries[1].Content != "Work finished" || entries[0].Meta["steer"] == true || entries[1].Meta["steer"] == true {
+		t.Fatalf("messages after stop = %+v", entries)
 	}
 }
 

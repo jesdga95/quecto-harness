@@ -72,10 +72,8 @@ type Session struct {
 	Compactions int
 	Todos       []store.Todo
 
-	// steer is the message waiting for the running turn to pick it up. It is
-	// not part of the document: a message that outlives the turn it was typed
-	// against is sent as an ordinary one instead.
-	steer *Steer
+	// Pending messages stay in arrival order until the current step finishes.
+	steer []Steer
 
 	caps llm.Caps
 	// features is what the server does for this model beyond its protocol.
@@ -357,54 +355,83 @@ func (s *Session) Compactable() bool {
 }
 
 // sender is who a message is from: the name a person reads, and the session a
-// reply is addressed to. Both empty is a person.
+// reply is addressed to. The zero value identifies a person.
 type sender struct {
 	Name    string
 	Session string
 }
 
-// Steer is a message typed while a turn was running. There is one per
-// session: a second joins the first, since the model reads them as one turn
-// either way.
+// Steer holds consecutive messages from one sender during a running turn.
 type Steer struct {
 	Text        string
 	Attachments []store.Attachment
-	// From is the agent that sent it, empty for the person. Two messages from
-	// different senders join with no sender, since the joined text names each
-	// of them already.
-	From sender
+	From        sender
 }
 
-// Steer is the message waiting for the running turn, or nil.
+// Steer returns the combined preview shown while messages are waiting.
 func (s *Session) Steer() *Steer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.steer == nil {
-		return nil
-	}
-	held := *s.steer
-	held.Attachments = append([]store.Attachment(nil), s.steer.Attachments...)
-	return &held
+	return s.steerPreview()
 }
 
-// queue adds a message to the one waiting, on a line of its own. A set of
-// attachments that would
-// take the joined message over the cap is refused whole, so the queue is
-// never left holding half of what was typed. The caller holds the lock.
-func (s *Session) queue(from sender, text string, attachments []store.Attachment) error {
-	next := &Steer{Text: text, Attachments: attachments, From: from}
-	if s.steer != nil {
-		next.Text = joinMessages(s.steer.Text, text)
-		next.Attachments = append(append([]store.Attachment(nil), s.steer.Attachments...), attachments...)
-		if s.steer.From != from {
-			next.From = sender{}
+func (s *Session) steerPreview() *Steer {
+	if len(s.steer) == 0 {
+		return nil
+	}
+	preview := &Steer{From: s.steer[0].From}
+	var texts []string
+	for _, m := range s.steer {
+		if m.Text != "" {
+			texts = append(texts, m.Text)
+		}
+		preview.Attachments = append(preview.Attachments, m.Attachments...)
+		if m.From != preview.From {
+			preview.From = sender{}
 		}
 	}
-	if len(next.Attachments) > maxAttachments {
-		return fmt.Errorf("Attach %d files: at most %d fit in one message", len(next.Attachments), maxAttachments)
+	preview.Text = strings.Join(texts, "\n")
+	return preview
+}
+
+// queue joins adjacent messages from the same sender. The caller holds the lock.
+func (s *Session) queue(next Steer) error {
+	total := len(next.Attachments)
+	for _, m := range s.steer {
+		total += len(m.Attachments)
 	}
-	s.steer = next
+	if total > maxAttachments {
+		return fmt.Errorf("Attach %d files: at most %d fit in one message", total, maxAttachments)
+	}
+	if n := len(s.steer); n > 0 && s.steer[n-1].From == next.From {
+		last := &s.steer[n-1]
+		last.Text = joinMessages(last.Text, next.Text)
+		last.Attachments = append(last.Attachments, next.Attachments...)
+	} else {
+		s.steer = append(s.steer, next)
+	}
 	return nil
+}
+
+// takeSteer moves the queue into the transcript. The caller holds the lock.
+func (s *Session) takeSteer(midTurn bool) []store.Entry {
+	entries := make([]store.Entry, 0, len(s.steer))
+	for _, m := range s.steer {
+		entry := m.entry(s.Mode)
+		if midTurn {
+			entry.Meta["steer"] = true
+		}
+		entries = append(entries, s.appendEntry(entry))
+	}
+	s.steer = nil
+	return entries
+}
+
+// entry keeps the original text for the transcript and the senders for the model.
+func (m Steer) entry(mode config.WorkMode) store.Entry {
+	return store.Entry{Kind: "user", Role: "user", Content: m.Text, From: m.From.Name,
+		FromSession: m.From.Session, Attachments: m.Attachments,
+		InContext: true, Visible: true, Meta: map[string]any{"mode": string(mode)}}
 }
 
 // joinMessages puts two messages on their own lines.
@@ -693,7 +720,12 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 			} else if m != mode {
 				switched, mode = modeRules(m, b), m
 			}
-			msgs = append(msgs, userMessage(e, images, switched, s.features))
+			last := msgs[len(msgs)-1]
+			if e.Meta["steer"] == true && (last.Role == "tool" || last.Update) {
+				msgs = appendToolUpdate(msgs, e, images, switched, s.features)
+			} else {
+				msgs = append(msgs, userMessage(e, images, switched, s.features))
+			}
 		case "compaction":
 			// Sent above, ahead of the messages it kept.
 		case "assistant":
@@ -763,26 +795,49 @@ func modeRules(m config.WorkMode, b brief) string {
 	return prompts.ModeExecute()
 }
 
+// A change of mode keeps the update in a user message of its own.
+// Attachments, including text files, follow in a separate user message.
+func appendToolUpdate(msgs []llm.Message, e store.Entry, images map[string]llm.Part, rules string, features llm.Features) []llm.Message {
+	attachments := e.Attachments
+	e.Attachments = nil
+	update := userMessage(e, nil, rules, features)
+	update.Update = rules == ""
+	msgs = append(msgs, update)
+	files := withAttachments("", attachments, images, features)
+	if files.Content != "" || len(files.Parts) > 0 {
+		msgs = append(msgs, files)
+	}
+	return msgs
+}
+
+func messageText(e store.Entry) string {
+	if e.From != "" {
+		return prompts.Message(e.From, e.FromSession, e.Content)
+	}
+	if e.Meta["steer"] == true {
+		return prompts.Steer(e.Content)
+	}
+	return e.Content
+}
+
 // userMessage is the message as typed, with each attached text file under it
 // and each image, document and video beside it, and rules for a mode it was the first sent in
 // ahead of it. A message with an image is an array of parts, which is the only
 // shape that carries one.
 func userMessage(e store.Entry, images map[string]llm.Part, rules string, features llm.Features) llm.Message {
-	var b strings.Builder
+	text := messageText(e)
 	if rules != "" {
-		b.WriteString(rules)
-		b.WriteString("\n\n")
+		text = rules + "\n\n" + text
 	}
-	// A message from a person and one from another agent arrive on the same
-	// role, so the sender is named in the text or the model cannot tell them
-	// apart.
-	if e.From != "" {
-		b.WriteString(prompts.Message(e.From, e.FromSession, e.Content))
-	} else {
-		b.WriteString(e.Content)
-	}
+	return withAttachments(text, e.Attachments, images, features)
+}
+
+func withAttachments(text string, attachments []store.Attachment, images map[string]llm.Part, features llm.Features) llm.Message {
+	var b strings.Builder
+	b.WriteString(text)
 	var parts []llm.Part
-	for _, a := range e.Attachments {
+	for _, a := range attachments {
+		var note string
 		switch a.Kind {
 		case "image":
 			// The picture goes as a part, so the model sees it. A path is not
@@ -791,6 +846,7 @@ func userMessage(e store.Entry, images map[string]llm.Part, rules string, featur
 			if part, ok := images[a.File]; ok {
 				parts = append(parts, part)
 			}
+			continue
 		case "document", "video":
 			// A document carries its own name. One the server is not sent is
 			// named in the text, so the model knows it was attached.
@@ -798,12 +854,14 @@ func userMessage(e store.Entry, images map[string]llm.Part, rules string, featur
 				parts = append(parts, part)
 				continue
 			}
-			b.WriteString("\n\n")
-			b.WriteString(prompts.NotSent(filepath.Base(a.Path), notSentReason(a, features)))
+			note = prompts.NotSent(filepath.Base(a.Path), notSentReason(a, features))
 		default:
-			b.WriteString("\n\n")
-			b.WriteString(prompts.Attachment(a.Path, a.Content))
+			note = prompts.Attachment(a.Path, a.Content)
 		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(note)
 	}
 	if len(parts) == 0 {
 		return llm.Message{Role: "user", Content: b.String()}

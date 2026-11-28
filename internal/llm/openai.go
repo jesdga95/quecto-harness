@@ -123,6 +123,7 @@ func openAIOverflow(body string) bool {
 // server that does not take the field, or does not take the level, refuses
 // the request and says so.
 func buildOpenAIBody(req ChatRequest) ([]byte, error) {
+	req.Messages = chatMessages(req.Messages)
 	body := baseBody(req)
 	switch req.Effort {
 	case EffortAuto:

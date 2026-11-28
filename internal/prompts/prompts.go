@@ -9,7 +9,7 @@ import (
 	"text/template"
 )
 
-//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md not_sent.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md commit_message.md
+//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md steer.md compact.md compaction.md title.md attachment.md not_sent.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md commit_message.md
 var files embed.FS
 
 // hasTool is the has the prompt templates take: whether the tools a turn sends
@@ -36,6 +36,7 @@ var (
 	notSentTmpl    = template.Must(template.New("not_sent").Parse(mustRead("not_sent.md")))
 	titleTmpl      = template.Must(template.New("title").Parse(mustRead("title.md")))
 	commitTmpl     = template.Must(template.New("commit").Parse(mustRead("commit_message.md")))
+	steerTmpl      = template.Must(template.New("steer").Parse(mustRead("steer.md")))
 	messageTmpl    = template.Must(template.New("message").Parse(mustRead("message.md")))
 	compactTmpl    = template.Must(template.New("compact").Parse(mustRead("compact.md")))
 	continueTmpl   = template.Must(template.New("continue").Parse(mustRead("plan_continue.md")))
@@ -244,6 +245,15 @@ func Message(from, session, text string) string {
 		panic("prompts: render message.md: " + err.Error())
 	}
 	return strings.TrimRight(b.String(), " \t\r\n")
+}
+
+// Steer renders a user message delivered during an active turn.
+func Steer(text string) string {
+	var b strings.Builder
+	if err := steerTmpl.Execute(&b, strings.ReplaceAll(text, "</user_update>", "&lt;/user_update&gt;")); err != nil {
+		panic("prompts: render steer.md: " + err.Error())
+	}
+	return b.String()
 }
 
 // Denial is what the model is told about a call the user refused, with the
