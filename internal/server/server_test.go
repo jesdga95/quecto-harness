@@ -3176,7 +3176,7 @@ func TestUnreadableSessionRecovery(t *testing.T) {
 	if result.Code != 200 {
 		t.Fatalf("Archive: %d %s", result.Code, result.Body.String())
 	}
-	if raw, err := os.ReadFile(path + ".unreadable-1"); err != nil || string(raw) != "{broken" {
+	if raw, err := os.ReadFile(decode(t, result)["path"].(string)); err != nil || string(raw) != "{broken" {
 		t.Fatalf("Archived transcript: %q %v", raw, err)
 	}
 	if err := f.srv.store.Save(&store.Session{ID: id}); err != nil {
@@ -3244,5 +3244,265 @@ func TestRecoveryCanRemoveTheRunsOfAnUnreadableLauncher(t *testing.T) {
 	}
 	if _, err := os.Stat(st.SpillDir(parent)); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestDeletingALauncherKeepsAnArchivedRunsOutput(t *testing.T) {
+	f := newFixture(t)
+	parent, child := store.NewID(), store.NewID()
+	for _, sess := range []*store.Session{
+		{ID: parent, Project: f.project},
+		{ID: child, Parent: parent, Project: f.project},
+	} {
+		if err := f.srv.store.Save(sess); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spill := f.srv.store.SpillDir(child)
+	if err := os.MkdirAll(spill, 0700); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(spill, "keep")
+	if err := os.WriteFile(output, []byte("saved output"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(f.cfg.Paths().Sessions, child+".json")
+	if err := os.WriteFile(transcript, []byte("{broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(t, "POST", "/api/recovery/sessions/"+child+"/archive", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Archive = %d %s", w.Code, w.Body.String())
+	}
+	if w := f.do(t, "DELETE", "/api/sessions/"+parent, nil); w.Code != http.StatusNoContent {
+		t.Fatalf("Delete = %d %s", w.Code, w.Body.String())
+	}
+	for path, want := range map[string]string{decode(t, w)["path"].(string): "{broken", output: "saved output"} {
+		if got, err := os.ReadFile(path); err != nil || string(got) != want {
+			t.Errorf("Read %s = %q, %v", path, got, err)
+		}
+	}
+}
+
+func TestRetainedOutputAndArchivesCanBeRemovedIndependently(t *testing.T) {
+	f := newFixture(t)
+	st := f.srv.store
+	id := store.NewID()
+	dir := f.cfg.Paths().Sessions
+	path := filepath.Join(dir, id+".json")
+	const base = "/api/recovery/items"
+	for _, suffix := range []string{".unreadable-1", ".unreadable-2"} {
+		if err := os.WriteFile(path+suffix, []byte("{broken"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(st.SpillDir(id), 0700); err != nil {
+		t.Fatal(err)
+	}
+	list := f.do(t, "GET", base, nil)
+	if list.Code != 200 || !strings.Contains(list.Body.String(), id+".json.unreadable-1") || !strings.Contains(list.Body.String(), id+".files") {
+		t.Fatalf("Recovery list = %d %s", list.Code, list.Body.String())
+	}
+	var items []store.RecoveryItem
+	if err := json.Unmarshal(list.Body.Bytes(), &items); err != nil {
+		t.Fatal(err)
+	}
+	var generation string
+	for _, item := range items {
+		if item.Kind == "output" {
+			generation = item.Generation
+		}
+	}
+	if generation == "" {
+		t.Fatal("Missing output generation")
+	}
+	outputURL := base + "/" + id + ".files?generation=" + generation
+	if err := os.WriteFile(path, []byte("{restored"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", outputURL, nil); w.Code != 409 {
+		t.Fatalf("Delete restored output = %d", w.Code)
+	}
+	if w := f.do(t, "DELETE", base+"/"+id+".json.unreadable-1", nil); w.Code != 204 {
+		t.Fatalf("Delete archive = %d", w.Code)
+	}
+	for _, p := range []string{path, path + ".unreadable-2", st.SpillDir(id)} {
+		if _, err := os.Lstat(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	folder := filepath.Join(dir, id+".files")
+	if err := os.Rename(folder, folder+".original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.CopyFS(folder, os.DirFS(folder+".original")); err != nil {
+		t.Fatal(err)
+	}
+	extra := filepath.Join(folder, "new-output")
+	if err := os.WriteFile(extra, []byte("restored"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", outputURL, nil); w.Code != http.StatusConflict {
+		t.Fatalf("Stale confirmation = %d %s", w.Code, w.Body)
+	}
+	if data, err := os.ReadFile(extra); err != nil || string(data) != "restored" {
+		t.Fatal("Lost restored output", err)
+	}
+	if err := json.Unmarshal(f.do(t, "GET", base, nil).Body.Bytes(), &items); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Kind == "output" {
+			outputURL = base + "/" + item.Name + "?generation=" + item.Generation
+		}
+	}
+	if w := f.do(t, "DELETE", outputURL, nil); w.Code != 204 {
+		t.Fatalf("Delete output = %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(st.SpillDir(id)); !os.IsNotExist(err) {
+		t.Fatalf("Output after deletion: %v", err)
+	}
+	if _, err := os.Stat(path + ".unreadable-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(st.SpillDir(id), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", outputURL, nil); w.Code != 409 {
+		t.Fatalf("Reused output confirmation = %d", w.Code)
+	}
+	if _, err := os.Stat(st.SpillDir(id)); err != nil {
+		t.Fatal(err)
+	}
+
+}
+
+func TestRepairedLegacyRunCanBeOpenedAndDeleted(t *testing.T) {
+	f := newFixture(t)
+	id, parent := store.NewID(), store.NewID()
+	path := filepath.Join(f.cfg.Paths().Sessions, id+".json")
+	if err := f.srv.store.Save(&store.Session{ID: parent, Project: f.project}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", "/api/sessions/"+parent, nil); w.Code != 204 {
+		t.Fatal(w.Body.String())
+	}
+	raw, err := json.Marshal(&store.Session{ID: id, Parent: parent, Project: f.project, Entries: []store.Entry{{Seq: 1, Kind: "user", Role: "user", Content: "Recovered transcript", Visible: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "GET", "/api/recovery/sessions?include=runs", nil); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	if w := f.do(t, "GET", "/api/recovery/items", nil); w.Code != 200 || !strings.Contains(w.Body.String(), id) {
+		t.Fatal(w.Body.String())
+	}
+	if w := f.do(t, "GET", "/api/sessions/"+id, nil); w.Code != 200 || !strings.Contains(w.Body.String(), "Recovered transcript") {
+		t.Fatal(w.Body.String())
+	}
+	if w := f.do(t, "DELETE", "/api/sessions/"+id, nil); w.Code != 204 {
+		t.Fatal(w.Body.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("Run after deletion: %v", err)
+	}
+}
+
+func TestStaleArchiveConfirmationKeepsTheNextArchive(t *testing.T) {
+	f := newFixture(t)
+	id := store.NewID()
+	transcript := filepath.Join(f.cfg.Paths().Sessions, id+".json")
+	archive := func(contents string) string {
+		t.Helper()
+		if err := os.WriteFile(transcript, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		w := f.do(t, "POST", "/api/recovery/sessions/"+id+"/archive", nil)
+		if w.Code != 200 {
+			t.Fatal(w.Code, w.Body)
+		}
+		return decode(t, w)["path"].(string)
+	}
+	first := archive("{first")
+	route := "/api/recovery/items/" + filepath.Base(first)
+	if w := f.do(t, "DELETE", route, nil); w.Code != 204 {
+		t.Fatal(w.Code, w.Body)
+	}
+	second := archive("{second")
+	if w := f.do(t, "DELETE", route, nil); w.Code != 409 {
+		t.Fatalf("Stale confirmation = %d %s", w.Code, w.Body)
+	}
+	if data, err := os.ReadFile(second); err != nil || string(data) != "{second" {
+		t.Fatalf("Second archive = %q, %v", data, err)
+	}
+}
+
+func TestRecoveryExplainsConflictingOutputMarkers(t *testing.T) {
+	f := newFixture(t)
+	id := store.NewID()
+	path := filepath.Join(f.cfg.Paths().Sessions, id+".files")
+	if err := f.srv.store.Save(&store.Session{ID: id, Project: f.project}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(f.cfg.Paths().Sessions, id+".json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const base = "/api/recovery/items"
+	first := f.do(t, "GET", base, nil)
+	var items []store.RecoveryItem
+	if err := json.Unmarshal(first.Body.Bytes(), &items); err != nil || len(items) != 1 {
+		t.Fatal(first.Body.String(), err)
+	}
+	markers, err := os.ReadDir(path)
+	if err != nil || len(markers) != 1 {
+		t.Fatal(markers, err)
+	}
+	locked := filepath.Join(path, "locked")
+	if err := os.Mkdir(locked, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "saved"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0700) })
+	if err := json.Unmarshal(f.do(t, "GET", base, nil).Body.Bytes(), &items); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := f.do(t, "DELETE", base+"/"+id+".files?generation="+items[0].Generation, nil); w.Code != 409 {
+		if os.Geteuid() == 0 {
+			t.Skip("Root can remove the protected file")
+		}
+		t.Fatalf("Expected pending cleanup, got %d %s", w.Code, w.Body)
+	}
+	second := ".recovery-" + strings.Repeat("B", 26)
+	if err := os.WriteFile(filepath.Join(path, second), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	project := f.do(t, "DELETE", "/api/projects", map[string]string{"path": f.project})
+	if project.Code != http.StatusConflict {
+		t.Fatalf("Project removal = %d %s", project.Code, project.Body)
+	}
+	for _, w := range []*httptest.ResponseRecorder{project, f.do(t, "GET", base, nil), f.do(t, "DELETE", base+"/"+id+".files?generation="+items[0].Generation, nil)} {
+		for _, part := range []string{markers[0].Name(), second, "move", "refresh"} {
+			if !strings.Contains(w.Body.String(), part) {
+				t.Fatalf("%d %s lacks %s", w.Code, w.Body, part)
+			}
+		}
 	}
 }

@@ -361,7 +361,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrStillRunning):
 			busy++
 		case errors.Is(err, agent.ErrNotFound):
-		case errors.Is(err, store.ErrLeftBehind), errors.Is(err, store.ErrUnreadable):
+		case errors.Is(err, store.ErrLeftBehind), errors.Is(err, store.ErrUnreadable), errors.Is(err, store.ErrRecoveryConflict):
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		default:
@@ -420,6 +420,33 @@ func (s *Server) deleteAllowlist(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"project": body.Project, "prefixes": orEmpty(s.cfg.Allowlist(body.Project)),
 	})
+}
+
+func (s *Server) listRecoveryItems(w http.ResponseWriter, r *http.Request) {
+	items, err := s.store.RecoveryItems()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Read the sessions folder: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) deleteRetained(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if id, ok := strings.CutSuffix(name, ".files"); ok && store.ValidID(id) && s.engine.Holds(id) {
+		writeError(w, http.StatusConflict, "The session is open: restart the harness and check again")
+		return
+	}
+	err := s.store.DeleteRetained(name, r.URL.Query().Get("generation"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "The item is gone: refresh the list")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) listUnreadableSessions(w http.ResponseWriter, r *http.Request) {
@@ -809,7 +836,7 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrStillRunning), errors.Is(err, agent.ErrNotFound):
 		writeEngineError(w, err)
 		return
-	case errors.Is(err, store.ErrLeftBehind), errors.Is(err, store.ErrUnreadable):
+	case errors.Is(err, store.ErrLeftBehind), errors.Is(err, store.ErrUnreadable), errors.Is(err, store.ErrRecoveryConflict):
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	default:

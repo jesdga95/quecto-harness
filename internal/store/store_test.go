@@ -1,8 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -922,5 +924,782 @@ func TestArchiveCancelsPendingOutputRemoval(t *testing.T) {
 	}
 	if _, err := os.Stat(st.SpillDir(id)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpenDistinguishesAnArchiveFromAPendingDeletion(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		version      int
+		pending      bool
+		archive      string
+		keepOutput   bool
+		keepRelation bool
+	}{
+		{name: "Earlier archive with a recorded launcher", keepOutput: true},
+		{name: "Interrupted archive with pending cleanup", version: 1, pending: true, archive: ".unreadable-1", keepOutput: true},
+		{name: "Interrupted archive with only a launcher", version: 1, archive: ".unreadable-1", keepOutput: true},
+		{name: "Restored run deleted after an earlier archive", version: 1, pending: true},
+		{name: "Earlier archive with a different pending name", version: 1, pending: true, archive: ".unreadable-2"},
+		{name: "Missing restored run with a recorded launcher", version: 1, keepOutput: true, keepRelation: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			id, parent := NewID(), NewID()
+			file := id + ".json"
+			if err := os.WriteFile(filepath.Join(dir, file+".unreadable-1"), []byte("{broken"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			spill := filepath.Join(dir, id+".files", "spill")
+			if err := os.MkdirAll(spill, 0700); err != nil {
+				t.Fatal(err)
+			}
+			relations := map[string]any{id: map[string]string{"parent": parent, "project": "/project"}}
+			record := map[string]any{"parents": relations}
+			if tc.version != 0 {
+				record["version"] = tc.version
+			}
+			if tc.archive != "" {
+				record["archiving"] = file + tc.archive
+			}
+			if tc.pending {
+				record["cleanup"] = relations
+			}
+			raw, err := json.Marshal(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, ledgerFile), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			st, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if slices.Contains(st.Family(parent), id) != tc.keepRelation || st.Pending(id) {
+				t.Errorf("Family = %v, cleanup pending = %t", st.Family(parent), st.Pending(id))
+			}
+			if _, err := os.Stat(spill); (tc.keepOutput && err != nil) || (!tc.keepOutput && !os.IsNotExist(err)) {
+				t.Errorf("Saved output after restart: %v, want kept %t", err, tc.keepOutput)
+			}
+		})
+	}
+}
+
+func TestCleanupWithAnEmptyOrNullPrimaryLedger(t *testing.T) {
+	for _, primary := range []string{"null", "{}", `{"version":1}`} {
+		t.Run(primary, func(t *testing.T) {
+			dir := t.TempDir()
+			st, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := NewID()
+			if err := st.Save(sample(id, time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			folder, release := lockedOutput(t, dir, id)
+			if err := st.Delete(id); !errors.Is(err, ErrLeftBehind) {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, ledgerFile)
+			if primary == "null" {
+				if err := st.clearFailedRemoval(id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(path, []byte(primary), 0600); err != nil {
+				t.Fatal(err)
+			}
+			st, err = Open(dir)
+			if err != nil || !st.Pending(id) {
+				t.Fatalf("Lost pending cleanup: %v", err)
+			}
+			backup, err := readLedgerCopy(path + ".backup")
+			if _, ok := backup.Cleanup[id]; err != nil || !ok {
+				t.Fatalf("Lost backup order: %v", err)
+			}
+			release()
+			st, err = Open(dir)
+			if err != nil || st.Pending(id) {
+				t.Fatalf("Cleanup did not settle: %v", err)
+			}
+			if _, err := os.Lstat(folder); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("Output remains: %v", err)
+			}
+		})
+	}
+}
+
+func TestEmptyLedgerKeepsUnconfirmedBackupOrdersForRecovery(t *testing.T) {
+	dir := t.TempDir()
+	id := NewID()
+	path := filepath.Join(dir, ledgerFile)
+	raw := []byte(`{"version":1,"cleanup":["` + id + `"]}`)
+	if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".backup", raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	folder := filepath.Join(dir, id+".files")
+	if err := os.Mkdir(folder, 0700); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(dir)
+	if err != nil || st.Pending(id) {
+		t.Fatalf("Unconfirmed cleanup: %v", err)
+	}
+	if _, err := os.Stat(folder); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := os.ReadFile(path + ".backup.divergent-1")
+	if err != nil || !bytes.Equal(saved, raw) {
+		t.Fatalf("Backup evidence = %s, %v", saved, err)
+	}
+}
+
+func TestFailedOutputOrderSurvivesLossOfBothLedgers(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, stray := NewID(), NewID()
+	if err := s.Save(sample(id, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	folder, release := lockedOutput(t, dir, id)
+	if err := s.Delete(id); !errors.Is(err, ErrLeftBehind) {
+		t.Fatal(err)
+	}
+	release()
+	if err := os.Mkdir(s.filesDir(stray), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ledgerFile, ledgerFile + ".backup"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Open(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{folder, filepath.Join(dir, id+".cleanup")} {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Remaining %s: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(s.filesDir(stray)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckTranscriptsFindsDamageAndRepairedRuns(t *testing.T) {
+	dir := t.TempDir()
+	id, parent := NewID(), NewID()
+	doc := sample(id, time.Now())
+	doc.Parent = parent
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, id+".json")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	damaged := slices.Clone(raw)
+	damaged[0] = '!'
+	if err := os.WriteFile(path, damaged, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := s.UnreadableSessions(); err != nil || !slices.Contains(ids, id) {
+		t.Fatalf("Damaged = %v, %v", ids, err)
+	}
+	if !s.Has(id) {
+		t.Fatal("Damaged transcript disappeared from the index")
+	}
+	items, err := s.RecoveryItems()
+	if err != nil || len(items) != 0 {
+		t.Fatalf("Unreadable run listed as readable: %v, %v", items, err)
+	}
+	// An unreadable run can predate the first ledger.
+	for _, name := range []string{ledgerFile, ledgerFile + ".backup"} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if ids, err := s.UnreadableSessions(); err != nil || len(ids) != 0 {
+			t.Fatalf("Repaired = %v, %v", ids, err)
+		}
+		items, err := s.RecoveryItems()
+		if err != nil || !slices.Contains(items, RecoveryItem{Name: id + ".json", ID: id, Kind: "run"}) {
+			t.Fatalf("Recovery = %v, %v", items, err)
+		}
+		s, err = Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc.Parent = ""
+	raw, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UnreadableSessions(); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Family(parent); slices.Contains(got, id) {
+		t.Fatalf("Former launcher still owns the repaired session: %v", got)
+	}
+
+}
+
+func BenchmarkCheckTranscripts(b *testing.B) {
+	dir := b.TempDir()
+	const count = 512
+	payload := strings.Repeat("x", 256<<10)
+	for range count {
+		id := NewID()
+		doc := sample(id, time.Now())
+		doc.Entries[0].Content = payload
+		raw, err := json.Marshal(doc)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, id+".json"), raw, 0600); err != nil {
+			b.Fatal(err)
+		}
+	}
+	s, err := Open(dir)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, bench := range []string{"Changed", "Unchanged"} {
+		b.Run(bench, func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				if bench == "Changed" {
+					b.StopTimer()
+					for id, v := range s.index {
+						v.checked = nil
+						s.index[id] = v
+					}
+					b.StartTimer()
+				}
+				if _, err := s.UnreadableSessions(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestDeleteReportsBothRemovalFailuresOnOneLine(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	marker := filepath.Join(s.dir, id+".cleanup")
+	for _, p := range []string{s.path(id), marker} {
+		if err := os.Mkdir(p, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "kept"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = s.Delete(id)
+	if err == nil {
+		t.Fatal("Deletion succeeded with nonempty directories")
+	}
+	message := err.Error()
+	if strings.ContainsAny(message, "\r\n") || !strings.Contains(message, s.path(id)) || !strings.Contains(message, marker) {
+		t.Fatalf("Deletion diagnostic = %q", message)
+	}
+	if !s.Pending(id) {
+		t.Fatal("Cleanup order was lost")
+	}
+}
+
+func TestRestoredSessionReportsWhyCleanupCannotSettle(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	if err := st.Save(sample(id, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.markPending(id); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(st.dir, ledgerFile)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.FinishCleanup(id)
+	if err == nil || !strings.HasPrefix(err.Error(), "Finish cleanup for session "+id) || !strings.Contains(err.Error(), ledgerFile) {
+		t.Fatalf("Cleanup error = %v", err)
+	}
+}
+
+func TestArchiveKeepsItsMarkerUntilTheRenameCommits(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	if err := st.markPending(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.recordFailedRemoval(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(st.path(id), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.archive(id, filepath.Join(st.dir, "absent", "archive")); err == nil {
+		t.Fatal("Rename succeeded")
+	}
+	marker := filepath.Join(st.dir, id+".cleanup")
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal(err)
+	}
+	aside := st.path(id) + ".unreadable-1"
+	st.led.Archiving = filepath.Base(aside)
+	if err := st.writeLedgerLocked(false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(st.path(id), aside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(st.filesDir(id), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		st, err = Open(st.dir)
+		if err != nil || st.Pending(id) {
+			t.Fatalf("Pending after archive: %v", err)
+		}
+		if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Stale marker: %v", err)
+		}
+		if _, err := os.Stat(st.filesDir(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestLostLedgersDoNotApplyAnAmbiguousMarkerToArchivedOutput(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	if err := st.markPending(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.recordFailedRemoval(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(st.filesDir(id), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(st.path(id)+".unreadable-1", []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{ledgerFile, ledgerFile + ".backup"} {
+		if err := os.WriteFile(filepath.Join(st.dir, name), []byte("{"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err = Open(st.dir)
+	if err != nil || st.Pending(id) {
+		t.Fatalf("Ambiguous cleanup: %v", err)
+	}
+	if err := st.DeleteRetained(id+".json.unreadable-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	st, err = Open(st.dir)
+	if err != nil || st.Pending(id) {
+		t.Fatalf("Archive removal rearmed cleanup: %v", err)
+	}
+	if _, err := os.Stat(st.filesDir(id)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestArchiveRetriesThePreviousMarker(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := NewID(), NewID()
+	for _, id := range []string{first, second} {
+		if err := os.WriteFile(s.path(id), []byte("{"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.markPending(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	marker := filepath.Join(s.dir, first+".cleanup")
+	if err := os.Mkdir(marker, 0700); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(marker, "keep")
+	if err := os.WriteFile(blocker, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := s.ArchiveUnreadable(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteRetained(filepath.Base(archive), ""); err == nil || !strings.Contains(err.Error(), marker) {
+		t.Fatalf("Delete with unresolved marker = %v", err)
+	}
+	if _, err := Open(s.dir); err == nil || !strings.Contains(err.Error(), "move "+marker+" aside") {
+		t.Fatalf("Startup with unresolved marker = %v", err)
+	}
+	if _, err := s.ArchiveUnreadable(second); err == nil || !strings.Contains(err.Error(), first) {
+		t.Fatalf("Second archive = %v", err)
+	}
+	if s.led.Archiving != filepath.Base(archive) {
+		t.Fatal("Lost the first archive")
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ArchiveUnreadable(second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stale marker = %v", err)
+	}
+	if _, err := os.Stat(archive); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewCleanupSupersedesArchiveOfTheSameSession(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	archive := id + ".json.unreadable-1"
+	if err := os.WriteFile(filepath.Join(s.dir, archive), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.led.Archiving = archive
+	folder, release := lockedOutput(t, s.dir, id)
+	if err := s.markPending(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.recordFailedRemoval(id); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(s.dir)
+	if err != nil || !s.Pending(id) {
+		t.Fatalf("New cleanup was released: %v", err)
+	}
+	release()
+	if _, err := s.FinishCleanup(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(folder); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("Output remains", err)
+	}
+}
+
+func TestEmptyLedgerQuarantinesAContradictedMarker(t *testing.T) {
+	dir := t.TempDir()
+	id, parent := NewID(), NewID()
+	path := filepath.Join(dir, ledgerFile)
+	put := func(path, data string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(path, "{}")
+	put(path+".backup", fmt.Sprintf(`{"parents":{"%s":{"parent":"%s"}},"cleanup":{"%s":{"parent":"%s"}}}`, id, parent, id, parent))
+	put(filepath.Join(dir, id+".cleanup"), fmt.Sprintf(`{"id":"%s"}`, id))
+	put(filepath.Join(dir, id+".json"), "{")
+	if err := os.Mkdir(filepath.Join(dir, id+".files"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.RecoveryItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{id + ".cleanup.ambiguous-1", ledgerFile + ".backup.divergent-1"} {
+		if !slices.Contains(items, RecoveryItem{Name: name, Kind: "record"}) {
+			t.Fatalf("Missing %s in %v", name, items)
+		}
+	}
+	for _, p := range []string{path, path + ".backup", filepath.Join(dir, id+".json")} {
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Open(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, id+".files")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestArchiveDeletionWaitsForBothLedgerCopies(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	if err := os.WriteFile(s.path(id), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(s.filesDir(id), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.markPending(id); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(s.dir, id+".cleanup")
+	if err := os.Mkdir(marker, 0700); err != nil {
+		t.Fatal(err)
+	}
+	block := filepath.Join(marker, "occupied")
+	if err := os.WriteFile(block, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := s.ArchiveUnreadable(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Base(path)
+	if err := os.Remove(block); err != nil {
+		t.Fatal(err)
+	}
+	primary := filepath.Join(s.dir, ledgerFile)
+	if err := os.Rename(primary, primary+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(primary, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteRetained(name, ""); err == nil {
+		t.Fatal("Deleted archive before saving the ledger")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(primary); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(primary+".saved", primary); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteRetained(name, ""); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Pending(id) {
+		t.Fatal("Archive deletion rearmed cleanup")
+	}
+	if _, err := os.Stat(s.filesDir(id)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRetainedOutputGenerationPersistsAcrossOpen(t *testing.T) {
+	dir := t.TempDir()
+	id := NewID()
+	if err := os.Mkdir(filepath.Join(dir, id+".files"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var generation string
+	for range 2 {
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items, err := s.RecoveryItems()
+		if err != nil || len(items) != 1 || items[0].Kind != "output" || items[0].Generation == "" {
+			t.Fatalf("Items = %v, %v", items, err)
+		}
+		if generation != "" && generation != items[0].Generation {
+			t.Fatal("Output generation changed on reopen")
+		}
+		generation = items[0].Generation
+	}
+}
+
+func TestDivergentLedgerIsPreservedOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ledgerFile)
+	raw := []byte(fmt.Sprintf(`{"cleanup":["%s"]}`, NewID()))
+	for range 2 {
+		if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path+".backup", raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if data, err := os.ReadFile(path + ".backup.divergent-1"); err != nil || !bytes.Equal(raw, data) {
+		t.Fatalf("Recovery copy = %s, %v", data, err)
+	}
+	if _, err := os.Lstat(path + ".backup.divergent-2"); !os.IsNotExist(err) {
+		t.Fatalf("Duplicate recovery copy: %v", err)
+	}
+}
+
+func TestNumberedRecordNamesThePathToRepair(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	prefix := filepath.Join(file, "record")
+	if _, err := numberedName(prefix); err == nil || !strings.Contains(err.Error(), prefix+"-1") || !strings.Contains(err.Error(), "check access") {
+		t.Fatalf("Repair instructions = %v", err)
+	}
+}
+
+func TestPendingOutputConfirmationCannotRemoveAReplacement(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := NewID()
+	path := s.filesDir(id)
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.RecoveryItems()
+	if err != nil || len(items) != 1 {
+		t.Fatalf("Recovery = %v, %v", items, err)
+	}
+	if err := s.orderOutput(id, items[0].Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, path+".original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(s.dir)
+	if err != nil || s.Pending(id) {
+		t.Fatalf("Pending after replacement: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRestoredCopyRequiresANewOutputConfirmation(t *testing.T) {
+	for _, action := range []string{"confirmation", "restart", "transcript"} {
+		t.Run(action, func(t *testing.T) {
+			s, err := Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := NewID()
+			path := s.filesDir(id)
+			if err := os.Mkdir(path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			items, err := s.RecoveryItems()
+			if err != nil || len(items) != 1 {
+				t.Fatal(items, err)
+			}
+			gen := items[0].Generation
+			if action != "confirmation" {
+				if err := s.orderOutput(id, gen); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Rename(path, path+".original"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.CopyFS(path, os.DirFS(path+".original")); err != nil {
+				t.Fatal(err)
+			}
+			extra := filepath.Join(path, "new")
+			if err := os.WriteFile(extra, []byte("saved"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			switch action {
+			case "confirmation":
+				if err := s.DeleteRetained(id+".files", gen); !errors.Is(err, errOutputChanged) {
+					t.Errorf("Stale confirmation = %v", err)
+				}
+			case "restart":
+				if s, err = Open(s.dir); err != nil || s.Pending(id) {
+					t.Fatal("Stale order", err)
+				}
+			case "transcript":
+				if err := s.Save(sample(id, time.Now())); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.Delete(id); !errors.Is(err, errOutputChanged) {
+					t.Errorf("Stale order = %v", err)
+				}
+				if _, err := os.Stat(s.path(id)); err != nil {
+					t.Error("Lost restored transcript", err)
+				}
+			}
+			if data, err := os.ReadFile(extra); err != nil || string(data) != "saved" {
+				t.Fatal("Lost restored output", err)
+			}
+			if action == "transcript" {
+				return
+			}
+			items, err = s.RecoveryItems()
+			if err != nil || len(items) != 1 || items[0].Generation == gen {
+				t.Fatal("No fresh confirmation", items, err)
+			}
+			if err := s.DeleteRetained(id+".files", items[0].Generation); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

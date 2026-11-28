@@ -387,20 +387,44 @@ shows the card in its answered state.
 - `ledger.json` records each run's launcher and project before the transcript is written.
   The record survives an unreadable transcript. Settings > Projects lists unreadable
   transcripts and their recorded runs. A run can be deleted with its saved output even
-  if its transcript is missing. An unreadable run can first be archived, then deleted
-  from its launcher's list. Archiving keeps the renamed transcript and its saved output
-  in the sessions folder. A transcript with outstanding runs can be archived once those
-  runs are resolved.
+  if its transcript is missing. Archiving an unreadable run removes it from its
+  launcher's list and keeps its renamed transcript and saved output in the sessions
+  folder after the launcher is deleted. A transcript with outstanding runs can be
+  archived once those runs are resolved. When the ledger has records for the session,
+  it names the archive before the rename. Startup uses that name to finish releasing
+  the records after an interruption. Check transcripts also lists readable runs whose launcher
+  is gone. Each new archive has a random suffix that stays with it across restarts.
+  The deletion request names the archive shown in the confirmation. An obsolete name returns 409.
+  Archived transcripts and retained output can be deleted separately. A restored
+  transcript keeps its output. A retained output directory receives a random recovery
+  marker when listed. A confirmation records both inodes and the marker’s change time.
+  On macOS it also records the directory’s birth time. On Linux ext filesystems it
+  records the directory’s inode generation when available. The saved identity survives
+  device renumbering. The order records a SHA-256 digest for each confirmed path,
+  including file contents and symbolic link targets. A retry accepts missing entries.
+  A new entry or changed file requires a fresh confirmation, including on a cloned
+  volume. Cleanup removes the marker last.
+  An older confirmation requires a refresh. If cleanup stops after removing the marker,
+  the retry can remove an empty directory only when its original lifetime can be verified.
+  If the directory cannot be marked, inspect it manually.
 - A deletion records its cleanup before removing anything. If removing the output fails,
   the session stays listed and the cleanup is retried at startup or on a later deletion.
+  A failed removal also records its order in `<id>.cleanup` until completion or archival.
   A run's relation expires when both transcripts and its output are gone. Pending
   cleanups retain their recorded owners until settled.
 - An unreadable ledger stops startup. An invalid ledger is moved to the first free
   `ledger.json.unreadable-<n>`. The second copy, `ledger.json.backup`, supplies known
-  relations and cleanups. Startup repairs missing or differing copies. Without either
-  copy, readable transcripts supply the relationships and unclaimed output stays on disk.
+  relations and cleanups. An empty primary paired with a nonempty backup keeps the backup
+  in `ledger.json.backup.divergent-<n>`. A matching failure marker confirms a backup cleanup.
+  A contradictory marker is renamed to
+  `<id>.cleanup.ambiguous-<n>`. Check transcripts lists those markers and divergent
+  backups for inspection. A backup parent relation keeps an unreadable run in its
+  launcher’s family until the run is repaired or archived. Startup repairs missing or
+  differing copies. Without either copy, readable transcripts supply the relationships
+  and failed removal orders identify output to retry. Unclaimed output stays available in Settings > Projects.
   Cleanup accepts a map of relations or a list of IDs resolved through the parent map.
-  On macOS and Linux the server takes exclusive ownership before opening its stores.
+  On macOS and Linux the server locks both the state directory and the sessions directory before
+  opening its stores.
   A store opened directly requires one writer per session directory.
 - **Size.** Tool output is capped at `output_limit_bytes`, but `write` content lives in
   the assistant's arguments, because a truncated argument makes the history unusable for a

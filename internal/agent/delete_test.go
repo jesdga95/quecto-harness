@@ -1169,3 +1169,21 @@ func TestRemovingAKnownUnreadableRunCleansItsOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestBackupParentKeepsLauncherWhileRunIsUnreadable(t *testing.T) {
+	h := newHarness(t)
+	parent := h.session(t)
+	h.engine.save(parent)
+	run := subagentOf(t, h, parent)
+	path := filepath.Join(h.paths.Sessions, run.ID+".json")
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.paths.Sessions, "ledger.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	restart(t, h)
+	if err := h.engine.Delete(parent.ID); !errors.Is(err, store.ErrUnreadable) || !onDisk(h, parent.ID) {
+		t.Fatalf("Launcher deletion with an unresolved run = %v", err)
+	}
+}

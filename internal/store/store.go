@@ -52,13 +52,18 @@ const ledgerFile = "ledger.json"
 // Parents records each run's last known launcher. Cleanup records output
 // still to remove after a confirmed deletion.
 type ledger struct {
-	Parents map[string]relation `json:"parents,omitempty"`
-	Cleanup map[string]relation `json:"cleanup,omitempty"`
+	Version int `json:"version,omitempty"`
+	// Archiving names the rename that releases the run and its output.
+	Archiving string              `json:"archiving,omitempty"`
+	Parents   map[string]relation `json:"parents,omitempty"`
+	Cleanup   map[string]relation `json:"cleanup,omitempty"`
 }
 
 type relation struct {
-	Parent  string `json:"parent"`
-	Project string `json:"project"`
+	OutputManifest   string `json:"output_manifest,omitempty"`
+	OutputGeneration string `json:"output_generation,omitempty"`
+	Parent           string `json:"parent"`
+	Project          string `json:"project"`
 }
 
 // Entry is one row of a session. Kind drives rendering; InContext drives what
@@ -251,16 +256,18 @@ type ContextBase struct {
 
 // Summary is what the sidebar needs, cheap enough to keep for every session.
 type Summary struct {
-	ID       string    `json:"id"`
-	Project  string    `json:"project"`
-	Agent    string    `json:"agent"`
-	Parent   string    `json:"parent,omitempty"`
-	Model    string    `json:"model"`
-	Title    string    `json:"title"`
-	Created  time.Time `json:"created"`
-	Updated  time.Time `json:"updated"`
-	Messages int       `json:"messages"`
-	Bytes    int64     `json:"bytes"`
+	unreadable bool
+	checked    os.FileInfo
+	ID         string    `json:"id"`
+	Project    string    `json:"project"`
+	Agent      string    `json:"agent"`
+	Parent     string    `json:"parent,omitempty"`
+	Model      string    `json:"model"`
+	Title      string    `json:"title"`
+	Created    time.Time `json:"created"`
+	Updated    time.Time `json:"updated"`
+	Messages   int       `json:"messages"`
+	Bytes      int64     `json:"bytes"`
 	// Fill is the context after the last call the server reported on, and zero
 	// where it never reported one.
 	Fill int `json:"fill,omitempty"`
@@ -281,7 +288,8 @@ type Sessions struct {
 }
 
 var (
-	namePattern = regexp.MustCompile(`^sess_[a-z2-7]{16}\.json$`)
+	archivePattern = regexp.MustCompile(`^(sess_[a-z2-7]{16})\.json\.unreadable-([1-9][0-9]*|[a-z2-7]{26,})$`)
+	namePattern    = regexp.MustCompile(`^sess_[a-z2-7]{16}\.json$`)
 )
 
 // Open builds the index once. A file that does not parse is named and
@@ -295,8 +303,33 @@ func Open(dir string) (*Sessions, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Read %s: check the permissions on the folder", dir)
 	}
-	if s.led, err = readLedger(filepath.Join(dir, ledgerFile)); err != nil {
+	path := filepath.Join(dir, ledgerFile)
+	s.led, err = readLedger(path)
+	if errors.Is(err, os.ErrNotExist) {
+		s.led = s.recoverFailedRemovals(entries)
+		// Without either ledger, a marker beside an archive may predate its rename.
+		// Keep that output available for explicit recovery.
+		for _, entry := range entries {
+			match := archivePattern.FindStringSubmatch(entry.Name())
+			if match == nil {
+				continue
+			}
+			id := match[1]
+			if _, ok := s.led.Cleanup[id]; !ok {
+				continue
+			}
+			if err := s.preserveMarker(id); err != nil {
+				return nil, err
+			}
+			delete(s.led.Cleanup, id)
+		}
+	} else if err != nil {
 		return nil, err
+	}
+	if err == nil && len(s.led.Parents) == 0 && len(s.led.Cleanup) == 0 && s.led.Archiving == "" {
+		if err := s.reconcileEmptyLedger(path, entries); err != nil {
+			return nil, err
+		}
 	}
 	parents := maps.Clone(s.led.Parents)
 	if parents == nil {
@@ -309,17 +342,41 @@ func Open(dir string) (*Sessions, error) {
 			continue
 		}
 		id := strings.TrimSuffix(e.Name(), ".json")
-		sess, size, err := s.readSession(id)
+		summary, err := s.readSummary(id, nil)
 		if err != nil {
 			log.Printf("sessions/%s: %v: the file is skipped", e.Name(), err)
 			keepRelation(parents, s.led, id)
 			continue
 		}
-		s.index[id] = summarise(sess, size)
+		s.index[id] = summary
 		delete(parents, id)
-		if sess.Parent != "" {
-			parents[sess.ID] = relation{Parent: sess.Parent, Project: sess.Project}
+		if summary.Parent != "" {
+			parents[id] = relation{Parent: summary.Parent, Project: summary.Project}
 		}
+	}
+	// A completed rename releases its records before cleanup resumes.
+	// An unversioned ledger identifies an archive by its name and lack of a cleanup order.
+	for name := range present {
+		if s.led.Version != 0 && name != s.led.Archiving {
+			continue
+		}
+		match := archivePattern.FindStringSubmatch(name)
+		if match == nil || present[match[1]+".json"] {
+			continue
+		}
+		id := match[1]
+		_, pending := s.led.Cleanup[id]
+		if name == s.led.Archiving || !pending {
+			if err := s.clearFailedRemoval(id); err != nil {
+				return nil, fmt.Errorf("Finish archiving %s: %w", id, err)
+			}
+			delete(parents, id)
+			delete(s.led.Cleanup, id)
+		}
+	}
+	s.led.Archiving = ""
+	if s.led.Version == 0 {
+		s.led.Version = 1
 	}
 	for id, r := range parents {
 		if !present[id+".json"] && !present[r.Parent+".json"] && !present[id+".files"] {
@@ -378,20 +435,24 @@ func (s *Sessions) Family(parent string) []string {
 // relate records a run's launcher before its file is written, so the file is
 // never on disk without it.
 func (s *Sessions) relate(sess *Session) error {
-	if sess.Parent == "" {
-		return nil
-	}
 	r := relation{Parent: sess.Parent, Project: sess.Project}
 	s.ledMu.Lock()
 	defer s.ledMu.Unlock()
 	old, had := s.led.Parents[sess.ID]
-	if had && old == r {
-		return nil
+	if sess.Parent == "" {
+		if !had {
+			return nil
+		}
+		delete(s.led.Parents, sess.ID)
+	} else {
+		if had && old == r {
+			return nil
+		}
+		if s.led.Parents == nil {
+			s.led.Parents = map[string]relation{}
+		}
+		s.led.Parents[sess.ID] = r
 	}
-	if s.led.Parents == nil {
-		s.led.Parents = map[string]relation{}
-	}
-	s.led.Parents[sess.ID] = r
 	if err := s.writeLedgerLocked(false); err != nil {
 		if had {
 			s.led.Parents[sess.ID] = old
@@ -425,9 +486,8 @@ func readRecord(path string) ([]byte, error) {
 	return nil, err
 }
 
-// readLedger reads the ledger, or starts an empty one where there is none. One
-// that does not parse is moved aside rather than written over, and one that
-// cannot be read is an error. Entries naming no session are dropped.
+// readLedger tries the primary record and then its backup. Malformed copies
+// are moved aside. An inaccessible copy requires repair.
 func readLedger(path string) (ledger, error) {
 	for _, candidate := range []string{path, path + ".backup"} {
 		l, err := readLedgerCopy(candidate)
@@ -435,7 +495,7 @@ func readLedger(path string) (ledger, error) {
 			return l, err
 		}
 	}
-	return ledger{}, nil
+	return ledger{}, os.ErrNotExist
 }
 
 func readLedgerCopy(path string) (ledger, error) {
@@ -451,9 +511,15 @@ func readLedgerCopy(path string) (ledger, error) {
 		return l, fmt.Errorf("Read %s: %v: restore a readable regular file at that path", path, err)
 	}
 	if err := decodeLedger(raw, &l); err != nil {
-		aside, rerr := moveAside(path)
+		if errors.Is(err, errLedgerVersion) {
+			return l, fmt.Errorf("Read %s: update the harness to read this ledger version", path)
+		}
+		aside, rerr := numberedName(path + ".unreadable")
+		if rerr == nil {
+			rerr = os.Rename(path, aside)
+		}
 		if rerr != nil {
-			return l, fmt.Errorf("Read %s: it is not valid JSON and cannot be moved aside: move or remove it", path)
+			return l, fmt.Errorf("Read %s: its ledger format is invalid and it cannot be moved aside: move or remove it", path)
 		}
 		log.Printf("sessions/%s: %v: moved to %s", filepath.Base(path), err, filepath.Base(aside))
 		return ledger{}, os.ErrNotExist
@@ -469,17 +535,48 @@ func readLedgerCopy(path string) (ledger, error) {
 	return l, nil
 }
 
+var errLedgerVersion = errors.New("unsupported ledger version")
+
 // Cleanup accepts relations keyed by session ID or an array of IDs.
 // Array entries take their relation from Parents.
 func decodeLedger(raw []byte, l *ledger) error {
-	var file struct {
-		Parents map[string]relation `json:"parents"`
-		Cleanup json.RawMessage     `json:"cleanup"`
+	var file *struct {
+		Version   int                 `json:"version"`
+		Archiving string              `json:"archiving"`
+		Parents   map[string]relation `json:"parents"`
+		Cleanup   json.RawMessage     `json:"cleanup"`
 	}
 	if err := json.Unmarshal(raw, &file); err != nil {
 		return err
 	}
-	l.Parents = file.Parents
+	if file == nil {
+		return errors.New("expected a ledger object")
+	}
+	if file.Version == 0 && file.Archiving == "" && file.Parents == nil && file.Cleanup == nil {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return err
+		}
+		if len(fields) > 0 {
+			known := false
+			for key := range fields {
+				switch strings.ToLower(key) {
+				case "version", "archiving", "parents", "cleanup":
+					known = true
+				}
+			}
+			if !known {
+				return errLedgerVersion
+			}
+		}
+	}
+	if file.Version < 0 {
+		return errors.New("invalid ledger version")
+	}
+	if file.Version > 1 {
+		return errLedgerVersion
+	}
+	l.Version, l.Archiving, l.Parents = file.Version, file.Archiving, file.Parents
 	trimmed := strings.TrimSpace(string(file.Cleanup))
 	if trimmed == "" || trimmed == "null" {
 		return nil
@@ -498,18 +595,17 @@ func decodeLedger(raw []byte, l *ledger) error {
 	return json.Unmarshal(file.Cleanup, &l.Cleanup)
 }
 
-// moveAside renames a file to the first free name of the form
-// <name>.unreadable-<n>, so an earlier copy is never replaced.
-func moveAside(path string) (string, error) {
+// numberedName finds an unused sibling for a recovery record.
+func numberedName(prefix string) (string, error) {
 	for n := 1; ; n++ {
-		aside := fmt.Sprintf("%s.unreadable-%d", path, n)
+		aside := fmt.Sprintf("%s-%d", prefix, n)
 		if _, err := os.Lstat(aside); !errors.Is(err, os.ErrNotExist) {
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("Inspect %s: check access to the sessions directory: %w", aside, err)
 			}
 			continue
 		}
-		return aside, os.Rename(path, aside)
+		return aside, nil
 	}
 }
 
@@ -562,12 +658,28 @@ func (s *Sessions) PendingIn(project string) []string {
 // markPending records that the session's side folder is to be removed, before
 // anything is. A failed write records nothing.
 func (s *Sessions) markPending(id string) error {
+	return s.orderOutput(id, "")
+}
+
+func (s *Sessions) orderOutput(id, generation string) error {
+	var snapshot outputSnapshot
+	if generation != "" {
+		var err error
+		snapshot, err = readOutputSnapshot(s.filesDir(id), false, relation{})
+		if err != nil {
+			return err
+		}
+		if snapshot.generation() != generation {
+			return errOutputChanged
+		}
+	}
 	s.mu.RLock()
 	sum := s.index[id]
 	s.mu.RUnlock()
 	s.ledMu.Lock()
 	defer s.ledMu.Unlock()
-	if _, ok := s.led.Cleanup[id]; ok {
+	previous, ordered := s.led.Cleanup[id]
+	if ordered && (generation == "" || generation == previous.OutputGeneration) {
 		return nil
 	}
 	if s.led.Cleanup == nil {
@@ -577,9 +689,20 @@ func (s *Sessions) markPending(id string) error {
 	if !ok {
 		rel = relation{Parent: sum.Parent, Project: sum.Project}
 	}
+	rel.OutputGeneration = generation
+	rel.OutputManifest = snapshot.manifest
 	s.led.Cleanup[id] = rel
+	archive := s.led.Archiving
+	if match := archivePattern.FindStringSubmatch(archive); match != nil && match[1] == id {
+		s.led.Archiving = ""
+	}
 	if err := s.writeLedgerLocked(false); err != nil {
-		delete(s.led.Cleanup, id)
+		s.led.Archiving = archive
+		if ordered {
+			s.led.Cleanup[id] = previous
+		} else {
+			delete(s.led.Cleanup, id)
+		}
 		return err
 	}
 	return nil
@@ -595,6 +718,9 @@ func (s *Sessions) settle(id string, gone bool) error {
 	if !was && !(gone && related) {
 		return nil
 	}
+	if err := s.clearFailedRemoval(id); err != nil {
+		return err
+	}
 	delete(s.led.Cleanup, id)
 	if gone {
 		delete(s.led.Parents, id)
@@ -606,7 +732,7 @@ func (s *Sessions) settle(id string, gone bool) error {
 		if related {
 			s.led.Parents[id] = parent
 		}
-		return fmt.Errorf("Update %s: %w", ledgerFile, err)
+		return fmt.Errorf("update %s: %w", ledgerFile, err)
 	}
 	return nil
 }
@@ -631,7 +757,11 @@ func (s *Sessions) FinishCleanup(id string) (bool, error) {
 		return false, nil
 	}
 	s.retryCleanup(id)
-	return s.finishCleanup(id)
+	done, err := s.finishCleanup(id)
+	if err != nil && !errors.Is(err, ErrRecoveryConflict) {
+		return done, fmt.Errorf("Finish cleanup for session %s: %w", id, err)
+	}
+	return done, err
 }
 
 func (s *Sessions) finishCleanup(id string) (bool, error) {
@@ -643,7 +773,7 @@ func (s *Sessions) finishCleanup(id string) (bool, error) {
 	}
 	sess, size, err := s.readSession(id)
 	if errors.Is(err, ErrNotFound) {
-		return true, s.removeOutput(id)
+		return true, s.removeOutput(id, false)
 	}
 	if err != nil {
 		return false, err
@@ -671,14 +801,14 @@ func (s *Sessions) RemoveMissingRun(parent, id string) error {
 	}
 	if _, err := os.Lstat(s.path(id)); !errors.Is(err, os.ErrNotExist) {
 		if err != nil {
-			return err
+			return fmt.Errorf("Check session %s: verify access to the sessions folder and retry: %w", id, err)
 		}
 		return fmt.Errorf("Session %s is present again: retry the deletion", id)
 	}
 	if err := s.markPending(id); err != nil {
-		return err
+		return fmt.Errorf("Record cleanup for session %s: %w", id, err)
 	}
-	return s.removeOutput(id)
+	return s.removeOutput(id, false)
 }
 
 // removeFolder removes a session's side folder. Only a folder that is then
@@ -698,14 +828,13 @@ func (s *Sessions) removeFolder(id string) error {
 }
 
 // List returns the sessions of one project, newest first, or every session
-// when project is empty. Subagent runs stay out of the listing; Children is
-// the only way to reach one.
+// when project is empty. Subagent runs stay out of the listing.
 func (s *Sessions) List(project string) []Summary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]Summary, 0, len(s.index))
 	for _, v := range s.index {
-		if v.Parent != "" {
+		if v.unreadable || v.Parent != "" {
 			continue
 		}
 		if project == "" || v.Project == project {
@@ -725,7 +854,7 @@ func newerFirst(a, b Summary) bool {
 }
 
 // Children returns the subagent runs one session launched, newest first. List
-// leaves them out, so this is the only way to reach one.
+// leaves them out of the project listing.
 func (s *Sessions) Children(parent string) []Summary {
 	if parent == "" {
 		return nil
@@ -734,7 +863,7 @@ func (s *Sessions) Children(parent string) []Summary {
 	defer s.mu.RUnlock()
 	var out []Summary
 	for _, v := range s.index {
-		if v.Parent == parent {
+		if !v.unreadable && v.Parent == parent {
 			out = append(out, v)
 		}
 	}
@@ -794,8 +923,11 @@ func (s *Sessions) UnreadableSessions() ([]string, error) {
 		if !ok || !ValidID(id) {
 			continue
 		}
-		if _, err := s.Load(id); errors.Is(err, ErrUnreadable) {
+		err := s.checkTranscript(id)
+		if errors.Is(err, ErrUnreadable) {
 			ids = append(ids, id)
+		} else if err != nil && !errors.Is(err, ErrNotFound) {
+			return nil, err
 		}
 	}
 	return ids, nil
@@ -820,17 +952,60 @@ func (s *Sessions) ArchiveUnreadable(id string) (string, error) {
 	if len(s.Family(id)) != 0 {
 		return "", fmt.Errorf("Session %s still has recorded runs: resolve them in Settings > Projects before archiving it", id)
 	}
-	if err := s.settle(id, false); err != nil {
-		return "", err
-	}
-	path, err := moveAside(s.path(id))
-	if err != nil {
+	aside := s.path(id) + ".unreadable-" + strings.ToLower(rand.Text())
+	if err := s.archive(id, aside); err != nil {
 		return "", fmt.Errorf("Archive session %s: %w", id, err)
 	}
 	s.mu.Lock()
 	delete(s.index, id)
 	s.mu.Unlock()
-	return path, nil
+	return aside, nil
+}
+
+// archive records the destination before renaming a transcript with a launcher
+// or cleanup order. The rename commits the archive, even if the final ledger
+// write must be retried at startup.
+func (s *Sessions) archive(id, aside string) error {
+	s.ledMu.Lock()
+	defer s.ledMu.Unlock()
+	_, pending := s.led.Cleanup[id]
+	_, related := s.led.Parents[id]
+	if !pending && !related {
+		_, err := os.Lstat(filepath.Join(s.dir, id+".cleanup"))
+		if errors.Is(err, os.ErrNotExist) {
+			return os.Rename(s.path(id), aside)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	// The ledger has one archive slot. Retire its marker before reusing it.
+	if previous := archivePattern.FindStringSubmatch(s.led.Archiving); previous != nil {
+		if err := s.clearFailedRemoval(previous[1]); err != nil {
+			return fmt.Errorf("finish archiving %s first: %w", previous[1], err)
+		}
+	}
+	s.led.Archiving = filepath.Base(aside)
+	if err := s.writeLedgerLocked(false); err != nil {
+		s.led.Archiving = ""
+		return err
+	}
+	if err := os.Rename(s.path(id), aside); err != nil {
+		s.led.Archiving = ""
+		return errors.Join(err, s.writeLedgerLocked(false))
+	}
+	delete(s.led.Parents, id)
+	delete(s.led.Cleanup, id)
+	if err := s.clearFailedRemoval(id); err != nil {
+		log.Printf("Session %s is archived: %v", id, err)
+		return nil
+	}
+	s.led.Archiving = ""
+	if err := s.writeLedgerLocked(false); err != nil {
+		s.led.Archiving = filepath.Base(aside)
+		log.Printf("sessions/%s: %v: the archived transcript keeps its output", id, err)
+	}
+	return nil
 }
 
 // unreadable names a session file that cannot be used and what clears it.
@@ -908,20 +1083,61 @@ func (s *Sessions) Delete(id string) error {
 		s.mu.Unlock()
 		return ErrNotFound
 	}
+	if statErr == nil {
+		s.ledMu.Lock()
+		generation := s.led.Cleanup[id].OutputGeneration
+		s.ledMu.Unlock()
+		if generation != "" {
+			path := s.filesDir(id)
+			current, err := outputGeneration(path, false)
+			if errors.Is(err, os.ErrNotExist) {
+				if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+					current, err = generation, nil
+				}
+			}
+			if err != nil {
+				return fmt.Errorf("Check saved output: %w", err)
+			}
+			if current != generation {
+				return fmt.Errorf("Delete session %s: %w", id, errors.Join(errOutputChanged, s.settle(id, false)))
+			}
+		}
+	}
 	if err := s.markPending(id); err != nil {
 		return fmt.Errorf("Delete session %s: %w", id, err)
 	}
 	if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		// The session is still there, so its side folder stays with it and
 		// the delete can be tried again.
-		return errors.Join(fmt.Errorf("Delete session %s: %w", id, err), s.settle(id, false))
+		if cancelErr := s.settle(id, false); cancelErr != nil {
+			return fmt.Errorf("Delete session %s: %w. Could not cancel the cleanup order: %w", id, err, cancelErr)
+		}
+		return fmt.Errorf("Delete session %s: %w", id, err)
 	}
-	return s.removeOutput(id)
+	return s.removeOutput(id, false)
 }
 
-func (s *Sessions) removeOutput(id string) error {
-	if rmErr := s.removeFolder(id); rmErr != nil {
+func (s *Sessions) removeOutput(id string, freshOrder bool) error {
+	s.ledMu.Lock()
+	order := s.led.Cleanup[id]
+	s.ledMu.Unlock()
+	var rmErr error
+	if order.OutputGeneration == "" {
+		rmErr = s.removeFolder(id)
+	} else {
+		rmErr = removeConfirmedOutput(s.filesDir(id), order, freshOrder)
+		if errors.Is(rmErr, errOutputChanged) {
+			return fmt.Errorf("Check saved output for %s: %w", id, errors.Join(rmErr, s.settle(id, true)))
+		}
+		if errors.Is(rmErr, ErrRecoveryConflict) {
+			return fmt.Errorf("Check saved output: %w", rmErr)
+		}
+	}
+	if rmErr != nil {
 		log.Printf("sessions/%s.files: %v: the folder is left behind", id, rmErr)
+		if err := s.recordFailedRemoval(id); err != nil {
+			log.Printf("sessions/%s: could not record the failed output removal: %v", id, err)
+		}
 		return &fileError{kind: ErrLeftBehind, msg: fmt.Sprintf(
 			"Session %s is deleted, but its saved output in %s could not be removed: check the permissions on that folder, then delete the session again",
 			id, s.filesDir(id))}
