@@ -760,6 +760,8 @@ export class MockApi implements HarnessApi {
 
   // reads
 
+  async trashFailures(): Promise<TrashFailure[]> { return []; }
+
   async getState(): Promise<State> {
     await this.tick();
     const probe = this.probe(this.active());

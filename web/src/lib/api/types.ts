@@ -866,6 +866,7 @@ export type SessionFeedHandler = (feed: Record<string, SessionFeed>, whole: bool
 
 export interface HarnessApi {
   getState(): Promise<State>;
+  trashFailures(): Promise<TrashFailure[]>;
   /** What the active agent's address holds. */
   listModels(refresh?: boolean): Promise<Model[]>;
   listAgents(): Promise<Agent[]>;

@@ -262,6 +262,15 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) getStorage(w http.ResponseWriter, r *http.Request) {
+	failures, err := s.engine.TrashFailures()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Could not read storage status: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"trash_failures": failures})
+}
+
 // getModels lists what the active agent's address holds. It is read on every
 // status event to redraw the dots, and it always wants the agent answering, so
 // it takes no agent of its own. The dialog asks about the others through the

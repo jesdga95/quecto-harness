@@ -105,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/state", s.getState)
+	mux.HandleFunc("GET /api/storage", s.getStorage)
 	mux.HandleFunc("GET /api/models", s.getModels)
 	mux.HandleFunc("GET /api/models/props", s.getModelProps)
 	mux.HandleFunc("POST /api/fs/pick", s.postPick)

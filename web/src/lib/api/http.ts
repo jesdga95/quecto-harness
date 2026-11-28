@@ -1552,6 +1552,11 @@ async function created(body: Record<string, unknown>): Promise<Session> {
 }
 
 class HttpApi implements HarnessApi {
+  async trashFailures(): Promise<TrashFailure[]> {
+    const result = await call<{ trash_failures?: unknown }>("/storage");
+    return retainedFolders(result.trash_failures);
+  }
+
   async getState(): Promise<State> {
     const wire = await call<WireState>("/state");
     projectPaths = wire.projects ?? [];
