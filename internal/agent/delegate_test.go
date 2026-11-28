@@ -62,22 +62,39 @@ func toolOutput(t *testing.T, s *Session, name string) string {
 	return ""
 }
 
-func waitForEntryFrom(t *testing.T, s *Session, from string) store.Entry {
+// entriesFrom returns the messages a session holds from one sender, in order.
+func entriesFrom(s *Session, from string) []store.Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.Entry
+	for _, e := range s.Entries {
+		if e.From == from {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// waitForEntriesFrom waits until a session holds n messages from one sender
+// and returns them, in order.
+func waitForEntriesFrom(t *testing.T, s *Session, from string, n int) []store.Entry {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
+	var got []store.Entry
 	for time.Now().Before(deadline) {
-		s.mu.Lock()
-		for _, e := range s.Entries {
-			if e.From == from {
-				s.mu.Unlock()
-				return e
-			}
+		if got = entriesFrom(s, from); len(got) >= n {
+			return got
 		}
-		s.mu.Unlock()
 		time.Sleep(2 * time.Millisecond)
 	}
-	t.Fatalf("no message from %s arrived", from)
-	return store.Entry{}
+	t.Fatalf("%d messages from %s arrived, want %d", len(got), from, n)
+	return nil
+}
+
+// waitForEntryFrom waits for the first message from one sender.
+func waitForEntryFrom(t *testing.T, s *Session, from string) store.Entry {
+	t.Helper()
+	return waitForEntriesFrom(t, s, from, 1)[0]
 }
 
 // The launcher's turn carries on the moment the subagent starts, and what the
@@ -240,26 +257,21 @@ func TestASubagentThatSpokeStillReportsItsAnswer(t *testing.T) {
 	h.engine.Send(s.ID, "delegate it", nil)
 	child := childOf(t, h, s)
 
-	waitForEntryFrom(t, s, "Reviewer")
+	// The subagent is idle before its answer reaches the launcher, so the
+	// test waits for both messages rather than for the states.
+	waitForEntriesFrom(t, s, "Reviewer", 2)
 	waitIdle(t, child)
 	waitIdle(t, s)
-
-	var said []string
-	s.mu.Lock()
-	for _, e := range s.Entries {
-		if e.From == "Reviewer" {
-			said = append(said, e.Content)
-		}
-	}
-	s.mu.Unlock()
+	// Read again once everything has settled, so a third message would show.
+	said := entriesFrom(s, "Reviewer")
 	if len(said) != 2 {
-		t.Fatalf("the launcher was told %d times, want the message and the answer: %q", len(said), said)
+		t.Fatalf("the launcher was told %d times, want the message and the answer", len(said))
 	}
-	if !strings.Contains(said[0], "which package did you mean") {
-		t.Errorf("the first = %q, want what the subagent chose to send", said[0])
+	if !strings.Contains(said[0].Content, "which package did you mean") {
+		t.Errorf("the first = %q, want what the subagent chose to send", said[0].Content)
 	}
-	if !strings.Contains(said[1], "has cmd, internal and web") {
-		t.Errorf("the second = %q, want the answer the turn ended on", said[1])
+	if !strings.Contains(said[1].Content, "has cmd, internal and web") {
+		t.Errorf("the second = %q, want the answer the turn ended on", said[1].Content)
 	}
 }
 
