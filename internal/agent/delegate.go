@@ -97,7 +97,7 @@ func (e *Engine) briefFor(ctx context.Context, s *Session, cfg config.Config) br
 	parent, mine, mode, project, set := s.Parent, s.AgentID, s.Mode, s.Project, s.Toolset
 	s.mu.Unlock()
 	rules, rulesName, note := readRules(project)
-	e.showRulesNote(s, note)
+	e.showNote(s, &s.rulesNote, note)
 	b := brief{rules: rules, rulesName: rulesName}
 	if parent != "" {
 		// A subagent hands work to nobody and asks nobody, but it still
@@ -160,16 +160,14 @@ func (e *Engine) mcpTools(ctx context.Context, s *Session, project string, set c
 	return offered
 }
 
-// showRulesNote records that the project's rules are not in the prompt, so
-// the transcript says why. A note already shown is not repeated, and a file
-// that fits again warns nothing.
-func (e *Engine) showRulesNote(s *Session, note string) {
+// showNote records a warning once until the condition clears or changes.
+func (e *Engine) showNote(s *Session, last *string, note string) {
 	s.mu.Lock()
-	if note == s.rulesNote {
+	if note == *last {
 		s.mu.Unlock()
 		return
 	}
-	s.rulesNote = note
+	*last = note
 	var entry store.Entry
 	if note != "" {
 		entry = s.appendEntry(store.Entry{Kind: "status", Content: note, InContext: false, Visible: true})

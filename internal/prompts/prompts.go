@@ -5,11 +5,12 @@ package prompts
 
 import (
 	"embed"
+	"regexp"
 	"strings"
 	"text/template"
 )
 
-//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md not_sent.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md commit_message.md
+//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md memory.md tool_remember.md remember_text.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md not_sent.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md commit_message.md
 var files embed.FS
 
 // hasTool is the has the prompt templates take: whether the tools a turn sends
@@ -25,6 +26,8 @@ var hasTool = template.FuncMap{"has": func(tool string, list []string) bool {
 }}
 
 var (
+	memoryClose    = regexp.MustCompile(`(?i)<(\s*/\s*memory\s*>)`)
+	memoryTmpl     = template.Must(template.New("memory").Parse(mustRead("memory.md")))
 	systemTmpl     = template.Must(template.New("system").Funcs(hasTool).Parse(mustRead("system.md")))
 	bodyTmpl       = template.Must(template.New("execute").Funcs(hasTool).Parse(mustRead("system_execute.md")))
 	modePlanTmpl   = template.Must(template.New("mode_plan").Parse(mustRead("mode_plan.md")))
@@ -310,6 +313,17 @@ func NotSent(name, reason string) string {
 	return b.String()
 }
 
+func MemoryPrefix(text *string) string {
+	if text == nil || strings.TrimSpace(*text) == "" {
+		return ""
+	}
+	var b strings.Builder
+	if err := memoryTmpl.Execute(&b, memoryClose.ReplaceAllString(*text, "&lt;${1}")); err != nil {
+		panic(err)
+	}
+	return b.String() + "\n\n"
+}
+
 func ToolRead() string            { return mustRead("tool_read.md") }
 func ToolReadImage() string       { return mustRead("tool_read_image.md") }
 func ToolGrep() string            { return mustRead("tool_grep.md") }
@@ -318,6 +332,8 @@ func ToolWrite() string           { return mustRead("tool_write.md") }
 func ToolEdit() string            { return mustRead("tool_edit.md") }
 func ToolBash() string            { return mustRead("tool_bash.md") }
 func ToolProcesses() string       { return mustRead("tool_processes.md") }
+func RememberText() string        { return mustRead("remember_text.md") }
+func ToolRemember() string        { return mustRead("tool_remember.md") }
 func ToolTodoWrite() string       { return mustRead("tool_todo_write.md") }
 func ToolAskUserQuestion() string { return mustRead("tool_ask_user_question.md") }
 func ToolSubagent() string        { return mustRead("tool_subagent.md") }

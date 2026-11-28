@@ -15,6 +15,7 @@ type Paths struct {
 	Config    string
 	Allowlist string
 	MCP       string
+	Memory    string
 	Sessions  string
 	Files     string
 	Uploads   string
@@ -46,6 +47,7 @@ func DiscoverPathsIn(home string) Paths {
 		Config:    filepath.Join(home, "config.json"),
 		Allowlist: filepath.Join(home, "allowlist.json"),
 		MCP:       filepath.Join(home, "mcp.json"),
+		Memory:    filepath.Join(home, "memory.md"),
 		Sessions:  filepath.Join(home, "sessions"),
 		Files:     filepath.Join(home, "files"),
 		Uploads:   filepath.Join(home, "uploads"),

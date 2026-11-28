@@ -3114,3 +3114,82 @@ func TestAnEmptyToolResultIsNotSentEmpty(t *testing.T) {
 		t.Errorf("content = %q", m.Content)
 	}
 }
+
+func TestReadPermissionMatchesExecutedPath(t *testing.T) {
+	for _, tc := range []struct {
+		fixture string
+		paths   []string
+	}{
+		{"stream_read.txt", []string{"file.txt"}},
+		{"stream_two_reads.txt", []string{"file.txt", "other.txt"}},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			h := newHarness(t, tc.fixture, "stream_plain.txt")
+			for i, frame := range h.replay.scripts[0] {
+				h.replay.scripts[0][i] = strings.ReplaceAll(frame, `{\"pat`, `{\"text\":[],\"pat`)
+			}
+			for _, path := range tc.paths {
+				if err := os.WriteFile(filepath.Join(h.project, path), []byte("Content of "+path), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := h.session(t)
+			if _, err := h.engine.Send(s.ID, "Read the files", nil); err != nil {
+				t.Fatal(err)
+			}
+			waitIdle(t, s)
+			doc, _, _, _ := s.Snapshot()
+			var seen int
+			for _, e := range doc.Entries {
+				if e.Kind != "tool" {
+					continue
+				}
+				if seen >= len(tc.paths) {
+					t.Fatal("unexpected read")
+				}
+				path := tc.paths[seen]
+				if e.Permission == nil || e.Permission.Path != path || !strings.Contains(e.Content, "Content of "+path) {
+					t.Fatalf("read of %q: permission %+v, content %q", path, e.Permission, e.Content)
+				}
+				seen++
+			}
+			if seen != len(tc.paths) {
+				t.Fatalf("got %d reads, want %d", seen, len(tc.paths))
+			}
+			var events []string
+			h.rec.mu.Lock()
+			for _, e := range h.rec.events {
+				if e.Type == "tool_start" || e.Type == "tool_output" {
+					events = append(events, e.Type)
+				}
+			}
+			h.rec.mu.Unlock()
+			if got, want := strings.Join(events, " ")+" ", strings.Repeat("tool_start ", seen)+strings.Repeat("tool_output ", seen); got != want {
+				t.Fatalf("read events %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestMalformedReadGetsNoPermission(t *testing.T) {
+	h := newHarness(t, "stream_two_reads.txt", "stream_plain.txt")
+	for i, frame := range h.replay.scripts[0] {
+		h.replay.scripts[0][i] = strings.ReplaceAll(frame, `other.txt\"}`, `other.txt\",\"offset\":false}`)
+	}
+	s := h.session(t)
+	if _, err := h.engine.Send(s.ID, "Read the files", nil); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, s)
+	started := h.rec.ofType("tool_start")
+	if len(started) != 1 || started[0].Fields["id"] != "call_0" {
+		t.Fatalf("started calls: %v", started)
+	}
+	doc, _, _, _ := s.Snapshot()
+	for _, e := range doc.Entries {
+		if e.ToolCallID == "call_1" && e.Permission == nil && e.Meta["error"] == true && strings.Contains(e.Content, "offset") {
+			return
+		}
+	}
+	t.Fatal("missing argument error for the second read")
+}

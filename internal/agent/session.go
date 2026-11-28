@@ -87,7 +87,8 @@ type Session struct {
 	// rulesNote is the last warning that the project's rules are not in the
 	// prompt, so a file that is still too large is not named again on every
 	// turn. It is not in the document: a restart re-warns once.
-	rulesNote string
+	rulesNote  string
+	memoryNote string
 	// mcpNote is the last report of MCP servers left out of a turn, kept so
 	// the same report is not written twice.
 	mcpNote string
@@ -677,8 +678,9 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 		last, _ := e.Meta["last_user"].(string)
 		_, kept := e.Meta["tail"]
 		mode = entryMode(e)
-		msgs = append(msgs, llm.Message{Role: "user", Content: prompts.Compaction(prompts.CompactionVars{
-			Summary: e.Content, Todos: todos, Carry: carry, LastUser: last, Kept: kept})})
+		content := prompts.Compaction(prompts.CompactionVars{
+			Summary: e.Content, Todos: todos, Carry: carry, LastUser: last, Kept: kept})
+		msgs = append(msgs, llm.Message{Role: "user", Content: prompts.MemoryPrefix(e.Memory) + content})
 	}
 	for i := 0; i < end; i++ {
 		e := s.Entries[i]
@@ -693,7 +695,10 @@ func (s *Session) contextMessagesUntil(a config.Agent, osName, date string, b br
 			} else if m != mode {
 				switched, mode = modeRules(m, b), m
 			}
-			msgs = append(msgs, userMessage(e, images, switched, s.features))
+			if switched != "" {
+				switched += "\n\n"
+			}
+			msgs = append(msgs, userMessage(e, images, prompts.MemoryPrefix(e.Memory)+switched, s.features))
 		case "compaction":
 			// Sent above, ahead of the messages it kept.
 		case "assistant":
@@ -767,12 +772,9 @@ func modeRules(m config.WorkMode, b brief) string {
 // and each image, document and video beside it, and rules for a mode it was the first sent in
 // ahead of it. A message with an image is an array of parts, which is the only
 // shape that carries one.
-func userMessage(e store.Entry, images map[string]llm.Part, rules string, features llm.Features) llm.Message {
+func userMessage(e store.Entry, images map[string]llm.Part, prefix string, features llm.Features) llm.Message {
 	var b strings.Builder
-	if rules != "" {
-		b.WriteString(rules)
-		b.WriteString("\n\n")
-	}
+	b.WriteString(prefix)
 	// A message from a person and one from another agent arrive on the same
 	// role, so the sender is named in the text or the model cannot tell them
 	// apart.
@@ -961,7 +963,7 @@ func (s *Session) estimateChars(from int) int {
 		if i <= from || !e.InContext {
 			continue
 		}
-		total += entryChars(e)
+		total += entryChars(e) + len(prompts.MemoryPrefix(e.Memory))
 	}
 	return total
 }

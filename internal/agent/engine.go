@@ -502,10 +502,15 @@ func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments [
 		e.publish(s.ID, ev("queued", steerFields(held)))
 		return Sent{Queued: true, Steer: held}, nil
 	}
+	var memory *string
+	var warning string
+	if s.Parent == "" && s.lastUserEntry() < 0 {
+		memory, warning = e.readSessionMemory()
+	}
 	s.state = StatePreflight
 	ctx, cancel := context.WithCancel(e.ctx)
 	s.cancel = cancel
-	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text,
+	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: text, Memory: memory,
 		From: from.Name, FromSession: from.Session,
 		Attachments: attachments, InContext: true, Visible: true,
 		Meta: map[string]any{"mode": string(s.Mode)}})
@@ -515,6 +520,9 @@ func (e *Engine) deliverFrom(s *Session, from sender, text string, attachments [
 	s.mu.Unlock()
 
 	e.save(s)
+	if warning != "" {
+		e.showNote(s, &s.memoryNote, warning)
+	}
 	// A message from another agent was typed into no composer, so nothing has
 	// drawn it and the turn it starts would answer a message the page cannot
 	// see. One from a person is already on the page it was typed into.
@@ -634,7 +642,7 @@ func (e *Engine) Resend(id string, seq int, text *string) (int, error) {
 	// message in the discarded range is the one whose files carry over.
 	s.rewindTo(i)
 	entry := s.appendEntry(store.Entry{Kind: "user", Role: "user", Content: content,
-		Attachments: previous.Attachments, Edited: edited, InContext: true, Visible: true})
+		Memory: previous.Memory, Attachments: previous.Attachments, Edited: edited, InContext: true, Visible: true})
 	// A session takes its name from its opening message, so a rewritten one
 	// renames it unless the name was typed.
 	if s.firstTurn() {
@@ -1443,9 +1451,10 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			call := res.ToolCalls[i]
 			// Calls that only read and need no card, made one after another,
 			// run at the same time.
-			if run := e.readRun(s, cfg, b.offer, runner, res.ToolCalls, i); run > 1 {
+			if records := e.readRun(s, cfg, b.offer, runner, res.ToolCalls[i:]); len(records) > 1 {
+				run := len(records)
 				calls += run
-				e.runReads(ctx, s, cfg, a, runner, res.ToolCalls[i:i+run], i, &seen, b.offer, &clock)
+				e.runReads(ctx, s, runner, res.ToolCalls[i:i+run], records, i, &seen, b.offer, &clock)
 				i += run - 1
 				if ctx.Err() != nil {
 					e.markStopped(s, clock, nil)
@@ -1457,18 +1466,24 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 			// A tool the mode does not run or the toolset does not offer is
 			// answered here; a tool withheld from this session alone reaches
 			// its own tool, which says why it is not taken.
+			record, err := permissionRecord(call)
+			var rejected store.Entry
 			if b.offer.Knows(call.Function.Name) &&
 				(!b.offer.InMode(call.Function.Name) || !b.offer.InSet(call.Function.Name)) {
-				entry := e.unavailable(s, call, b.offer)
+				rejected = e.unavailable(s, call, b.offer)
+			} else if err != nil {
+				rejected = e.appendTool(s, call, nil, outcome{content: err.Error(), meta: map[string]any{"error": true}})
+			}
+			if rejected.Kind != "" {
 				e.saveSoon(s)
 				e.publish(s.ID, ev("tool_output", map[string]any{
 					"index": i, "id": call.ID, "name": call.Function.Name,
-					"output": entry.Content, "exit_code": nil, "truncated": false,
+					"output": rejected.Content, "exit_code": nil, "truncated": false, "meta": rejected.Meta,
 				}))
 				continue
 			}
 			note := seen.see(call)
-			decision, record, stopped := e.decide(ctx, s, cfg, a, runner, call)
+			decision, stopped := e.decide(ctx, s, cfg, a, runner, call, record)
 			if stopped {
 				e.stopWith(s, call, record, clock)
 				return
@@ -1848,27 +1863,22 @@ func (e *Engine) publishUsage(s *Session) {
 	e.publish(s.ID, ev("usage", payload))
 }
 
-// decide applies the policy and, when it says prompt, blocks on the browser.
-// The third result reports that the session was stopped while waiting.
-func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a config.Agent, runner *tools.Runner, call llm.ToolCall) (perms.Decision, *store.PermissionRecord, bool) {
-	tool := call.Function.Name
-	command, path := argSummary(call)
-	// An MCP call has no command or path of its own: what it is about is its
-	// arguments, which the card shows and the record keeps.
-	if _, ok := runner.MCPTools[tool]; ok {
-		command, path = string(call.Function.Arguments), ""
+func (e *Engine) autoAllow(s *Session, runner *tools.Runner, mode config.Mode, r *store.PermissionRecord) bool {
+	if e.perms.Evaluate(s.Project, r.Tool, r.Command, r.Path, runner.Outside(r.Path), mode) != perms.ActionAllow {
+		return false
 	}
-	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
+	r.Decision = "auto"
+	if mode == config.ModeFull {
+		r.Decision = "full"
+	}
+	return true
+}
 
-	policy := cfg.Mode
-	if e.perms.Evaluate(s.Project, tool, command, path, runner.Outside(path), policy) == perms.ActionAllow {
-		// A call skips the card two ways, and the record keeps them apart.
-		// "auto" is a policy that allowed this call, "full" is no policy.
-		record.Decision = "auto"
-		if policy == config.ModeFull {
-			record.Decision = "full"
-		}
-		return perms.Decision{Kind: perms.DecideOnce}, record, false
+// decide applies the policy and reports whether the session stopped while waiting for a card.
+func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a config.Agent, runner *tools.Runner, call llm.ToolCall, record *store.PermissionRecord) (perms.Decision, bool) {
+	tool, command, path := record.Tool, record.Command, record.Path
+	if e.autoAllow(s, runner, cfg.Mode, record) {
+		return perms.Decision{Kind: perms.DecideOnce}, false
 	}
 	// The id is minted here rather than inside Ask, so the record kept with the
 	// tool entry carries the same id the card was asked with, whether the card
@@ -1902,7 +1912,7 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 	if err != nil {
 		record.Decision = "stopped"
 		e.publishDecided(s, record)
-		return perms.Decision{}, record, true
+		return perms.Decision{}, true
 	}
 	record.Decision = string(d.Kind)
 	record.Prefix = d.Prefix
@@ -1911,7 +1921,7 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 	if d.Note != "" {
 		e.publish(s.ID, ev("error", map[string]any{"kind": "allowlist", "message": d.Note}))
 	}
-	return d, record, false
+	return d, false
 }
 
 // publishDecided closes a card that is open in the browser. The tab that
@@ -1983,34 +1993,30 @@ func mcpTable(offer tools.Offer) map[string]mcp.Offered {
 	return out
 }
 
-// readRun is how many calls from i on only read and would run without a card,
-// so they can run at the same time.
-func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, runner *tools.Runner, calls []llm.ToolCall, i int) int {
-	n := 0
-	for _, call := range calls[i:] {
+// readRun collects the permissions for consecutive reads that can start without a card.
+func (e *Engine) readRun(s *Session, cfg config.Config, offer tools.Offer, runner *tools.Runner, calls []llm.ToolCall) []*store.PermissionRecord {
+	var records []*store.PermissionRecord
+	for _, call := range calls {
 		name := call.Function.Name
 		if !readsOnly(offer, name) || !offer.InMode(name) || !offer.InSet(name) {
 			break
 		}
-		command, path := argSummary(call)
-		if e.perms.Evaluate(s.Project, name, command, path, runner.Outside(path), cfg.Mode) != perms.ActionAllow {
+		record, err := permissionRecord(call)
+		if err != nil || !e.autoAllow(s, runner, cfg.Mode, record) {
 			break
 		}
-		n++
+		records = append(records, record)
 	}
-	return n
+	return records
 }
 
 // runReads runs calls that only read at the same time, and appends their
 // results in the order the model made them.
-func (e *Engine) runReads(ctx context.Context, s *Session, cfg config.Config, a config.Agent,
-	runner *tools.Runner, calls []llm.ToolCall, first int, seen *repeats, offer tools.Offer, clock *turnClock) {
+func (e *Engine) runReads(ctx context.Context, s *Session, runner *tools.Runner,
+	calls []llm.ToolCall, records []*store.PermissionRecord, first int, seen *repeats, offer tools.Offer, clock *turnClock) {
 	notes := make([]string, len(calls))
-	records := make([]*store.PermissionRecord, len(calls))
 	for k, call := range calls {
 		notes[k] = seen.see(call)
-		// The policy allows each of these, so deciding asks nobody.
-		_, records[k], _ = e.decide(ctx, s, cfg, a, runner, call)
 		e.publishStarted(s, runner, call, first+k)
 	}
 	e.setState(s, StateExecuting)
@@ -2070,6 +2076,12 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 			res, err = e.runBash(ctx, s, runner, call)
 		case "processes":
 			res, err = e.listProcesses(s)
+		case "remember":
+			var note rememberArgs
+			if err = tools.DecodeArgs("remember", args, &note); err == nil {
+				err = e.cfg.Remember(note.Text)
+				res.Output = "Saved for new conversations and the next compaction."
+			}
 		case "todo_write":
 			res, err = e.writeTodos(s, args)
 		case "ask_user_question":
@@ -2087,7 +2099,7 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 				res, err = runner.CallMCP(ctx, call.Function.Name, args)
 				break
 			}
-			err = fmt.Errorf("no tool named %s: use read, read_image, grep, web_search, write, edit, bash, processes, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read, read_image, grep, web_search, write, edit, bash, processes, remember, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
 		}
 		if err != nil {
 			// The flag is what lets the row say the call failed, since only
@@ -2328,23 +2340,66 @@ func (e *Engine) refuseImages(s *Session, err error) bool {
 	return true
 }
 
-// argSummary pulls the command and the path out of the raw arguments for the
-// permission card, tolerating arguments the model malformed. The card shows
-// what the call is about, and for a search that is the query, which the card
-// reads as the command.
-func argSummary(call llm.ToolCall) (command, path string) {
-	var args struct {
-		Command string `json:"command"`
-		Path    string `json:"path"`
-		Query   string `json:"query"`
+type rememberArgs struct {
+	Text string `json:"text"`
+}
+
+// permissionRecord reads the fields the policy uses with the tool's own argument type.
+func permissionRecord(call llm.ToolCall) (*store.PermissionRecord, error) {
+	name := call.Function.Name
+	raw := json.RawMessage(call.Function.Arguments)
+	r := &store.PermissionRecord{Tool: name}
+	var err error
+	switch name {
+	case "read":
+		var args tools.ReadFileArgs
+		err = tools.DecodeArgs(name, raw, &args)
+		r.Path = args.Path
+	case "read_image":
+		var args tools.ReadImageArgs
+		err = tools.DecodeArgs(name, raw, &args)
+		r.Path = args.Path
+	case "grep":
+		var args tools.FindArgs
+		err = tools.DecodeArgs(name, raw, &args)
+		r.Path = args.Path
+	case "write":
+		var args tools.WriteFileArgs
+		err = tools.DecodeArgs(name, raw, &args)
+		r.Path = args.Path
+	case "edit":
+		var args tools.ReplaceInFileArgs
+		err = tools.DecodeArgs(name, raw, &args)
+		r.Path = args.Path
+	case "bash":
+		var args tools.RunShellArgs
+		err = tools.DecodeArgs(name, raw, &args)
+		r.Command = args.Command
+	case "web_search":
+		var args tools.WebSearchArgs
+		err = tools.DecodeArgs(name, raw, &args)
+		r.Command = args.Query
+	case "remember":
+		var args rememberArgs
+		err = tools.DecodeArgs(name, raw, &args)
+		r.Command = strings.TrimSpace(args.Text)
+	default:
+		if mcp.IsWire(name) {
+			r.Command = string(raw)
+		}
 	}
-	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-		return "", ""
+	if err != nil {
+		return nil, err
 	}
-	if args.Command == "" {
-		return args.Query, args.Path
+	return r, nil
+}
+
+func (e *Engine) readSessionMemory() (*string, string) {
+	m, err := e.cfg.Memory()
+	if err != nil {
+		return new(string), "Memory could not be loaded. " + err.Error()
 	}
-	return args.Command, args.Path
+	return &m.Text, ""
 }
 
 // compact replaces the in-context set with one summary of everything but the
@@ -2401,16 +2456,41 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 		return errors.New("The model returned an empty summary: try again or start a new session")
 	}
 
+	var memory *string
+	var warning string
+	if s.Parent == "" {
+		memory, warning = e.readSessionMemory()
+	}
 	s.mu.Lock()
-	// The kept messages are found again by sequence number, since the turn
-	// may have appended since the request was made.
-	for i := range s.Entries {
-		if s.Entries[i].Seq < tailSeq || !kept {
-			s.Entries[i].InContext = false
+	e.waitSavedLocked(s)
+	if s.gone {
+		s.mu.Unlock()
+		return ErrNotFound
+	}
+	if err := ctx.Err(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	if warning != "" {
+		memory = nil
+		for _, entry := range s.Entries {
+			if entry.InContext && entry.Memory != nil {
+				memory = entry.Memory
+			}
 		}
 	}
-	s.Compactions++
-	meta := map[string]any{"before": before, "n": s.Compactions}
+	// Build the replacement on a copy so a failed write leaves the active context intact.
+	doc := s.doc()
+	next := Session{Entries: doc.Entries, ContextBase: s.ContextBase, turnSeq: s.turnSeq, usageSince: s.usageSince}
+	// The kept messages are found again by sequence number, since the turn
+	// may have appended since the request was made.
+	for i := range next.Entries {
+		if next.Entries[i].Seq < tailSeq || !kept {
+			next.Entries[i].InContext = false
+		}
+	}
+	doc.Compactions++
+	meta := map[string]any{"before": before, "n": doc.Compactions}
 	if kept {
 		meta["tail"] = tailSeq
 	}
@@ -2437,13 +2517,19 @@ func (e *Engine) compact(ctx context.Context, s *Session, back Backend, a config
 			break
 		}
 	}
-	s.appendEntry(store.Entry{Kind: "compaction", Role: "user",
+	next.appendEntry(store.Entry{Memory: memory, Kind: "compaction", Role: "user",
 		Content: summary, InContext: true, Visible: true, Meta: meta, Usage: rec})
-	after := s.computeFill()
-	s.Entries[len(s.Entries)-1].Meta["after"] = after
+	after := next.computeFill()
+	meta["after"] = after
+	doc.Entries, doc.Updated = next.Entries, next.Updated
+	if err := e.store.Save(doc); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.Entries, s.Updated, s.turnSeq, s.Compactions = doc.Entries, doc.Updated, next.turnSeq, doc.Compactions
 	s.mu.Unlock()
 
-	e.save(s)
+	e.showNote(s, &s.memoryNote, warning)
 	e.publish(s.ID, ev("compacted", map[string]any{"before": before, "after": after, "summary": summary}))
 	return nil
 }

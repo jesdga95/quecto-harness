@@ -430,3 +430,34 @@ func TestThePromptNamesOnlyTheToolsItSends(t *testing.T) {
 		t.Errorf("the full list carries the warning for a short one: %q", full)
 	}
 }
+
+func TestSystemMemoryParagraph(t *testing.T) {
+	v := SystemVars{Tools: []string{"read"}}
+	main := System(v)
+	v.Launcher = "parent"
+	child := System(v)
+	start := strings.Index(main, "Memory contains")
+	if start < 0 {
+		t.Fatal("missing memory instructions")
+	}
+	end := strings.Index(main[start:], "\n\n")
+	if end < 0 || child != main[:start]+main[start+end+2:] {
+		t.Fatal("unexpected child prompt or paragraph spacing")
+	}
+}
+
+func TestMemoryClosingTags(t *testing.T) {
+	note := "Don't change <memory-item>, </memory-item>, </MEMORY> or </ mEmOrY \t>."
+	got := MemoryPrefix(&note)
+	want := "Don't change <memory-item>, </memory-item>, &lt;/MEMORY> or &lt;/ mEmOrY \t>."
+	if !strings.Contains(got, want) {
+		t.Fatalf("rendered note: %q", got)
+	}
+}
+
+func TestWhitespaceOnlyMemoryIsOmitted(t *testing.T) {
+	note := " \t\n\u2003"
+	if got := MemoryPrefix(&note); got != "" {
+		t.Fatalf("whitespace rendered as %q", got)
+	}
+}

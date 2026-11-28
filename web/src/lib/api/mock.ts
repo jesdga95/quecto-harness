@@ -5,6 +5,7 @@ import type {
   Answer,
   Attached,
   Config,
+  Memory,
   EventHandler,
   DiffKind,
   Git,
@@ -45,6 +46,7 @@ import type {
   Usage,
   WorkMode,
 } from "./types";
+import { ApiError } from "./http";
 import { applyEvent, nextId, outcomeLabel, pushUser } from "../transcript";
 import { answerText, type Asked } from "../question";
 
@@ -102,6 +104,11 @@ const MOCK_TOOL_SPECS: ToolSpec[] = [
       { name: "old_string", type: "string", description: "The exact text to replace.", required: true },
       { name: "new_string", type: "string", description: "What to put in its place.", required: true },
     ],
+  },
+  {
+    name: "remember",
+    description: "Save a preference when explicitly requested.",
+    params: [{ name: "text", type: "string", description: "One note.", required: true }],
   },
   {
     name: "todo_write",
@@ -166,7 +173,7 @@ const MOCK_TOOLSET_DEBUG: ToolsetDebug = {
   prompts: {
     full:
       "You are a coding agent working in /Users/jay/Projects/Personal/quecto-harness on darwin.\n" +
-      "Tools: read, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash, processes.\n\n" +
+      "Tools: read, grep, web_search, write, edit, remember, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash, processes.\n\n" +
       "Use the grep tool, not a shell command, to locate files and lines.\n" +
       "Use the read tool, not cat, head or sed, to read a file.\n" +
       "Check the exit code of every bash result, and look into a failure before moving on.",
@@ -1277,6 +1284,20 @@ export class MockApi implements HarnessApi {
       draft: null,
     });
     return { ...session };
+  }
+
+  private memory: Memory = { text: "", revision: "0" };
+
+  async getMemory(): Promise<Memory> {
+    return { ...this.memory };
+  }
+
+  async replaceMemory(memory: Memory): Promise<Memory> {
+    if (memory.revision !== this.memory.revision) {
+      throw new ApiError("Memory changed since you opened it. Reload before saving.", 409);
+    }
+    this.memory = { text: memory.text, revision: String(Number(this.memory.revision) + 1) };
+    return { ...this.memory };
   }
 
   async updateConfig(patch: Partial<Config>): Promise<Config> {

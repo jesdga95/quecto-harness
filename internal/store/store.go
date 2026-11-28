@@ -32,6 +32,8 @@ type Entry struct {
 
 	Content   string `json:"content,omitempty"`
 	Reasoning string `json:"reasoning,omitempty"`
+	// Memory is the snapshot taken with the opening message or this summary.
+	Memory *string `json:"memory,omitempty"`
 
 	ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
