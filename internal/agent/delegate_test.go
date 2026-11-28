@@ -343,7 +343,7 @@ func TestAMessageToAnIdleLauncherIsPublished(t *testing.T) {
 
 	drawn := false
 	for _, e := range h.rec.ofType("message") {
-		if e.Fields["from"] == "Reviewer" && e.Fields["seq"] == got.Seq {
+		if e.Fields["from"] == "Reviewer" && e.Fields["entry"] == got.Seq {
 			drawn = true
 		}
 	}

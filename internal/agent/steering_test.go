@@ -131,6 +131,10 @@ func TestSteersJoin(t *testing.T) {
 	if doc.Entries[2].Content != "one\ntwo" {
 		t.Errorf("third entry = %q, want one message", doc.Entries[2].Content)
 	}
+	// The browser is told the message joined the turn rather than started one.
+	if ev := h.rec.ofType("message"); len(ev) != 1 || ev[0].Fields["steer"] != true {
+		t.Errorf("message events = %v, want one marked as steered", ev)
+	}
 }
 
 // A stop ends the turn without picking the message up, so it is sent as an
@@ -160,9 +164,8 @@ func TestStopDeliversTheQueue(t *testing.T) {
 		t.Error("the queue still holds the message the stop delivered")
 	}
 	// No browser drew this one for itself, so the harness has to.
-	if len(h.rec.ofType("message")) != 1 {
-		t.Errorf("message events = %d, want the delivered message on the stream",
-			len(h.rec.ofType("message")))
+	if ev := h.rec.ofType("message"); len(ev) != 1 || ev[0].Fields["steer"] != false {
+		t.Errorf("message events = %v, want the delivered message on the stream as a new turn", ev)
 	}
 }
 

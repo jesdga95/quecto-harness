@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"maps"
 	"time"
 
 	"github.com/jesdga95/quecto-harness/internal/llm"
@@ -56,7 +57,14 @@ type turnUsage struct {
 	// generating time was measured.
 	perSecond float64
 	// each holds every call of the turn, in the order they were made.
-	each []store.CallUsage
+	each []call
+}
+
+// call is one model call of a turn. cut is set on a summary: the context
+// before and after it, and the seq of the entry it wrote.
+type call struct {
+	store.CallUsage
+	cut map[string]any
 }
 
 // turnUsageOf sums the records the entries after from carry. A call recorded
@@ -73,7 +81,13 @@ func turnUsageOf(entries []store.Entry, from int) turnUsage {
 			continue
 		}
 		u.calls++
-		u.each = append(u.each, *c)
+		one := call{CallUsage: *c}
+		before, ok1 := metaInt(e.Meta["before"])
+		after, ok2 := metaInt(e.Meta["after"])
+		if c.Compaction && ok1 && ok2 {
+			one.cut = map[string]any{"before": before, "after": after, "seq": e.Seq}
+		}
+		u.each = append(u.each, one)
 		if !c.Reported {
 			u.unrecorded++
 			// stopped names the uncounted calls this harness cut short, so the
@@ -153,11 +167,13 @@ func (u turnUsage) fields(wall, tool time.Duration, agent, model string) map[str
 
 // rows renders each call of the turn, in the order they were made. A count the
 // server did not report is left out rather than written as zero, and so is a
-// summary's prompt, which counted the messages it replaced.
+// summary's prompt, which counted the messages it replaced. A summary carries
+// the context before and after it instead, and the entry it wrote.
 func (u turnUsage) rows() []map[string]any {
 	out := make([]map[string]any, 0, len(u.each))
 	for _, c := range u.each {
 		row := map[string]any{"first_ms": c.FirstMs, "gen_ms": c.GenMs}
+		maps.Copy(row, c.cut)
 		if !c.Reported {
 			out = append(out, row)
 			continue

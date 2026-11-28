@@ -986,6 +986,58 @@ func TestBusySession(t *testing.T) {
 	f.waitIdle(t, id)
 }
 
+// A message the harness draws names its entry apart from the stream's own
+// number, so a browser that holds entry 1 does not drop a later message whose
+// event happens to be number 1.
+func TestMessageEventNamesItsEntry(t *testing.T) {
+	f := newFixture(t)
+	id := f.newSession(t)
+	f.block(t)
+	f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "hi"})
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && f.engine.State(id) != agent.StateStreaming {
+		time.Sleep(time.Millisecond)
+	}
+	f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "again"})
+	f.do(t, "POST", "/api/sessions/"+id+"/stop", nil)
+
+	var entry float64
+	for deadline = time.Now().Add(5 * time.Second); time.Now().Before(deadline) && entry == 0; {
+		entries, _ := decode(t, f.do(t, "GET", "/api/sessions/"+id, nil))["entries"].([]any)
+		for _, e := range entries {
+			if row, _ := e.(map[string]any); row["content"] == "again" {
+				entry, _ = row["seq"].(float64)
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if entry == 0 {
+		t.Fatal("the stop did not deliver the queued message")
+	}
+	// The event follows the entry, so the replay is read until it holds it.
+	var seen []string
+	sent := false
+	for deadline = time.Now().Add(5 * time.Second); time.Now().Before(deadline) && !sent; {
+		_, cancel, replay := f.hub.Subscribe(id, 0)
+		cancel()
+		seen = seen[:0]
+		for _, fr := range replay {
+			var v map[string]any
+			json.Unmarshal(fr.Data, &v)
+			if fr.Type == "message" {
+				seen = append(seen, string(fr.Data))
+				sent = sent || v["text"] == "again" && v["entry"] == entry && v["seq"] == float64(fr.Seq)
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !sent {
+		t.Errorf("message events = %v, want one naming entry %v apart from its stream number", seen, entry)
+	}
+	f.do(t, "POST", "/api/sessions/"+id+"/stop", nil)
+	f.waitIdle(t, id)
+}
+
 // An unreadable policy is rejected rather than stored.
 func TestPutConfigRejectsAnUnknownMode(t *testing.T) {
 	f := newFixture(t)

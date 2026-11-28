@@ -365,14 +365,14 @@ export type HarnessEvent =
   | { type: "status_entry"; text: string }
   /** The model named the session after its first turn. */
   | { type: "title"; title: string }
-  | { type: "compacted"; before: number; after: number; summary: string }
+  | { type: "compacted"; before: number; after: number; summary: string; seq?: number }
   /** The model rewrote the plan. It replaces the one held. */
   | { type: "todos"; todos: Todo[] }
   /** A message is waiting for the running turn, as it now stands. */
   | { type: "queued"; steer: Steer }
   /** The harness appended a user message, which is a queued one being picked
       up by the turn it was typed against. */
-  | { type: "message"; seq: number; text: string; files: Attached[]; from: string }
+  | { type: "message"; seq: number; text: string; files: Attached[]; from: string; steer?: boolean }
   /** The files this session is answerable for moved for a reason its own
       stream does not carry, such as a subagent writing one. */
   | { type: "changed" }
@@ -420,6 +420,8 @@ export type TranscriptItem =
       from: string;
       /** When it was sent, in epoch milliseconds. */
       at?: number;
+      /** Taken into a turn already running rather than starting one. */
+      steer?: boolean;
     }
   /** at is when the block was stored, which for the one that ends a turn is
       when the turn ended. */
@@ -475,7 +477,7 @@ export type TranscriptItem =
           only that one blocks the composer. */
       agent: string;
     }
-  | { kind: "compaction"; id: string; before: number; after: number; summary: string }
+  | { kind: "compaction"; id: string; before: number; after: number; summary: string; seq?: number }
   /** Where the conversation moved to another mode. kickoff is an approved
       plan starting its execution, and title is that plan's. */
   | { kind: "mode"; id: string; mode: WorkMode; kickoff: boolean; title: string }
@@ -730,13 +732,15 @@ export interface TurnCost {
   perRequest?: RequestCost[];
 }
 
-/** One request of a turn. window is its prompt, absent where the server did
-    not report one; tokens is its output. */
+/** One request of a turn. window is its prompt and tokens its output, each
+    absent where the server did not report it. A summary carries the context it
+    compacted from and to, and the seq of the entry it wrote. */
 export interface RequestCost {
   window?: number;
-  tokens: number;
+  tokens?: number;
   firstMs: number;
   genMs: number;
+  compacted?: { before: number; after: number; seq?: number };
 }
 
 /** One folder in the project, as the panel's browser lists it. path is
