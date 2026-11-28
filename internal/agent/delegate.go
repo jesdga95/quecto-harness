@@ -93,22 +93,28 @@ func readRules(project string) (content, name, note string) {
 // what it has instead is the launcher waiting on it. The rules file is read
 // outside the lock, like the image bytes a message carries.
 func (e *Engine) briefFor(ctx context.Context, s *Session, cfg config.Config) brief {
+	return e.briefWith(ctx, s, cfg, false, nil)
+}
+
+// briefWith is briefFor that, with keep, offers the MCP tools kept instead of
+// reading the servers, for a turn that goes on with the ones it started with.
+func (e *Engine) briefWith(ctx context.Context, s *Session, cfg config.Config, keep bool, kept []mcp.Offered) brief {
 	s.mu.Lock()
 	parent, mine, mode, project, set := s.Parent, s.AgentID, s.Mode, s.Project, s.Toolset
 	s.mu.Unlock()
 	rules, rulesName, note := readRules(project)
 	e.showRulesNote(s, note)
+	if !keep {
+		kept = e.mcpTools(ctx, s, project, set)
+	}
 	b := brief{rules: rules, rulesName: rulesName}
+	b.offer = tools.Offer{Set: set, Mode: mode, Ask: parent == "", Message: true, Search: cfg.Search.Enabled(), MCP: kept}
 	if parent != "" {
 		// A subagent hands work to nobody and asks nobody, but it still
 		// searches: research delegated down is what web_search is for.
-		b.offer = tools.Offer{Set: set, Mode: mode, Message: true, Search: cfg.Search.Enabled()}
-		b.offer.MCP = e.mcpTools(ctx, s, project, set)
 		b.launcher = parent
 		return b
 	}
-	b.offer = tools.Offer{Set: set, Mode: mode, Ask: true, Message: true, Search: cfg.Search.Enabled()}
-	b.offer.MCP = e.mcpTools(ctx, s, project, set)
 	me, _ := cfg.AgentByID(mine)
 	// What is named is what the caller may hand work to, so a list that names
 	// nothing offers the tool at all, the way a roster with no enabled agents

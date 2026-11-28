@@ -27,7 +27,10 @@ type mcpServerJSON struct {
 	TimeoutS  int               `json:"timeout_s"`
 	ReadOnly  bool              `json:"read_only"`
 	Allow     []string          `json:"allow"`
-	Problem   string            `json:"problem"`
+	// EnabledTools is null when every tool is offered but those disabled.
+	EnabledTools  []string `json:"enabled_tools"`
+	DisabledTools []string `json:"disabled_tools"`
+	Problem       string   `json:"problem"`
 
 	State   string   `json:"state"`
 	Error   string   `json:"error"`
@@ -43,6 +46,7 @@ func toMCPServerJSON(srv config.MCPServer, st mcp.ServerStatus) mcpServerJSON {
 		Command: srv.Command, Args: orEmpty(srv.Args), Env: orEmptyMap(srv.Env), Cwd: srv.Cwd,
 		URL: srv.URL, Headers: orEmptyMap(srv.Headers), TimeoutS: int(srv.Timeout / time.Second),
 		ReadOnly: srv.ReadOnly, Allow: orEmpty(srv.Allow), Problem: srv.Problem,
+		EnabledTools: srv.EnabledTools, DisabledTools: orEmpty(srv.DisabledTools),
 		State: string(mcp.StateIdle), Tools: []string{},
 	}
 	if st.Name != "" {
@@ -93,6 +97,9 @@ type mcpServerBody struct {
 	TimeoutS  int               `json:"timeout_s"`
 	ReadOnly  bool              `json:"read_only"`
 	Allow     []string          `json:"allow"`
+	// EnabledTools absent or null offers every tool not disabled.
+	EnabledTools  []string `json:"enabled_tools"`
+	DisabledTools []string `json:"disabled_tools"`
 }
 
 var mcpName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
@@ -114,6 +121,7 @@ func (b mcpServerBody) record() (config.MCPServer, error) {
 		Command:   strings.TrimSpace(b.Command), Args: b.Args, Env: cleanMap(b.Env),
 		Cwd: strings.TrimSpace(b.Cwd), URL: strings.TrimSpace(b.URL), Headers: cleanMap(b.Headers),
 		Timeout: time.Duration(b.TimeoutS) * time.Second, ReadOnly: b.ReadOnly, Allow: b.Allow,
+		EnabledTools: b.EnabledTools, DisabledTools: b.DisabledTools,
 	}
 	if len(srv.Args) == 0 {
 		srv.Args = nil

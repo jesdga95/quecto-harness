@@ -383,20 +383,27 @@ func TestEvaluateMCP(t *testing.T) {
 	}
 	b := New(cfg, nil)
 	cases := []struct {
-		tool string
-		mode config.Mode
-		want Action
+		server, tool string
+		mode         config.Mode
+		want         Action
 	}{
-		{"mcp__gh__get_issue", config.ModeAsk, ActionPrompt},
-		{"mcp__gh__get_issue", config.ModeAllowlist, ActionAllow},
-		{"mcp__gh__create_issue", config.ModeAllowlist, ActionPrompt},
-		{"mcp__other__get_issue", config.ModeAllowlist, ActionPrompt},
-		{"mcp__gh__create_issue", config.ModeFull, ActionAllow},
+		{"gh", "get.issue", config.ModeAsk, ActionPrompt},
+		{"gh", "get.issue", config.ModeAllowlist, ActionAllow},
+		// get_issue is sent under the same wire name as get.issue, and is
+		// still not the tool the user allowed.
+		{"gh", "get_issue", config.ModeAllowlist, ActionPrompt},
+		{"gh", "create_issue", config.ModeAllowlist, ActionPrompt},
+		{"other", "get.issue", config.ModeAllowlist, ActionPrompt},
+		{"gh", "create_issue", config.ModeFull, ActionAllow},
 	}
 	for _, c := range cases {
-		if got := b.Evaluate("/proj", c.tool, "", "", false, c.mode); got != c.want {
-			t.Errorf("%s in %s = %s, want %s", c.tool, c.mode, got, c.want)
+		if got := b.EvaluateMCP(c.server, c.tool, c.mode); got != c.want {
+			t.Errorf("%s/%s in %s = %s, want %s", c.server, c.tool, c.mode, got, c.want)
 		}
+	}
+	// A wire name alone is never allowed outside full mode.
+	if got := b.Evaluate("/proj", "mcp__gh__get_issue", "", "", false, config.ModeAllowlist); got != ActionPrompt {
+		t.Errorf("a wire name alone = %s, want a card", got)
 	}
 }
 

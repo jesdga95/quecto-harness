@@ -261,11 +261,14 @@ func TestManagerClose(t *testing.T) {
 
 func TestManagerProbe(t *testing.T) {
 	m := newTestManager(t, fakeServer("fake"))
+	if stateOf(m, "fake").Listed {
+		t.Fatal("a server never listed reads as listed")
+	}
 	info, tools, notes, err := m.Probe(context.Background(), fakeServer("fake"), "")
 	if err != nil || info.Name != "fake" || len(tools) != 4 || len(notes) != 3 {
 		t.Fatalf("probe = %+v %d %q %v", info, len(tools), notes, err)
 	}
-	if st := stateOf(m, "fake"); st.State != StateIdle || len(st.Tools) != 4 {
+	if st := stateOf(m, "fake"); st.State != StateIdle || len(st.Tools) != 4 || !st.Listed {
 		t.Fatalf("probe should fill the list and leave nothing running: %+v", st)
 	}
 }
@@ -310,6 +313,41 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition never held")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A server offers only its enabled tools when it names them, and never a
+// disabled one; the status still lists every tool it has.
+func TestManagerOffersTheChosenTools(t *testing.T) {
+	only := fakeServer("only")
+	only.EnabledTools = []string{"echo", "slow"}
+	only.DisabledTools = []string{"slow"}
+	none := fakeServer("none")
+	none.EnabledTools = []string{}
+	m := newTestManager(t, only, none)
+	offered, _ := m.Tools(context.Background(), "")
+	if got := wires(offered); got != "mcp__only__echo" {
+		t.Errorf("offered = %s, want only echo", got)
+	}
+	if st := stateOf(m, "only"); len(st.Tools) != 4 {
+		t.Errorf("status tools = %v, want all four", st.Tools)
+	}
+}
+
+// A server whose enabled list is empty offers nothing, so building the offer
+// does not start it.
+func TestManagerDoesNotStartAServerThatOffersNothing(t *testing.T) {
+	none := fakeServer("none")
+	none.EnabledTools = []string{}
+	m := newTestManager(t, none)
+	if offered, notes := m.Tools(context.Background(), ""); len(offered) != 0 || len(notes) != 0 {
+		t.Fatalf("offered = %s, notes = %q", wires(offered), notes)
+	}
+	m.mu.Lock()
+	started := len(m.inst)
+	m.mu.Unlock()
+	if st := stateOf(m, "none"); started != 0 || st.State != StateIdle || st.Running != 0 {
+		t.Errorf("%d instances, status %+v, want nothing started", started, st)
 	}
 }
 

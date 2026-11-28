@@ -221,7 +221,8 @@ func (m *Manager) Tools(ctx context.Context, project string) ([]Offered, []strin
 	m.mu.Lock()
 	var usable []Server
 	for _, n := range m.order {
-		if s := m.servers[n]; s.Usable() {
+		// A server with an empty enabled list offers nothing and is not started.
+		if s := m.servers[n]; s.Usable() && (s.EnabledTools == nil || len(s.EnabledTools) > 0) {
 			usable = append(usable, s)
 		}
 	}
@@ -256,6 +257,9 @@ func (m *Manager) Tools(ctx context.Context, project string) ([]Offered, []strin
 		sorted := append([]Tool(nil), tools...)
 		sort.Slice(sorted, func(a, b int) bool { return sorted[a].Name < sorted[b].Name })
 		for _, t := range sorted {
+			if !s.Offers(t.Name) {
+				continue
+			}
 			wire, ok := WireName(s.Name, t.Name)
 			if !ok {
 				notes = append(notes, fmt.Sprintf("MCP tool %s on %s is left out: its name is too long to send", t.Name, s.Name))
@@ -935,8 +939,9 @@ type ServerStatus struct {
 	Error   string   `json:"error,omitempty"`
 	Tools   []string `json:"tools"`
 	Running int      `json:"running"`
-	Listed  bool     `json:"listed"`
-	Project string   `json:"project,omitempty"`
+	// Listed is true once the server's tools are known, even when there are none.
+	Listed  bool   `json:"listed"`
+	Project string `json:"project,omitempty"`
 }
 
 // Status reports every configured server. A server running in several
