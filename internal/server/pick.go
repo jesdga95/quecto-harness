@@ -16,7 +16,7 @@ import (
 )
 
 // errNoDialog is returned when the host has no chooser installed.
-var errNoDialog = errors.New("No file dialog on this system: install zenity, or type the path")
+var errNoDialog = errors.New("No file dialog on this system: install zenity or kdialog")
 
 // folderPicker and filePicker are variables so the route can be exercised
 // without opening a dialog on the machine running the tests.
@@ -225,7 +225,7 @@ func runDialogRaw(ctx context.Context, name string, args ...string) (string, err
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			if noGUISession(string(exit.Stderr)) {
-				return "", errors.New("The folder dialog cannot open: this process has no desktop session, type the path instead")
+				return "", errors.New("The dialog cannot open: this process has no desktop session")
 			}
 			return "", nil
 		}
@@ -233,9 +233,9 @@ func runDialogRaw(ctx context.Context, name string, args ...string) (string, err
 			return "", errNoDialog
 		}
 		if ctx.Err() != nil {
-			return "", errors.New("The folder dialog did not answer in time: type the path instead")
+			return "", errors.New("The dialog did not answer in time: try again")
 		}
-		return "", errors.New("Open the folder dialog: " + err.Error())
+		return "", errors.New("Open the dialog: " + err.Error())
 	}
 	return strings.TrimRight(string(out), "\r\n"), nil
 }
