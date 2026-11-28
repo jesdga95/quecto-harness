@@ -265,6 +265,9 @@ func (s *Store) AddProject(path string) (Config, error) {
 	if err := s.CheckProject(real); err != nil {
 		return s.Config(), err
 	}
+	if ContainsDirectory(s.paths.Scratch, real) {
+		return s.Config(), fmt.Errorf("%s is in the folder the harness keeps for conversations without a project, so it cannot be a project. Choose a folder outside it", real)
+	}
 	s.mu.Lock()
 	for _, p := range s.cfg.Projects {
 		if p == real {
@@ -276,27 +279,11 @@ func (s *Store) AddProject(path string) (Config, error) {
 	return s.Update(func(c *Config) { c.Projects = append([]string{real}, c.Projects...) })
 }
 
-// DropProject removes the project the list holds under exactly this path,
-// without resolving it again.
-func (s *Store) DropProject(path string) (Config, error) {
+// RemoveProjectEntry removes the one entry written exactly as entry, and no
+// other entry its path may resolve to.
+func (s *Store) RemoveProjectEntry(entry string) (Config, error) {
 	return s.Update(func(c *Config) {
-		c.Projects = slices.DeleteFunc(c.Projects, func(p string) bool { return p == path })
-	})
-}
-
-func (s *Store) RemoveProject(path string) (Config, error) {
-	real := filepath.Clean(path)
-	if r, err := ResolveProject(path); err == nil {
-		real = r
-	}
-	return s.Update(func(c *Config) {
-		var keep []string
-		for _, p := range c.Projects {
-			if p != real && p != filepath.Clean(path) {
-				keep = append(keep, p)
-			}
-		}
-		c.Projects = keep
+		c.Projects = slices.DeleteFunc(c.Projects, func(p string) bool { return p == entry })
 	})
 }
 

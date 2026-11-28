@@ -727,10 +727,10 @@ func TestAddProject(t *testing.T) {
 	if _, err := s.AddProject(filepath.Join(proj, "missing")); err == nil {
 		t.Error("adding a missing directory must fail")
 	}
-	if _, err = s.RemoveProject(proj); err != nil {
+	if _, err = s.RemoveProjectEntry(real); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err = s.RemoveProject(proj2)
+	cfg, err = s.RemoveProjectEntry(real2)
 	if err != nil || len(cfg.Projects) != 0 {
 		t.Errorf("remove left %v (%v)", cfg.Projects, err)
 	}

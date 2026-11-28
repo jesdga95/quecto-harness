@@ -70,6 +70,11 @@ type Engine struct {
 	procs    *Registry
 	// mcp runs the configured MCP servers. Nil offers no MCP tools.
 	mcp *mcp.Manager
+	// scratch is the folder conversations started without a project get
+	// their own folders in. Empty offers no such conversation.
+	scratch    string
+	ledger     *store.ScratchLedger
+	ledgerOnce sync.Once
 
 	ctx context.Context
 	os  string
@@ -1095,30 +1100,51 @@ func (e *Engine) Rename(id, title string) error {
 	return nil
 }
 
+// ErrKeptChanged is a delete whose folder left on disk is no longer the one
+// the person was told of.
+var ErrKeptChanged = errors.New("The files this deletion leaves on disk have changed. Confirm the deletion again")
+
+// Delete removes the session, every run it launched and, when its owner
+// record allows, the scratch folder it worked in.
 func (e *Engine) Delete(id string) error {
+	_, err := e.DeleteWithResult(id, nil)
+	return err
+}
+
+// DeleteConfirmed deletes after the person has seen told, the PreviewDelete
+// of what stays on disk. Its Kept, Deferred and Token are checked, and any
+// change since is refused with ErrKeptChanged.
+func (e *Engine) DeleteConfirmed(id string, told DeletionPreview) error {
+	_, err := e.DeleteWithResult(id, &told)
+	return err
+}
+
+// DeleteWithResult reports a retained folder after the session deletion commits.
+func (e *Engine) DeleteWithResult(id string, told *DeletionPreview) (*store.TrashFailure, error) {
 	e.mu.Lock()
 	reserved := e.deleting[id]
 	e.mu.Unlock()
 	if reserved {
-		return ErrBusy
+		return nil, ErrBusy
 	}
 	// A session whose file went but whose saved output stayed has only the
 	// output left to remove.
 	if done, err := e.store.FinishCleanup(id); done || err != nil {
-		return err
+		return nil, err
 	}
 	s, err := e.Get(id)
 	if errors.Is(err, ErrNotFound) {
 		if missingErr := e.store.RemoveMissingRun("", id); !errors.Is(missingErr, store.ErrNotFound) {
-			return missingErr
+			return nil, missingErr
 		}
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
+	e.store.Reread()
 	group, missing, err := e.reserve(s)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer e.unreserve(group)
 
@@ -1132,22 +1158,69 @@ func (e *Engine) Delete(id string) error {
 	err = e.procs.Drain(ctx, ids)
 	cancel()
 	if err != nil {
-		return ErrStillRunning
+		return nil, ErrStillRunning
 	}
 
-	// Subagent runs go before their launcher, so a failure part way leaves
-	// the launcher in place to be deleted again.
-	for _, id := range missing {
-		if err := e.store.RemoveMissingRun(s.ID, id); err != nil && !errors.Is(err, store.ErrNotFound) {
-			return err
+	kept, deferred := e.keptBy(s, told != nil)
+	if told != nil && (told.Kept != kept || told.Deferred != deferred) {
+		return nil, ErrKeptChanged
+	}
+	keepRecord, err := e.finishCarryForDelete(s, told)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	project, scratch, leftIn := s.Project, s.Scratch, s.LeftIn
+	s.mu.Unlock()
+	// A run whose launcher is gone orders its folder removed in its place.
+	owner := s.ID
+	if s.Parent != "" && e.LauncherGone(s.Parent) {
+		owner = s.Parent
+	}
+	// A folder kept only while a session file is unread keeps its order,
+	// which nothing carries out until every file reads.
+	ordered := false
+	if kept != "" && told != nil && !deferred {
+		source := project
+		if !scratch {
+			source = leftIn
+		}
+		if store.IsScratch(e.scratch, source) {
+			if err := e.scratchLedger().Keep(source, owner); err != nil {
+				return nil, fmt.Errorf("Keep %s: %w", kept, err)
+			}
+		}
+	} else if scratch && (s.Parent == "" || owner == s.Parent) {
+		if ordered, err = e.orderRemoval(project, owner); err != nil {
+			return nil, err
+		}
+		if ordered && kept != "" && !deferred {
+			if err := e.scratchLedger().Withdraw(project); err != nil {
+				return nil, fmt.Errorf("Keep %s: %w", kept, err)
+			}
+			ordered = false
 		}
 	}
-	for _, m := range group[1:] {
-		if err := e.remove(m); err != nil {
-			return err
+	for _, run := range slices.Backward(missing) {
+		if err := e.store.RemoveMissingRun(run.parent, run.id); err != nil && !errors.Is(err, store.ErrNotFound) {
+			if ordered {
+				err = errors.Join(err, e.scratchLedger().Withdraw(project))
+			}
+			return nil, err
 		}
 	}
-	return e.remove(s)
+	for i := len(group) - 1; i >= 0; i-- {
+		if err := e.remove(group[i], keepRecord && group[i] == s); err != nil {
+			if ordered && (group[i] != s || !errors.Is(err, store.ErrLeftBehind)) {
+				return nil, errors.Join(err, e.scratchLedger().Withdraw(project))
+			}
+			return nil, err
+		}
+	}
+	if ordered {
+		return e.removeScratch(project), nil
+	}
+	return nil, nil
 }
 
 // drainTimeout bounds the wait for a deleted session's commands to end. A
@@ -1155,14 +1228,19 @@ func (e *Engine) Delete(id string) error {
 // reaches it.
 const drainTimeout = 10 * time.Second
 
+type missingRun struct {
+	parent string
+	id     string
+}
+
 // reserve marks a session and the subagent runs under it as being deleted, or
 // none of them when any is working, holds a queued message, or is reserved.
 // The launcher comes first in what it returns.
-func (e *Engine) reserve(s *Session) ([]*Session, []string, error) {
+func (e *Engine) reserve(s *Session) ([]*Session, []missingRun, error) {
 	// A run only on disk is loaded, so its one instance is what is reserved.
 	// One whose file cannot be read refuses the delete by name.
 	var kids []*Session
-	var missing []string
+	var missing []missingRun
 	for _, id := range e.store.Family(s.ID) {
 		// A run with output left behind is finished first, or its launcher
 		// would go while the run still waits on a fix.
@@ -1175,7 +1253,7 @@ func (e *Engine) reserve(s *Session) ([]*Session, []string, error) {
 		}
 		kid, err := e.Get(id)
 		if errors.Is(err, ErrNotFound) {
-			missing = append(missing, id)
+			missing = append(missing, missingRun{s.ID, id})
 			continue
 		}
 		if err != nil {
@@ -1257,7 +1335,7 @@ func (e *Engine) unreserve(group []*Session) {
 // remove deletes one reserved session once its accepted writes are on disk.
 // A failed delete leaves it in place and writes back what changed meanwhile.
 // Output left behind after the file went is reported, with the session gone.
-func (e *Engine) remove(s *Session) error {
+func (e *Engine) remove(s *Session, keepRecord bool) error {
 	s.mu.Lock()
 	e.waitSavedLocked(s)
 	s.gone = true
@@ -1271,6 +1349,14 @@ func (e *Engine) remove(s *Session) error {
 		e.waitSavedLocked(s)
 		s.mu.Unlock()
 		return err
+	}
+	if doc.Parent == "" && doc.LeftIn != "" {
+		if !keepRecord {
+			e.forgetCarry(doc.LeftIn)
+		}
+		if store.IsScratch(e.scratch, doc.LeftIn) {
+			e.scratchLedger().ForgetMissing(doc.LeftIn, s.ID)
+		}
 	}
 	// Stored copies of attachments belong to the session and go with it.
 	for _, entry := range doc.Entries {
@@ -1549,6 +1635,9 @@ func carriesOutput(kind llm.EventKind) bool {
 // state a new message is accepted in. card holds the turn's totals and is nil
 // for a turn that recorded no model call.
 func (e *Engine) finish(s *Session, next State, finishReason string, iterations int, card map[string]any) {
+	// A move change_directory asked for happens once the turn is over, and
+	// before a new message can start another.
+	e.applyMove(s)
 	// The steps of the turn were written without a flush. The file reaches
 	// the disk before the session reads as idle.
 	e.save(s)
@@ -1570,6 +1659,9 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	s.mu.Lock()
 	s.launches = nil
 	s.mu.Unlock()
+	// A move the last turn approved but a restart cut off is applied before
+	// this one reads the project.
+	e.applyMove(s)
 	clock := turnClock{started: time.Now()}
 	a, err := e.ensureReady(ctx, s)
 	if err != nil {
@@ -1594,12 +1686,17 @@ func (e *Engine) run(ctx context.Context, s *Session) {
 	}
 	// The estimate reads the same prompt the first request sends.
 	e.estimateBase(s, a, b)
-	runner, rerr := tools.NewRunner(s.Project, cfg)
+	project, _ := s.Where()
+	runner, rerr := tools.NewRunner(project, cfg)
 	if rerr != nil {
 		e.fail(s, rerr, clock)
 		return
 	}
+	s.mu.Lock()
+	runner.Folders = slices.Clone(s.Folders)
+	s.mu.Unlock()
 	runner.Hide(e.cfg.Paths().Home)
+	runner.FenceOff(e.Fence(s))
 	runner.Seen = s.seen
 	runner.SpillTo(e.store.SpillDir(s.ID))
 	if e.mcp != nil {
@@ -2207,7 +2304,24 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 	record := &store.PermissionRecord{Tool: tool, Command: command, Path: path}
 
 	policy := cfg.Mode
-	if e.perms.Evaluate(s.Project, tool, command, path, runner.Outside(path), policy) == perms.ActionAllow {
+	if tool == "change_directory" || tool == "request_directory" {
+		req, ask, refused := e.directoryRequest(s, call, policy)
+		if refused != nil {
+			record.Decision = "auto"
+			return perms.Decision{Kind: perms.DecideOnce, Refused: refused.Error()}, record, false
+		}
+		if !ask {
+			record.Decision = "auto"
+			if policy == config.ModeFull {
+				record.Decision = "full"
+			}
+			return perms.Decision{Kind: perms.DecideOnce}, record, false
+		}
+		record.Path = req.Path
+		return e.askDirectory(ctx, s, a, req, record)
+	}
+	project, _ := s.Where()
+	if e.perms.Evaluate(project, tool, command, path, runner.Outside(path), policy) == perms.ActionAllow {
 		// A call skips the card two ways, and the record keeps them apart.
 		// "auto" is a policy that allowed this call, "full" is no policy.
 		record.Decision = "auto"
@@ -2216,12 +2330,8 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 		}
 		return perms.Decision{Kind: perms.DecideOnce}, record, false
 	}
-	// The id is minted here rather than inside Ask, so the record kept with the
-	// tool entry carries the same id the card was asked with, whether the card
-	// was answered or the turn was stopped under it.
 	req := perms.Request{
-		ID:        perms.NewRequestID(),
-		SessionID: s.ID, Project: s.Project, Tool: tool,
+		Tool:    tool,
 		Command: command, Path: path,
 		Prefix: perms.DefaultPrefix(command),
 		Args:   string(call.Function.Arguments),
@@ -2235,6 +2345,28 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 	if t, ok := runner.MCPTools[tool]; ok {
 		req.Server, req.MCPTool, req.Prefix = t.Server, t.Tool, ""
 	}
+	d, stopped := e.askCard(ctx, s, a, req, record)
+	if stopped {
+		return d, record, true
+	}
+	record.Decision = string(d.Kind)
+	record.Prefix = d.Prefix
+	record.Reason = d.Reason
+	e.publishDecided(s, record)
+	if d.Note != "" {
+		e.publish(s.ID, ev("error", map[string]any{"kind": "allowlist", "message": d.Note}))
+	}
+	return d, record, false
+}
+
+// askCard puts a card to the person and waits for the answer. stopped reports
+// that the session was stopped while waiting, and the record then reads so.
+// The id is minted here rather than inside Ask, so the record carries the id
+// the card was asked with either way.
+func (e *Engine) askCard(ctx context.Context, s *Session, a config.Agent, req perms.Request, record *store.PermissionRecord) (d perms.Decision, stopped bool) {
+	req.ID = perms.NewRequestID()
+	req.SessionID = s.ID
+	req.Project, _ = s.Where()
 	// A subagent's card belongs in the conversation the person has open, not
 	// in a transcript nobody is reading.
 	if root := e.rootOf(s); root != s.ID {
@@ -2248,16 +2380,9 @@ func (e *Engine) decide(ctx context.Context, s *Session, cfg config.Config, a co
 	if err != nil {
 		record.Decision = "stopped"
 		e.publishDecided(s, record)
-		return perms.Decision{}, record, true
+		return perms.Decision{}, true
 	}
-	record.Decision = string(d.Kind)
-	record.Prefix = d.Prefix
-	record.Reason = d.Reason
-	e.publishDecided(s, record)
-	if d.Note != "" {
-		e.publish(s.ID, ev("error", map[string]any{"kind": "allowlist", "message": d.Note}))
-	}
-	return d, record, false
+	return d, false
 }
 
 // publishDecided closes a card that is open in the browser. The tab that
@@ -2428,12 +2553,21 @@ func (e *Engine) runTool(ctx context.Context, s *Session, runner *tools.Runner, 
 			res, err = e.writePlan(s, args)
 		case "exit_plan_mode":
 			res, err = e.submitPlan(ctx, s, call)
+		case "change_directory", "request_directory":
+			switch {
+			case d.Refused != "":
+				err = errors.New(d.Refused)
+			case call.Function.Name == "change_directory":
+				res, err = e.changeDirectory(s, runner, call, d.Path)
+			default:
+				res, err = e.requestDirectory(s, runner, call, d)
+			}
 		default:
 			if mcp.IsWire(call.Function.Name) {
 				res, err = runner.CallMCP(ctx, call.Function.Name, args)
 				break
 			}
-			err = fmt.Errorf("no tool named %s: use read, read_image, grep, web_search, write, edit, bash, processes, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent or send_message", call.Function.Name)
+			err = fmt.Errorf("no tool named %s: use read, read_image, grep, web_search, write, edit, bash, processes, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, change_directory or request_directory", call.Function.Name)
 		}
 		if err != nil {
 			// The flag is what lets the row say the call failed, since only

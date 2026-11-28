@@ -257,6 +257,8 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		"models_kind":  string(llm.Kind(modelsErr)),
 		"os":           runtime.GOOS,
 		"version":      s.version,
+		// Without a file identity no scratch folder is ever moved to the trash.
+		"removes_folders": store.KnowsFileID,
 	})
 }
 
@@ -341,9 +343,15 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "No project at that path: it may have been removed already")
 		return
 	}
-	// The project's sessions go with it. A running one is kept and reported;
-	// one that fails for another reason keeps the project for a retry.
+	// A project that is gone has no conversations, so its sessions go with it.
+	// A running one is left alone and reported rather than killed underfoot.
+	s.store.Reread()
 	removed, busy := 0, 0
+	retained := []store.TrashFailure{}
+	// A removal that stops partway still reports the sessions it deleted.
+	stopped := func(status int, msg string) {
+		writeJSON(w, status, map[string]any{"error": msg, "sessions_deleted": removed, "retained_folders": retained})
+	}
 	var ids []string
 	for _, sum := range s.store.List(project) {
 		ids = append(ids, sum.ID)
@@ -355,27 +363,30 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, id := range ids {
-		err := s.engine.Delete(id)
+		failure, err := s.engine.DeleteWithResult(id, nil)
 		switch {
 		case err == nil:
 			removed++
+			if failure != nil {
+				retained = append(retained, *failure)
+			}
 		case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrStillRunning):
 			busy++
 		case errors.Is(err, agent.ErrNotFound):
 		case errors.Is(err, store.ErrLeftBehind), errors.Is(err, store.ErrUnreadable), errors.Is(err, store.ErrRecoveryConflict):
-			writeError(w, http.StatusConflict, err.Error())
+			stopped(http.StatusConflict, err.Error())
 			return
 		default:
-			writeError(w, http.StatusInternalServerError, err.Error())
+			stopped(http.StatusInternalServerError, "Delete the session "+id+": "+err.Error()+". The project is kept")
 			return
 		}
 	}
-	cfg, err := s.cfg.DropProject(project)
+	cfg, err := s.cfg.RemoveProjectEntry(project)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		stopped(http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := map[string]any{"projects": orEmpty(cfg.Projects), "sessions_deleted": removed}
+	out := map[string]any{"projects": orEmpty(cfg.Projects), "sessions_deleted": removed, "retained_folders": retained}
 	if busy > 0 {
 		out["note"] = "A session is still running and was kept"
 	}
@@ -490,7 +501,14 @@ func (s *Server) archiveUnreadableSession(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
-	list := s.store.List(r.URL.Query().Get("project"))
+	// A record that reads again is listed, a run whose launcher is gone among them.
+	s.store.Reread()
+	var list []store.Summary
+	if r.URL.Query().Get("scratch") == "1" {
+		list = s.store.ListScratch()
+	} else {
+		list = s.store.List(r.URL.Query().Get("project"))
+	}
 	if list == nil {
 		list = []store.Summary{}
 	}
@@ -500,11 +518,24 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Project string `json:"project"`
+		// Scratch starts the conversation in a new folder of its own, for
+		// work that needs no existing project.
+		Scratch bool `json:"scratch"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
-	sess, err := s.engine.Create(body.Project)
+	if body.Scratch && body.Project != "" {
+		writeError(w, http.StatusBadRequest, "Send a project or scratch, not both")
+		return
+	}
+	var sess *agent.Session
+	var err error
+	if body.Scratch {
+		sess, err = s.engine.CreateScratch()
+	} else {
+		sess, err = s.engine.Create(body.Project)
+	}
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -513,7 +544,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": doc.ID, "project": doc.Project, "model": doc.Model, "title": doc.Title,
 		"created": doc.Created, "updated": doc.Updated, "messages": 0, "bytes": 0,
-		"state": string(state),
+		"state": string(state), "scratch": doc.Scratch,
 	})
 }
 
@@ -575,8 +606,9 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		todos = []store.Todo{}
 	}
 	body := map[string]any{
-		"id": doc.ID, "project": doc.Project, "model": doc.Model, "parent": doc.Parent,
-		"updated": doc.Updated, "mode": string(doc.Mode), "effort": string(doc.Effort), "toolset": string(doc.Toolset), "plan": doc.Plan, "draft": doc.Draft,
+		"id": doc.ID, "project": doc.Project, "scratch": doc.Scratch, "model": doc.Model, "parent": doc.Parent,
+		"launcher_gone": doc.Parent != "" && s.engine.LauncherGone(doc.Parent),
+		"updated":       doc.Updated, "mode": string(doc.Mode), "effort": string(doc.Effort), "toolset": string(doc.Toolset), "plan": doc.Plan, "draft": doc.Draft,
 		// A subagent run is reachable only from the transcript that launched
 		// it, so a launcher carries the list of what it launched.
 		"children": s.children(doc.ID),
@@ -679,7 +711,8 @@ func (s *Server) getProjectFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	arg := r.URL.Query().Get("path")
-	v, err := tools.ViewFile(sess.Project, s.cfg.Paths().Home, arg, viewLimit, tools.Fence{})
+	project, _ := sess.Where()
+	v, err := tools.ViewFile(project, s.cfg.Paths().Home, arg, viewLimit, s.engine.Fence(sess))
 	switch {
 	case errors.Is(err, tools.ErrHidden):
 		writeError(w, http.StatusForbidden, "That path is in the harness state folder")
@@ -739,10 +772,11 @@ func (s *Server) getProjectDir(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.projectOK(w, sess.Project) {
+	project, _ := sess.Where()
+	if !s.projectOK(w, project) {
 		return
 	}
-	rel, entries, err := tools.ListDir(sess.Project, s.cfg.Paths().Home, r.URL.Query().Get("path"), tools.Fence{})
+	rel, entries, err := tools.ListDir(project, s.cfg.Paths().Home, r.URL.Query().Get("path"), s.engine.Fence(sess))
 	switch {
 	case errors.Is(err, tools.ErrHidden):
 		writeError(w, http.StatusForbidden, "That folder is in the harness state folder")
@@ -755,23 +789,47 @@ func (s *Server) getProjectDir(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	default:
-		writeJSON(w, http.StatusOK, map[string]any{"root": sess.Project, "path": rel, "entries": entries})
+		writeJSON(w, http.StatusOK, map[string]any{"root": project, "path": rel, "entries": entries})
 	}
+}
+
+// getKept is the delete dialog's preview: the folder that stays on disk, empty
+// for none, whether it goes later, the interrupted copy's files and its token.
+func (s *Server) getKept(w http.ResponseWriter, r *http.Request) {
+	preview, err := s.engine.PreviewDelete(r.PathValue("id"))
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
 }
 
 // getProjectFiles finds files in a project by name, for the composer's @
 // mentions. It takes the project rather than a session, since the message
-// that mentions a file may be the one that creates the session.
+// that mentions a file may be the one that creates the session. A folder
+// made for a conversation without a project is searched only for the
+// session named beside it, the one it was made for.
 func (s *Server) getProjectFiles(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	if !s.cfg.HasProject(project) {
+	var sess *agent.Session
+	if id := r.URL.Query().Get("session"); id != "" {
+		if got, err := s.engine.Get(id); err == nil {
+			sess = got
+		}
+	}
+	own := false
+	if sess != nil {
+		where, scratch := sess.Where()
+		own = scratch && where == project
+	}
+	if !s.cfg.HasProject(project) && !own {
 		writeError(w, http.StatusNotFound, "No project at that path: add it first")
 		return
 	}
 	if !s.projectOK(w, project) {
 		return
 	}
-	files, err := tools.FindFiles(project, s.cfg.Paths().Home, r.URL.Query().Get("q"), 30, tools.Fence{})
+	files, err := tools.FindFiles(project, s.cfg.Paths().Home, r.URL.Query().Get("q"), 30, s.engine.Fence(sess))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "List the project files: "+err.Error())
 		return
@@ -841,14 +899,52 @@ func (s *Server) putEffort(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": sess.ID, "effort": body.Effort})
 }
 
-// deleteSession goes to the engine with the id as it was asked for, so a
-// session another delete has reserved answers busy rather than not found.
+// deleteSession removes a session. A body carries kept, deferred and
+// carry_token from the preview the person saw, and the delete answers 409
+// when any of them changed.
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	err := s.engine.Delete(id)
+	if !store.ValidID(id) {
+		writeEngineError(w, agent.ErrNotFound)
+		return
+	}
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, requestBudget))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Could not read the deletion request: "+err.Error())
+		return
+	}
+	var preview *agent.DeletionPreview
+	if len(data) != 0 {
+		var body map[string]json.RawMessage
+		var kept *string
+		if json.Unmarshal(data, &body) != nil || json.Unmarshal(body["kept"], &kept) != nil || kept == nil {
+			writeError(w, http.StatusBadRequest, "The deletion request must contain a string named kept")
+			return
+		}
+		told := agent.DeletionPreview{Kept: *kept}
+		if raw, ok := body["carry_token"]; ok {
+			var token *string
+			if json.Unmarshal(raw, &token) != nil || token == nil {
+				writeError(w, http.StatusBadRequest, "The copy confirmation must be a string")
+				return
+			}
+			told.Token = *token
+		}
+		if raw, ok := body["deferred"]; ok {
+			var deferred *bool
+			if json.Unmarshal(raw, &deferred) != nil || deferred == nil {
+				writeError(w, http.StatusBadRequest, "The deferred removal must be true or false")
+				return
+			}
+			told.Deferred = *deferred
+		}
+		preview = &told
+	}
+	failure, err := s.engine.DeleteWithResult(id, preview)
+	var aside *store.AsideMoveError
 	switch {
 	case err == nil:
-	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrStillRunning), errors.Is(err, agent.ErrNotFound):
+	case errors.As(err, &aside), errors.Is(err, agent.ErrKeptChanged), errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrStillRunning), errors.Is(err, agent.ErrNotFound):
 		writeEngineError(w, err)
 		return
 	case errors.Is(err, store.ErrLeftBehind), errors.Is(err, store.ErrUnreadable), errors.Is(err, store.ErrRecoveryConflict):
@@ -856,6 +952,10 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if failure != nil {
+		writeJSON(w, http.StatusOK, failure)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1025,6 +1125,8 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 		Decision string `json:"decision"`
 		Prefix   string `json:"prefix"`
 		Reason   string `json:"reason"`
+		// Path is the folder picked on a request_directory card.
+		Path string `json:"path"`
 	}
 	if !readJSON(w, r, &body) {
 		return
@@ -1042,6 +1144,15 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if kind == perms.DecideAlways && req.Server == "" {
+		// A rule is kept for a project, and a folder made for one conversation
+		// goes with it.
+		if sess, err := s.engine.Get(req.SessionID); err == nil {
+			if _, scratch := sess.Where(); scratch {
+				writeError(w, http.StatusBadRequest,
+					"Allow always is not kept for a conversation without a project: choose allow once")
+				return
+			}
+		}
 		if req.Tool != "bash" {
 			writeError(w, http.StatusBadRequest,
 				"Allow always applies to shell commands and MCP tools only: choose allow once")
@@ -1056,7 +1167,23 @@ func (s *Server) postPermission(w http.ResponseWriter, r *http.Request) {
 		}
 		body.Prefix = prefix
 	}
-	if err := s.perms.Resolve(id, perms.Decision{Kind: kind, Prefix: body.Prefix, Reason: body.Reason}); err != nil {
+	if body.Path != "" {
+		if req.Tool != "request_directory" || req.Path != "" {
+			writeError(w, http.StatusBadRequest, "A folder is picked only on a request_directory card that names none")
+			return
+		}
+		// A typed path gets the same check the tool makes, here, so a refused
+		// one can be corrected while the card is still open.
+		if !filepath.IsAbs(body.Path) {
+			writeError(w, http.StatusBadRequest, body.Path+" is not an absolute path: type the folder's full path")
+			return
+		}
+		if _, err := s.engine.AdmitFolder(body.Path); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if err := s.perms.Resolve(id, perms.Decision{Kind: kind, Prefix: body.Prefix, Reason: body.Reason, Path: body.Path}); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
@@ -1271,10 +1398,16 @@ func (s *Server) outsideState(w http.ResponseWriter, path string) bool {
 // writeEngineError answers a refusal from the engine or a project check. A
 // project folder that is gone gets 404 and a sentence written for a person.
 func writeEngineError(w http.ResponseWriter, err error) {
+	var aside *store.AsideMoveError
 	switch {
-	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrNotLast),
+	case errors.As(err, &aside):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "aside_recovery", "error": aside.Error()})
+	case errors.Is(err, agent.ErrBusy):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "session_busy", "error": err.Error()})
+	case errors.Is(err, agent.ErrKeptChanged):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "kept_changed", "error": err.Error()})
+	case errors.Is(err, agent.ErrStillRunning), errors.Is(err, agent.ErrNotLast),
 		errors.Is(err, agent.ErrCompacting), errors.Is(err, agent.ErrTooShort), errors.Is(err, agent.ErrNoShell),
-		errors.Is(err, agent.ErrStillRunning),
 		errors.Is(err, config.ErrStateOverlap):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, agent.ErrNotFound):

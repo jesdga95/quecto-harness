@@ -39,6 +39,11 @@ type brief struct {
 	// file's name as it stands on disk. Both empty is a project with none.
 	rules     string
 	rulesName string
+	// scratch, recent and moved feed the prompt's account of a conversation
+	// started without a project and of its move out of that folder.
+	scratch bool
+	recent  []string
+	moved   *prompts.Moved
 }
 
 // findRulesFile names the rules file in a project root, exact case first and
@@ -95,10 +100,20 @@ func readRules(project string) (content, name, note string) {
 func (e *Engine) briefFor(ctx context.Context, s *Session, cfg config.Config) brief {
 	s.mu.Lock()
 	parent, mine, mode, project, set := s.Parent, s.AgentID, s.Mode, s.Project, s.Toolset
+	scratch, leftIn, carried := s.Scratch, s.LeftIn, s.Carried
 	s.mu.Unlock()
 	rules, rulesName, note := readRules(project)
 	e.showRulesNote(s, note)
-	b := brief{rules: rules, rulesName: rulesName}
+	b := brief{rules: rules, rulesName: rulesName, scratch: scratch}
+	if scratch {
+		b.recent = e.recentProjects(cfg)
+	}
+	if leftIn != "" && carried != nil {
+		b.moved = &prompts.Moved{From: leftIn, Carried: *carried}
+		if b.moved.To == "" {
+			b.moved.To = project
+		}
+	}
 	if parent != "" {
 		// A subagent hands work to nobody and asks nobody, but it still
 		// searches: research delegated down is what web_search is for.
@@ -361,7 +376,7 @@ func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (
 
 	cfg := e.cfg.Config()
 	s.mu.Lock()
-	mine, project, mode := s.AgentID, s.Project, s.Mode
+	mine, project, mode, scratch := s.AgentID, s.Project, s.Mode, s.Scratch
 	s.mu.Unlock()
 	me, _ := cfg.AgentByID(mine)
 
@@ -384,6 +399,9 @@ func (e *Engine) startAgent(s *Session, call llm.ToolCall, waiter chan string) (
 	// launcher was not.
 	child := newSession(store.NewID(), project, target.ID, target.Model, s.Toolset)
 	child.Parent = s.ID
+	// A run in a folder made for its launcher works under the same rules,
+	// and the folder stays its launcher's to remove.
+	child.Scratch = scratch
 	// A subagent works in the mode of the session that launched it, so a
 	// planner's researcher changes no files either.
 	child.Mode = mode

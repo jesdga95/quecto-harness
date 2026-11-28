@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // Paths are the locations under the state directory.
@@ -21,6 +22,9 @@ type Paths struct {
 	Log       string
 	Token     string
 	URL       string
+	// Scratch holds the folders made for conversations started without a
+	// project. It lies outside Home, which the file tools never reach.
+	Scratch string
 }
 
 // DiscoverPaths honours $QUECTO_HARNESS_HOME and otherwise puts the state
@@ -37,7 +41,30 @@ func DiscoverPaths() (Paths, error) {
 	if err != nil {
 		return Paths{}, errors.New("Find your home directory: set $QUECTO_HARNESS_HOME to the state directory you want")
 	}
-	return DiscoverPathsIn(filepath.Join(home, ".quecto-harness")), nil
+	p := DiscoverPathsIn(filepath.Join(home, ".quecto-harness"))
+	if dir := platformData(home); dir != "" {
+		p.Scratch = filepath.Join(dir, "scratch-workspaces")
+	}
+	return p, nil
+}
+
+// platformData is the folder the platform gives an application for its own
+// data, empty where there is none.
+func platformData(home string) string {
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Application Support", "Quecto Harness")
+	case "windows":
+		if d := os.Getenv("LocalAppData"); d != "" {
+			return filepath.Join(d, "Quecto Harness")
+		}
+		return ""
+	default:
+		if d := os.Getenv("XDG_DATA_HOME"); filepath.IsAbs(d) {
+			return filepath.Join(d, "quecto-harness")
+		}
+		return filepath.Join(home, ".local", "share", "quecto-harness")
+	}
 }
 
 func DiscoverPathsIn(home string) Paths {
@@ -52,6 +79,7 @@ func DiscoverPathsIn(home string) Paths {
 		Log:       filepath.Join(home, "log"),
 		Token:     filepath.Join(home, "token"),
 		URL:       filepath.Join(home, "url"),
+		Scratch:   home + ".scratch-workspaces",
 	}
 }
 

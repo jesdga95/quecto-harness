@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +73,31 @@ type Session struct {
 	ContextBase *store.ContextBase
 	Compactions int
 	Todos       []store.Todo
+
+	// The folder fields below are the document's. Project changes only under
+	// the lock, when a move is applied.
+	Scratch      bool
+	Folders      []string
+	Pending      string
+	PendingGrant bool
+	LeftIn       string
+	LeftInID     string
+	CarryTo      string
+	CarryToID    string
+	Carried      *store.Carried
+	// pendingInfo is the folder Pending names as it was when the user approved
+	// it, so a folder put in its place is not moved to. It is not kept on
+	// disk: a move a restart cut off is asked for again.
+	pendingInfo os.FileInfo
+	// leftInfo and carryInfo are the folders a move left and went to, as the
+	// move found them, for a copy run in the same process. A copy resumed
+	// after a restart has only the identities kept on disk.
+	leftInfo, carryInfo os.FileInfo
+	// scratchInfo is the scratch folder as CreateScratch made it.
+	scratchInfo os.FileInfo
+	// ScratchID is the scratch folder's identity when it was made, which a
+	// move out of it checks the folder it copies from against.
+	ScratchID string
 
 	// steer is the message waiting for the running turn to pick it up. It is
 	// not part of the document: a message that outlives the turn it was typed
@@ -186,14 +213,24 @@ func fromDoc(d *store.Session) *Session {
 		ID: d.ID, Project: d.Project, AgentID: d.Agent, Parent: d.Parent, Model: d.Model,
 		Mode: d.Mode, Effort: d.Effort, Toolset: d.Toolset, Plan: d.Plan, Draft: d.Draft,
 		Created: d.Created, Updated: d.Updated, Title: d.Title, Named: d.Named,
-		Entries:     append([]store.Entry(nil), d.Entries...),
-		NCtx:        d.NCtx,
-		NCtxSource:  d.NCtxSource,
-		ContextBase: d.ContextBase,
-		Compactions: d.Compactions,
-		Todos:       append([]store.Todo(nil), d.Todos...),
-		state:       StateIdle,
-		seen:        tools.NewSeen(),
+		Entries:      append([]store.Entry(nil), d.Entries...),
+		NCtx:         d.NCtx,
+		NCtxSource:   d.NCtxSource,
+		ContextBase:  d.ContextBase,
+		Compactions:  d.Compactions,
+		Todos:        append([]store.Todo(nil), d.Todos...),
+		Scratch:      d.Scratch,
+		Folders:      slices.Clone(d.Folders),
+		ScratchID:    d.ScratchID,
+		Pending:      d.Pending,
+		PendingGrant: d.PendingGrant,
+		LeftIn:       d.LeftIn,
+		LeftInID:     d.LeftInID,
+		CarryTo:      d.CarryTo,
+		CarryToID:    d.CarryToID,
+		Carried:      d.Carried,
+		state:        StateIdle,
+		seen:         tools.NewSeen(),
 	}
 }
 
@@ -235,7 +272,17 @@ func (s *Session) doc() *store.Session {
 		Compactions: s.Compactions, ContextBase: s.ContextBase,
 		Todos:   append([]store.Todo(nil), s.Todos...),
 		Entries: entries,
+		Scratch: s.Scratch, ScratchID: s.ScratchID, Folders: slices.Clone(s.Folders), Pending: s.Pending, PendingGrant: s.PendingGrant,
+		LeftIn: s.LeftIn, LeftInID: s.LeftInID, CarryTo: s.CarryTo, CarryToID: s.CarryToID, Carried: s.Carried,
 	}
+}
+
+// Where is the folder the session works in and whether the harness made it
+// for a conversation started without one.
+func (s *Session) Where() (project string, scratch bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Project, s.Scratch
 }
 
 // takeLaunch hands over the subagent started ahead for a call, if any.
@@ -637,6 +684,9 @@ func (s *Session) systemMessage(a config.Agent, osName, date string, b brief) ll
 		Tools:        names,
 		NotAllTools:  len(names) < tools.AllCount(),
 		MCPServers:   b.offer.MCPServers(),
+		Scratch:      b.scratch,
+		Recent:       b.recent,
+		Moved:        b.moved,
 	})
 	return llm.Message{Role: "system", Content: content}
 }
@@ -727,7 +777,7 @@ func (s *Session) modeAt(tailSeq int, kept bool) config.WorkMode {
 // approved it is not among the ones kept. The caller holds the lock.
 func (s *Session) carryFor(mode config.WorkMode, b brief, tailSeq int, kept bool) string {
 	if mode == config.WorkPlan {
-		return prompts.ModePlan(b.offer.Ask, b.offer.Search)
+		return prompts.ModePlan(b.offer.Ask, b.offer.Search, b.scratch && b.offer.Sends("request_directory"))
 	}
 	if s.Plan == nil {
 		return ""
@@ -751,7 +801,7 @@ func entryMode(e store.Entry) config.WorkMode {
 // modeRules is what the first message sent in a mode carries in front of it.
 func modeRules(m config.WorkMode, b brief) string {
 	if m == config.WorkPlan {
-		return prompts.ModePlan(b.offer.Ask, b.offer.Search)
+		return prompts.ModePlan(b.offer.Ask, b.offer.Search, b.scratch && b.offer.Sends("request_directory"))
 	}
 	return prompts.ModeExecute()
 }

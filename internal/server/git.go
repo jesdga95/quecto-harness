@@ -39,6 +39,10 @@ func (s *Server) repo(w http.ResponseWriter, r *http.Request, project string) (*
 	if !s.repoOK(w, r, repo) {
 		return nil, false
 	}
+	if s.engine.OverlapsScratch(repo.Top) {
+		writeError(w, http.StatusForbidden, scratchRepo)
+		return nil, false
+	}
 	return repo, true
 }
 
@@ -58,6 +62,10 @@ func (s *Server) repoOK(w http.ResponseWriter, r *http.Request, repo *git.Repo) 
 	}
 	return true
 }
+
+// scratchRepo is the answer for a repository whose tree holds the folders of
+// conversations without a project, which the panel would read and change.
+const scratchRepo = "This repository overlaps the folders of conversations without a project, so the Git panel does not open it"
 
 // writeGitError reports a failed git command with what git said, which is the
 // only account of why.
@@ -175,6 +183,10 @@ func (s *Server) postGitInit(w http.ResponseWriter, r *http.Request) {
 		writeGitError(w, "Read the repository", err)
 		return
 	}
+	if s.engine.OverlapsScratch(body.Project) {
+		writeError(w, http.StatusForbidden, "This folder overlaps the folders of conversations without a project, so no repository is made in it")
+		return
+	}
 	if err := git.Init(r.Context(), body.Project); err != nil {
 		writeGitError(w, "Initialize the repository", err)
 		return
@@ -280,7 +292,9 @@ func (s *Server) postGitDraft(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	repo, ok := s.repo(w, r, sess.Project)
+	// A move changes the folder under the session's lock.
+	project, _ := sess.Where()
+	repo, ok := s.repo(w, r, project)
 	if !ok {
 		return
 	}

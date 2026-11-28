@@ -38,5 +38,6 @@ func PermissionEvent(r perms.Request) Event {
 		"prefix":      r.Prefix,
 		"args":        r.Args,
 		"description": r.Description,
+		"occupied":    r.Occupied,
 	})
 }

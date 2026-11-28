@@ -565,7 +565,8 @@ func TestLooksBinary(t *testing.T) {
 func TestSchemasMatchTheDescriptions(t *testing.T) {
 	s := Schemas(Offer{Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true})
 	names := []string{"read", "read_image", "grep", "web_search", "write", "edit", "todo_write",
-		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash", "processes"}
+		"ask_user_question", "write_plan", "exit_plan_mode", "subagent", "send_message", "bash",
+		"change_directory", "request_directory", "processes"}
 	if len(s) != len(names) {
 		t.Fatalf("got %d schemas, want %d", len(s), len(names))
 	}
@@ -1260,7 +1261,7 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 		}
 		return out
 	}
-	base := []string{"read", "read_image", "grep", "write", "edit", "todo_write", "bash", "processes"}
+	base := []string{"read", "read_image", "grep", "write", "edit", "todo_write", "bash", "request_directory", "processes"}
 	optional := map[string]Offer{
 		"ask_user_question": {Mode: config.WorkExecute, Ask: true},
 		"subagent":          {Mode: config.WorkExecute, Agents: true},
@@ -1277,7 +1278,8 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 			t.Errorf("an empty offer left out %s, which every session has", want)
 		}
 	}
-	// Asking a person also sends the plan tools, since each puts a card to one.
+	// Asking a person also sends the plan tools, since each puts a card to one,
+	// and change_directory, which moves the conversation that person started.
 	for name, only := range optional {
 		got := names(only)
 		if !slices.Contains(got, name) {
@@ -1285,7 +1287,7 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 		}
 		extra := 1
 		if name == "ask_user_question" {
-			extra = 3
+			extra = 4
 		}
 		if len(got) != len(base)+extra {
 			t.Errorf("offering %s sent %v", name, got)
@@ -1293,7 +1295,7 @@ func TestSchemasFollowTheOffer(t *testing.T) {
 	}
 
 	all := names(Offer{Mode: config.WorkExecute, Ask: true, Agents: true, Message: true, Search: true})
-	if len(all) != len(base)+len(optional)+2 {
+	if len(all) != len(base)+len(optional)+3 {
 		t.Errorf("every offer sent %v", all)
 	}
 	// The order the model sees is the order they are declared, whichever are

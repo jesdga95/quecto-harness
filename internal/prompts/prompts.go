@@ -7,9 +7,11 @@ import (
 	"embed"
 	"strings"
 	"text/template"
+
+	"github.com/jesdga95/quecto-harness/internal/store"
 )
 
-//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md not_sent.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md commit_message.md
+//go:embed system.md system_execute.md mode_plan.md mode_execute.md plan.md plan_approved.md plan_carried.md tool_write_plan.md tool_exit_plan_mode.md tool_read.md tool_read_image.md tool_grep.md tool_web_search.md tool_write.md tool_edit.md tool_bash.md tool_processes.md bash_moved.md tool_todo_write.md tool_ask_user_question.md tool_subagent.md tool_send_message.md message.md compact.md compaction.md title.md attachment.md not_sent.md denial.md budget_spent.md repeat.md todo_note.md not_run.md outcome_unknown.md plan_continue.md subagent_result.md commit_message.md tool_change_directory.md tool_request_directory.md directory_granted.md
 var files embed.FS
 
 // hasTool is the has the prompt templates take: whether the tools a turn sends
@@ -44,6 +46,7 @@ var (
 	repeatTmpl     = template.Must(template.New("repeat").Parse(mustRead("repeat.md")))
 	noteTmpl       = template.Must(template.New("note").Parse(mustRead("todo_note.md")))
 	movedTmpl      = template.Must(template.New("moved").Parse(mustRead("bash_moved.md")))
+	grantedTmpl    = template.Must(template.New("granted").Parse(mustRead("directory_granted.md")))
 )
 
 func mustRead(name string) string {
@@ -108,6 +111,19 @@ type SystemVars struct {
 	// MCPServers names the MCP servers whose tools this turn carries. Empty
 	// leaves the prompt as it is without MCP.
 	MCPServers []string
+	// Scratch is set when Project is a folder the app made for a
+	// conversation started without one, and Recent then lists the project
+	// folders used lately, most recent first.
+	Scratch bool
+	Recent  []string
+	// Moved describes the move out of a scratch folder, once its copy ran.
+	Moved *Moved
+}
+
+// Moved is a move out of the scratch folder From and what its copy did.
+type Moved struct {
+	From string
+	store.Carried
 }
 
 // System renders the shared head around the body. It is the same in every
@@ -193,10 +209,12 @@ func PlanCarried(plan string) string {
 
 // ModePlan is plan mode's rules, carried in the first message sent in it.
 // canAsk and canSearch say whether ask_user_question, write_plan and
-// exit_plan_mode, and web_search, are offered.
-func ModePlan(canAsk, canSearch bool) string {
+// exit_plan_mode, and web_search, are offered; scratch whether the
+// conversation works in a folder the app made for it.
+func ModePlan(canAsk, canSearch, scratch bool) string {
 	var b strings.Builder
-	if err := modePlanTmpl.Execute(&b, struct{ CanAsk, CanSearch bool }{canAsk, canSearch}); err != nil {
+	vars := struct{ CanAsk, CanSearch, Scratch bool }{canAsk, canSearch, scratch}
+	if err := modePlanTmpl.Execute(&b, vars); err != nil {
 		panic("prompts: render mode_plan.md: " + err.Error())
 	}
 	return strings.TrimRight(b.String(), " \t\r\n")
@@ -320,12 +338,16 @@ func ToolBash() string            { return mustRead("tool_bash.md") }
 func ToolProcesses() string       { return mustRead("tool_processes.md") }
 func ToolTodoWrite() string       { return mustRead("tool_todo_write.md") }
 func ToolAskUserQuestion() string { return mustRead("tool_ask_user_question.md") }
-func ToolSubagent() string        { return mustRead("tool_subagent.md") }
-func ToolSendMessage() string     { return mustRead("tool_send_message.md") }
-func ToolExitPlanMode() string    { return mustRead("tool_exit_plan_mode.md") }
-func ToolWritePlan() string       { return mustRead("tool_write_plan.md") }
-func BudgetSpent() string         { return mustRead("budget_spent.md") }
-func NotRun() string              { return mustRead("not_run.md") }
+
+func ToolChangeDirectory() string { return mustRead("tool_change_directory.md") }
+
+func ToolRequestDirectory() string { return mustRead("tool_request_directory.md") }
+func ToolSubagent() string         { return mustRead("tool_subagent.md") }
+func ToolSendMessage() string      { return mustRead("tool_send_message.md") }
+func ToolExitPlanMode() string     { return mustRead("tool_exit_plan_mode.md") }
+func ToolWritePlan() string        { return mustRead("tool_write_plan.md") }
+func BudgetSpent() string          { return mustRead("budget_spent.md") }
+func NotRun() string               { return mustRead("not_run.md") }
 
 // BashMoved is the result of a bash call whose command moved to the
 // background before it ended. Why opens the sentence; Output is what it has
@@ -342,6 +364,16 @@ func BashMoved(why, id string, pid int, output string) string {
 	return b.String()
 }
 func OutcomeUnknown() string { return mustRead("outcome_unknown.md") }
+
+// DirectoryGranted is the result of a change_directory call that granted the
+// folder path, which the conversation moves to when the turn ends.
+func DirectoryGranted(path string) string {
+	var b strings.Builder
+	if err := grantedTmpl.Execute(&b, path); err != nil {
+		panic("prompts: render directory_granted.md: " + err.Error())
+	}
+	return b.String()
+}
 
 // CommitMessage asks for a commit message for a diff. Recent is the newest
 // subjects in the repository, and Cut says the diff was shortened to fit.

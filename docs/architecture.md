@@ -213,6 +213,55 @@ directory). Output is truncated to a head and a tail with a marker; `looksBinary
 on a NUL byte or invalid UTF-8 above 1 % of an 8 KiB sniff, and UTF-16 reads as binary,
 accepted.
 
+**Conversation fence.** A conversation without a project works in its own folder under the
+scratch root. `read`, `read_image`, `grep`, `write` and `edit` refuse a path in another
+conversation's scratch folder, and the file panel, the file viewer and `@` mentions leave
+those folders out. The Git panel refuses repositories inside the scratch root and repositories whose tree
+contains it.
+`change_directory` refuses the scratch root and any folder above it; `request_directory`
+refuses only the scratch root and what is in it. `bash`, the background processes it
+starts, and MCP tools are not confined by the fence: a command the permission policy lets
+run reaches whatever the user's account can, other conversations' folders included.
+
+**Scratch removal.** A scratch folder goes when its conversation is deleted, or seven days
+after a move copied every file out of it, on a removal order bound to the owner record
+written when the folder was made. The order holds while the folder has its recorded
+identity, nothing in it changed after the order, and, after a copy, every file still matches
+its copy. These checks decide when a folder goes. The folder is then moved into the trash of
+its own volume with one rename, never deleted, so open files, modes, attributes, resource
+forks and access control lists stay with it. macOS uses `~/.Trash` on the home volume and
+`<top>/.Trashes/<uid>` on another. Linux uses the freedesktop home trash, or
+`$topdir/.Trash/$uid` or `$topdir/.Trash-$uid`, and writes the `.trashinfo` record first to
+reserve the name. A volume with no trash the account can use keeps the folder. The ledger
+saves the source and intended trash path before the rename. After the rename the entry in
+the trash is checked again: another entry moved by mistake goes back, and one that cannot go
+back is recorded with where it is in the trash. A trash entry that cannot be read leaves the
+order waiting, and a later removal settles it once the entry reads as the folder. If a later
+check finds a different entry, Storage names both paths for inspection. The ledger records
+the confirmed destination before clearing the order.
+
+**Retained folders.** The ledger keeps a notice beside the removal order for each folder
+that stays: a refused move, an order waiting for a check (a copy edited in the project, a
+tree that cannot be read, a trash entry not yet checked), and a folder kept for good. A
+change in the folder after its order cannot be undone, so that order is settled: it is
+withdrawn and the folder is kept, with a reason that names what the change came after, the
+delete of its conversation or the start of its copy. `GET /api/storage` lists every notice
+with `path` and `reason`. Optional fields include `kept`, `waiting`, `foreign`, `trash`,
+`record` and `file`. The owner record also stores why a folder was kept, so Storage
+can list it if its notice is removed. The `record` field names a damaged owner record,
+order or notice, or an order a settled notice could not withdraw. Removing an owner record or an
+order keeps the folder, which is then listed as kept while it is on disk. The sweep forgets
+the records of a listed folder once it is gone, and the notice of another entry once it has
+left the trash. Copy cleanup records each file it sends to the trash beside the scratch copy
+journal. The sweep leaves active moves alone. After a move finishes or the harness
+restarts, the sweep clears its notice once the file is verified or its trash path is empty.
+A misplaced entry stays listed while it remains at that path.
+
+**Responses.** When deletion removes the session but leaves its folder,
+`DELETE /api/sessions/{id}` returns 200 with that notice. `DELETE /api/projects` deletes the
+project's sessions first and returns `sessions_deleted` and `retained_folders`, the notices
+of the folders those deletes left; a removal that stops partway returns both beside `error`.
+
 ## 7. internal/perms
 
 The broker **decides and blocks**. `Evaluate` applies the static policy without blocking;

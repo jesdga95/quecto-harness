@@ -12,7 +12,21 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jesdga95/quecto-harness/internal/store"
 )
+
+func TestMain(m *testing.M) {
+	trash, err := os.MkdirTemp("", "quecto-trash-")
+	if err != nil {
+		panic(err)
+	}
+	store.TrashHome = func() string { return trash }
+	store.TrashTop = func(string) string { return "" }
+	code := m.Run()
+	os.RemoveAll(trash)
+	os.Exit(code)
+}
 
 func TestServeStateHelper(t *testing.T) {
 	home := os.Getenv("QUECTO_TEST_STATE_DIR")
@@ -31,7 +45,8 @@ func startStateOwner(t *testing.T, home string) (stop func(), refusal string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestServeStateHelper$")
-	cmd.Env = append(os.Environ(), "QUECTO_TEST_STATE_DIR="+home)
+	temp := t.TempDir()
+	cmd.Env = append(os.Environ(), "QUECTO_TEST_STATE_DIR="+home, "TMPDIR="+temp, "TMP="+temp, "TEMP="+temp)
 	var diagnostic bytes.Buffer
 	cmd.Stderr = &diagnostic
 	out, err := cmd.StdoutPipe()
@@ -107,5 +122,12 @@ func TestSessionsMayResolveToTheStateHome(t *testing.T) {
 	}
 	if owner, why := startStateOwner(t, home); owner == nil {
 		t.Fatal(why)
+	}
+}
+
+func TestCommandUsesATemporaryTrash(t *testing.T) {
+	rel, err := filepath.Rel(os.TempDir(), store.TrashHome())
+	if err != nil || !filepath.IsLocal(rel) || rel == "." || store.TrashTop(os.TempDir()) != "" {
+		t.Fatal("Command tests require a temporary trash on the test volume")
 	}
 }

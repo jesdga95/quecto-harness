@@ -45,6 +45,27 @@ asked about until you change the permission mode to `allowlist` or `full`.
 Configuration, the allowlist, sessions and logs live under `~/.quecto-harness`.
 Nothing is written into a project folder.
 
+A conversation started without a project works in a folder the harness makes
+for it, under `scratch-workspaces` in the platform's data folder:
+
+- macOS: `~/Library/Application Support/Quecto Harness/scratch-workspaces`
+- Linux: `$XDG_DATA_HOME/quecto-harness/scratch-workspaces`, by default
+  `~/.local/share/quecto-harness/scratch-workspaces`
+- Windows: `%LocalAppData%\Quecto Harness\scratch-workspaces`
+
+With `$QUECTO_HARNESS_HOME` or `--home` set to a folder, they live beside it in
+`<folder>.scratch-workspaces`. Deleting `~/.quecto-harness` does not delete
+them. To back them up, copy that folder while the harness is stopped. On
+Windows, deleting a conversation keeps its folder, since the harness cannot
+confirm it is the same folder it made.
+
+On macOS and Linux the harness never deletes one of these folders. Once no
+conversation needs it, the folder is moved to the trash of its own volume:
+`~/.Trash`, or `.Trashes/<uid>` at the top of another volume, on macOS, and the
+freedesktop trash on Linux. A folder whose files a move copied into a project
+goes there seven days after the copy, while its files still match their copies.
+On a volume with no trash the harness can use, the folder stays where it is.
+
 ## Features
 
 - **Agents.** Any number of named agents, one selected at a time. Each carries
@@ -89,7 +110,7 @@ Nothing is written into a project folder.
 
 ## Build from source
 
-Needs Go 1.24 and Node. `make build` runs the Vite build into
+Needs Go 1.25 and Node. `make build` runs the Vite build into
 `internal/web/dist` and then the binary that embeds it, in that order: editing
 anything under `web/` without rebuilding the UI leaves the previous page
 compiled in. `make check` runs gofmt, vet and the race tests.

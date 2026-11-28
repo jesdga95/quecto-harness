@@ -1286,6 +1286,56 @@ func TestPermissionRoute(t *testing.T) {
 	}
 }
 
+// A folder typed on a request_directory card gets the tool's own check before
+// the card is answered, so a refused one leaves the card open to try again.
+func TestPermissionTypedFolder(t *testing.T) {
+	f := newFixture(t)
+	ask := func(id, path string) {
+		go f.perms.Ask(context.Background(), perms.Request{
+			ID: id, SessionID: "s1", Project: f.project, Tool: "request_directory", Path: path,
+		})
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, ok := f.perms.Lookup(id); ok {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("%s never became pending", id)
+	}
+	ask("perm_folder0000", "")
+	ask("perm_named00000", f.project)
+
+	dir := t.TempDir()
+	scratch := filepath.Join(t.TempDir(), "scratch-workspaces")
+	f.engine.SetScratchRoot(scratch)
+	reserved := filepath.Join(scratch, "kept")
+	if err := os.MkdirAll(reserved, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		id, path, want string
+	}{
+		{"perm_folder0000", "relative/dir", "is not an absolute path"},
+		{"perm_folder0000", filepath.Join(dir, "missing"), "no such folder"},
+		{"perm_folder0000", reserved, "cannot be used"},
+		{"perm_named00000", dir, "names none"},
+	} {
+		w := f.do(t, "POST", "/api/permissions/"+c.id, map[string]string{"decision": "once", "path": c.path})
+		if w.Code != 400 || !strings.Contains(w.Body.String(), c.want) {
+			t.Errorf("%s with %q = %d %s, want %q", c.id, c.path, w.Code, w.Body.String(), c.want)
+		}
+		if _, ok := f.perms.Lookup(c.id); !ok {
+			t.Errorf("%s was answered by a refused path", c.id)
+		}
+	}
+
+	w := f.do(t, "POST", "/api/permissions/perm_folder0000", map[string]string{"decision": "once", "path": dir})
+	if w.Code != 200 {
+		t.Fatalf("an existing folder = %d %s", w.Code, w.Body.String())
+	}
+}
+
 // The allowlist rule a card keeps is a shell rule, so the decision is refused
 // for every other tool before the prefix is checked.
 func TestPermissionAlwaysIsShellOnly(t *testing.T) {
@@ -1570,8 +1620,8 @@ func TestTheToolsDebugView(t *testing.T) {
 	f := newFixture(t)
 	body := decode(t, f.do(t, "GET", "/api/tools", nil))
 	list, _ := body["tools"].([]any)
-	if len(list) != 14 {
-		t.Fatalf("the view lists %d tools, want 14", len(list))
+	if len(list) != 16 {
+		t.Fatalf("the view lists %d tools, want 16", len(list))
 	}
 	sent, _ := body["sent"].(map[string]any)
 	minimal, _ := sent["minimal"].([]any)
@@ -1587,7 +1637,7 @@ func TestTheToolsDebugView(t *testing.T) {
 		t.Errorf("the minimal prompt names a tool it does not send: %q", p)
 	}
 	p, _ = prompts["full"].(string)
-	if !strings.Contains(p, "Tools: read, read_image, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash, processes.") {
+	if !strings.Contains(p, "Tools: read, read_image, grep, web_search, write, edit, todo_write, ask_user_question, write_plan, exit_plan_mode, subagent, send_message, bash, change_directory, request_directory, processes.") {
 		t.Errorf("the full prompt does not name every tool: %q", p)
 	}
 }
@@ -3526,6 +3576,209 @@ func TestRecoveryExplainsConflictingOutputMarkers(t *testing.T) {
 			if !strings.Contains(w.Body.String(), part) {
 				t.Fatalf("%d %s lacks %s", w.Code, w.Body, part)
 			}
+		}
+	}
+}
+
+func TestAConversationWithoutAProject(t *testing.T) {
+	f := newFixture(t)
+	f.engine.SetScratchRoot(filepath.Join(t.TempDir(), "scratch-workspaces"))
+	if w := f.do(t, "POST", "/api/sessions", map[string]any{"scratch": true, "project": f.project}); w.Code != http.StatusBadRequest {
+		t.Errorf("both a project and scratch = %d, want 400", w.Code)
+	}
+	body := decode(t, f.do(t, "POST", "/api/sessions", map[string]any{"scratch": true}))
+	dir, _ := body["project"].(string)
+	if body["scratch"] != true || !store.IsScratch(f.engine.ScratchRoot(), dir) {
+		t.Fatalf("created = %v", body)
+	}
+	if f.cfg.HasProject(dir) {
+		t.Error("the folder was added to the project list")
+	}
+	listed := decode(t, f.do(t, "GET", "/api/sessions?scratch=1", nil))
+	if list, _ := listed["sessions"].([]any); len(list) != 1 {
+		t.Errorf("the conversations without a project = %v", listed)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.md"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id, _ := body["id"].(string)
+	files := decode(t, f.do(t, "GET", "/api/projects/files?project="+url.QueryEscape(dir)+"&q=notes&session="+id, nil))
+	if list, _ := files["files"].([]any); len(list) != 1 {
+		t.Errorf("mentions = %v", files)
+	}
+	dirList := decode(t, f.do(t, "GET", "/api/sessions/"+id+"/dir", nil))
+	if entries, _ := dirList["entries"].([]any); len(entries) != 1 {
+		t.Errorf("the panel lists %v", dirList)
+	}
+	if w := f.do(t, "DELETE", "/api/sessions/"+id, nil); w.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("the folder outlived the conversation: %v", err)
+	}
+}
+
+func TestAnUnreadSessionDoesNotBlockADelete(t *testing.T) {
+	f := newFixture(t)
+	bad := filepath.Join(f.cfg.Paths().Sessions, store.NewID()+".json")
+	if err := os.WriteFile(bad, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(f.cfg.Paths().Sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv.store = st
+	one := decode(t, f.do(t, "POST", "/api/sessions", map[string]any{"project": f.project}))
+	id, _ := one["id"].(string)
+	if w := f.do(t, "DELETE", "/api/sessions/"+id, nil); w.Code != http.StatusNoContent {
+		t.Errorf("delete a conversation = %d %s", w.Code, w.Body.String())
+	}
+	f.do(t, "POST", "/api/sessions", map[string]any{"project": f.project})
+	w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": f.project})
+	if w.Code != http.StatusOK {
+		t.Errorf("remove the project = %d %s", w.Code, w.Body.String())
+	}
+	if f.cfg.HasProject(f.project) {
+		t.Error("the project was kept")
+	}
+	if _, err := os.Stat(bad); err != nil {
+		t.Errorf("the unread file was touched: %v", err)
+	}
+}
+
+func TestRemovingALinkedEntryLeavesTheOther(t *testing.T) {
+	f := newFixture(t)
+	body := decode(t, f.do(t, "POST", "/api/sessions", map[string]any{"project": f.project}))
+	id, _ := body["id"].(string)
+	link := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(f.project, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.cfg.Update(func(c *config.Config) { c.Projects = append(c.Projects, link) }); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": link}); w.Code != http.StatusOK {
+		t.Fatalf("remove = %d %s", w.Code, w.Body.String())
+	}
+	if !f.cfg.HasProject(f.project) {
+		t.Error("the other entry was removed")
+	}
+	if _, err := os.Stat(filepath.Join(f.cfg.Paths().Sessions, id+".json")); err != nil {
+		t.Errorf("the other project's session was deleted: %v", err)
+	}
+}
+
+func TestAnAmbiguousAliasRemovesNothing(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	a, c := filepath.Join(dir, "a"), filepath.Join(dir, "c")
+	os.Symlink(f.project, a)
+	os.Symlink(f.project, c)
+	if _, err := f.cfg.Update(func(cfg *config.Config) { cfg.Projects = append(cfg.Projects, a) }); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": c}); w.Code != http.StatusNotFound {
+		t.Errorf("an ambiguous alias = %d %s, want 404", w.Code, w.Body.String())
+	}
+	if !f.cfg.HasProject(f.project) {
+		t.Error("a project was removed")
+	}
+}
+
+func TestARunOfAScratchConversationIsScratch(t *testing.T) {
+	f := newFixture(t)
+	f.engine.SetScratchRoot(filepath.Join(t.TempDir(), "scratch-workspaces"))
+	if w := f.do(t, "PUT", "/api/agents/"+f.agent, map[string]any{"calls": []string{f.agent}, "concurrency": 2}); w.Code != http.StatusOK {
+		t.Fatalf("calls = %d: %s", w.Code, w.Body.String())
+	}
+	id, _ := decode(t, f.do(t, "POST", "/api/sessions", map[string]any{"scratch": true}))["id"].(string)
+	f.waitIdle(t, id)
+	f.nextFrames(
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"subagent","arguments":`+
+			strconv.Quote(`{"agent":"Local","title":"Look around","task":"List the files"}`)+`}}]}}]}`,
+		`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	)
+	f.setFrames(`data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}`, `data: [DONE]`)
+	if w := f.do(t, "POST", "/api/sessions/"+id+"/message", map[string]string{"text": "hand it on"}); w.Code != http.StatusAccepted {
+		t.Fatalf("message = %d: %s", w.Code, w.Body.String())
+	}
+	f.waitIdle(t, id)
+	var child string
+	for _, c := range f.srv.store.Children(id) {
+		child = c.ID
+	}
+	if child == "" {
+		t.Fatalf("no run was launched: %s", f.do(t, "GET", "/api/sessions/"+id, nil).Body.String())
+	}
+	f.waitIdle(t, child)
+	if got := decode(t, f.do(t, "GET", "/api/sessions/"+child, nil)); got["scratch"] != true {
+		t.Errorf("the run reports scratch = %v", got["scratch"])
+	}
+	for _, sid := range []string{id, child} {
+		pid := "perm_" + sid[len(sid)-8:]
+		go f.perms.Ask(context.Background(), perms.Request{ID: pid, SessionID: sid, Tool: "bash", Command: "ls -la", Prefix: "ls"})
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, ok := f.perms.Lookup(pid); ok {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		w := f.do(t, "POST", "/api/permissions/"+pid, map[string]string{"decision": "always", "prefix": "ls"})
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "without a project") {
+			t.Errorf("%s: always = %d %s, want it refused", sid, w.Code, w.Body.String())
+		}
+		f.do(t, "POST", "/api/permissions/"+pid, map[string]string{"decision": "deny"})
+	}
+}
+
+func TestRemovingAProjectIncludesARepairedSession(t *testing.T) {
+	f := newFixture(t)
+	session, err := f.engine.Create(f.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := session.ID
+	dir := f.cfg.Paths().Sessions
+	path := filepath.Join(dir, id+".json")
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv.store = st
+	f.srv.engine = agent.NewEngine(t.Context(), f.cfg, st, f.files, agent.Clients{Pool: llm.NewPool()}, search.NewProviders(), f.perms, f.hub)
+	if err := os.WriteFile(path, saved, 0600); err != nil {
+		t.Fatal(err)
+	}
+	w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": f.project})
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("Repaired session after project removal: %v", err)
+	}
+}
+
+func TestRunSnapshotNamesOnlyAnAvailableLauncher(t *testing.T) {
+	f := newFixture(t)
+	present := f.newSession(t)
+	for _, parent := range []string{present, store.NewID()} {
+		doc := &store.Session{ID: store.NewID(), Parent: parent, Project: f.project}
+		if err := f.srv.store.Save(doc); err != nil {
+			t.Fatal(err)
+		}
+		snap := decode(t, f.do(t, "GET", "/api/sessions/"+doc.ID, nil))
+		if snap["parent"] != parent || snap["launcher_gone"] != (parent != present) {
+			t.Errorf("Parent = %v, gone = %v, want %s and %v", snap["parent"], snap["launcher_gone"], parent, parent != present)
 		}
 	}
 }

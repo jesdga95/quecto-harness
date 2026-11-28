@@ -185,6 +185,8 @@ func serve(argv []string) error {
 	servers := mcp.NewManager(filepath.Join(p.Home, "mcp"), p.Log, version)
 	servers.Configure(cfg.MCP())
 	engine.SetMCP(servers)
+	engine.SetScratchRoot(p.Scratch)
+	go engine.Sweep(ctx)
 	srv := server.New(cfg, sessions, blobs, pastes, engine, broker, pool, searches, hub, token, listen, version)
 
 	go srv.Detect(ctx)

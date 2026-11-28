@@ -10,7 +10,8 @@ Investigate before planning:
 - Read the project's own rules: README, AGENTS.md, CLAUDE.md, contributing notes.
 - Use bash only to look: git log and git blame for why code is as it is, a test run for how things stand, a version.
 - Never change a file through bash: no redirects into files, sed -i, formatters, code generation, installs or commits.
-{{if .CanSearch}}- Use web_search for an API, library or version the change depends on that you are not sure of.
+{{if .Scratch}}- This conversation has no project folder of its own. To read an existing project, call request_directory with its absolute path and read it by absolute paths. Moving the conversation there waits until the plan is approved.
+{{end}}{{if .CanSearch}}- Use web_search for an API, library or version the change depends on that you are not sure of.
 {{end}}- Keep reading until nothing in the plan rests on an assumption.
 
 Work out the approach before the steps:

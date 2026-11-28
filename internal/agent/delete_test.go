@@ -905,7 +905,7 @@ func TestAReportHeldForADeletedLauncherGoesWithIt(t *testing.T) {
 	}
 	h.engine.report(child)
 	for _, m := range slices.Backward(group) {
-		if err := h.engine.remove(m); err != nil {
+		if err := h.engine.remove(m, false); err != nil {
 			t.Fatal(err)
 		}
 	}

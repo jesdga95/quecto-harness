@@ -89,6 +89,8 @@ func TestBackgroundProcessRunsAndPingsBack(t *testing.T) {
 	if counts[0].Fields["running"] != 1 || counts[1].Fields["running"] != 0 {
 		t.Errorf("running counts = %v and %v, want 1 then 0", counts[0].Fields["running"], counts[1].Fields["running"])
 	}
+	waitIdle(t, s)
+	h.engine.wg.Wait()
 }
 
 // Stopping one reports it as stopped and still tells the conversation.

@@ -138,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/calls/{call}/{action}", s.postShellAction)
 	mux.HandleFunc("GET /api/sessions/{id}/file", s.getProjectFile)
 	mux.HandleFunc("GET /api/sessions/{id}/dir", s.getProjectDir)
+	mux.HandleFunc("GET /api/sessions/{id}/kept", s.getKept)
 	mux.HandleFunc("PUT /api/sessions/{id}", s.rebindSession)
 	mux.HandleFunc("PUT /api/sessions/{id}/mode", s.putMode)
 	mux.HandleFunc("PUT /api/sessions/{id}/effort", s.putEffort)
