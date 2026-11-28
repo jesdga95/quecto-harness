@@ -21,6 +21,9 @@ func (s *Server) repo(w http.ResponseWriter, r *http.Request, project string) (*
 		writeError(w, http.StatusNotFound, "No project at that path: add it first")
 		return nil, false
 	}
+	if !s.projectOK(w, project) {
+		return nil, false
+	}
 	repo, err := git.Open(r.Context(), project)
 	switch {
 	case errors.Is(err, git.ErrMissing):
@@ -33,7 +36,27 @@ func (s *Server) repo(w http.ResponseWriter, r *http.Request, project string) (*
 		writeGitError(w, "Read the repository", err)
 		return nil, false
 	}
+	if !s.repoOK(w, r, repo) {
+		return nil, false
+	}
 	return repo, true
+}
+
+// repoOK refuses a repository whose working tree or git folders overlap the
+// harness state folder, even when the project is a part of it that does not:
+// a stash, a commit of everything or a branch switch reaches the whole tree.
+func (s *Server) repoOK(w http.ResponseWriter, r *http.Request, repo *git.Repo) bool {
+	dirs, err := repo.Dirs(r.Context())
+	if err != nil {
+		writeGitError(w, "Read the repository", err)
+		return false
+	}
+	for _, d := range dirs {
+		if !s.checked(w, s.cfg.CheckRepo(d)) {
+			return false
+		}
+	}
+	return true
 }
 
 // writeGitError reports a failed git command with what git said, which is the
@@ -135,6 +158,21 @@ func (s *Server) postGitInit(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.cfg.HasProject(body.Project) {
 		writeError(w, http.StatusNotFound, "No project at that path: add it first")
+		return
+	}
+	// A repository is made at the project, so the project is checked as one.
+	if !s.checked(w, s.cfg.CheckRepo(body.Project)) {
+		return
+	}
+	// A project already inside a repository is checked against all of it.
+	switch repo, err := git.Open(r.Context(), body.Project); {
+	case err == nil:
+		if !s.repoOK(w, r, repo) {
+			return
+		}
+	case errors.Is(err, git.ErrNotRepo), errors.Is(err, git.ErrMissing):
+	default:
+		writeGitError(w, "Read the repository", err)
 		return
 	}
 	if err := git.Init(r.Context(), body.Project); err != nil {
