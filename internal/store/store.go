@@ -242,6 +242,76 @@ type Session struct {
 	ContextBase *ContextBase `json:"context_base,omitempty"`
 	Todos       []Todo       `json:"todos,omitempty"`
 	Entries     []Entry      `json:"entries"`
+
+	// Scratch is set while Project is a folder the harness made for a
+	// conversation started without one. Such a folder is not in the project
+	// list and goes when the conversation does.
+	Scratch bool `json:"scratch,omitempty"`
+	// ScratchID is the identity of that folder when it was made.
+	ScratchID string `json:"scratch_id,omitempty"`
+	// Folders are folders outside Project that this conversation was given,
+	// which its tools reach as if they were in the project.
+	Folders []string `json:"folders,omitempty"`
+	// Pending is the folder the conversation moves to when its turn ends.
+	Pending string `json:"pending,omitempty"`
+	// PendingGrant is set when the move added Pending to Folders, so a move
+	// that does not happen takes back only that.
+	PendingGrant bool `json:"pending_grant,omitempty"`
+	// LeftIn is the scratch folder a move left behind, and CarryTo the folder
+	// its files are copied into; the IDs are each folder's identity when the
+	// move was made. Carried is what the copy did, nil until it has run.
+	LeftIn    string   `json:"left_in,omitempty"`
+	LeftInID  string   `json:"left_in_id,omitempty"`
+	CarryTo   string   `json:"carry_to,omitempty"`
+	CarryToID string   `json:"carry_to_id,omitempty"`
+	Carried   *Carried `json:"carried,omitempty"`
+}
+
+// Carried counts what a move copied from a scratch folder into the new one.
+type Carried struct {
+	// To is the folder the files were copied into.
+	To     string `json:"to,omitempty"`
+	Copied int    `json:"copied"`
+	// There is a file the new folder already had at that path, which was kept.
+	There int `json:"there"`
+	// Failed is a file whose copy did not finish.
+	Failed int `json:"failed"`
+	// Interrupted is a name an earlier copy cut short left in the new folder
+	// that cannot be shown to be that copy's, which was kept.
+	Interrupted            int      `json:"interrupted"`
+	InterruptedNames       []string `json:"interrupted_names,omitempty"`
+	DestinationUnavailable bool     `json:"destination_unavailable,omitempty"`
+	// Attrs counts files and directories whose extended attributes or access
+	// control lists the copy leaves behind.
+	Attrs int `json:"attrs"`
+	// Held is a link, a special file or repository metadata, which is never
+	// copied.
+	Held int `json:"held"`
+	// Dependencies is a dependency folder, such as node_modules, left out.
+	Dependencies int `json:"dependencies"`
+	// Stopped is set when a limit cut the copy short.
+	Stopped bool `json:"stopped,omitempty"`
+	// Gone is set when the scratch folder was no longer there to copy from.
+	Gone bool `json:"gone,omitempty"`
+	// Reason says why nothing was copied, when a folder changed under the move.
+	Reason string `json:"reason,omitempty"`
+}
+
+// Complete reports whether the copy brought every file across, so the folder
+// it came from holds nothing the new one lacks.
+func (c *Carried) Complete() bool {
+	return c != nil && c.There == 0 && c.Failed == 0 && c.Interrupted == 0 && c.Attrs == 0 && c.Held == 0 && c.Dependencies == 0 &&
+		!c.Stopped && !c.Gone && c.Reason == ""
+}
+
+// Keeps is the scratch folder a move left that holds files the move did not
+// copy, or whose copy has not run, and which is kept after the conversation is
+// deleted. Empty when there is none.
+func (s *Session) Keeps() string {
+	if s.LeftIn == "" || s.Parent != "" || s.Carried.Complete() || (s.Carried != nil && s.Carried.Gone) {
+		return ""
+	}
+	return s.LeftIn
 }
 
 // ContextBase is the estimated token cost of the three parts of a prompt that
@@ -271,12 +341,24 @@ type Summary struct {
 	// Fill is the context after the last call the server reported on, and zero
 	// where it never reported one.
 	Fill int `json:"fill,omitempty"`
+	// Scratch, Pending and LeftIn are the session's, so the folders they name
+	// can be told apart from ones no conversation holds.
+	Scratch bool   `json:"scratch,omitempty"`
+	Pending string `json:"-"`
+	LeftIn  string `json:"-"`
+	// Kept is the folder that stays when the conversation is deleted.
+	Kept string `json:"kept,omitempty"`
 }
 
 // Sessions indexes one directory for its exclusive writer. Session IDs share
 // a fixed set of locks for the lifetime of the store.
 type Sessions struct {
 	dir string
+	// id is the identity of dir when it was opened, which the records of
+	// scratch folders made for these sessions are bound to; opened is dir as
+	// it was then.
+	id     string
+	opened os.FileInfo
 
 	mu    sync.RWMutex
 	index map[string]Summary
@@ -299,6 +381,9 @@ func Open(dir string) (*Sessions, error) {
 		return nil, fmt.Errorf("Create %s: check the permissions on its parent", dir)
 	}
 	s := &Sessions{dir: dir, index: map[string]Summary{}}
+	if info, err := os.Stat(dir); err == nil {
+		s.id, s.opened = FileID(info), info
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("Read %s: check the permissions on the folder", dir)
@@ -827,22 +912,139 @@ func (s *Sessions) removeFolder(id string) error {
 	return err
 }
 
+// Identity is the identity of the session folder when it was opened, empty
+// where the system gives none.
+func (s *Sessions) Identity() string { return s.id }
+
+// Replaced reports why the session folder on disk is not the one Open read,
+// or nil when it is. A store whose folder was replaced cannot vouch for which
+// conversations exist.
+func (s *Sessions) Replaced() error {
+	now, err := os.Stat(s.dir)
+	if err != nil {
+		return err
+	}
+	if s.opened == nil || !os.SameFile(now, s.opened) {
+		return fmt.Errorf("%s is not the folder the harness opened", s.dir)
+	}
+	return nil
+}
+
 // List returns the sessions of one project, newest first, or every session
-// when project is empty. Subagent runs stay out of the listing.
+// when project is empty. Runs are listed separately once their launcher is gone.
 func (s *Sessions) List(project string) []Summary {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	out := make([]Summary, 0, len(s.index))
 	for _, v := range s.index {
-		if v.unreadable || v.Parent != "" {
+		if v.unreadable {
 			continue
 		}
 		if project == "" || v.Project == project {
 			out = append(out, v)
 		}
 	}
+	s.mu.RUnlock()
+	out = slices.DeleteFunc(out, func(v Summary) bool { return v.Parent != "" && !s.Gone(v.Parent) })
 	sort.Slice(out, func(i, j int) bool { return newerFirst(out[i], out[j]) })
 	return out
+}
+
+// ListScratch returns the conversations started without a project, each in a
+// folder of its own, newest first.
+func (s *Sessions) ListScratch() []Summary {
+	return slices.DeleteFunc(s.List(""), func(v Summary) bool { return !v.Scratch })
+}
+
+// Claims lists every folder a session record names as its project, the
+// folder it is moving to, or the scratch folder it left. ok is false while a
+// session file could not be read, since that one may name any folder.
+func (s *Sessions) Claims() (claims []string, ok bool) {
+	ok = len(s.Unread()) == 0
+	s.mu.RLock()
+	for _, v := range s.index {
+		for _, p := range []string{v.Project, v.Pending, v.LeftIn} {
+			if p != "" {
+				claims = append(claims, p)
+			}
+		}
+	}
+	s.mu.RUnlock()
+	s.ledMu.Lock()
+	defer s.ledMu.Unlock()
+	for _, records := range []map[string]relation{s.led.Parents, s.led.Cleanup} {
+		for _, record := range records {
+			if record.Project != "" {
+				claims = append(claims, record.Project)
+			}
+		}
+	}
+	return claims, ok
+}
+
+// Unread names transcripts and archives whose folder claims are unknown.
+func (s *Sessions) Unread() []string {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return []string{s.dir}
+	}
+	var names []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if archivePattern.MatchString(name) {
+			names = append(names, name)
+		} else if namePattern.MatchString(name) {
+			if err := s.checkTranscript(strings.TrimSuffix(name, ".json")); err != nil {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
+// RequireRead tries the unread session files again, and returns an error
+// naming those that still cannot be read, since any of them may name the
+// sessions or folders a caller is about to remove.
+func (s *Sessions) RequireRead() error {
+	if unread := s.Unread(); len(unread) > 0 {
+		return fmt.Errorf("A session file cannot be read or does not name its own session (%s): fix it or remove it, then try again", strings.Join(unread, ", "))
+	}
+	return nil
+}
+
+// Reread refreshes the index after a transcript was repaired.
+func (s *Sessions) Reread() { s.Unread() }
+
+// Gone reports whether the index, transcripts, archives and cleanup ledger
+// have all released a session.
+func (s *Sessions) Gone(id string) bool {
+	if !ValidID(id) || s.Has(id) {
+		return false
+	}
+	lock := s.lockFor(id)
+	lock.Lock()
+	defer lock.Unlock()
+	if s.Has(id) {
+		return false
+	}
+	s.ledMu.Lock()
+	_, parent := s.led.Parents[id]
+	_, pending := s.led.Cleanup[id]
+	archiving := strings.HasPrefix(s.led.Archiving, id+".json.unreadable-")
+	s.ledMu.Unlock()
+	if parent || pending || archiving {
+		return false
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == id+".json" || strings.HasPrefix(name, id+".json.unreadable-") && archivePattern.MatchString(name) {
+			return false
+		}
+	}
+	return true
 }
 
 // newerFirst is the listing order, newest session first.
@@ -1051,6 +1253,7 @@ func (s *Sessions) save(sess *Session, sync bool) error {
 	}
 	s.mu.Lock()
 	s.index[sess.ID] = summarise(sess, int64(len(data)))
+	// What was just written supersedes a read of it that failed earlier.
 	s.mu.Unlock()
 	return nil
 }
@@ -1196,6 +1399,10 @@ func summarise(sess *Session, size int64) Summary {
 		Messages: messages,
 		Bytes:    size,
 		Fill:     fill,
+		Scratch:  sess.Scratch,
+		Pending:  sess.Pending,
+		LeftIn:   sess.LeftIn,
+		Kept:     sess.Keeps(),
 	}
 }
 

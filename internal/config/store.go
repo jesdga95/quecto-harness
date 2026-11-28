@@ -478,3 +478,55 @@ func (s *Store) nameIsFree(name, own string) error {
 	}
 	return nil
 }
+
+// ContainsDirectory checks membership by path and by the identities of
+// existing ancestors, including on volumes with more than one spelling for a name.
+func ContainsDirectory(root, path string) bool {
+	if root == "" || path == "" {
+		return false
+	}
+	if Within(root, path) {
+		return true
+	}
+	root, path = ResolveLinks(root), ResolveLinks(path)
+	if Within(root, path) {
+		return true
+	}
+	want, err := os.Stat(root)
+	if err != nil || !want.IsDir() {
+		return false
+	}
+	for {
+		if info, err := os.Stat(path); err == nil && os.SameFile(info, want) {
+			return true
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return false
+		}
+		path = parent
+	}
+}
+
+// Within reports whether p is root or lies under it, comparing the paths as
+// written. Both are clean and absolute.
+func Within(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// ResolveLinks follows the links in the part of a path that exists.
+func ResolveLinks(path string) string {
+	p, tail := filepath.Clean(path), ""
+	for {
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(real, tail)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Clean(path)
+		}
+		tail = filepath.Join(filepath.Base(p), tail)
+		p = parent
+	}
+}

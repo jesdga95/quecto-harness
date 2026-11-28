@@ -1703,3 +1703,53 @@ func TestRestoredCopyRequiresANewOutputConfirmation(t *testing.T) {
 		})
 	}
 }
+
+func TestARecordWithoutItsOwnIDIsUnread(t *testing.T) {
+	for _, body := range []string{`{}`, `{"id":"sess_bbbbbbbbbbbbbbbb","project":"/p"}`} {
+		dir := t.TempDir()
+		name := "sess_aaaaaaaaaaaaaaaa.json"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := s.Claims(); ok {
+			t.Errorf("%s: claims are reported complete", body)
+		}
+		if err := s.RequireRead(); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: RequireRead = %v, want it to name %s", body, err, name)
+		}
+		if s.Has("sess_bbbbbbbbbbbbbbbb") {
+			t.Errorf("%s: a record was indexed under an id that is not its file's", body)
+		}
+		if got, err := s.Load("sess_aaaaaaaaaaaaaaaa"); err == nil {
+			t.Errorf("%s: Load returned session %q under another file's name", body, got.ID)
+		}
+	}
+}
+
+func TestOpenKeepsOutputWithoutACleanupOrder(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir)
+	kept := sample(NewID(), time.Now())
+	if err := s.Save(kept); err != nil {
+		t.Fatal(err)
+	}
+	gone := NewID()
+	for _, id := range []string{kept.ID, gone} {
+		if err := os.MkdirAll(s.SpillDir(id), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Open(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, gone+".files")); err != nil {
+		t.Errorf("Unclaimed output disappeared without a cleanup order: %v", err)
+	}
+	if _, err := os.Stat(s.SpillDir(kept.ID)); err != nil {
+		t.Errorf("the output of a live session was removed: %v", err)
+	}
+}

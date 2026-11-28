@@ -24,6 +24,28 @@ func exclusiveRename(trap uintptr, cwd int, flags uintptr, from, to string) erro
 	return nil
 }
 
+// A read lease excludes existing writers and blocks new ones until the
+// descriptor closes. A filesystem that refuses the lease keeps the file.
+func removeIdle(dir *os.File, name string, want os.FileInfo) error {
+	fd, err := syscall.Openat(int(dir.Fd()), name, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(fd), name)
+	defer file.Close()
+	if _, _, err := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_SETLEASE, syscall.F_RDLCK); err != 0 {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !unchanged(want, info) {
+		return errNotHeld
+	}
+	return syscall.Unlinkat(int(dir.Fd()), name)
+}
+
 func renameInto(parent *os.File, from string, dest *os.File, to string) error {
 	return syscall.Renameat(int(parent.Fd()), from, int(dest.Fd()), to)
 }

@@ -1000,3 +1000,23 @@ func TestUpdateReturnsACopy(t *testing.T) {
 		t.Errorf("after a failed update, project = %q, want %q", p, want)
 	}
 }
+
+func TestDirectoryMembershipUsesTheVolumesSpellingRules(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "Pictures")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "PICTURES")
+	if _, err := os.Stat(alias); os.IsNotExist(err) {
+		t.Skip("Volume distinguishes case")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if !ContainsDirectory(alias, filepath.Join(dir, "albums")) {
+		t.Fatal("Alternate spelling did not contain its child")
+	}
+	if ContainsDirectory(alias, filepath.Join(base, "pictures-old")) {
+		t.Fatal("Matched a sibling")
+	}
+}

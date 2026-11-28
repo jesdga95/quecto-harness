@@ -22,16 +22,24 @@ var (
 // errNoTrash is a folder on a volume with no trash this account can use.
 var errNoTrash = errors.New("its volume has no trash this account can use, so it stays where it is")
 
-// errNotTheFolder is an entry that no longer has the identity it was ordered
-// moved with.
-var errNotTheFolder = errors.New("the folder is not the one to remove")
-
 // trashCan is a trash folder on one volume. files holds what is trashed. A
 // freedesktop trash also has info, with a record for each item, whose path
 // is relative to top on a volume other than the home one.
 type trashCan struct {
 	files, info, top string
 	prepare          func(path, trash string) error
+}
+
+// TrashScratch moves the named scratch folder to the trash if it still has id.
+func TrashScratch(root, folder, id string) (string, error) {
+	return trashScratch(root, folder, id, nil)
+}
+
+func trashScratch(root, folder, id string, prepare func(string, string) error) (string, error) {
+	if root == "" || !inRoot(root, folder) || !scratchName.MatchString(filepath.Base(folder)) {
+		return "", fmt.Errorf("%s is not a scratch folder in %s", folder, root)
+	}
+	return trashEntry(folder, id, folder, true, prepare)
 }
 
 // moveToTrash renames the folder with identity id into its own volume's trash.
