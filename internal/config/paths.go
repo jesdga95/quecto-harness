@@ -65,3 +65,11 @@ func (p Paths) EnsureDirs() error {
 	}
 	return nil
 }
+
+// LockState claims the state directory for the life of the server.
+func LockState(home string) (func(), error) { return lockDirectoryEntry(home, "lock") }
+
+const sessionsLockName = ".sessions.lock"
+
+// LockSessions also covers a sessions directory shared by separate state homes.
+func LockSessions(dir string) (func(), error) { return lockDirectoryEntry(dir, sessionsLockName) }
