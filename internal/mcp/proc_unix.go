@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -25,4 +26,12 @@ func killGroup(pid int, sig syscall.Signal) error {
 		return nil
 	}
 	return err
+}
+
+func catalogProcessGone(pid int) bool {
+	return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+}
+
+func lockCatalogKey(file *os.File) error {
+	return syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
 }

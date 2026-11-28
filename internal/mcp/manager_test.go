@@ -3,8 +3,10 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -770,5 +772,216 @@ func TestCatalogKeyFailureReportsTheRepairOnceAndRetries(t *testing.T) {
 	seedCache(t, m, s, "recovered")
 	if got := stateOf(m, s.Name).Tools; len(got) != 1 || got[0] != "recovered" {
 		t.Fatalf("Recovered catalog = %v", got)
+	}
+}
+
+func TestCatalogEvictionUsesLiteralNames(t *testing.T) {
+	base := t.TempDir()
+	s := fakeServer("local")
+	dir := filepath.Join(base, "state[copy]")
+	other := filepath.Join(base, "statec")
+	if err := os.Mkdir(other, 0700); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(dir, "", "test")
+	defer m.Close()
+	m.Configure([]Server{s})
+	k := instKey{s.Name, "work"}
+	tmp := m.prepareCache(s, k, []Tool{{Name: "saved"}})
+	if err := os.Rename(tmp, m.catalogPath(k)); err != nil {
+		t.Fatal(err)
+	}
+	keep := []string{filepath.Join(dir, "local.notes.json"), filepath.Join(dir, "local."+strings.Repeat("z", 64)+".json"), filepath.Join(other, filepath.Base(m.catalogPath(k)))}
+	for _, p := range keep {
+		if err := os.WriteFile(p, []byte("keep"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.Configure(nil)
+	if _, err := os.Stat(m.catalogPath(k)); !os.IsNotExist(err) {
+		t.Errorf("Catalog was retained: %v", err)
+	}
+	for _, p := range keep {
+		if b, err := os.ReadFile(p); err != nil || string(b) != "keep" {
+			t.Errorf("Missing %s", p)
+		}
+	}
+}
+
+func TestProjectStatusSurvivesRestartAndProbe(t *testing.T) {
+	s := fakeServer("local")
+	s.Env = map[string]string{"MCP_FAKE": "project", "MCP_TOOL": "{project}"}
+	m := newTestManager(t, s)
+	if got, _ := m.Tools(context.Background(), "alpha"); wires(got) != "mcp__local__alpha" {
+		t.Fatal(got)
+	}
+	if _, _, _, err := m.Probe(context.Background(), s, "beta"); err != nil {
+		t.Fatal(err)
+	}
+	other := NewManager(m.cacheDir, m.logDir, "test")
+	defer other.Close()
+	other.Configure([]Server{s})
+	st := stateOf(other, s.Name)
+	if !st.Listed || st.Project != "beta" || len(st.Tools) != 1 || st.Tools[0] != "beta" {
+		t.Fatalf("Latest project listing = %+v", st)
+	}
+	empty := other.instanceFor(s, "empty")
+	if err := other.publishList(empty, []Tool{}, 0); err != nil {
+		t.Fatal(err)
+	}
+	last := NewManager(m.cacheDir, m.logDir, "test")
+	defer last.Close()
+	last.Configure([]Server{s, fakeServer("unknown")})
+	if known := stateOf(last, s.Name); !known.Listed || known.Project != "empty" || len(known.Tools) != 0 {
+		t.Fatalf("Empty catalog = %+v", known)
+	}
+	if stateOf(last, "unknown").Listed {
+		t.Fatal("Unknown catalog was listed")
+	}
+	if _, ok := other.readCache(s, keyFor(s, "beta")); ok {
+		t.Fatal("Probe populated the turn catalog")
+	}
+}
+
+func TestCatalogMaintenancePreservesUnrelatedFiles(t *testing.T) {
+	dir := t.TempDir()
+	s := fakeServer("local")
+	data, err := json.Marshal(launchFields(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := fmt.Sprintf(`{"launch":"%x","tools":[]}`, sha256.Sum256(data))
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("local.json", legacy)
+	write(".catalog-123456", "incomplete")
+	write(".catalog-notes", "keep")
+	write("local.notes.json", "keep")
+	m := NewManager(dir, "", "test")
+	defer m.Close()
+	m.Configure([]Server{s})
+	for _, name := range []string{"local.json", ".catalog-123456"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("Stale file %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{".catalog-notes", "local.notes.json"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Args = append(s.Args, "{project}")
+	m.Configure([]Server{s})
+	for i := range 40 {
+		in := m.instanceFor(s, fmt.Sprint(i))
+		if err := m.publishList(in, []Tool{}, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "local.") && len(e.Name()) == len("local.")+64+len(".json") {
+			count++
+		}
+	}
+	if count > 32 || count == 0 {
+		t.Fatalf("Retained %d project catalogs", count)
+	}
+	if _, ok := m.readCache(s, keyFor(s, "39")); !ok {
+		t.Fatal("Latest catalog evicted")
+	}
+}
+
+func TestConcurrentCatalogCreatorsUseTheSameKey(t *testing.T) {
+	dir := t.TempDir()
+	start := make(chan struct{})
+	keys := make(chan []byte, 12)
+	for range cap(keys) {
+		go func() {
+			m := NewManager(dir, "", "test")
+			defer m.Close()
+			<-start
+			keys <- m.cacheKey()
+		}()
+	}
+	close(start)
+	first := <-keys
+	if len(first) != 32 {
+		t.Fatalf("Key length = %d", len(first))
+	}
+	for i := 1; i < cap(keys); i++ {
+		if !bytes.Equal(first, <-keys) {
+			t.Fatal("Concurrent creators used different keys")
+		}
+	}
+}
+
+func TestStatusFindsOlderProjectCatalogs(t *testing.T) {
+	s := fakeServer("local")
+	s.Cwd = "{project}"
+	m := newTestManager(t, s)
+	now := time.Now()
+	for i, project := range []string{"alpha", "beta", "obsolete"} {
+		k := keyFor(s, project)
+		digest := m.launchDigest(s, k)
+		if project == "obsolete" {
+			digest = strings.Repeat("0", 64)
+		}
+		raw, err := json.Marshal(map[string]any{"launch": digest, "tools": []Tool{{Name: project}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := m.catalogPath(k)
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		at := now.Add(time.Duration(i) * time.Minute)
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := NewManager(m.cacheDir, m.logDir, "test")
+	defer other.Close()
+	other.Configure([]Server{s})
+	st := other.Status("obsolete", "alpha", "beta")[0]
+	if !st.Listed || st.Project != "beta" || len(st.Tools) != 1 || st.Tools[0] != "beta" {
+		t.Fatalf("Older project catalog = %+v", st)
+	}
+}
+
+func TestStartupDropsCatalogsOfRemovedServers(t *testing.T) {
+	shared, project, kept := fakeServer("shared"), fakeServer("local"), fakeServer("kept")
+	project.Cwd = "{project}"
+	m := newTestManager(t, shared, project, kept)
+	for _, srv := range []Server{shared, project, kept} {
+		if err := m.publishList(m.instanceFor(srv, "alpha"), []Tool{{Name: "saved"}}, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := NewManager(m.cacheDir, m.logDir, "test")
+	defer other.Close()
+	kept.Enabled = false
+	doc := filepath.Join(m.cacheDir, "notes.json")
+	if err := os.WriteFile(doc, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	other.Configure([]Server{kept})
+	for _, p := range []string{m.cachePath("shared"), m.catalogPath(keyFor(project, "alpha")), m.statusPath("local")} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("Obsolete catalog %s: %v", p, err)
+		}
+	}
+	for _, p := range []string{doc, m.cachePath("kept"), filepath.Join(m.cacheDir, ".catalog-key")} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

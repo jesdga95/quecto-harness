@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -59,6 +60,8 @@ type Manager struct {
 	logDir   string
 	version  string
 
+	readFile         func(string) ([]byte, error)
+	maintenance      sync.Once
 	keyMu            sync.Mutex
 	catalogKey       []byte
 	keyWarningLogged bool
@@ -75,7 +78,7 @@ type Manager struct {
 	generation map[instKey]uint64
 	// Settings can show the last probe or project-specific list. Tool offers
 	// use only the catalog for their own instance.
-	probed map[string][]Tool
+	probed map[string]catalogView
 	closed bool
 }
 
@@ -98,12 +101,12 @@ type instance struct {
 }
 
 // NewManager keeps the tool cache in cacheDir and each server's stderr in
-// logDir. Neither is touched until a server starts.
+// logDir. Initial configuration cleans obsolete entries in an existing cache.
 func NewManager(cacheDir, logDir, version string) *Manager {
 	return &Manager{
-		cacheDir: cacheDir, logDir: logDir, version: version,
+		cacheDir: cacheDir, logDir: logDir, version: version, readFile: os.ReadFile,
 		servers: map[string]Server{}, inst: map[instKey]*instance{},
-		tools: map[instKey][]Tool{}, dirty: map[instKey]bool{}, generation: map[instKey]uint64{}, probed: map[string][]Tool{},
+		tools: map[instKey][]Tool{}, dirty: map[instKey]bool{}, generation: map[instKey]uint64{}, probed: map[string]catalogView{},
 	}
 }
 
@@ -169,12 +172,9 @@ func (m *Manager) Configure(servers []Server) {
 		go in.stop()
 	}
 	if m.cacheDir != "" {
+		m.maintenance.Do(func() { m.cleanCatalogs(next) })
 		for _, name := range evict {
-			_ = os.Remove(m.cachePath(name))
-			paths, _ := filepath.Glob(filepath.Join(m.cacheDir, name+".*.json"))
-			for _, path := range paths {
-				_ = os.Remove(path)
-			}
+			m.evictCatalogs(name)
 		}
 	}
 }
@@ -356,22 +356,36 @@ func (m *Manager) publishList(in *instance, tools []Tool, generation uint64) err
 	if tmp != "" {
 		defer os.Remove(tmp)
 	}
+	var status string
+	if in.srv.PerProject() {
+		status = m.prepareCache(in.srv, in.key, tools)
+		if status != "" {
+			defer os.Remove(status)
+		}
+	}
 	m.cacheMu.Lock()
 	defer m.cacheMu.Unlock()
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if err := m.instanceErrorLocked(in); err != nil {
+		m.mu.Unlock()
 		return err
 	}
-	if m.generation[in.key] == generation {
-		m.tools[in.key] = tools
-		delete(m.dirty, in.key)
-		if in.srv.PerProject() {
-			m.probed[in.key.server] = tools
-		}
-		if tmp != "" {
-			_ = os.Rename(tmp, m.catalogPath(in.key))
-		}
+	if m.generation[in.key] != generation {
+		m.mu.Unlock()
+		return nil
+	}
+	m.tools[in.key] = tools
+	delete(m.dirty, in.key)
+	if in.srv.PerProject() {
+		m.probed[in.key.server] = catalogView{Project: in.key.project, Tools: tools}
+	}
+	published := tmp != "" && os.Rename(tmp, m.catalogPath(in.key)) == nil
+	if status != "" {
+		_ = os.Rename(status, m.statusPath(in.key.server))
+	}
+	m.mu.Unlock()
+	if published && in.key.project != "" {
+		m.trimProjects(in.key.server, filepath.Base(m.catalogPath(in.key)))
 	}
 	return nil
 }
@@ -412,10 +426,10 @@ func (m *Manager) cacheKey() []byte {
 	if m.catalogKey != nil {
 		return m.catalogKey
 	}
-	key, err := loadCacheKey(m.cacheDir)
+	key, err := m.loadCacheKey()
 	if err != nil {
 		if !m.keyWarningLogged {
-			log.Printf("MCP disk cache unavailable: %v. Check permissions on %s or move the damaged key aside to generate another", err, filepath.Join(m.cacheDir, ".catalog-key"))
+			log.Printf("MCP disk cache unavailable: %v. Check permissions on %s, move a damaged key aside, or use a filesystem that supports locks and atomic renames", err, filepath.Join(m.cacheDir, ".catalog-key"))
 			m.keyWarningLogged = true
 		}
 		return nil
@@ -425,36 +439,49 @@ func (m *Manager) cacheKey() []byte {
 }
 
 // loadCacheKey publishes a complete private key before another process can read it.
-func loadCacheKey(dir string) ([]byte, error) {
-	path := filepath.Join(dir, ".catalog-key")
-	key, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		if err = os.MkdirAll(dir, 0700); err != nil {
-			return nil, err
+func (m *Manager) loadCacheKey() ([]byte, error) {
+	path := filepath.Join(m.cacheDir, ".catalog-key")
+	read := func() ([]byte, error) {
+		key, err := m.readFile(path)
+		if err == nil && len(key) != 32 {
+			return nil, errors.New("invalid catalog key")
 		}
-		key = make([]byte, 32)
-		if _, err = rand.Read(key); err != nil {
-			return nil, err
-		}
-		tmp, err := stageFile(dir, key)
-		if err != nil {
-			return nil, err
-		}
-		defer os.Remove(tmp)
-		if err = os.Link(tmp, path); err == nil {
-			return key, nil
-		} else if !errors.Is(err, os.ErrExist) {
-			return nil, err
-		}
-		key, err = os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-	} else if err != nil {
+		return key, err
+	}
+	if key, err := read(); !errors.Is(err, os.ErrNotExist) {
+		return key, err
+	}
+	if err := os.MkdirAll(m.cacheDir, 0700); err != nil {
 		return nil, err
 	}
-	if len(key) != 32 {
-		return nil, errors.New("invalid catalog key")
+	key := make([]byte, 32)
+	rand.Read(key)
+	tmp, err := stageFile(m.cacheDir, key)
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(tmp)
+	if err := os.Link(tmp, path); err == nil {
+		return key, nil
+	} else if errors.Is(err, os.ErrExist) {
+		return read()
+	} else if !errors.Is(err, syscall.ENOTSUP) && !errors.Is(err, syscall.ENOSYS) && !errors.Is(err, syscall.EPERM) {
+		return nil, err
+	}
+	// On volumes without hard links, creators serialize the recheck and rename.
+	lock, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	if err := lockCatalogKey(lock); err != nil {
+		return nil, err
+	}
+	if key, err := read(); !errors.Is(err, os.ErrNotExist) {
+		return key, err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return nil, err
 	}
 	return key, nil
 }
@@ -482,25 +509,18 @@ func (m *Manager) catalogPath(k instKey) string {
 }
 
 func (m *Manager) readCache(s Server, k instKey) ([]Tool, bool) {
-	if m.cacheDir == "" {
+	if m.cacheDir == "" || !catalogServer.MatchString(k.server) {
 		return nil, false
 	}
-	raw, err := os.ReadFile(m.catalogPath(k))
-	if err != nil {
-		return nil, false
-	}
-	var c struct {
-		Launch string `json:"launch"`
-		Tools  []Tool `json:"tools"`
-	}
-	if json.Unmarshal(raw, &c) != nil || c.Launch == "" || c.Tools == nil || c.Launch != m.launchDigest(s, k) {
+	c, ok := m.readCatalog(m.catalogPath(k))
+	if !ok || c.Launch != m.launchDigest(s, k) {
 		return nil, false
 	}
 	return c.Tools, true
 }
 
 func stageFile(dir string, data []byte) (string, error) {
-	f, err := os.CreateTemp(dir, ".catalog-*")
+	f, err := os.CreateTemp(dir, fmt.Sprintf(".catalog-%d-*", os.Getpid()))
 	if err != nil {
 		return "", err
 	}
@@ -514,14 +534,14 @@ func stageFile(dir string, data []byte) (string, error) {
 }
 
 func (m *Manager) prepareCache(s Server, k instKey, tools []Tool) string {
-	if m.cacheDir == "" {
+	if m.cacheDir == "" || !catalogServer.MatchString(k.server) {
 		return ""
 	}
 	launch := m.launchDigest(s, k)
 	if launch == "" {
 		return ""
 	}
-	data, err := json.Marshal(map[string]any{"launch": launch, "tools": tools})
+	data, err := json.Marshal(diskCatalog{Version: 1, Launch: launch, catalogView: catalogView{Project: k.project, Tools: tools}})
 	if err != nil {
 		return ""
 	}
@@ -832,27 +852,29 @@ type ServerStatus struct {
 	Error   string   `json:"error,omitempty"`
 	Tools   []string `json:"tools"`
 	Running int      `json:"running"`
+	Listed  bool     `json:"listed"`
+	Project string   `json:"project,omitempty"`
 }
 
 // Status reports every configured server. A server running in several
 // projects reads as running when any instance is, and failed when one has
 // failed and none runs.
-func (m *Manager) Status() []ServerStatus {
+func (m *Manager) Status(projects ...string) []ServerStatus {
 	m.mu.Lock()
 	order := append([]string(nil), m.order...)
 	byServer := map[string][]*instance{}
 	for k, in := range m.inst {
 		byServer[k.server] = append(byServer[k.server], in)
 	}
-	known := map[string][]Tool{}
+	known := map[string]catalogView{}
 	missing := map[string]Server{}
 	for _, name := range order {
-		tools, ok := m.tools[instKey{server: name}]
-		if !ok {
-			tools, ok = m.probed[name]
+		view, ok := m.probed[name]
+		if tools, shared := m.tools[instKey{server: name}]; shared && (!m.servers[name].PerProject() || !ok) {
+			view, ok = catalogView{Tools: tools}, true
 		}
 		if ok {
-			known[name] = tools
+			known[name] = view
 		} else {
 			missing[name] = m.servers[name]
 		}
@@ -862,11 +884,12 @@ func (m *Manager) Status() []ServerStatus {
 	out := make([]ServerStatus, 0, len(order))
 	for _, n := range order {
 		st := ServerStatus{Name: n, State: StateIdle, Tools: []string{}}
-		tools := known[n]
+		view, listed := known[n]
 		if server, ok := missing[n]; ok {
-			tools, _ = m.readCache(server, keyFor(server, ""))
+			view, listed = m.lastCatalog(server, projects)
 		}
-		for _, t := range tools {
+		st.Listed, st.Project = listed, view.Project
+		for _, t := range view.Tools {
 			st.Tools = append(st.Tools, t.Name)
 		}
 		sort.Strings(st.Tools)
@@ -912,10 +935,31 @@ func (m *Manager) Probe(ctx context.Context, s Server, project string) (ServerIn
 	// Test's session is its own and may list other tools than the session
 	// turns run on, so its list is kept for the settings alone.
 	m.mu.Lock()
-	if cur, ok := m.servers[s.Name]; ok && s.Name != "" && reflect.DeepEqual(launchFields(cur), launchFields(s)) {
-		m.probed[s.Name] = tools
+	saved, configured := m.servers[s.Name]
+	m.mu.Unlock()
+	if !configured || !reflect.DeepEqual(launchFields(saved), launchFields(s)) {
+		return c.Info, tools, notes, nil
+	}
+	k := keyFor(s, project)
+	if tools == nil {
+		tools = []Tool{}
+	}
+	tmp := m.prepareCache(s, k, tools)
+	if tmp != "" {
+		defer os.Remove(tmp)
+	}
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+	m.mu.Lock()
+	cur, ok := m.servers[s.Name]
+	current := !m.closed && ok && s.Name != "" && reflect.DeepEqual(launchFields(cur), launchFields(s))
+	if current {
+		m.probed[s.Name] = catalogView{Project: k.project, Tools: tools}
 	}
 	m.mu.Unlock()
+	if current && tmp != "" {
+		_ = os.Rename(tmp, m.statusPath(s.Name))
+	}
 	return c.Info, tools, notes, nil
 }
 

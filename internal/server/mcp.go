@@ -33,6 +33,8 @@ type mcpServerJSON struct {
 	Error   string   `json:"error"`
 	Tools   []string `json:"tools"`
 	Running int      `json:"running"`
+	Listed  bool     `json:"listed"`
+	Project string   `json:"listed_project,omitempty"`
 }
 
 func toMCPServerJSON(srv config.MCPServer, st mcp.ServerStatus) mcpServerJSON {
@@ -45,6 +47,7 @@ func toMCPServerJSON(srv config.MCPServer, st mcp.ServerStatus) mcpServerJSON {
 	}
 	if st.Name != "" {
 		out.State, out.Tools, out.Running = string(st.State), st.Tools, st.Running
+		out.Listed, out.Project = st.Listed, st.Project
 		if st.Error != "" {
 			out.Error = "The last start failed: " + st.Error
 		}
@@ -62,7 +65,7 @@ func orEmptyMap(m map[string]string) map[string]string {
 func (s *Server) writeMCP(w http.ResponseWriter, status int) {
 	byName := map[string]mcp.ServerStatus{}
 	if m := s.engine.MCP(); m != nil {
-		for _, st := range m.Status() {
+		for _, st := range m.Status(s.cfg.Config().Projects...) {
 			byName[st.Name] = st
 		}
 	}
@@ -211,6 +214,6 @@ func (s *Server) probeMCP(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "server": map[string]string{"name": info.Name, "version": info.Version, "protocol": info.Protocol},
-		"tools": list, "notes": notes,
+		"tools": list, "notes": notes, "listed_project": project,
 	})
 }
