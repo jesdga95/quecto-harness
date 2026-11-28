@@ -1217,6 +1217,12 @@ export class MockApi implements HarnessApi {
     if (session) session.title = title;
   }
 
+  async recoveryItems() { return []; }
+  async deleteRetained(_name: string) {}
+  async unreadableSessions() { return []; }
+
+  async archiveUnreadable(): Promise<string> { throw new Error("Transcript not found"); }
+
   async deleteSession(id: string): Promise<void> {
     await this.tick();
     this.sessions = this.sessions.filter((s) => s.id !== id);
