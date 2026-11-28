@@ -1241,25 +1241,35 @@ func (e *Engine) reserve(s *Session) ([]*Session, []missingRun, error) {
 	// One whose file cannot be read refuses the delete by name.
 	var kids []*Session
 	var missing []missingRun
-	for _, id := range e.store.Family(s.ID) {
-		// A run with output left behind is finished first, or its launcher
-		// would go while the run still waits on a fix.
-		done, err := e.store.FinishCleanup(id)
-		if err != nil {
-			return nil, nil, err
+	parents := []string{s.ID}
+	seen := map[string]bool{s.ID: true}
+	for i := 0; i < len(parents); i++ {
+		parent := parents[i]
+		for _, id := range e.store.Family(parent) {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			parents = append(parents, id)
+			// A run with output left behind is finished first, or its launcher
+			// would go while the run still waits on a fix.
+			done, err := e.store.FinishCleanup(id)
+			if err != nil {
+				return nil, nil, err
+			}
+			if done {
+				continue
+			}
+			kid, err := e.Get(id)
+			if errors.Is(err, ErrNotFound) {
+				missing = append(missing, missingRun{parent, id})
+				continue
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			kids = append(kids, kid)
 		}
-		if done {
-			continue
-		}
-		kid, err := e.Get(id)
-		if errors.Is(err, ErrNotFound) {
-			missing = append(missing, missingRun{s.ID, id})
-			continue
-		}
-		if err != nil {
-			return nil, nil, err
-		}
-		kids = append(kids, kid)
 	}
 	group, err := e.claim(s, kids)
 	return group, missing, err
@@ -1286,9 +1296,11 @@ func (e *Engine) claim(s *Session, kids []*Session) ([]*Session, error) {
 		}
 	}
 	// A run started a moment ago may be live before it is on disk.
-	for _, m := range e.live {
-		if m.Parent == s.ID && !slices.Contains(group, m) {
-			group = append(group, m)
+	for i := 0; i < len(group); i++ {
+		for _, m := range e.live {
+			if m.Parent == group[i].ID && !slices.Contains(group, m) {
+				group = append(group, m)
+			}
 		}
 	}
 	for _, m := range group {

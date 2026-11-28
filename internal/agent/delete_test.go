@@ -1187,3 +1187,36 @@ func TestBackupParentKeepsLauncherWhileRunIsUnreadable(t *testing.T) {
 		t.Fatalf("Launcher deletion with an unresolved run = %v", err)
 	}
 }
+
+func TestDeleteFindsAMissingDescendantAfterRestart(t *testing.T) {
+	h := scratchHarness(t)
+	root, err := h.engine.CreateScratch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := subagentOf(t, h, root)
+	missing := subagentOf(t, h, kid)
+	if err := os.Remove(filepath.Join(h.paths.Sessions, missing.ID+".json")); err != nil {
+		t.Fatal(err)
+	}
+	output := h.store.SpillDir(missing.ID)
+	if err := os.MkdirAll(output, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeText(t, filepath.Join(output, "result"), "saved output")
+	e := h.reopen(t)
+	if e.store.Gone(missing.ID) {
+		t.Fatal("Missing run lost its family record")
+	}
+	if err := e.Delete(root.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{root.ID, kid.ID, missing.ID} {
+		if !e.store.Gone(id) {
+			t.Fatalf("Session %s survived family deletion", id)
+		}
+	}
+	if _, err := os.Lstat(output); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Missing run output: %v", err)
+	}
+}

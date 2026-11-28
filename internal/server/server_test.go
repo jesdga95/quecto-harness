@@ -3645,6 +3645,22 @@ func TestAnUnreadSessionDoesNotBlockADelete(t *testing.T) {
 	}
 }
 
+func TestRemovingAProjectNamesOneEntry(t *testing.T) {
+	f := newFixture(t)
+	if w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": ""}); w.Code != http.StatusNotFound {
+		t.Errorf("an empty path = %d, want 404", w.Code)
+	}
+	body := decode(t, f.do(t, "POST", "/api/sessions", map[string]any{"project": f.project}))
+	id, _ := body["id"].(string)
+	w := f.do(t, "DELETE", "/api/projects", map[string]string{"path": f.project + "/"})
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"sessions_deleted":1`) {
+		t.Errorf("remove with a trailing slash = %d %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(f.cfg.Paths().Sessions, id+".json")); !os.IsNotExist(err) {
+		t.Errorf("the project's session outlived it: %v", err)
+	}
+}
+
 func TestRemovingALinkedEntryLeavesTheOther(t *testing.T) {
 	f := newFixture(t)
 	body := decode(t, f.do(t, "POST", "/api/sessions", map[string]any{"project": f.project}))

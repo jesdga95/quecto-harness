@@ -344,12 +344,9 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	// The path is the one the list holds, taken as it is: resolving it could
-	// lead to another project, and an empty one would name every project's
-	// sessions.
-	project := body.Path
-	if strings.TrimSpace(project) == "" || !s.cfg.HasProject(project) {
-		writeError(w, http.StatusNotFound, "No project at that path: it may have been removed already")
+	project := filepath.Clean(body.Path)
+	if strings.TrimSpace(body.Path) == "" || !s.cfg.HasProject(project) {
+		writeError(w, http.StatusNotFound, "No project at that path in the list")
 		return
 	}
 	// A project that is gone has no conversations, so its sessions go with it.
