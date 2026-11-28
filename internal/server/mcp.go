@@ -193,6 +193,9 @@ func (s *Server) probeMCP(w http.ResponseWriter, r *http.Request) {
 			project = projects[0]
 		}
 	}
+	if project != "" && !s.projectOK(w, project) {
+		return
+	}
 	info, tools, notes, err := m.Probe(r.Context(), srv, project)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "The server did not start: " + err.Error()})

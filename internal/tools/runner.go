@@ -43,8 +43,9 @@ type Runner struct {
 	// against. Nil runs the tools with no such check.
 	Seen *Seen
 
-	// Hidden is the harness's own state directory, which no tool reaches even
-	// when the project contains it: it holds the token and the allowlist.
+	// Hidden is the harness's own state directory, which the file tools refuse
+	// even when the project contains it: it holds the token and the allowlist.
+	// A bash command is not confined by it.
 	Hidden string
 
 	// Spill is the folder where a command whose output was cut saves all of

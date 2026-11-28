@@ -203,7 +203,7 @@ const hunk = (old_start: number, new_start: number, lines: [DiffKind, string][],
   lines: lines.map(([kind, text]) => ({ kind, text })),
 });
 
-function counted(f: Omit<MockFile, "added" | "removed" | "omitted">): MockFile {
+function counted(f: Omit<MockFile, "link" | "added" | "removed" | "omitted">): MockFile {
   let added = 0;
   let removed = 0;
   for (const h of f.hunks)
@@ -211,7 +211,7 @@ function counted(f: Omit<MockFile, "added" | "removed" | "omitted">): MockFile {
       if (l.kind === "added") added++;
       if (l.kind === "removed") removed++;
     }
-  return { ...f, added, removed, omitted: 0 };
+  return { ...f, link: false, added, removed, omitted: 0 };
 }
 
 function mockFiles(): MockFile[] {

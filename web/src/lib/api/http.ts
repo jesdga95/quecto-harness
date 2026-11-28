@@ -862,6 +862,7 @@ interface WireGitFile {
   path?: string;
   state?: GitState;
   binary?: boolean;
+  link?: boolean;
   added?: number;
   removed?: number;
   omitted?: number;
@@ -875,6 +876,7 @@ function toGitFile(f: WireGitFile): GitFile {
     path: f.path ?? "",
     state: f.state ?? "changed",
     binary: f.binary ?? false,
+    link: f.link ?? false,
     added: f.added ?? 0,
     removed: f.removed ?? 0,
     omitted: f.omitted ?? 0,

@@ -77,3 +77,23 @@ func (u *Uploads) Prune() {
 		os.RemoveAll(filepath.Join(u.dir, e.Name()))
 	}
 }
+
+// Owns accepts the exact path to a regular file in a file ID directory
+// directly under the uploads directory. Both directories must be real directories.
+func (u *Uploads) Owns(path string) bool {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return false
+	}
+	dir := filepath.Dir(path)
+	if filepath.Dir(dir) != filepath.Clean(u.dir) || !filePattern.MatchString(filepath.Base(dir)) {
+		return false
+	}
+	for _, p := range []string{u.dir, dir} {
+		info, err := os.Lstat(p)
+		if err != nil || !info.IsDir() {
+			return false
+		}
+	}
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular()
+}
