@@ -258,13 +258,16 @@ type httpFake struct {
 	// lost is how many notifications/initialized are answered 404, as by a
 	// server that forgets a session as soon as it hands it out.
 	lost int
-	// catalog, when set, is the one tool each session lists, by the number
-	// of initializes so far.
+	// catalog, when set, is the one tool each session lists, by the
+	// initialize that opened it.
 	catalog []string
+	// live maps each session handed out and not forgotten to the number of
+	// the initialize that opened it.
+	live map[string]int
 }
 
 func newHTTPFake(t *testing.T) (*httpFake, *httptest.Server) {
-	h := &httpFake{t: t, waiting: map[string]chan message{}}
+	h := &httpFake{t: t, waiting: map[string]chan message{}, live: map[string]int{}}
 	h.fake = newFake("", h.route)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
@@ -280,6 +283,7 @@ func httpSpec(srv *httptest.Server) *HTTPSpec {
 func forgetSession(h *httpFake) {
 	h.mu.Lock()
 	h.session = "forgotten"
+	clear(h.live)
 	h.mu.Unlock()
 }
 
@@ -301,6 +305,7 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	session, stale := h.session, h.stale
+	opened, live := h.live[r.Header.Get("Mcp-Session-Id")]
 	h.mu.Unlock()
 	if r.Method == http.MethodDelete {
 		h.mu.Lock()
@@ -328,7 +333,7 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.lost--
 		}
 		h.mu.Unlock()
-		if lose || stale || r.Header.Get("Mcp-Session-Id") != session {
+		if lose || stale || !live {
 			http.Error(w, "unknown session", http.StatusNotFound)
 			return
 		}
@@ -339,11 +344,11 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.mu.Lock()
-	catalog, inits := h.catalog, h.inits
+	catalog := h.catalog
 	h.mu.Unlock()
 	if m.Method == "tools/list" && catalog != nil {
 		out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{
-			"tools": []any{map[string]any{"name": catalog[min(inits, len(catalog))-1], "inputSchema": map[string]any{"type": "object"}}},
+			"tools": []any{map[string]any{"name": catalog[min(opened, len(catalog))-1], "inputSchema": map[string]any{"type": "object"}}},
 		}})
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(out)
@@ -360,9 +365,10 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 	if m.Method == "initialize" {
 		h.mu.Lock()
-		h.session = "sess-1"
+		id := fmt.Sprintf("sess-%d", h.inits)
+		h.session, h.live[id] = id, h.inits
 		h.mu.Unlock()
-		w.Header().Set("Mcp-Session-Id", "sess-1")
+		w.Header().Set("Mcp-Session-Id", id)
 	}
 	go h.fake.handle(m)
 	var reply message

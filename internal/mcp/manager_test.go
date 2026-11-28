@@ -126,6 +126,32 @@ func TestManagerDiskCache(t *testing.T) {
 	}
 }
 
+func TestManagerRefreshesTheDiskListAfterAnOutage(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	h.catalog = []string{"unused", "tested", "running"}
+	h.initStatus = http.StatusServiceUnavailable
+	s := httpServer(srv)
+	m := newTestManager(t, s)
+	m.writeCache(s.Name, []Tool{{Name: "saved"}})
+	ctx := context.Background()
+	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__saved" {
+		t.Fatalf("offer during the outage = %s", wires(offered))
+	}
+	h.mu.Lock()
+	h.initStatus = 0
+	h.mu.Unlock()
+	if _, _, _, err := m.Probe(ctx, s, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateOf(m, s.Name).Tools; len(got) != 1 || got[0] != "tested" {
+		t.Errorf("settings after Test = %v, want [tested]", got)
+	}
+	waitFor(t, func() bool {
+		offered, _ := m.Tools(ctx, "")
+		return wires(offered) == "mcp__remote__running"
+	})
+}
+
 func TestManagerPerProject(t *testing.T) {
 	s := fakeServer("fake")
 	s.Cwd = "{project}"
@@ -236,6 +262,38 @@ func TestManagerProbe(t *testing.T) {
 	}
 	if st := stateOf(m, "fake"); st.State != StateIdle || len(st.Tools) != 4 {
 		t.Fatalf("probe should fill the list and leave nothing running: %+v", st)
+	}
+}
+
+// A test result belongs to the launch settings that produced it.
+func TestManagerDropsProbeWhenTheLaunchChanges(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	h.catalog = []string{"first"}
+	s := httpServer(srv)
+	m := newTestManager(t, s)
+	ctx := context.Background()
+	if _, _, _, err := m.Probe(ctx, s, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.Allow = []string{"first"}
+	m.Configure([]Server{s})
+	if got := stateOf(m, s.Name).Tools; len(got) != 1 || got[0] != "first" {
+		t.Fatalf("tools after an allow change = %v", got)
+	}
+	original := s
+	s.URL += "/changed"
+	m.Configure([]Server{s})
+	if got := stateOf(m, s.Name).Tools; len(got) != 0 {
+		t.Errorf("tools after a URL change = %v", got)
+	}
+	m.Configure([]Server{original})
+	if _, _, _, err := m.Probe(ctx, original, ""); err != nil {
+		t.Fatal(err)
+	}
+	m.Configure(nil)
+	m.Configure([]Server{original})
+	if got := stateOf(m, original.Name).Tools; len(got) != 0 {
+		t.Errorf("tools after removal and re-addition = %v", got)
 	}
 }
 
@@ -424,5 +482,74 @@ func TestManagerListsAgainAfterASessionEndsOnItsOwn(t *testing.T) {
 	waitFor(t, func() bool { return stateOf(m, "remote").State == StateIdle })
 	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__b" {
 		t.Fatalf("offer after the session ended = %s", wires(offered))
+	}
+}
+
+// Test opens a session of its own, so the list it gets does not stand in for
+// the one the running session owes after a renewal.
+func TestManagerTestDoesNotReplaceTheListARenewalOwes(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	h.catalog = []string{"a", "b", "c"}
+	s := httpServer(srv)
+	m := newTestManager(t, s)
+	ctx := context.Background()
+	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__a" {
+		t.Fatalf("first offer = %s", wires(offered))
+	}
+	forgetSession(h)
+	if _, err := m.Call(ctx, "", "remote", "echo", nil, time.Minute); err != nil {
+		t.Fatalf("call across the renewal = %v", err)
+	}
+	if _, _, _, err := m.Probe(ctx, s, ""); err != nil {
+		t.Fatal(err)
+	}
+	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__b" {
+		t.Fatalf("offer after the renewal and a test = %s, want the running session's", wires(offered))
+	}
+}
+
+// The same with a turn between the renewal and Test: the turn takes the
+// renewed list, and Test still does not replace it while that session runs.
+func TestManagerTestAfterATurnKeepsTheRunningList(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	h.catalog = []string{"a", "b", "c"}
+	s := httpServer(srv)
+	m := newTestManager(t, s)
+	ctx := context.Background()
+	m.Tools(ctx, "")
+	forgetSession(h)
+	if _, err := m.Call(ctx, "", "remote", "echo", nil, time.Minute); err != nil {
+		t.Fatalf("call across the renewal = %v", err)
+	}
+	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__b" {
+		t.Fatalf("offer after the renewal = %s", wires(offered))
+	}
+	if _, _, _, err := m.Probe(ctx, s, ""); err != nil {
+		t.Fatal(err)
+	}
+	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__b" {
+		t.Fatalf("offer after a test = %s, want the running session's", wires(offered))
+	}
+}
+
+// Test before anything ran: its list shows in the settings, and the first
+// offer comes from the session turns run on.
+func TestManagerOffersTheRunningListAfterAFirstTest(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	h.catalog = []string{"a", "b"}
+	s := httpServer(srv)
+	m := newTestManager(t, s)
+	ctx := context.Background()
+	if _, _, _, err := m.Probe(ctx, s, ""); err != nil {
+		t.Fatal(err)
+	}
+	if st := stateOf(m, "remote"); len(st.Tools) != 1 || st.Tools[0] != "a" {
+		t.Fatalf("settings after Test = %v, want Test's list", st.Tools)
+	}
+	if _, err := m.Call(ctx, "", "remote", "echo", nil, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if offered, _ := m.Tools(ctx, ""); wires(offered) != "mcp__remote__b" {
+		t.Fatalf("offer = %s, want the running session's", wires(offered))
 	}
 }

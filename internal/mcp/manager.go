@@ -61,7 +61,10 @@ type Manager struct {
 	inst    map[instKey]*instance
 	tools   map[string][]Tool
 	dirty   map[string]bool
-	closed  bool
+	// probed is what Test listed on a session of its own, shown in the
+	// settings until a running session lists. Offers never read it.
+	probed map[string][]Tool
+	closed bool
 }
 
 type instKey struct{ server, project string }
@@ -87,7 +90,7 @@ func NewManager(cacheDir, logDir, version string) *Manager {
 	return &Manager{
 		cacheDir: cacheDir, logDir: logDir, version: version,
 		servers: map[string]Server{}, inst: map[instKey]*instance{},
-		tools: map[string][]Tool{}, dirty: map[string]bool{},
+		tools: map[string][]Tool{}, dirty: map[string]bool{}, probed: map[string][]Tool{},
 	}
 }
 
@@ -109,6 +112,12 @@ func (m *Manager) Configure(servers []Server) {
 		order = append(order, s.Name)
 	}
 	sort.Strings(order)
+	for name := range m.probed {
+		replacement, ok := next[name]
+		if !ok || !reflect.DeepEqual(launchFields(m.servers[name]), launchFields(replacement)) {
+			delete(m.probed, name)
+		}
+	}
 	var stop []*instance
 	for k, in := range m.inst {
 		s, ok := next[k.server]
@@ -250,11 +259,6 @@ func (m *Manager) listFor(ctx context.Context, s Server, project string) ([]Tool
 		return tools, nil
 	}
 	if cached, ok := m.readCache(s.Name); ok {
-		m.mu.Lock()
-		if _, has := m.tools[s.Name]; !has {
-			m.tools[s.Name] = cached
-		}
-		m.mu.Unlock()
 		return cached, nil
 	}
 	return nil, err
@@ -577,6 +581,9 @@ func (m *Manager) Status() []ServerStatus {
 		byServer[k.server] = append(byServer[k.server], in)
 	}
 	known := map[string][]Tool{}
+	for k, v := range m.probed {
+		known[k] = v
+	}
 	for k, v := range m.tools {
 		known[k] = v
 	}
@@ -632,11 +639,13 @@ func (m *Manager) Probe(ctx context.Context, s Server, project string) (ServerIn
 	if err != nil {
 		return c.Info, nil, nil, err
 	}
-	if s.Name != "" {
-		if cur, ok := m.Server(s.Name); ok && reflect.DeepEqual(launchFields(cur), launchFields(s)) {
-			m.keepTools(s.Name, tools)
-		}
+	// Test's session is its own and may list other tools than the session
+	// turns run on, so its list is kept for the settings alone.
+	m.mu.Lock()
+	if cur, ok := m.servers[s.Name]; ok && s.Name != "" && reflect.DeepEqual(launchFields(cur), launchFields(s)) {
+		m.probed[s.Name] = tools
 	}
+	m.mu.Unlock()
 	return c.Info, tools, notes, nil
 }
 
