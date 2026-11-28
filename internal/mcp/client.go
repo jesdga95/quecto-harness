@@ -321,6 +321,9 @@ func (c *Client) ListTools(ctx context.Context) ([]Tool, []string, error) {
 		if err := c.call(ctx, "tools/list", params, &res); err != nil {
 			return nil, nil, fmt.Errorf("list tools: %w", err)
 		}
+		if res.Tools == nil {
+			return nil, nil, errors.New("list tools: the server did not return a tools array")
+		}
 		for _, raw := range res.Tools {
 			t, note := decodeTool(raw)
 			if note != "" {

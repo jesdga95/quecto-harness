@@ -294,19 +294,10 @@
     }
   }
 
-  /** The tools to draw: what the last test listed, else what the server
-      listed when it last ran. */
-  const tools = $derived.by(() => {
-    if (probe?.ok && probe.tools) return probe.tools;
-    return (stored?.tools ?? []).map((t) => ({ name: t, description: "" }));
-  });
-
-  /** Whether a list of the server's tools is known, even an empty one. */
-  const listed = $derived.by(() => {
-    const p: McpProbe | null = probe;
-    return (!!p?.ok && !!p.tools) || !!stored?.listed;
-  });
-  const listedProject = $derived.by(() => probe?.ok ? probe.listed_project : stored?.listed_project);
+  const probedTools = $derived.by(() => probe?.ok ? probe.tools : undefined);
+  const tools = $derived(probedTools ?? (stored?.tools ?? []).map((name) => ({ name, description: "" })));
+  const listed = $derived(probedTools !== undefined || !!stored?.listed);
+  const listedProject = $derived.by(() => probedTools !== undefined ? probe?.listed_project : stored?.listed_project);
   const allowed = $derived.by(() => new Set(draft?.allow ?? []));
   const choices = $derived.by(() => {
     const names = new Set(tools.map((tool) => tool.name));
@@ -406,8 +397,7 @@
               </p>
             {:else if probe?.ok}
               <p class="text-[12px] text-ok">
-                Started {probe.server?.name || draft.name}{probe.server?.version ? " " + probe.server.version : ""},
-                {probe.tools?.length ?? 0} tool{probe.tools?.length === 1 ? "" : "s"}.
+                Started {probe.server?.name || draft.name}{probe.server?.version ? " " + probe.server.version : ""}{#if probedTools}, {probedTools.length} tool{probedTools.length === 1 ? "" : "s"}{/if}.
               </p>
               {#each probe.notes ?? [] as note}
                 <p class="text-[12px] text-muted">{note}</p>

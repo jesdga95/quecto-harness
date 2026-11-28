@@ -1175,3 +1175,43 @@ func TestSharedCatalogMigrationUsesTheLatestListing(t *testing.T) {
 		t.Fatal("Legacy catalog assigned to both names")
 	}
 }
+
+func TestIncompleteToolListKeepsTheLastCatalog(t *testing.T) {
+	h, srv := newHTTPFake(t)
+	s := httpServer(srv)
+	s.EnabledTools = []string{"echo"}
+	m := newTestManager(t, s)
+	ctx := context.Background()
+	if got, _ := m.Tools(ctx, ""); wires(got) != "mcp__remote__echo" {
+		t.Fatal(got)
+	}
+	setResult := func(result string) {
+		h.mu.Lock()
+		h.listResult = json.RawMessage(result)
+		h.mu.Unlock()
+	}
+	for _, result := range []string{"{}", `{"tools":null}`} {
+		setResult(result)
+		if _, _, _, err := m.Probe(ctx, s, ""); err == nil {
+			t.Errorf("Probe accepted %s", result)
+		}
+		m.invalidate(m.instanceFor(s, ""))
+		if got, _ := m.Tools(ctx, ""); wires(got) != "mcp__remote__echo" {
+			t.Errorf("Offer after %s = %s", result, wires(got))
+		}
+		other := NewManager(m.cacheDir, m.logDir, "test")
+		other.Configure([]Server{s})
+		st := stateOf(other, s.Name)
+		other.Close()
+		if !st.Listed || len(st.Tools) != 4 {
+			t.Errorf("Catalog after restart = %+v", st)
+		}
+	}
+	setResult(`{"tools":[]}`)
+	if _, _, _, err := m.Probe(ctx, s, ""); err != nil {
+		t.Fatal(err)
+	}
+	if st := stateOf(m, s.Name); !st.Listed || len(st.Tools) != 0 {
+		t.Fatalf("Empty catalog = %+v", st)
+	}
+}

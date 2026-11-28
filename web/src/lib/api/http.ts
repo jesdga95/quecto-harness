@@ -1767,7 +1767,7 @@ class HttpApi implements HarnessApi {
       error: wire.error ?? "",
       server: wire.server,
       listed_project: wire.listed_project,
-      tools: wire.tools ?? [],
+      tools: Array.isArray(wire.tools) ? wire.tools : undefined,
       notes: wire.notes ?? [],
     };
   }

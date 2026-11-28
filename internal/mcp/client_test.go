@@ -266,6 +266,7 @@ type httpFake struct {
 	// catalog, when set, is the one tool each session lists, by the
 	// initialize that opened it.
 	catalog          []string
+	listResult       json.RawMessage
 	expireMethod     string
 	notifyDuringList bool
 	// live maps each session handed out and not forgotten to the number of
@@ -355,12 +356,18 @@ func (h *httpFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	catalog := h.catalog
+	listResult := h.listResult
 	notify := h.notifyDuringList && m.Method == "tools/list"
 	if notify {
 		h.notifyDuringList = false
 		h.catalog = []string{"updated"}
 	}
 	h.mu.Unlock()
+	if m.Method == "tools/list" && listResult != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(message{JSONRPC: "2.0", ID: m.ID, Result: listResult})
+		return
+	}
 	if m.Method == "tools/list" && catalog != nil {
 		out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{
 			"tools": []any{map[string]any{"name": catalog[min(opened, len(catalog))-1], "inputSchema": map[string]any{"type": "object"}}},
