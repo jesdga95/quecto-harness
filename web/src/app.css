@@ -213,6 +213,15 @@
   [hidden] {
     display: none !important;
   }
+  /* A scrollbar is a thin thumb in the palette's muted colour over a
+     transparent track, so the pointer on it shows no light band. The colour
+     is inherited from the root; the width is not. */
+  :root {
+    scrollbar-color: var(--muted) transparent;
+  }
+  * {
+    scrollbar-width: thin;
+  }
   @media (prefers-reduced-motion: reduce) {
     * {
       transition: none !important;
